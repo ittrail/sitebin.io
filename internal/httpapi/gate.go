@@ -118,12 +118,12 @@ var basePageTmpl = template.Must(template.New("page").Parse(`<!doctype html>
   input[type=password]:focus { border-color: #5b8cff; box-shadow: 0 0 0 3px rgba(91,140,255,.25); }
   button {
     padding: 12px 14px; border: 0; border-radius: 10px; cursor: pointer;
-    background: linear-gradient(135deg, #5b8cff, #7c5bff); color: white;
-    font-size: 15px; font-weight: 600;
+    background: linear-gradient(135deg, #f5b84d, #d99a26); color: #1c1503;
+    font-size: 15px; font-weight: 650;
   }
-  button:hover { filter: brightness(1.1); }
+  button:hover { filter: brightness(1.07); }
   .err { color: #ff9d9d; font-size: 14px; }
-  .code { font: 600 44px/1 ui-monospace, monospace; color: #5b8cff; margin-bottom: 10px; }
+  .code { font: 600 44px/1 ui-monospace, monospace; color: #f5b84d; margin-bottom: 10px; }
 </style>
 </head>
 <body>

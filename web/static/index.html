@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sitebin — drop files, get a website</title>
+<meta name="description" content="Publish files to the web in one drop. No accounts, no builds — one upload becomes a site on its own private URL.">
+<link rel="icon" href="/_sitebin/assets/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/_sitebin/assets/static/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <a class="wordmark" href="/">
+    <svg viewBox="0 0 64 64" aria-hidden="true"><rect x="4" y="4" width="56" height="56" rx="14" fill="#101725" stroke="#2A3550" stroke-width="2"/><rect x="16" y="16" width="32" height="6" rx="3" fill="#F5B84D"/><path d="M32 30v14M25 38l7 7 7-7" stroke="#5B8CFF" stroke-width="4.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    sitebin
+  </a>
+  <span class="tag">self-hosted · no accounts</span>
+  <span class="spacer"></span>
+</header>
+
+<main class="stage">
+  <section class="hero">
+    <h1>Drop files.<br>Get a <em>website</em>.</h1>
+    <p>One upload becomes a site on its own private URL — a real static server for HTML apps,
+       or an instant viewer for PDF, Markdown, DOCX and more. No account, no build, no fuss.</p>
+  </section>
+
+  <section id="create">
+    <div class="slab" id="slab">
+      <svg class="tray" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <path d="M12 3v10m0 0l-3.5-3.5M12 13l3.5-3.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M3 13v4a3 3 0 003 3h12a3 3 0 003-3v-4" stroke-linecap="round"/>
+        <path d="M3 14h4l2 2h6l2-2h4" stroke-linejoin="round"/>
+      </svg>
+      <h2 id="slab-title">Drop it in the bin</h2>
+      <p class="hint">Drag files or a folder here — or pick
+        <button type="button" id="pick-files">files</button>,
+        a <button type="button" id="pick-folder">folder</button>,
+        or a <button type="button" id="pick-zip">.zip</button>
+      </p>
+      <div class="filelist" id="filelist"></div>
+      <div class="total hidden" id="total"></div>
+      <div class="progress"><div class="bar" id="progressbar"></div></div>
+      <div class="errbar" id="errbar" role="alert"></div>
+      <p class="fineprint">served from this instance · files live on your own server</p>
+    </div>
+
+    <input type="file" id="input-files" multiple class="hidden">
+    <input type="file" id="input-folder" webkitdirectory class="hidden">
+    <input type="file" id="input-zip" accept=".zip,application/zip" class="hidden">
+
+    <details class="options" id="options">
+      <summary>
+        <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M9 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Options — mode, password, expiry, WebDAV, domains
+      </summary>
+      <div class="body">
+        <div class="opt">
+          <span class="optlabel" id="mode-label">How should it behave?</span>
+          <div class="seg" role="radiogroup" aria-labelledby="mode-label">
+            <label><input type="radio" name="mode" value="webserver" checked><span>Web server</span></label>
+            <label><input type="radio" name="mode" value="viewer"><span>File viewer</span></label>
+          </div>
+          <span class="sub" id="mode-sub">Web server serves your files as-is (index.html is the front door).
+            File viewer renders documents — PDF, Markdown, DOCX, images, code — right in the browser.</span>
+        </div>
+
+        <div class="opt hidden" id="opt-unzip">
+          <label class="switch">
+            <input type="checkbox" id="unzip" checked>
+            <span class="knob"></span>
+            <span class="lbl">Unpack the .zip into individual files</span>
+          </label>
+          <span class="sub">Off means the archive itself is published as a single file.</span>
+        </div>
+
+        <div class="opt">
+          <label for="view-password">View password <span style="color:var(--ink-faint)">(optional)</span></label>
+          <input type="password" id="view-password" autocomplete="new-password" placeholder="Leave empty for a public site">
+          <span class="sub">Visitors must enter this before anything is served.</span>
+        </div>
+
+        <div class="opt">
+          <label for="expires">Expires <span style="color:var(--ink-faint)">(optional)</span></label>
+          <input type="datetime-local" id="expires">
+          <span class="sub">After this moment the site stops serving and is cleaned up.</span>
+        </div>
+
+        <div class="opt">
+          <label class="switch">
+            <input type="checkbox" id="webdav">
+            <span class="knob"></span>
+            <span class="lbl">WebDAV — mount the site as a network drive</span>
+          </label>
+          <span class="sub">Edit files from Finder, Explorer or rclone. The edit password is the login.</span>
+        </div>
+
+        <div class="opt">
+          <label for="domain">Custom domains <span style="color:var(--ink-faint)">(optional)</span></label>
+          <div class="row">
+            <input type="text" id="domain" placeholder="docs.example.com" style="max-width:280px">
+            <button type="button" class="btn small" id="add-domain">Add</button>
+          </div>
+          <div class="filelist" id="domainlist" style="justify-content:flex-start"></div>
+          <span class="sub">Point the domain at this server and TLS is issued automatically on first visit.</span>
+        </div>
+      </div>
+    </details>
+
+    <div class="publishrow">
+      <button class="btn primary big" id="publish" disabled>Publish site</button>
+      <span class="sub" id="publish-hint" style="color:var(--ink-faint);font-size:13.5px">Add files to publish — or publish an empty site and fill it later.</span>
+    </div>
+  </section>
+
+  <section id="done" class="hidden">
+    <div class="ticket">
+      <div class="stamp">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 6L9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        site published
+      </div>
+      <h2>Your claim ticket</h2>
+      <p class="sub">Everything you need to view, share and edit this site.</p>
+
+      <div class="secretrows">
+        <div class="secretrow">
+          <span class="k">View URL</span>
+          <span class="v"><a id="t-view" href="#" target="_blank" rel="noopener"></a></span>
+          <button class="copybtn" data-copy="t-view">Copy</button>
+        </div>
+        <div class="secretrow">
+          <span class="k">Edit URL</span>
+          <span class="v"><a id="t-edit" href="#"></a></span>
+          <button class="copybtn" data-copy="t-edit">Copy</button>
+        </div>
+        <div class="secretrow pass">
+          <span class="k">Edit password</span>
+          <span class="v" id="t-pass"></span>
+          <button class="copybtn" data-copy="t-pass">Copy</button>
+        </div>
+      </div>
+
+      <div class="keepnote">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4m0 4h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span><strong>Save the edit password now.</strong> It is shown only this once — Sitebin keeps just a hash and cannot recover it for you.</span>
+      </div>
+
+      <div class="ticketactions">
+        <a class="btn primary" id="t-open" href="#" target="_blank" rel="noopener">Open site</a>
+        <a class="btn" id="t-editlink" href="#">Manage site</a>
+        <button class="btn" id="t-copyall">Copy all</button>
+        <button class="btn" id="t-again">Publish another</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="foot">
+    <span>open-source · filesystem-only · one <code>docker run</code> to self-host</span>
+    <span>for robots: <code id="api-hint">curl -F "files=@index.html" https://…/api/sites</code></span>
+  </section>
+</main>
+
+<div id="toast" role="status"></div>
+<script src="/_sitebin/assets/static/app.js" defer></script>
+</body>
+</html>

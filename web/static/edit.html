@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manage site — Sitebin</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="/_sitebin/assets/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/_sitebin/assets/static/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <a class="wordmark" href="/">
+    <svg viewBox="0 0 64 64" aria-hidden="true"><rect x="4" y="4" width="56" height="56" rx="14" fill="#101725" stroke="#2A3550" stroke-width="2"/><rect x="16" y="16" width="32" height="6" rx="3" fill="#F5B84D"/><path d="M32 30v14M25 38l7 7 7-7" stroke="#5B8CFF" stroke-width="4.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    sitebin
+  </a>
+  <span class="tag">manage site</span>
+  <span class="spacer"></span>
+</header>
+
+<!-- lock screen -->
+<div class="lockwrap" id="lock">
+  <div class="card">
+    <h1>Unlock this site</h1>
+    <p>Enter the edit password from your claim ticket. It was shown once when the site was published.</p>
+    <form id="lockform">
+      <input type="password" id="lockpw" placeholder="Edit password" autocomplete="current-password" autofocus>
+      <div class="inline-status err" id="lockerr"></div>
+      <button class="btn primary" type="submit">Unlock</button>
+    </form>
+  </div>
+</div>
+
+<!-- app -->
+<main class="stage hidden" id="app">
+  <div class="pagehead">
+    <h1 id="site-id">…</h1>
+    <a class="viewlink" id="view-link" href="#" target="_blank" rel="noopener">open site ↗</a>
+    <span class="meta" id="site-meta"></span>
+  </div>
+
+  <section class="card" id="card-files">
+    <h3>Files <span class="count" id="file-count"></span></h3>
+    <table class="filetable"><tbody id="filerows"></tbody></table>
+    <div class="dropmini" id="dropmini">
+      Drop files here to add or replace — or pick
+      <button type="button" id="e-pick-files">files</button> /
+      <button type="button" id="e-pick-folder">folder</button> /
+      <button type="button" id="e-pick-zip">.zip</button>
+    </div>
+    <label class="switch" style="margin-top:12px">
+      <input type="checkbox" id="replace-all">
+      <span class="knob"></span>
+      <span class="lbl">Replace everything with the next upload</span>
+    </label>
+    <input type="file" id="e-input-files" multiple class="hidden">
+    <input type="file" id="e-input-folder" webkitdirectory class="hidden">
+    <input type="file" id="e-input-zip" accept=".zip,application/zip" class="hidden">
+    <div class="usagebar"><div class="fill" id="usage-fill" style="width:0%"></div></div>
+    <div class="usagenote" id="usage-note"></div>
+  </section>
+
+  <section class="card">
+    <h3>Behavior</h3>
+    <div class="opt">
+      <div class="seg" role="radiogroup" aria-label="Site mode">
+        <label><input type="radio" name="emode" value="webserver"><span>Web server</span></label>
+        <label><input type="radio" name="emode" value="viewer"><span>File viewer</span></label>
+      </div>
+      <span class="sub">Web server serves files as-is. File viewer renders one document in the browser.</span>
+    </div>
+    <div class="opt hidden" id="entrywrap" style="margin-top:14px">
+      <label for="entry-file">Viewer shows</label>
+      <div class="row">
+        <select id="entry-file"></select>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h3>Access</h3>
+    <div class="opt">
+      <label for="e-viewpw">View password</label>
+      <div class="row">
+        <input type="password" id="e-viewpw" autocomplete="new-password" placeholder="New view password" style="max-width:250px">
+        <button class="btn small" id="set-viewpw">Set password</button>
+        <button class="btn small hidden" id="clear-viewpw">Remove protection</button>
+      </div>
+      <span class="sub" id="viewpw-status"></span>
+    </div>
+    <div class="opt" style="margin-top:16px">
+      <label class="switch">
+        <input type="checkbox" id="e-webdav">
+        <span class="knob"></span>
+        <span class="lbl">WebDAV network drive</span>
+      </label>
+      <div id="davinfo" class="dnshint hidden">
+        Mount <span class="dav-url" id="dav-url"></span><br>
+        Any username · password = your <strong>edit password</strong>.
+      </div>
+    </div>
+    <div class="opt" style="margin-top:16px">
+      <label for="e-expires">Expires</label>
+      <div class="row">
+        <input type="datetime-local" id="e-expires" style="max-width:250px">
+        <button class="btn small" id="save-expiry">Save</button>
+        <button class="btn small" id="clear-expiry">Clear</button>
+      </div>
+      <span class="sub" id="expiry-status"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h3>Custom domains</h3>
+    <div id="domainrows"></div>
+    <div class="row" style="margin-top:12px">
+      <input type="text" id="e-domain" placeholder="docs.example.com" style="max-width:280px">
+      <button class="btn small" id="e-add-domain">Add domain</button>
+    </div>
+    <div class="dnshint">
+      Point the domain at this server first:
+      <code>A → your server IP</code> or <code>CNAME → <span id="dns-target"></span></code>.
+      The certificate is issued automatically on the first visit.
+    </div>
+  </section>
+
+  <section class="card" style="border-color:rgba(242,109,109,.25)">
+    <h3 style="color:var(--danger)">Danger zone</h3>
+    <div class="row">
+      <button class="btn danger" id="delete-site">Delete this site</button>
+      <span class="sub" id="delete-hint">Removes all files, domains and URLs. There is no undo.</span>
+    </div>
+  </section>
+</main>
+
+<div id="toast" role="status"></div>
+<script src="/_sitebin/assets/static/edit.js" defer></script>
+</body>
+</html>
