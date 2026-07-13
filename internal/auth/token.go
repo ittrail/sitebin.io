@@ -58,8 +58,13 @@ func (s TokenSigner) Verify(token, siteID string, now time.Time) bool {
 	if !hmac.Equal(sig, s.mac(string(payload))) {
 		return false
 	}
-	id, expStr, ok := strings.Cut(string(payload), "|")
-	if !ok || id != siteID {
+	// the subject may itself contain '|'; the expiry is after the last one
+	i := strings.LastIndex(string(payload), "|")
+	if i < 0 {
+		return false
+	}
+	id, expStr := string(payload[:i]), string(payload[i+1:])
+	if id != siteID {
 		return false
 	}
 	exp, err := strconv.ParseInt(expStr, 10, 64)
