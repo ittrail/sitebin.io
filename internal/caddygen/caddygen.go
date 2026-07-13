@@ -82,7 +82,11 @@ func writeContentRoutes(b *strings.Builder, backend func(string) string, root st
 	b.WriteString("\t@backend path /_sitebin/*\n")
 	fmt.Fprintf(b, "\thandle @backend {\n\t\treverse_proxy %s\n\t}\n", backend("8080"))
 	b.WriteString("\thandle {\n")
-	fmt.Fprintf(b, "\t\tforward_auth %s {\n\t\t\turi /internal/authz\n\t\t\tcopy_headers Set-Cookie\n\t\t}\n", backend("9000"))
+	// Pin X-Forwarded-Host to Caddy's own {host} placeholder so authz resolves
+	// the SAME site that file_server will serve. Without this, a client-supplied
+	// X-Forwarded-Host could make the gate evaluate a different (open) site than
+	// the one whose files are served — a password-gate bypass.
+	fmt.Fprintf(b, "\t\tforward_auth %s {\n\t\t\turi /internal/authz\n\t\t\theader_up X-Forwarded-Host {host}\n\t\t\tcopy_headers Set-Cookie\n\t\t}\n", backend("9000"))
 	fmt.Fprintf(b, "\t\troot * %s\n", root)
 	b.WriteString("\t\tfile_server {\n\t\t\tbrowse\n\t\t}\n")
 	b.WriteString("\t}\n")

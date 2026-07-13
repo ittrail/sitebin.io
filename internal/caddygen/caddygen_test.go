@@ -36,6 +36,7 @@ func TestGenerateHTTPS(t *testing.T) {
 		"root * /data/domain-index/{host}/files",
 		"forward_auth 127.0.0.1:9000",
 		"uri /internal/authz",
+		"header_up X-Forwarded-Host {host}",
 		"reverse_proxy 127.0.0.1:8080",
 		"path /_sitebin/*",
 		"on_demand",

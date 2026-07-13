@@ -537,6 +537,27 @@ func TestAuthzPasswordFlow(t *testing.T) {
 	}
 }
 
+func TestAuthzUsesForwardedHostNotRequestHost(t *testing.T) {
+	// authz must resolve the site from X-Forwarded-Host (which Caddy pins to
+	// the real request host), independent of the connection's own Host header.
+	e := newEnv(t, nil)
+	prot := e.createSite(t, map[string]string{"view_password": "sesame"}, map[string]string{"index.html": "secret"})
+	open := e.createSite(t, nil, map[string]string{"index.html": "public"})
+
+	// A request whose X-Forwarded-Host is the protected site must gate (401),
+	// even if the raw Host header names the open site.
+	req := authzReq(prot.ID+".sitebin.example", "/", "")
+	req.Host = open.ID + ".sitebin.example"
+	if w := e.internal(t, req); w.Code != 401 {
+		t.Fatalf("protected site via forwarded host should gate: %d", w.Code)
+	}
+	// And the open site resolved via forwarded host serves.
+	req = authzReq(open.ID+".sitebin.example", "/", "")
+	if w := e.internal(t, req); w.Code != 200 {
+		t.Fatalf("open site via forwarded host: %d", w.Code)
+	}
+}
+
 func TestAuthzExpired(t *testing.T) {
 	e := newEnv(t, nil)
 	past := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
@@ -625,6 +646,28 @@ func TestWebDAV(t *testing.T) {
 	// CleanRelPath rejects anything that slips through — never a 2xx write
 	if w := davReq(t, e, "PUT", base+"../evil.txt", c.EditPassword, strings.NewReader("x")); w.Code < 300 {
 		t.Fatalf("dav traversal: %d", w.Code)
+	}
+}
+
+func TestWebDAVDestinationGuard(t *testing.T) {
+	e := newEnv(t, nil)
+	a := e.createSite(t, map[string]string{"webdav": "true"}, map[string]string{"index.html": "a"})
+	b := e.createSite(t, map[string]string{"webdav": "true"}, map[string]string{"index.html": "b"})
+	aEdit, bEdit := editIDFrom(t, a.EditURL), editIDFrom(t, b.EditURL)
+
+	// MOVE with a Destination pointing at another site must be refused.
+	req := httptest.NewRequest("MOVE", "/dav/"+aEdit+"/index.html", nil)
+	req.SetBasicAuth("u", a.EditPassword)
+	req.Header.Set("Destination", "http://sitebin.example/dav/"+bEdit+"/stolen.html")
+	if w := e.public(t, req); w.Code != 400 {
+		t.Fatalf("cross-site MOVE should be 400, got %d", w.Code)
+	}
+	// MOVE with a traversal Destination must be refused.
+	req = httptest.NewRequest("MOVE", "/dav/"+aEdit+"/index.html", nil)
+	req.SetBasicAuth("u", a.EditPassword)
+	req.Header.Set("Destination", "http://sitebin.example/dav/"+aEdit+"/../../../escape.html")
+	if w := e.public(t, req); w.Code != 400 {
+		t.Fatalf("traversal MOVE should be 400, got %d", w.Code)
 	}
 }
 

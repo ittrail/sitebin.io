@@ -20,9 +20,14 @@ var (
 	ErrDomainTaken  = errors.New("domain already in use")
 	ErrBadDomain    = errors.New("invalid domain name")
 	ErrBadPath      = errors.New("invalid file path")
-	ErrTooLarge     = errors.New("site size limit exceeded")
-	ErrTooManyFiles = errors.New("file count limit exceeded")
+	ErrTooLarge      = errors.New("site size limit exceeded")
+	ErrTooManyFiles  = errors.New("file count limit exceeded")
+	ErrTooManyDomain = errors.New("custom domain limit exceeded")
 )
+
+// maxDomainsPerSite bounds custom domains per site to prevent one site from
+// forcing unbounded certificate issuance.
+const maxDomainsPerSite = 20
 
 const (
 	ModeWebserver = "webserver"
@@ -96,6 +101,17 @@ func (s *Store) lockSite(viewID string) *sync.Mutex {
 		s.locks[viewID] = l
 	}
 	return l
+}
+
+// WithLock runs fn while holding the site's exclusive lock — the same lock
+// used by SaveFile/Update/Delete. Callers that mutate a site's files outside
+// the store's own methods (e.g. the WebDAV handler) use this to serialize
+// with API writes.
+func (s *Store) WithLock(viewID string, fn func() error) error {
+	l := s.lockSite(viewID)
+	l.Lock()
+	defer l.Unlock()
+	return fn()
 }
 
 // Create makes a new empty site and returns it with the plaintext edit

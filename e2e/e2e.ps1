@@ -271,6 +271,12 @@ if ($psite) {
     Assert "unlock sets cookie" ((Get-Content $cookieJar -Raw -ErrorAction SilentlyContinue) -match "sitebin_v")
     $r = Req "GET" "$($psite.view_url)/" @("-b", $cookieJar)
     Assert "cookie unlocks content" ($r.body -match "sitebin-e2e-webserver-ok") "code $($r.code)"
+
+    # gate must not be bypassable by spoofing X-Forwarded-Host at Caddy
+    if ($site) {
+        $r = Req "GET" "$($psite.view_url)/" @("-H", "X-Forwarded-Host: $(([uri]$site.view_url).Host)")
+        Assert "spoofed X-Forwarded-Host cannot bypass gate" ($r.code -eq 401) "got $($r.code)"
+    }
 }
 
 # ---------- expiry ----------

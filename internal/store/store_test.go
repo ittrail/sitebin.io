@@ -275,6 +275,17 @@ func TestDomains(t *testing.T) {
 	if err := s.AddDomain(other, "client.example.org"); !errors.Is(err, ErrDomainTaken) {
 		t.Errorf("duplicate domain: %v", err)
 	}
+	// per-site domain cap
+	capSite, _, _ := s.Create()
+	for i := 0; i < maxDomainsPerSite; i++ {
+		if err := s.AddDomain(capSite, fmt.Sprintf("cap%d.example.net", i)); err != nil {
+			t.Fatalf("AddDomain %d: %v", i, err)
+		}
+	}
+	if err := s.AddDomain(capSite, "one-too-many.example.net"); !errors.Is(err, ErrTooManyDomain) {
+		t.Errorf("domain cap not enforced: %v", err)
+	}
+
 	if err := s.RemoveDomain(site, "client.example.org"); err != nil {
 		t.Fatalf("RemoveDomain: %v", err)
 	}

@@ -105,6 +105,20 @@ func serve(withCaddy bool) error {
 	cfg := mustConfig()
 	st := mustStore(cfg)
 
+	// In the all-in-one image Caddy is a child on the same host and reaches the
+	// backend over 127.0.0.1, so there is no reason to expose the backend
+	// listeners on all interfaces. Bind them to loopback unless the operator
+	// overrode the addresses (the compose split needs 0.0.0.0 + a reachable
+	// BackendHost).
+	if withCaddy {
+		if cfg.PublicAddr == ":8080" {
+			cfg.PublicAddr = "127.0.0.1:8080"
+		}
+		if cfg.InternalAddr == ":9000" {
+			cfg.InternalAddr = "127.0.0.1:9000"
+		}
+	}
+
 	secret, err := auth.LoadOrCreateSecret(filepath.Join(cfg.DataDir, ".secret"))
 	if err != nil {
 		return err

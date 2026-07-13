@@ -104,7 +104,12 @@ func (a *API) webdav(w http.ResponseWriter, r *http.Request) {
 		FileSystem: webdav.Dir(site.ContentDir()),
 		LockSystem: a.davLockSystems.get(site.ViewID),
 	}
-	h.ServeHTTP(w, r)
+	if davMutating[r.Method] {
+		// serialize with API writes / mode switches on the same site
+		a.st.WithLock(site.ViewID, func() error { h.ServeHTTP(w, r); return nil })
+	} else {
+		h.ServeHTTP(w, r)
+	}
 
 	if davMutating[r.Method] && site.Meta.Mode == store.ModeViewer {
 		if err := a.syncViewerLayout(site); err != nil {

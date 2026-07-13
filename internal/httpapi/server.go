@@ -179,6 +179,8 @@ func storeError(w http.ResponseWriter, err error) {
 		writeError(w, 413, "site size limit exceeded")
 	case errors.Is(err, store.ErrTooManyFiles):
 		writeError(w, 413, "file count limit exceeded")
+	case errors.Is(err, store.ErrTooManyDomain):
+		writeError(w, 409, err.Error())
 	case errors.Is(err, store.ErrBadPath):
 		writeError(w, 400, "invalid file path")
 	case errors.Is(err, store.ErrBadDomain):
