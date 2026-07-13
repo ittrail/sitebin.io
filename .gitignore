@@ -1,0 +1,6 @@
+/sitebin
+/sitebin.exe
+/dist/
+*.test
+/.scratch/
+/e2e/.work/

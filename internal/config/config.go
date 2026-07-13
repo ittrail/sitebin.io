@@ -1,0 +1,216 @@
+// Package config loads Sitebin configuration from environment variables.
+package config
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// Config holds all runtime configuration. See README for the full reference.
+type Config struct {
+	BaseDomain string // main domain; view subdomains are <id>.BaseDomain
+	PublicPort int    // non-standard public port for URL construction (0 = default)
+	DataDir    string
+
+	DNSProvider string // caddy dns module for the wildcard cert (cloudflare|hetzner|duckdns)
+	DNSToken    string
+	TLSSnippet  string // raw lines injected into the wildcard tls block (advanced providers)
+	ACMEEmail   string
+	HTTPOnly    bool // disable TLS entirely (local/testing or behind an external proxy)
+
+	MaxSiteBytes  int64
+	MaxFiles      int
+	MaxExpiryDays int // 0 = unlimited
+	WebDAVAllowed bool
+	ReadOnly      bool
+
+	PublicAddr   string // backend listener proxied by Caddy
+	InternalAddr string // authz/tls-check/health listener (never proxied)
+	BackendHost  string // host Caddy uses to reach the backend
+
+	RateCreatePerHour int
+	RateCreateBurst   int
+	RateAuthPer5Min   int
+	CleanupInterval   time.Duration
+}
+
+// singleTokenProviders are DNS modules configurable via SITEBIN_DNS_TOKEN alone.
+var singleTokenProviders = map[string]bool{
+	"cloudflare": true,
+	"hetzner":    true,
+	"duckdns":    true,
+}
+
+// Load reads configuration using getenv (os.Getenv in production).
+func Load(getenv func(string) string) (Config, error) {
+	cfg := Config{
+		DataDir:           "/data",
+		MaxSiteBytes:      104857600,
+		MaxFiles:          1000,
+		WebDAVAllowed:     true,
+		PublicAddr:        ":8080",
+		InternalAddr:      ":9000",
+		BackendHost:       "127.0.0.1",
+		RateCreatePerHour: 30,
+		RateCreateBurst:   10,
+		RateAuthPer5Min:   10,
+		CleanupInterval:   10 * time.Minute,
+	}
+
+	base := strings.ToLower(strings.TrimSpace(getenv("SITEBIN_BASE_DOMAIN")))
+	base = strings.TrimSuffix(base, ".")
+	if host, port, ok := strings.Cut(base, ":"); ok {
+		p, err := strconv.Atoi(port)
+		if err != nil {
+			return cfg, fmt.Errorf("SITEBIN_BASE_DOMAIN: invalid port %q", port)
+		}
+		base, cfg.PublicPort = host, p
+	}
+	if base == "" {
+		return cfg, fmt.Errorf("SITEBIN_BASE_DOMAIN is required (e.g. sitebin.example.com)")
+	}
+	cfg.BaseDomain = base
+
+	if v := getenv("SITEBIN_DATA_DIR"); v != "" {
+		cfg.DataDir = v
+	}
+	cfg.DNSProvider = strings.ToLower(getenv("SITEBIN_DNS_PROVIDER"))
+	cfg.DNSToken = getenv("SITEBIN_DNS_TOKEN")
+	cfg.TLSSnippet = getenv("SITEBIN_TLS_SNIPPET")
+	cfg.ACMEEmail = getenv("SITEBIN_ACME_EMAIL")
+	if v := getenv("SITEBIN_BACKEND_HOST"); v != "" {
+		cfg.BackendHost = v
+	}
+	if v := getenv("SITEBIN_PUBLIC_ADDR"); v != "" {
+		cfg.PublicAddr = v
+	}
+	if v := getenv("SITEBIN_INTERNAL_ADDR"); v != "" {
+		cfg.InternalAddr = v
+	}
+
+	var err error
+	if cfg.HTTPOnly, err = boolVar(getenv, "SITEBIN_HTTP_ONLY", false); err != nil {
+		return cfg, err
+	}
+	if cfg.WebDAVAllowed, err = boolVar(getenv, "SITEBIN_WEBDAV_ENABLED", true); err != nil {
+		return cfg, err
+	}
+	if cfg.ReadOnly, err = boolVar(getenv, "SITEBIN_READONLY", false); err != nil {
+		return cfg, err
+	}
+	if cfg.MaxSiteBytes, err = int64Var(getenv, "SITEBIN_MAX_SITE_BYTES", cfg.MaxSiteBytes); err != nil {
+		return cfg, err
+	}
+	if cfg.MaxFiles, err = intVar(getenv, "SITEBIN_MAX_FILES", cfg.MaxFiles); err != nil {
+		return cfg, err
+	}
+	if cfg.MaxExpiryDays, err = intVar(getenv, "SITEBIN_MAX_EXPIRY_DAYS", 0); err != nil {
+		return cfg, err
+	}
+	if cfg.RateCreatePerHour, err = intVar(getenv, "SITEBIN_RATE_CREATE_PER_HOUR", cfg.RateCreatePerHour); err != nil {
+		return cfg, err
+	}
+	if cfg.RateCreateBurst, err = intVar(getenv, "SITEBIN_RATE_CREATE_BURST", cfg.RateCreateBurst); err != nil {
+		return cfg, err
+	}
+	if cfg.RateAuthPer5Min, err = intVar(getenv, "SITEBIN_RATE_AUTH_PER_5MIN", cfg.RateAuthPer5Min); err != nil {
+		return cfg, err
+	}
+	if v := getenv("SITEBIN_CLEANUP_INTERVAL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return cfg, fmt.Errorf("SITEBIN_CLEANUP_INTERVAL: %v", err)
+		}
+		cfg.CleanupInterval = d
+	}
+
+	if !cfg.HTTPOnly {
+		switch {
+		case cfg.TLSSnippet != "":
+			// advanced escape hatch, accepted as-is
+		case cfg.DNSProvider == "":
+			return cfg, fmt.Errorf("the *.%s wildcard certificate needs a DNS challenge: set SITEBIN_DNS_PROVIDER + SITEBIN_DNS_TOKEN (or SITEBIN_TLS_SNIPPET, or SITEBIN_HTTP_ONLY=true behind your own proxy)", cfg.BaseDomain)
+		case !singleTokenProviders[cfg.DNSProvider]:
+			return cfg, fmt.Errorf("SITEBIN_DNS_PROVIDER %q is not a built-in single-token provider (cloudflare, hetzner, duckdns); use SITEBIN_TLS_SNIPPET for other providers", cfg.DNSProvider)
+		case cfg.DNSToken == "":
+			return cfg, fmt.Errorf("SITEBIN_DNS_TOKEN is required with SITEBIN_DNS_PROVIDER=%s", cfg.DNSProvider)
+		}
+	}
+	return cfg, nil
+}
+
+func boolVar(getenv func(string) string, name string, def bool) (bool, error) {
+	v := strings.ToLower(strings.TrimSpace(getenv(name)))
+	switch v {
+	case "":
+		return def, nil
+	case "1", "true", "yes", "on":
+		return true, nil
+	case "0", "false", "no", "off":
+		return false, nil
+	}
+	return def, fmt.Errorf("%s: cannot parse %q as bool", name, v)
+}
+
+func intVar(getenv func(string) string, name string, def int) (int, error) {
+	v := strings.TrimSpace(getenv(name))
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def, fmt.Errorf("%s: cannot parse %q as integer", name, v)
+	}
+	return n, nil
+}
+
+func int64Var(getenv func(string) string, name string, def int64) (int64, error) {
+	v := strings.TrimSpace(getenv(name))
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return def, fmt.Errorf("%s: cannot parse %q as integer", name, v)
+	}
+	return n, nil
+}
+
+// SiteURL returns the public URL for a view id or custom domain host.
+func (c Config) SiteURL(host string) string {
+	return c.scheme() + "://" + host + c.portSuffix()
+}
+
+// ViewURL returns the public URL for a site's view id.
+func (c Config) ViewURL(viewID string) string {
+	return c.SiteURL(viewID + "." + c.BaseDomain)
+}
+
+// EditURL returns the public edit-page URL for an edit id.
+func (c Config) EditURL(editID string) string {
+	return c.scheme() + "://" + c.BaseDomain + c.portSuffix() + "/e/" + editID
+}
+
+// DAVURL returns the WebDAV mount URL for an edit id.
+func (c Config) DAVURL(editID string) string {
+	return c.scheme() + "://" + c.BaseDomain + c.portSuffix() + "/dav/" + editID + "/"
+}
+
+func (c Config) scheme() string {
+	if c.HTTPOnly {
+		return "http"
+	}
+	return "https"
+}
+
+func (c Config) portSuffix() string {
+	if c.PublicPort == 0 {
+		return ""
+	}
+	if c.HTTPOnly && c.PublicPort == 80 || !c.HTTPOnly && c.PublicPort == 443 {
+		return ""
+	}
+	return ":" + strconv.Itoa(c.PublicPort)
+}
