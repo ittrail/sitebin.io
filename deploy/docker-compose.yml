@@ -1,0 +1,50 @@
+# Sitebin — multi-service variant (backend and Caddy as separate containers).
+# The all-in-one `docker run` image is the simpler default; use this when you
+# want to scale or replace the pieces independently.
+#
+#   SITEBIN_BASE_DOMAIN=sitebin.example.com \
+#   SITEBIN_DNS_PROVIDER=cloudflare \
+#   SITEBIN_DNS_TOKEN=... \
+#   docker compose up -d
+
+services:
+  backend:
+    image: ghcr.io/ittrail/sitebin:latest
+    command: ["server"]
+    environment:
+      SITEBIN_BASE_DOMAIN: ${SITEBIN_BASE_DOMAIN:?set SITEBIN_BASE_DOMAIN}
+      SITEBIN_DNS_PROVIDER: ${SITEBIN_DNS_PROVIDER:-}
+      SITEBIN_DNS_TOKEN: ${SITEBIN_DNS_TOKEN:-}
+      SITEBIN_ACME_EMAIL: ${SITEBIN_ACME_EMAIL:-}
+      SITEBIN_HTTP_ONLY: ${SITEBIN_HTTP_ONLY:-}
+      SITEBIN_BACKEND_HOST: backend
+    volumes:
+      - sitebin-data:/data
+    restart: unless-stopped
+
+  caddy:
+    image: ghcr.io/ittrail/sitebin:latest
+    entrypoint: ["/sbin/tini", "--"]
+    command:
+      - /bin/sh
+      - -c
+      - sitebin caddyfile > /tmp/Caddyfile && exec caddy run --config /tmp/Caddyfile --adapter caddyfile
+    environment:
+      SITEBIN_BASE_DOMAIN: ${SITEBIN_BASE_DOMAIN:?set SITEBIN_BASE_DOMAIN}
+      SITEBIN_DNS_PROVIDER: ${SITEBIN_DNS_PROVIDER:-}
+      SITEBIN_DNS_TOKEN: ${SITEBIN_DNS_TOKEN:-}
+      SITEBIN_ACME_EMAIL: ${SITEBIN_ACME_EMAIL:-}
+      SITEBIN_HTTP_ONLY: ${SITEBIN_HTTP_ONLY:-}
+      SITEBIN_BACKEND_HOST: backend
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - sitebin-data:/data
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  sitebin-data:

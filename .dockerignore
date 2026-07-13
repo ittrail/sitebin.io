@@ -1,0 +1,8 @@
+.git
+.gitignore
+.scratch
+docs
+e2e/.work
+*.md
+deploy
+.github
