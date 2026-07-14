@@ -169,6 +169,23 @@ services:
       # SITEBIN_OAUTH_MICROSOFT_CLIENT_ID:     "..."
       # SITEBIN_OAUTH_MICROSOFT_CLIENT_SECRET: "..."
       # SITEBIN_OAUTH_MICROSOFT_TENANT:        "common"
+      # Generisches OIDC — beliebiger Issuer (Keycloak, Okta, Authentik, oder
+      # das Auth Gateway des IT-Trail SaaS Stack). Redirect-URI:
+      #   https://<base>/account/auth/oidc/callback
+      # SITEBIN_OAUTH_OIDC_ISSUER:        "https://auth.saas-stack.example.com/api/v1/sitebin"
+      # SITEBIN_OAUTH_OIDC_CLIENT_ID:     "sitebin"
+      # SITEBIN_OAUTH_OIDC_CLIENT_SECRET: "..."
+      # SITEBIN_OAUTH_OIDC_LABEL:         "Example SSO"   # Text des Login-Buttons
+
+      # --- SaaS-Stack PayGate als Abo-Quelle (statt Stripe/Paddle direkt) ---
+      # Tarife kommen dann aus PayGate (Tier-IDs = tiers.json-IDs); nur für
+      # Konten, die über das generische OIDC angemeldet sind. Erfordert
+      # SITEBIN_ACCOUNT_MODE=tiers. Siehe README → "SaaS-Stack integration".
+      # SITEBIN_PAYGATE_URL:        "https://paygate.saas-stack.example.com"
+      # SITEBIN_PAYGATE_APP_ID:     "sitebin"
+      # SITEBIN_PAYGATE_API_KEY:    "ssk_live_..."
+      # SITEBIN_PAYGATE_CACHE_TTL:  "5m"
+      # SITEBIN_PAYGATE_MANAGE_URL: "https://account.example.com"
 
       # --- SMTP (E-Mail-Verifizierung & Passwort-Reset) ---
       # SITEBIN_SMTP_HOST: "smtp.example.com"

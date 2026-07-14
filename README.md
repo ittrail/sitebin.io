@@ -439,6 +439,9 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_ALLOW_ANON_CREATE` | In accounts mode, still allow anonymous sites. |
 | `SITEBIN_OAUTH_GOOGLE_CLIENT_ID` / `_SECRET` | Google OIDC login. |
 | `SITEBIN_OAUTH_MICROSOFT_CLIENT_ID` / `_SECRET` / `_TENANT` | Microsoft OIDC (`_TENANT` default `common`). |
+| `SITEBIN_OAUTH_OIDC_ISSUER` / `_CLIENT_ID` / `_CLIENT_SECRET` / `_LABEL` | Generic OIDC sign-in against any issuer (Keycloak, Okta, Authentik, the [SaaS Stack](#saas-stack-integration)). `_LABEL` is the login-button text (default `SSO`). |
+| `SITEBIN_PAYGATE_URL` / `_APP_ID` / `_API_KEY` | Resolve subscription tiers from a SaaS-Stack PayGate instead of built-in billing. See [SaaS-Stack integration](#saas-stack-integration). |
+| `SITEBIN_PAYGATE_CACHE_TTL` / `_MANAGE_URL` | Per-user tier cache (default `5m`); optional dashboard "manage subscription" link. |
 | `SITEBIN_SMTP_HOST` / `_PORT` / `_USER` / `_PASS` / `_FROM` / `_TLS` | Email (verification, password reset). Port default 587; `_TLS=true` for implicit TLS (465). |
 | `SITEBIN_STRIPE_SECRET_KEY` / `_WEBHOOK_SECRET` | Stripe billing. Webhook: `POST /account/billing/stripe/webhook`. |
 | `SITEBIN_PADDLE_API_KEY` / `_WEBHOOK_SECRET` / `_SANDBOX` | Paddle billing. Webhook: `POST /account/billing/paddle/webhook`. |
@@ -449,6 +452,39 @@ A tier's `price` maps it to provider price IDs, e.g. a tier with
 paid plan the dashboard sells via checkout. The dashboard lives at `/account`
 on the main domain; sites created while signed in are owned by the account and
 still work over the API with their edit password.
+
+### SaaS-Stack integration
+
+Sitebin Enterprise is a first-class app of the MIT-licensed
+[IT-Trail SaaS Stack](https://github.com/ittrail/saas-stack): onboard it like
+any of your apps and it inherits single sign-on and subscription billing —
+users log in once across your whole portfolio, and their Sitebin tier follows
+the subscription they bought through the stack.
+
+```bash
+# 1. SSO through the stack's Auth Gateway (generic OIDC)
+SITEBIN_OAUTH_OIDC_ISSUER=https://auth.saas-stack.example.com/api/v1/sitebin
+SITEBIN_OAUTH_OIDC_CLIENT_ID=sitebin
+SITEBIN_OAUTH_OIDC_CLIENT_SECRET=…
+SITEBIN_OAUTH_OIDC_LABEL="Example SSO"
+
+# 2. Tiers from PayGate (requires SITEBIN_ACCOUNT_MODE=tiers)
+SITEBIN_PAYGATE_URL=https://paygate.saas-stack.example.com
+SITEBIN_PAYGATE_APP_ID=sitebin
+SITEBIN_PAYGATE_API_KEY=ssk_live_…
+SITEBIN_PAYGATE_MANAGE_URL=https://account.example.com   # "manage subscription" link
+```
+
+Conventions and behavior: **stack tier ids must match `tiers.json` ids** —
+PayGate decides *which* tier a user has, `tiers.json` decides *what it means*
+(quotas). Lookups use the stack's admin-by-user-id endpoint (no user JWTs are
+stored), are cached (`SITEBIN_PAYGATE_CACHE_TTL`), and fail open to the
+account's stored tier so a PayGate outage never blocks publishing. Tiers
+resolve via PayGate only for accounts signed in through the generic OIDC
+provider (their subject *is* the stack user id); `active`, `trialing` and
+`past_due` subscriptions are honored. For those accounts the dashboard links
+to the stack's subscription management instead of built-in checkout, and
+`SITEBIN_TIER_SELF_SELECT` is ignored.
 
 ## License
 
