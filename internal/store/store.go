@@ -16,10 +16,10 @@ import (
 )
 
 var (
-	ErrNotFound     = errors.New("site not found")
-	ErrDomainTaken  = errors.New("domain already in use")
-	ErrBadDomain    = errors.New("invalid domain name")
-	ErrBadPath      = errors.New("invalid file path")
+	ErrNotFound      = errors.New("site not found")
+	ErrDomainTaken   = errors.New("domain already in use")
+	ErrBadDomain     = errors.New("invalid domain name")
+	ErrBadPath       = errors.New("invalid file path")
 	ErrTooLarge      = errors.New("site size limit exceeded")
 	ErrTooManyFiles  = errors.New("file count limit exceeded")
 	ErrTooManyDomain = errors.New("custom domain limit exceeded")
@@ -154,6 +154,22 @@ func (s *Store) Create() (*Site, string, error) {
 		return nil, "", fmt.Errorf("index edit id: %w", err)
 	}
 	return &Site{ViewID: viewID, EditID: editID, Meta: meta, dir: dir}, pw, nil
+}
+
+// SetEditPassword generates a fresh edit password for the site, stores its
+// hash, and returns the plaintext once. Used by the enterprise dashboard's
+// "reset edit password" (ownership proves identity, so the old password is not
+// required). The edit URL/id is unchanged.
+func (s *Store) SetEditPassword(site *Site) (string, error) {
+	pw := ids.NewEditPassword()
+	hash := auth.HashPassword(pw)
+	if err := s.Update(site, func(m *Meta) error {
+		m.EditPasswordHash = hash
+		return nil
+	}); err != nil {
+		return "", err
+	}
+	return pw, nil
 }
 
 // ByViewID loads a site by its view id (subdomain label / folder name).

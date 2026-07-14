@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ittrail/sitebin/internal/auth"
+	"github.com/ittrail/sitebin/internal/ext"
 	"github.com/ittrail/sitebin/internal/store"
 	"github.com/ittrail/sitebin/internal/viewer"
 )
@@ -303,6 +305,23 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 429, "site creation rate limit reached, try again later")
 		return
 	}
+
+	// Enterprise: gate creation behind accounts/tiers when a provider is active.
+	// The community build has no provider and creation stays fully open.
+	var owner string
+	if p, ok := ext.Get(); ok && p.AccountsEnabled() {
+		var err error
+		if owner, err = p.AuthorizeCreate(r); err != nil {
+			var ce *ext.CreateError
+			if errors.As(err, &ce) {
+				writeError(w, ce.Status, ce.Msg)
+			} else {
+				writeError(w, 403, "site creation not permitted")
+			}
+			return
+		}
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, a.cfg.MaxSiteBytes+(10<<20))
 
 	site, editPassword, err := a.st.Create()
@@ -354,12 +373,22 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Stamp and record ownership when the site was created by an account.
+	if owner != "" {
+		a.st.Update(site, func(m *store.Meta) error { m.OwnerAccountID = owner; return nil })
+		if p, ok := ext.Get(); ok {
+			if err := p.OnSiteCreated(owner, site.ViewID); err != nil {
+				a.log.Error("link owned site", "account", owner, "site", site.ViewID, "err", err)
+			}
+		}
+	}
+
 	resp := a.sitePayload(site)
 	resp["edit_password"] = editPassword
 	if len(warnings) > 0 {
 		resp["warnings"] = warnings
 	}
-	a.log.Info("site created", "id", site.ViewID, "ip", clientIP(r))
+	a.log.Info("site created", "id", site.ViewID, "ip", clientIP(r), "owner", owner)
 	writeJSON(w, 201, resp)
 }
 

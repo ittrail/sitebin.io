@@ -20,6 +20,7 @@ type Meta struct {
 	WebDAVEnabled         bool       `json:"webdav_enabled"`
 	CustomDomains         []string   `json:"custom_domains"`
 	EntryFile             string     `json:"entry_file"`
+	OwnerAccountID        string     `json:"owner_account_id,omitempty"` // enterprise: owning account (empty = anonymous)
 	ExpiresAt             *time.Time `json:"expires_at"`
 	CreatedAt             time.Time  `json:"created_at"`
 	UpdatedAt             time.Time  `json:"updated_at"`

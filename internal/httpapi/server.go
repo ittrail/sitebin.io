@@ -19,6 +19,7 @@ import (
 
 	"github.com/ittrail/sitebin/internal/auth"
 	"github.com/ittrail/sitebin/internal/config"
+	"github.com/ittrail/sitebin/internal/ext"
 	"github.com/ittrail/sitebin/internal/store"
 )
 
@@ -83,6 +84,14 @@ func (a *API) Public() http.Handler {
 
 	mux.HandleFunc("GET /_sitebin/assets/{path...}", a.asset)
 	mux.HandleFunc("POST /_sitebin/unlock", a.unlock)
+
+	// Enterprise: mount the account dashboard + auth routes when a provider is
+	// active. Guarded so a provider can only ever add routes on the main domain.
+	if p, ok := ext.Get(); ok {
+		for pattern, h := range p.PublicRoutes() {
+			mux.Handle(pattern, h)
+		}
+	}
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		a.notFoundPage(w, r)

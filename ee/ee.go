@@ -46,3 +46,5 @@ func (p *provider) PublicRoutes() map[string]http.Handler { return nil }
 func (p *provider) AccountsEnabled() bool { return false }
 
 func (p *provider) AuthorizeCreate(r *http.Request) (string, error) { return "", nil }
+
+func (p *provider) OnSiteCreated(ownerAccountID, viewID string) error { return nil }

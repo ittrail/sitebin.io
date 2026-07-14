@@ -8,7 +8,10 @@
 // not merely disabled by a flag.
 package ext
 
-import "net/http"
+import (
+	"net/http"
+	"time"
+)
 
 // Provider is implemented by the enterprise extension. Its methods are the
 // only surface the core depends on; the core has no compile-time reference to
@@ -18,8 +21,7 @@ type Provider interface {
 	Name() string
 	Version() string
 
-	// Init wires the provider to the running instance. It is called once at
-	// startup with the host services the extension needs. Returning an error
+	// Init wires the provider to the running instance. Returning an error
 	// aborts startup.
 	Init(Host) error
 
@@ -31,25 +33,57 @@ type Provider interface {
 	AccountsEnabled() bool
 
 	// AuthorizeCreate is consulted before a site is created. It returns the
-	// owner account id to stamp on the new site (empty for anonymous) or an
-	// error to reject creation (quota, login required, tier disabled). In the
-	// community build this is never called and creation stays open.
+	// owner account id to stamp on the new site (empty for anonymous), or a
+	// *CreateError to reject creation. In the community build it is never
+	// called and creation stays open.
 	AuthorizeCreate(r *http.Request) (ownerAccountID string, err error)
+
+	// OnSiteCreated records ownership after a site is created (no-op for
+	// anonymous owners). Errors are logged, not surfaced to the client.
+	OnSiteCreated(ownerAccountID, viewID string) error
 }
 
-// Host is the set of core services handed to the extension at Init. It is
-// intentionally an interface so the core package does not import ee/ and ee/
-// depends only on this contract. It is fleshed out in Phase 1 as concrete
-// integration points are wired; kept minimal here so both editions compile.
+// CreateError rejects a site creation with an HTTP status and message.
+type CreateError struct {
+	Status int
+	Msg    string
+}
+
+func (e *CreateError) Error() string { return e.Msg }
+
+// Host is the set of core services handed to the extension at Init. It is an
+// interface so the core does not import ee/ and ee/ depends only on this
+// contract.
 type Host interface {
-	// DataDir is the instance data root (SITEBIN_DATA_DIR).
 	DataDir() string
-	// BaseDomain is the configured main domain.
 	BaseDomain() string
-	// HTTPOnly reports whether the instance serves plain HTTP (affects cookies).
 	HTTPOnly() bool
-	// Secret is the per-instance signing secret (for session cookies).
 	Secret() []byte
+	// Sites exposes the core site operations the dashboard needs.
+	Sites() SiteService
+}
+
+// SiteService lets the extension read and manage sites without importing the
+// core store. Implemented by the httpapi layer (which also invalidates its
+// auth caches on mutation).
+type SiteService interface {
+	// Info returns a lightweight view of a site, or ok=false if absent.
+	Info(viewID string) (SiteInfo, bool)
+	// RotateEditPassword issues a new edit password, returning it once.
+	RotateEditPassword(viewID string) (newPassword string, err error)
+	// Delete removes a site and its indexes.
+	Delete(viewID string) error
+}
+
+// SiteInfo is the dashboard's view of an owned site.
+type SiteInfo struct {
+	ViewID    string
+	Mode      string
+	Bytes     int64
+	Files     int
+	ViewURL   string
+	EditURL   string
+	CreatedAt time.Time
 }
 
 var registered Provider
@@ -65,3 +99,6 @@ func Register(p Provider) {
 
 // Get returns the registered provider, or (nil, false) in the community build.
 func Get() (Provider, bool) { return registered, registered != nil }
+
+// Reset clears the registered provider. Test-only helper.
+func Reset() { registered = nil }

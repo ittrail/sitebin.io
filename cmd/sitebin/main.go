@@ -132,7 +132,7 @@ func serve(withCaddy bool) error {
 	// Initialize the premium extension when this is an enterprise build with a
 	// provider registered; the community build has none and stays fully open.
 	if p, ok := ext.Get(); ok {
-		if err := p.Init(extHost{cfg: cfg, secret: secret}); err != nil {
+		if err := p.Init(extHost{cfg: cfg, secret: secret, sites: api.SiteService()}); err != nil {
 			return fmt.Errorf("init %s extension: %w", p.Name(), err)
 		}
 		slog.Info("extension active", "name", p.Name(), "version", p.Version(),

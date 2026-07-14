@@ -20,12 +20,12 @@ import (
 )
 
 var testFS = fstest.MapFS{
-	"static/index.html":      {Data: []byte("<html>landing</html>")},
-	"static/edit.html":       {Data: []byte("<html>edit</html>")},
-	"static/app.css":         {Data: []byte("body{}")},
-	"viewer/viewer.js":       {Data: []byte("// viewer")},
-	"static/favicon.svg":     {Data: []byte("<svg/>")},
-	"vendor/markdown-it.js":  {Data: []byte("// md")},
+	"static/index.html":     {Data: []byte("<html>landing</html>")},
+	"static/edit.html":      {Data: []byte("<html>edit</html>")},
+	"static/app.css":        {Data: []byte("body{}")},
+	"viewer/viewer.js":      {Data: []byte("// viewer")},
+	"static/favicon.svg":    {Data: []byte("<svg/>")},
+	"vendor/markdown-it.js": {Data: []byte("// md")},
 }
 
 type env struct {
