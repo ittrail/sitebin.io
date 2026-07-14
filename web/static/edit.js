@@ -266,6 +266,26 @@ async function uploadFiles(files, isZip) {
   } catch (err) { toast(err.message, true); }
 }
 
+$("download-zip").addEventListener("click", async () => {
+  try {
+    const res = await fetch("/api/sites/" + editID + "/download", {
+      headers: { "X-Edit-Password": sitePw },
+    });
+    if (!res.ok) throw new Error("download failed (" + res.status + ")");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = site.id + ".zip";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+
 $("e-pick-files").addEventListener("click", () => $("e-input-files").click());
 $("e-pick-folder").addEventListener("click", () => $("e-input-folder").click());
 $("e-pick-zip").addEventListener("click", () => $("e-input-zip").click());

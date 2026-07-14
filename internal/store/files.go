@@ -1,6 +1,7 @@
 package store
 
 import (
+	"archive/zip"
 	"fmt"
 	"io"
 	"io/fs"
@@ -215,6 +216,39 @@ func (s *Store) ClearFiles(site *Site) error {
 		}
 	}
 	return nil
+}
+
+// ZipContent writes a zip archive of the site's content files to w.
+func (s *Store) ZipContent(site *Site, w io.Writer) error {
+	root := site.ContentDir()
+	zw := zip.NewWriter(w)
+	walkErr := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		zf, err := zw.Create(filepath.ToSlash(rel))
+		if err != nil {
+			return err
+		}
+		src, err := os.Open(p)
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(zf, src)
+		src.Close()
+		return err
+	})
+	if closeErr := zw.Close(); walkErr == nil {
+		return closeErr
+	}
+	return walkErr
 }
 
 // ListFiles returns the site's user files sorted by path.

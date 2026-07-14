@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -655,6 +656,35 @@ func TestPathModeGateAndUnlock(t *testing.T) {
 	creq.Header.Set("Cookie", strings.Split(cookie, ";")[0])
 	if w := e.internal(t, creq); w.Code != 200 {
 		t.Fatalf("cookie path authz: %d", w.Code)
+	}
+}
+
+func TestDownloadZip(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "<h1>hi</h1>", "css/x.css": "body{}"})
+	edit := editIDFrom(t, c.EditURL)
+
+	w := e.public(t, authed(httptest.NewRequest("GET", "/api/sites/"+edit+"/download", nil), c.EditPassword))
+	if w.Code != 200 {
+		t.Fatalf("download: %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/zip" {
+		t.Errorf("content-type = %q", ct)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(w.Body.Bytes()), int64(w.Body.Len()))
+	if err != nil {
+		t.Fatalf("zip parse: %v", err)
+	}
+	names := map[string]bool{}
+	for _, f := range zr.File {
+		names[f.Name] = true
+	}
+	if !names["index.html"] || !names["css/x.css"] {
+		t.Errorf("zip missing files: %v", names)
+	}
+	// requires auth
+	if w := e.public(t, httptest.NewRequest("GET", "/api/sites/"+edit+"/download", nil)); w.Code != 401 {
+		t.Errorf("download without auth: %d", w.Code)
 	}
 }
 

@@ -436,6 +436,15 @@ func (a *API) getSite(w http.ResponseWriter, r *http.Request, site *store.Site) 
 	writeJSON(w, 200, a.sitePayload(site))
 }
 
+// downloadSite streams the site's content files as a zip.
+func (a *API) downloadSite(w http.ResponseWriter, r *http.Request, site *store.Site) {
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+site.ViewID+`.zip"`)
+	if err := a.st.ZipContent(site, w); err != nil {
+		a.log.Error("zip download", "id", site.ViewID, "err", err)
+	}
+}
+
 func (a *API) updateSite(w http.ResponseWriter, r *http.Request, site *store.Site) {
 	var set updateSet
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
