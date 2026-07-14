@@ -15,13 +15,17 @@ const base62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
 const idLen = 26
 
+// New returns a 26-char lowercase base32 id (~130 bits). It backs the view and
+// edit ids and is used for any other unguessable identifier (e.g. accounts).
+func New() string { return randomString(base32Lower, idLen) }
+
 // NewViewID returns a 26-char lowercase base32 id used as the site's
 // subdomain label and folder name.
-func NewViewID() string { return randomString(base32Lower, idLen) }
+func NewViewID() string { return New() }
 
 // NewEditID returns a 26-char lowercase base32 id used as the edit-URL path
 // token.
-func NewEditID() string { return randomString(base32Lower, idLen) }
+func NewEditID() string { return New() }
 
 // NewEditPassword returns a 22-char base62 secret (~131 bits).
 func NewEditPassword() string { return randomString(base62, 22) }
