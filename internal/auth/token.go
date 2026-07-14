@@ -43,35 +43,42 @@ func (s TokenSigner) Sign(siteID string, now time.Time, ttl time.Duration) strin
 
 // Verify reports whether token grants access to siteID at time now.
 func (s TokenSigner) Verify(token, siteID string, now time.Time) bool {
-	p64, sig64, ok := strings.Cut(token, ".")
-	if !ok {
-		return false
+	subject, ok := s.Parse(token, now)
+	return ok && subject == siteID
+}
+
+// Parse verifies token's signature and expiry and returns its subject. It is
+// used when the caller does not know the subject in advance (e.g. a session
+// cookie that encodes the account id and token version).
+func (s TokenSigner) Parse(token string, now time.Time) (subject string, ok bool) {
+	p64, sig64, found := strings.Cut(token, ".")
+	if !found {
+		return "", false
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(p64)
 	if err != nil {
-		return false
+		return "", false
 	}
 	sig, err := base64.RawURLEncoding.DecodeString(sig64)
 	if err != nil {
-		return false
+		return "", false
 	}
 	if !hmac.Equal(sig, s.mac(string(payload))) {
-		return false
+		return "", false
 	}
 	// the subject may itself contain '|'; the expiry is after the last one
 	i := strings.LastIndex(string(payload), "|")
 	if i < 0 {
-		return false
+		return "", false
 	}
-	id, expStr := string(payload[:i]), string(payload[i+1:])
-	if id != siteID {
-		return false
-	}
-	exp, err := strconv.ParseInt(expStr, 10, 64)
+	exp, err := strconv.ParseInt(string(payload[i+1:]), 10, 64)
 	if err != nil {
-		return false
+		return "", false
 	}
-	return now.Unix() < exp
+	if now.Unix() >= exp {
+		return "", false
+	}
+	return string(payload[:i]), true
 }
 
 func (s TokenSigner) mac(payload string) []byte {
