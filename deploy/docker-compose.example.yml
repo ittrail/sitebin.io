@@ -117,6 +117,7 @@ services:
       # Optional FTPS (explizites AUTH TLS) — dann werden Zugangsdaten verschlüsselt:
       # SITEBIN_FTP_TLS_CERT:       "/certs/ftp.crt"
       # SITEBIN_FTP_TLS_KEY:        "/certs/ftp.key"
+      # SITEBIN_TRACK_VIEWS:           "true"           # Seitenaufrufe pro Site zählen
       # SITEBIN_READONLY:              "false"          # true = keine neuen Sites
       # SITEBIN_RATE_CREATE_PER_HOUR:  "30"             # Sites/Stunde/IP
       # SITEBIN_RATE_CREATE_BURST:     "10"

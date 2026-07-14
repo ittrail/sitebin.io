@@ -14,9 +14,16 @@ source code).
   per site, symlink indexes for lookups.
 - **One container.** Caddy (TLS, routing, static serving) + a single Go
   backend, shipped as one image. One volume holds everything.
-- **Custom domains** with automatic TLS via Caddy's on-demand issuance.
-- **WebDAV** (optional, per site): mount your site as a network drive.
-- **Optional view password and expiry** per site.
+- **Custom domains** with automatic TLS via Caddy's on-demand issuance
+  *(Enterprise)*.
+- **WebDAV / FTP** (optional, per site): mount your site as a network drive.
+- **SPA fallback** so single-page apps (React/Vue) work; **built-in viewer**
+  for PDF, Markdown, DOCX, CSV/TSV, Jupyter notebooks, images, audio/video,
+  and code.
+- **In-browser editor**, **ZIP download/upload**, and a **QR code** to open a
+  site on your phone.
+- **Optional view password, expiry, and view counter** per site.
+- **Deploy from CI** with `scripts/deploy.sh` or the bundled GitHub Action.
 
 ---
 
@@ -104,6 +111,7 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | `SITEBIN_FTP_ADDR` / `SITEBIN_FTP_PASV_PORT_MIN` / `_MAX` | `:21` / `21000` / `21010` | FTP control port + passive data-port range (map them in `docker run`). |
 | `SITEBIN_FTP_PUBLIC_HOST` | base domain | Host advertised for FTP passive mode. |
 | `SITEBIN_FTP_TLS_CERT` / `SITEBIN_FTP_TLS_KEY` | — | Optional PEM cert/key for FTPS (encrypts credentials). |
+| `SITEBIN_TRACK_VIEWS` | `true` | Count per-site page views (Accept: text/html) + last-seen. |
 | `SITEBIN_READONLY` | `false` | Freeze new site creation. |
 | `SITEBIN_RATE_CREATE_PER_HOUR` / `SITEBIN_RATE_CREATE_BURST` | `30` / `10` | Anonymous creation limit per IP. |
 | `SITEBIN_RATE_AUTH_PER_5MIN` | `10` | Password-attempt limit per (IP, site) — edit, view, and WebDAV auth. |
@@ -174,8 +182,41 @@ curl -X POST -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
 curl -X DELETE -H "X-Edit-Password: $PW" \
      https://sitebin.example.com/api/sites/$EDIT_ID/domains/docs.client.com
 
+# read one file's content (used by the in-browser editor)
+curl -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/content/index.html
+
+# download the whole site as a zip
+curl -H "X-Edit-Password: $PW" -o site.zip https://sitebin.example.com/api/sites/$EDIT_ID/download
+
 # delete the site
 curl -X DELETE -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID
+
+# report abuse (public, no auth)
+curl -X POST -H "Content-Type: application/json" \
+     -d '{"target":"https://abc.sitebin.example.com","reason":"phishing"}' \
+     https://sitebin.example.com/api/report
+```
+
+### Deploy from CI / scripts
+
+Deploy a folder with the bundled script (needs `zip` + `curl`):
+
+```bash
+# create a new site
+SITEBIN_BASE=https://sitebin.example.com scripts/deploy.sh ./dist
+# update an existing site (replaces all files)
+SITEBIN_EDIT_URL=https://sitebin.example.com/e/<id> SITEBIN_EDIT_PASSWORD=... \
+  scripts/deploy.sh ./dist
+```
+
+Or use the GitHub Action ([`.github/actions/deploy`](.github/actions/deploy)):
+
+```yaml
+- uses: ./.github/actions/deploy   # or your-org/sitebin/.github/actions/deploy@v1
+  with:
+    folder: dist
+    edit_url: ${{ secrets.SITEBIN_EDIT_URL }}
+    edit_password: ${{ secrets.SITEBIN_EDIT_PASSWORD }}
 ```
 
 ### WebDAV (mount a site as a drive)
@@ -291,11 +332,22 @@ after expiry.
 
 ## Operations
 
-- **Backup:** the `/data` volume is everything (sites + indexes + certs).
-- **Health:** the image ships a `HEALTHCHECK` (`sitebin healthcheck` against
-  the internal listener).
-- **Takedown (abuse):** operators can delete any site by view id, edit id, or
-  domain: `docker exec sitebin sitebin delete <id-or-domain>`.
+Operator commands (run inside the container, e.g. `docker exec sitebin sitebin <cmd>`):
+
+| Command | Purpose |
+|---|---|
+| `sitebin list` | List all sites (id, size, files, mode, created, owner/domains). |
+| `sitebin reports` | List filed abuse reports. |
+| `sitebin delete <id\|domain>` | Take down a site by view id, edit id, or domain. |
+| `sitebin backup [file]` | Write a gzip tar of `/data` (stdout if no file). |
+| `sitebin restore <file>` | Restore `/data` from a backup. |
+| `sitebin caddyfile` | Print the generated Caddyfile. |
+| `sitebin healthcheck` | Probe the internal health endpoint. |
+
+- **Backup:** the `/data` volume is everything (sites + indexes + certs) — or
+  use `sitebin backup` to stream a snapshot, e.g.
+  `docker exec sitebin sitebin backup - > sitebin-$(date +%F).tar.gz`.
+- **Health:** the image ships a `HEALTHCHECK`.
 - **Freeze:** `SITEBIN_READONLY=true` disables new-site creation.
 - **Logs:** structured request + lifecycle logs on stdout (`docker logs`).
 
