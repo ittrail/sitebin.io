@@ -109,6 +109,10 @@ func (p *provider) AccountsEnabled() bool { return p.cfg.Enabled() }
 // custom_domains cap.
 func (p *provider) CustomDomainsAllowed() bool { return true }
 
+// EmbedOriginsAllowed makes SITEBIN_EMBED_ORIGINS effective in the enterprise
+// edition, allowing allowlisted foreign origins to embed the create flow.
+func (p *provider) EmbedOriginsAllowed() bool { return true }
+
 // AuthorizeCreate gates site creation and returns the owner + per-site quota
 // caps. Logged-in users own their sites; anonymous creation is allowed only
 // when the mode/config permits it.

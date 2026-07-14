@@ -37,6 +37,12 @@ type Provider interface {
 	// are off there.
 	CustomDomainsAllowed() bool
 
+	// EmbedOriginsAllowed reports whether SITEBIN_EMBED_ORIGINS is honored —
+	// letting foreign origins embed the create flow (<sitebin-drop>) is a
+	// premium feature. The community build has no provider, so cross-origin
+	// creation stays off there.
+	EmbedOriginsAllowed() bool
+
 	// AuthorizeCreate is consulted before a site is created. It returns a
 	// CreateGrant (owner + per-site quota caps to stamp), or a *CreateError to
 	// reject creation. In the community build it is never called and creation

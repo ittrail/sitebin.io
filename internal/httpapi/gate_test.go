@@ -13,6 +13,7 @@ import (
 type fakeProvider struct {
 	enabled   bool
 	domainsOK bool
+	embedOK   bool
 	owner     string
 	rejErr    error
 	created   []string
@@ -23,6 +24,7 @@ func (f *fakeProvider) Version() string            { return "0" }
 func (f *fakeProvider) Init(ext.Host) error        { return nil }
 func (f *fakeProvider) AccountsEnabled() bool      { return f.enabled }
 func (f *fakeProvider) CustomDomainsAllowed() bool { return f.domainsOK }
+func (f *fakeProvider) EmbedOriginsAllowed() bool  { return f.embedOK }
 func (f *fakeProvider) AuthorizeCreate(*http.Request) (ext.CreateGrant, error) {
 	return ext.CreateGrant{OwnerAccountID: f.owner}, f.rejErr
 }
