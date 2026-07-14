@@ -1,0 +1,155 @@
+//go:build ee
+
+package ee
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"fmt"
+	"net/http"
+	"os"
+	"strconv"
+
+	"github.com/ittrail/sitebin/ee/account"
+	"github.com/ittrail/sitebin/ee/authn"
+	"github.com/ittrail/sitebin/ee/eeconfig"
+	"github.com/ittrail/sitebin/ee/session"
+	"github.com/ittrail/sitebin/internal/ext"
+)
+
+// provider is the enterprise ext.Provider: it gates site creation behind
+// accounts/tiers and serves the account dashboard.
+type provider struct {
+	host     ext.Host
+	cfg      eeconfig.Config
+	accounts *account.Store
+	sessions *session.Manager
+	local    *authn.Local
+	secret   []byte
+}
+
+func newProvider() *provider { return &provider{} }
+
+func (p *provider) Name() string    { return "sitebin-ee" }
+func (p *provider) Version() string { return Version }
+
+func (p *provider) Init(h ext.Host) error {
+	p.host = h
+	p.secret = h.Secret()
+
+	cfg, err := eeconfig.Load(os.Getenv, os.ReadFile)
+	if err != nil {
+		return fmt.Errorf("enterprise config: %w", err)
+	}
+	p.cfg = cfg
+
+	store, err := account.New(h.DataDir())
+	if err != nil {
+		return fmt.Errorf("account store: %w", err)
+	}
+	p.accounts = store
+	p.sessions = session.New(h.Secret(), !h.HTTPOnly(), session.DefaultTTL)
+	p.local = authn.NewLocal(store)
+	return nil
+}
+
+func (p *provider) AccountsEnabled() bool { return p.cfg.Enabled() }
+
+// AuthorizeCreate gates site creation. Logged-in users own their sites;
+// anonymous creation is allowed only when the mode/config permits it.
+func (p *provider) AuthorizeCreate(r *http.Request) (string, error) {
+	if !p.cfg.Enabled() {
+		return "", nil
+	}
+	if acc, ok := p.currentAccount(r); ok {
+		return acc.ID, nil
+	}
+	switch p.cfg.Mode {
+	case eeconfig.ModeAccounts:
+		if p.cfg.AllowAnon {
+			return "", nil
+		}
+	case eeconfig.ModeTiers:
+		if p.cfg.AnonTier != "" {
+			return "", nil
+		}
+	}
+	return "", &ext.CreateError{Status: 401, Msg: "sign in to create a site: " + p.baseURL() + "/account"}
+}
+
+// OnSiteCreated records site ownership on the account.
+func (p *provider) OnSiteCreated(ownerAccountID, viewID string) error {
+	if ownerAccountID == "" {
+		return nil
+	}
+	acc, err := p.accounts.ByID(ownerAccountID)
+	if err != nil {
+		return err
+	}
+	return p.accounts.LinkSite(acc, viewID)
+}
+
+// currentAccount resolves the session cookie to an account, honoring token
+// version (revocation).
+func (p *provider) currentAccount(r *http.Request) (*account.Account, bool) {
+	id, ver, ok := p.sessions.Validate(r)
+	if !ok {
+		return nil, false
+	}
+	acc, err := p.accounts.ByID(id)
+	if err != nil || acc.TokenVersion != ver {
+		return nil, false
+	}
+	return acc, true
+}
+
+// owns reports whether the account owns the given site.
+func (p *provider) owns(acc *account.Account, viewID string) bool {
+	ids, err := p.accounts.ListSiteIDs(acc)
+	if err != nil {
+		return false
+	}
+	for _, id := range ids {
+		if id == viewID {
+			return true
+		}
+	}
+	return false
+}
+
+// baseURL returns the main-domain URL for building links.
+func (p *provider) baseURL() string {
+	scheme := "https"
+	if p.host.HTTPOnly() {
+		scheme = "http"
+	}
+	return scheme + "://" + p.host.BaseDomain()
+}
+
+// ---- CSRF (stateless, derived from the session) ----
+
+// csrf returns a token bound to the account + token version. Combined with the
+// SameSite=Lax session cookie this defends state-changing POSTs.
+func (p *provider) csrf(acc *account.Account) string {
+	mac := hmac.New(sha256.New, p.secret)
+	fmt.Fprintf(mac, "%s|%d|csrf", acc.ID, acc.TokenVersion)
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func (p *provider) checkCSRF(r *http.Request, acc *account.Account) bool {
+	got := r.PostFormValue("csrf")
+	want := p.csrf(acc)
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+// tierForNewAccount returns the tier id a new account starts on.
+func (p *provider) tierForNewAccount() string {
+	if p.cfg.DefaultTier != "" {
+		return p.cfg.DefaultTier
+	}
+	return ""
+}
+
+var _ = strconv.Itoa // reserved for future numeric config

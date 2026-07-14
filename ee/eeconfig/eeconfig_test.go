@@ -48,10 +48,10 @@ func TestLoadInvalidMode(t *testing.T) {
 
 func TestLoadTiersInline(t *testing.T) {
 	cfg, err := Load(env(map[string]string{
-		"SITEBIN_ACCOUNT_MODE": "tiers",
-		"SITEBIN_TIERS":        twoTiers,
-		"SITEBIN_DEFAULT_TIER": "free",
-		"SITEBIN_ANON_TIER":    "free",
+		"SITEBIN_ACCOUNT_MODE":     "tiers",
+		"SITEBIN_TIERS":            twoTiers,
+		"SITEBIN_DEFAULT_TIER":     "free",
+		"SITEBIN_ANON_TIER":        "free",
 		"SITEBIN_TIER_SELF_SELECT": "true",
 	}), noFile)
 	if err != nil {
