@@ -231,3 +231,63 @@ func TestBaseDomainPortStripped(t *testing.T) {
 		t.Errorf("PublicPort = %d", cfg.PublicPort)
 	}
 }
+
+func TestEmbedOrigins(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"SITEBIN_BASE_DOMAIN":   "sitebin.example",
+		"SITEBIN_HTTP_ONLY":     "true",
+		"SITEBIN_EMBED_ORIGINS": " https://Sitebin.io ,https://www.sitebin.io,",
+	}))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []string{"https://sitebin.io", "https://www.sitebin.io"}
+	if len(cfg.EmbedOrigins) != len(want) {
+		t.Fatalf("EmbedOrigins = %v, want %v", cfg.EmbedOrigins, want)
+	}
+	for i := range want {
+		if cfg.EmbedOrigins[i] != want[i] {
+			t.Fatalf("EmbedOrigins = %v, want %v", cfg.EmbedOrigins, want)
+		}
+	}
+}
+
+func TestEmbedOriginsWildcard(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"SITEBIN_BASE_DOMAIN":   "sitebin.example",
+		"SITEBIN_HTTP_ONLY":     "true",
+		"SITEBIN_EMBED_ORIGINS": "*",
+	}))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.EmbedOrigins) != 1 || cfg.EmbedOrigins[0] != "*" {
+		t.Fatalf("EmbedOrigins = %v, want [*]", cfg.EmbedOrigins)
+	}
+}
+
+func TestEmbedOriginsInvalid(t *testing.T) {
+	for _, bad := range []string{"sitebin.io", "ftp://x.io", "https://x.io/path"} {
+		_, err := Load(env(map[string]string{
+			"SITEBIN_BASE_DOMAIN":   "sitebin.example",
+			"SITEBIN_HTTP_ONLY":     "true",
+			"SITEBIN_EMBED_ORIGINS": bad,
+		}))
+		if err == nil || !strings.Contains(err.Error(), "SITEBIN_EMBED_ORIGINS") {
+			t.Errorf("%q: err = %v, want SITEBIN_EMBED_ORIGINS error", bad, err)
+		}
+	}
+}
+
+func TestEmbedOriginsUnset(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"SITEBIN_BASE_DOMAIN": "sitebin.example",
+		"SITEBIN_HTTP_ONLY":   "true",
+	}))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.EmbedOrigins != nil {
+		t.Fatalf("EmbedOrigins = %v, want nil", cfg.EmbedOrigins)
+	}
+}

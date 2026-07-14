@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -48,6 +49,11 @@ type Config struct {
 	FTPPublicHost string // host advertised for passive mode (default: BaseDomain)
 	FTPTLSCert    string // optional PEM cert for explicit FTPS (AUTH TLS)
 	FTPTLSKey     string // optional PEM key
+
+	// EmbedOrigins are web origins allowed to create sites cross-origin via
+	// the <sitebin-drop> embed component ("*" allows any). Honored only in
+	// the enterprise edition; empty means same-origin only.
+	EmbedOrigins []string
 }
 
 // View-access modes for serving site content.
@@ -190,6 +196,24 @@ func Load(getenv func(string) string) (Config, error) {
 	cfg.FTPTLSKey = strings.TrimSpace(getenv("SITEBIN_FTP_TLS_KEY"))
 	if cfg.FTPEnabled && cfg.FTPPasvMax < cfg.FTPPasvMin {
 		return cfg, fmt.Errorf("SITEBIN_FTP_PASV_PORT_MAX (%d) must be >= MIN (%d)", cfg.FTPPasvMax, cfg.FTPPasvMin)
+	}
+
+	if v := strings.TrimSpace(getenv("SITEBIN_EMBED_ORIGINS")); v != "" {
+		if v == "*" {
+			cfg.EmbedOrigins = []string{"*"}
+		} else {
+			for _, part := range strings.Split(v, ",") {
+				o := strings.ToLower(strings.TrimSpace(part))
+				if o == "" {
+					continue
+				}
+				u, err := url.Parse(o)
+				if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Path != "" || u.RawQuery != "" {
+					return cfg, fmt.Errorf("SITEBIN_EMBED_ORIGINS: %q is not an origin (want https://host[:port], or a single *)", part)
+				}
+				cfg.EmbedOrigins = append(cfg.EmbedOrigins, o)
+			}
+		}
 	}
 
 	// The wildcard cert (and thus a DNS challenge) is only needed when sites are
