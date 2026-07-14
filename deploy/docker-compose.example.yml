@@ -44,8 +44,13 @@ services:
     #   - "443:443/udp"     # HTTP/3
     ports:
       - "8080:80"
-      # FTP (nur bei SITEBIN_FTP_ENABLED=true): Steuerport + Passiv-Portbereich
-      # müssen 1:1 gemappt werden, damit der Passiv-Modus durch Docker funktioniert.
+      # FTP (nur bei SITEBIN_FTP_ENABLED=true) — WICHTIG, sonst hängt FTP:
+      # Der Steuerport UND der komplette Passiv-Portbereich müssen 1:1 gemappt
+      # werden (Bereich 21000-21010:21000-21010, NICHT ein einzelner Port),
+      # damit der Passiv-Modus durch Docker funktioniert. Zusätzlich muss unten
+      # SITEBIN_FTP_PUBLIC_HOST auf die Adresse zeigen, die der CLIENT erreicht
+      # (lokal 127.0.0.1, in Produktion deine Server-IP/Domain — NICHT die
+      # interne Container-IP). Falsch gesetzt = Login klappt, LIST/Transfer hängt.
       # - "21:21"
       # - "21000-21010:21000-21010"
 
@@ -107,7 +112,8 @@ services:
       # SITEBIN_FTP_ADDR:           ":21"                # Steuerport
       # SITEBIN_FTP_PASV_PORT_MIN:  "21000"              # Passiv-Datenports (Bereich)
       # SITEBIN_FTP_PASV_PORT_MAX:  "21010"
-      # SITEBIN_FTP_PUBLIC_HOST:    "sitebin.localtest.me"  # für Passiv-Modus angekündigter Host
+      # SITEBIN_FTP_PUBLIC_HOST: "127.0.0.1"   # PASV: Adresse, die der CLIENT erreicht!
+      #                                        # lokal 127.0.0.1, in Prod deine Server-IP/Domain.
       # Optional FTPS (explizites AUTH TLS) — dann werden Zugangsdaten verschlüsselt:
       # SITEBIN_FTP_TLS_CERT:       "/certs/ftp.crt"
       # SITEBIN_FTP_TLS_KEY:        "/certs/ftp.key"

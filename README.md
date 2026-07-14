@@ -220,15 +220,35 @@ curl --user "$EDIT_ID:$PW" ftp://sitebin.example.com/index.html
 ```
 
 Each session is confined to that one site's files, with the same path and
-quota rules as every other write path. Ports: map the control port (`21`) and
-the passive range (`21000-21010` by default) at `docker run`
-(`-p 21:21 -p 21000-21010:21000-21010`), and set `SITEBIN_FTP_PUBLIC_HOST` to
-the address clients reach.
+quota rules as every other write path.
 
 > **Plain FTP is unencrypted** — username and password travel in clear text.
 > Use it only on a trusted network, or configure FTPS with
 > `SITEBIN_FTP_TLS_CERT` / `SITEBIN_FTP_TLS_KEY`. Like WebDAV, FTP grants full
 > write access to the site.
+
+#### Passive mode & Docker (read this — FTP is fiddly here)
+
+FTP opens a second connection for each data transfer (LIST, upload, download).
+In **passive mode** (what clients use by default) the server tells the client
+which host and port to open that connection to — and getting this right through
+Docker is the part that trips everyone up. Two rules:
+
+1. **Publish the whole passive range 1:1.** The container-internal port the
+   server picks must be reachable under the *same* number on the host:
+   `-p 21:21 -p 21000-21010:21000-21010` (a `21000-21010:21000-21010` mapping,
+   not a single port). Widen the range with
+   `SITEBIN_FTP_PASV_PORT_MIN`/`_MAX` if you expect many concurrent transfers.
+2. **Set `SITEBIN_FTP_PUBLIC_HOST` to the address the *client* actually
+   reaches** — **not** the container's internal IP. Locally that's `127.0.0.1`;
+   in production it's your server's public IP or hostname (e.g.
+   `sitebin.example.com`). If it's wrong, the control connection logs in and
+   `LIST`/transfers then hang or fail — that symptom is almost always a wrong
+   `SITEBIN_FTP_PUBLIC_HOST` or unmapped passive ports.
+
+Because of all this, WebDAV (`/dav/<edit-id>/`, plain HTTPS, no extra ports) is
+the smoother remote-mount option; reach for FTP when a client or workflow
+specifically needs it.
 
 ### View access modes
 
