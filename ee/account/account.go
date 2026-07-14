@@ -16,6 +16,7 @@ const (
 	Local     Provider = "local"
 	Google    Provider = "google"
 	Microsoft Provider = "microsoft"
+	OIDCProv  Provider = "oidc" // generic OIDC issuer (saas-stack, Keycloak, …)
 )
 
 var (

@@ -99,3 +99,43 @@ func serveMux(p *provider) *http.ServeMux {
 	}
 	return m
 }
+
+func TestGenericOIDCProvider(t *testing.T) {
+	cfg, err := eeconfig.Load(func(k string) string {
+		return map[string]string{
+			"SITEBIN_ACCOUNT_MODE":             "accounts",
+			"SITEBIN_OAUTH_OIDC_ISSUER":        "https://auth.stack.example/api/v1/sitebin",
+			"SITEBIN_OAUTH_OIDC_CLIENT_ID":     "sitebin",
+			"SITEBIN_OAUTH_OIDC_CLIENT_SECRET": "s3cret",
+			"SITEBIN_OAUTH_OIDC_LABEL":         "IT-Trail SSO",
+		}[k]
+	}, func(string) ([]byte, error) { return nil, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := authn.NewOIDC(cfg, "https://sitebin.example")
+	if !m.Configured(account.OIDCProv) {
+		t.Fatal("generic oidc provider not configured")
+	}
+}
+
+func TestGenericOIDCLoginButtonLabel(t *testing.T) {
+	t.Setenv("SITEBIN_ACCOUNT_MODE", "accounts")
+	t.Setenv("SITEBIN_OAUTH_OIDC_ISSUER", "https://auth.stack.example/api/v1/sitebin")
+	t.Setenv("SITEBIN_OAUTH_OIDC_CLIENT_ID", "sitebin")
+	t.Setenv("SITEBIN_OAUTH_OIDC_LABEL", "IT-Trail SSO")
+	p := newProvider()
+	if err := p.Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
+		t.Fatal(err)
+	}
+	mux := serveMux(p)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/account/login", nil))
+	body := w.Body.String()
+	if !strings.Contains(body, "/account/auth/oidc") {
+		t.Error("oidc button missing from login page")
+	}
+	if !strings.Contains(body, "IT-Trail SSO") {
+		t.Error("configured label missing from login page")
+	}
+}

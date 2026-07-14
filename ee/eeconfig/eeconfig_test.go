@@ -181,3 +181,58 @@ func TestBadTierJSON(t *testing.T) {
 		t.Fatal("expected json error")
 	}
 }
+
+func TestLoadGenericOIDC(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"SITEBIN_ACCOUNT_MODE":             "accounts",
+		"SITEBIN_OAUTH_OIDC_ISSUER":        "https://auth.stack.example/api/v1/sitebin",
+		"SITEBIN_OAUTH_OIDC_CLIENT_ID":     "sitebin",
+		"SITEBIN_OAUTH_OIDC_CLIENT_SECRET": "s3cret",
+		"SITEBIN_OAUTH_OIDC_LABEL":         "IT-Trail SSO",
+	}), noFile)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.OIDC == nil {
+		t.Fatal("OIDC not parsed")
+	}
+	if cfg.OIDC.Issuer != "https://auth.stack.example/api/v1/sitebin" ||
+		cfg.OIDC.ClientID != "sitebin" || cfg.OIDC.ClientSecret != "s3cret" ||
+		cfg.OIDC.Label != "IT-Trail SSO" {
+		t.Fatalf("OIDC = %+v", cfg.OIDC)
+	}
+	if !cfg.OAuthEnabled() {
+		t.Fatal("OAuthEnabled should include generic OIDC")
+	}
+}
+
+func TestLoadGenericOIDCDefaultLabel(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"SITEBIN_OAUTH_OIDC_ISSUER":    "https://idp.example",
+		"SITEBIN_OAUTH_OIDC_CLIENT_ID": "cid",
+	}), noFile)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.OIDC.Label != "SSO" {
+		t.Fatalf("default label = %q, want SSO", cfg.OIDC.Label)
+	}
+}
+
+func TestLoadGenericOIDCInvalid(t *testing.T) {
+	// missing client id
+	_, err := Load(env(map[string]string{
+		"SITEBIN_OAUTH_OIDC_ISSUER": "https://idp.example",
+	}), noFile)
+	if err == nil || !strings.Contains(err.Error(), "SITEBIN_OAUTH_OIDC_CLIENT_ID") {
+		t.Fatalf("want client-id error, got %v", err)
+	}
+	// bad issuer
+	_, err = Load(env(map[string]string{
+		"SITEBIN_OAUTH_OIDC_ISSUER":    "idp.example",
+		"SITEBIN_OAUTH_OIDC_CLIENT_ID": "cid",
+	}), noFile)
+	if err == nil || !strings.Contains(err.Error(), "SITEBIN_OAUTH_OIDC_ISSUER") {
+		t.Fatalf("want issuer error, got %v", err)
+	}
+}

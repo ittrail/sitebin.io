@@ -49,6 +49,16 @@ type OAuthProvider struct {
 	Tenant       string // Microsoft only (default "common")
 }
 
+// GenericOIDC configures sign-in against any spec-compliant OIDC issuer —
+// Keycloak, Okta, Authentik, or the IT-Trail SaaS Stack's Auth Gateway
+// (issuer https://auth.<stack-domain>/api/v1/<app-id>).
+type GenericOIDC struct {
+	Issuer       string
+	ClientID     string
+	ClientSecret string
+	Label        string // login-button text (default "SSO")
+}
+
 // Config is the parsed enterprise configuration.
 type Config struct {
 	Mode        Mode
@@ -60,6 +70,7 @@ type Config struct {
 
 	Google    *OAuthProvider // nil = not configured
 	Microsoft *OAuthProvider
+	OIDC      *GenericOIDC // generic issuer (saas-stack, Keycloak, Okta, …)
 
 	SMTP    *SMTPConfig    // nil = email disabled
 	Billing *BillingConfig // nil = billing disabled
@@ -96,7 +107,9 @@ type SMTPConfig struct {
 }
 
 // OAuthEnabled reports whether any OAuth provider is configured.
-func (c Config) OAuthEnabled() bool { return c.Google != nil || c.Microsoft != nil }
+func (c Config) OAuthEnabled() bool {
+	return c.Google != nil || c.Microsoft != nil || c.OIDC != nil
+}
 
 // EmailEnabled reports whether SMTP is configured.
 func (c Config) EmailEnabled() bool { return c.SMTP != nil }
@@ -142,6 +155,24 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Co
 			tenant = "common"
 		}
 		cfg.Microsoft = &OAuthProvider{ClientID: id, ClientSecret: getenv("SITEBIN_OAUTH_MICROSOFT_CLIENT_SECRET"), Tenant: tenant}
+	}
+
+	if issuer := strings.TrimSpace(getenv("SITEBIN_OAUTH_OIDC_ISSUER")); issuer != "" {
+		if !strings.HasPrefix(issuer, "https://") && !strings.HasPrefix(issuer, "http://") {
+			return cfg, fmt.Errorf("SITEBIN_OAUTH_OIDC_ISSUER: %q is not an http(s) URL", issuer)
+		}
+		clientID := strings.TrimSpace(getenv("SITEBIN_OAUTH_OIDC_CLIENT_ID"))
+		if clientID == "" {
+			return cfg, fmt.Errorf("SITEBIN_OAUTH_OIDC_CLIENT_ID is required with SITEBIN_OAUTH_OIDC_ISSUER")
+		}
+		label := strings.TrimSpace(getenv("SITEBIN_OAUTH_OIDC_LABEL"))
+		if label == "" {
+			label = "SSO"
+		}
+		cfg.OIDC = &GenericOIDC{
+			Issuer: strings.TrimRight(issuer, "/"), ClientID: clientID,
+			ClientSecret: getenv("SITEBIN_OAUTH_OIDC_CLIENT_SECRET"), Label: label,
+		}
 	}
 
 	if host := strings.TrimSpace(getenv("SITEBIN_SMTP_HOST")); host != "" {

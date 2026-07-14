@@ -47,11 +47,28 @@ func (p *provider) checkoutProvider() string {
 	return ""
 }
 
-// oauthButtons returns the configured providers for the login/signup page.
-func (p *provider) oauthButtons() []string {
-	var out []string
-	for _, prov := range p.oidc.Providers() {
-		out = append(out, string(prov))
+// providerButton is one sign-in option on the login/signup page.
+type providerButton struct {
+	ID    string // path segment: /account/auth/<id>
+	Label string // button text
+}
+
+// oauthButtons returns the configured providers for the login/signup page,
+// in a stable order with display labels (the generic issuer's label is
+// operator-configured, e.g. the SSO product's name).
+func (p *provider) oauthButtons() []providerButton {
+	labels := map[account.Provider]string{
+		account.Google:    "Google",
+		account.Microsoft: "Microsoft",
+	}
+	if p.cfg.OIDC != nil {
+		labels[account.OIDCProv] = p.cfg.OIDC.Label
+	}
+	var out []providerButton
+	for _, prov := range []account.Provider{account.OIDCProv, account.Google, account.Microsoft} {
+		if p.oidc.Configured(prov) {
+			out = append(out, providerButton{ID: string(prov), Label: labels[prov]})
+		}
 	}
 	return out
 }
@@ -233,7 +250,7 @@ type authView struct {
 	Mode         string // login | signup
 	Email        string
 	Error        string
-	Providers    []string
+	Providers    []providerButton
 	EmailEnabled bool
 }
 

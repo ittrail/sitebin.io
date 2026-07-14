@@ -82,6 +82,13 @@ func NewOIDC(cfg eeconfig.Config, redirectBase string) *OIDC {
 			redirectURL: redirectBase + "/account/auth/microsoft/callback",
 		}
 	}
+	if g := cfg.OIDC; g != nil {
+		m.providers[account.OIDCProv] = &oidcProvider{
+			name: account.OIDCProv, issuer: g.Issuer,
+			clientID: g.ClientID, secret: g.ClientSecret,
+			redirectURL: redirectBase + "/account/auth/oidc/callback",
+		}
+	}
 	return m
 }
 

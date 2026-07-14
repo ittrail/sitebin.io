@@ -60,7 +60,7 @@ var authTmpl = template.Must(template.New("auth").Parse(pageHead + `
   {{if .Providers}}
   <div style="margin:18px 0;text-align:center;color:var(--ink-faint);font-size:13px">or continue with</div>
   <div style="display:grid;gap:8px">
-    {{range .Providers}}<a class="btn" style="justify-content:center;text-transform:capitalize" href="/account/auth/{{.}}">{{.}}</a>{{end}}
+    {{range .Providers}}<a class="btn" style="justify-content:center" href="/account/auth/{{.ID}}">{{.Label}}</a>{{end}}
   </div>
   {{end}}
   <div class="switch-link">
