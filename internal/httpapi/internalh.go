@@ -3,17 +3,28 @@ package httpapi
 import (
 	"net/http"
 	"time"
+
+	"github.com/ittrail/sitebin/internal/store"
 )
 
 // authz answers Caddy's forward_auth subrequest for every content request on
-// view subdomains and custom domains: 200 serve, 401 gate (body relayed to
-// the client), 410 expired, 404 unknown.
+// view subdomains, custom domains, and /v/<id> path views: 200 serve, 401 gate
+// (body relayed to the client), 410 expired, 404 unknown.
 func (a *API) authz(w http.ResponseWriter, r *http.Request) {
-	host := r.Header.Get("X-Forwarded-Host")
-	if host == "" {
-		host = r.Host
+	var site *store.Site
+	var err error
+	pathMode := false
+	if viewID := r.Header.Get("X-Sitebin-View"); viewID != "" {
+		// /v/<id> path view — Caddy passes the id explicitly.
+		pathMode = true
+		site, err = a.st.ByViewID(viewID)
+	} else {
+		host := r.Header.Get("X-Forwarded-Host")
+		if host == "" {
+			host = r.Host
+		}
+		site, err = a.siteByHost(host)
 	}
-	site, err := a.siteByHost(host)
 	if err != nil {
 		a.msgPage(w, 404, "Site not found", "There is no site at this address. It may have been deleted.")
 		return
@@ -30,7 +41,12 @@ func (a *API) authz(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 		return
 	}
-	a.gatePage(w, 401, sanitizeRedirect(r.Header.Get("X-Forwarded-Uri")), "")
+	// The gate form needs the site id in path mode (Host is the main domain).
+	gateSite := ""
+	if pathMode {
+		gateSite = site.ViewID
+	}
+	a.gatePage(w, 401, sanitizeRedirect(r.Header.Get("X-Forwarded-Uri")), "", gateSite)
 }
 
 // tlsCheck is Caddy's on-demand TLS ask endpoint: 200 only for domains that

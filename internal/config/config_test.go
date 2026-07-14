@@ -140,6 +140,82 @@ func TestLoadRejectsBadInt(t *testing.T) {
 	}
 }
 
+func TestViewAccessDefaultSubdomain(t *testing.T) {
+	cfg, err := Load(env(map[string]string{"SITEBIN_BASE_DOMAIN": "s.example", "SITEBIN_HTTP_ONLY": "true"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ViewAccess != ViewSubdomain || !cfg.SubdomainViews() || cfg.PathViews() {
+		t.Errorf("default view access = %q", cfg.ViewAccess)
+	}
+	if got := cfg.ViewURL("aaaaaaaaaaaaaaaaaaaaaaaaaa"); got != "http://aaaaaaaaaaaaaaaaaaaaaaaaaa.s.example" {
+		t.Errorf("subdomain view url = %q", got)
+	}
+}
+
+func TestViewAccessPath(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"SITEBIN_BASE_DOMAIN": "s.example", "SITEBIN_HTTP_ONLY": "true",
+		"SITEBIN_VIEW_ACCESS": "path",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SubdomainViews() || !cfg.PathViews() {
+		t.Errorf("path mode flags wrong: sub=%v path=%v", cfg.SubdomainViews(), cfg.PathViews())
+	}
+	if got := cfg.ViewURL("aaaaaaaaaaaaaaaaaaaaaaaaaa"); got != "http://s.example/v/aaaaaaaaaaaaaaaaaaaaaaaaaa/" {
+		t.Errorf("path view url = %q", got)
+	}
+}
+
+func TestViewAccessBoth(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"SITEBIN_BASE_DOMAIN": "s.example", "SITEBIN_HTTP_ONLY": "true",
+		"SITEBIN_VIEW_ACCESS": "both",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.SubdomainViews() || !cfg.PathViews() {
+		t.Error("both mode should enable subdomain and path")
+	}
+}
+
+func TestViewAccessInvalid(t *testing.T) {
+	_, err := Load(env(map[string]string{
+		"SITEBIN_BASE_DOMAIN": "s.example", "SITEBIN_HTTP_ONLY": "true",
+		"SITEBIN_VIEW_ACCESS": "wat",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "SITEBIN_VIEW_ACCESS") {
+		t.Fatalf("expected view-access error, got %v", err)
+	}
+}
+
+func TestPathModeNeedsNoDNSChallenge(t *testing.T) {
+	// path-only mode over HTTPS needs no wildcard cert, so no DNS provider.
+	cfg, err := Load(env(map[string]string{
+		"SITEBIN_BASE_DOMAIN": "s.example",
+		"SITEBIN_VIEW_ACCESS": "path",
+	}))
+	if err != nil {
+		t.Fatalf("path-only HTTPS should not require DNS provider: %v", err)
+	}
+	if cfg.SubdomainViews() {
+		t.Error("path-only should not enable subdomains")
+	}
+}
+
+func TestSubdomainModeStillNeedsDNSChallenge(t *testing.T) {
+	_, err := Load(env(map[string]string{
+		"SITEBIN_BASE_DOMAIN": "s.example",
+		"SITEBIN_VIEW_ACCESS": "both",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "SITEBIN_DNS_PROVIDER") {
+		t.Fatalf("both mode still needs the wildcard cert, got %v", err)
+	}
+}
+
 func TestBaseDomainPortStripped(t *testing.T) {
 	cfg, err := Load(env(map[string]string{
 		"SITEBIN_BASE_DOMAIN": "sitebin.localtest.me:8085",

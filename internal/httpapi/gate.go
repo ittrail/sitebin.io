@@ -35,29 +35,44 @@ func (a *API) unlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	redirect := sanitizeRedirect(r.PostFormValue("redirect"))
-	site, err := a.siteByHost(r.Host)
+
+	// In path mode the form carries the site id (Host is the main domain, so it
+	// can't be resolved from the Host header). The cookie is then scoped to the
+	// site's /v/<id>/ path so protected path-sites don't share one cookie slot.
+	var site *store.Site
+	var err error
+	cookiePath := "/"
+	if sid := r.PostFormValue("site"); sid != "" {
+		site, err = a.st.ByViewID(sid)
+		if err == nil {
+			cookiePath = "/v/" + site.ViewID + "/"
+		}
+	} else {
+		site, err = a.siteByHost(r.Host)
+	}
 	if err != nil {
 		a.msgPage(w, 404, "Site not found", "There is no site at this address.")
 		return
 	}
+	gateSite := r.PostFormValue("site")
 	if !site.Meta.ViewPasswordProtected {
 		http.Redirect(w, r, redirect, http.StatusSeeOther)
 		return
 	}
 	pw := r.PostFormValue("password")
 	if !a.authLimiter.Allow(clientIP(r)+"|view:"+site.ViewID) || !a.targetLimiter.Allow("view:"+site.ViewID) {
-		a.gatePage(w, 429, redirect, "Too many attempts — please wait a moment and try again.")
+		a.gatePage(w, 429, redirect, "Too many attempts — please wait a moment and try again.", gateSite)
 		return
 	}
 	if pw == "" || !auth.VerifyPassword(site.Meta.ViewPasswordHash, pw) {
-		a.gatePage(w, 401, redirect, "Wrong password, please try again.")
+		a.gatePage(w, 401, redirect, "Wrong password, please try again.", gateSite)
 		return
 	}
 	token := a.signer.Sign(tokenSubject(site), time.Now(), viewCookieTTL)
 	http.SetCookie(w, &http.Cookie{
 		Name:     viewCookieName,
 		Value:    token,
-		Path:     "/",
+		Path:     cookiePath,
 		MaxAge:   int(viewCookieTTL.Seconds()),
 		HttpOnly: true,
 		Secure:   !a.cfg.HTTPOnly,
@@ -138,6 +153,7 @@ var basePageTmpl = template.Must(template.New("page").Parse(`<!doctype html>
   {{if .ShowForm}}
   <form method="post" action="/_sitebin/unlock">
     <input type="hidden" name="redirect" value="{{.Redirect}}">
+    {{if .Site}}<input type="hidden" name="site" value="{{.Site}}">{{end}}
     <input type="password" name="password" placeholder="Password" autofocus autocomplete="current-password" aria-label="View password">
     {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
     <button type="submit">Unlock site</button>
@@ -155,6 +171,7 @@ type pageData struct {
 	ShowForm bool
 	Redirect string
 	Error    string
+	Site     string // view id (path mode only; empty on subdomains)
 }
 
 func (a *API) renderPage(w http.ResponseWriter, status int, d pageData) {
@@ -167,14 +184,16 @@ func (a *API) renderPage(w http.ResponseWriter, status int, d pageData) {
 }
 
 // gatePage renders the password prompt (also used as the 401 body relayed by
-// Caddy's forward_auth).
-func (a *API) gatePage(w http.ResponseWriter, status int, redirect, errMsg string) {
+// Caddy's forward_auth). site is the view id for path-mode gates ("" on
+// subdomains, where the site resolves from the Host).
+func (a *API) gatePage(w http.ResponseWriter, status int, redirect, errMsg, site string) {
 	a.renderPage(w, status, pageData{
 		Title:    "This site is protected",
 		Message:  "Enter the view password to continue.",
 		ShowForm: true,
 		Redirect: redirect,
 		Error:    errMsg,
+		Site:     site,
 	})
 }
 

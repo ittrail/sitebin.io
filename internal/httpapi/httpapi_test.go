@@ -582,6 +582,66 @@ func TestAuthzCustomDomain(t *testing.T) {
 	}
 }
 
+func TestAuthzPathMode(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+
+	req := httptest.NewRequest("GET", "/internal/authz", nil)
+	req.Header.Set("X-Sitebin-View", c.ID)
+	req.Header.Set("X-Forwarded-Uri", "/v/"+c.ID+"/")
+	if w := e.internal(t, req); w.Code != 200 {
+		t.Fatalf("path authz open site: %d", w.Code)
+	}
+	// unknown id → 404
+	req = httptest.NewRequest("GET", "/internal/authz", nil)
+	req.Header.Set("X-Sitebin-View", "aaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if w := e.internal(t, req); w.Code != 404 {
+		t.Fatalf("path authz unknown: %d", w.Code)
+	}
+}
+
+func TestPathModeGateAndUnlock(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, map[string]string{"view_password": "sesame"}, map[string]string{"index.html": "secret"})
+
+	// gate via path mode
+	req := httptest.NewRequest("GET", "/internal/authz", nil)
+	req.Header.Set("X-Sitebin-View", c.ID)
+	req.Header.Set("X-Forwarded-Uri", "/v/"+c.ID+"/page")
+	w := e.internal(t, req)
+	if w.Code != 401 {
+		t.Fatalf("path gate: %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), `name="site" value="`+c.ID+`"`) {
+		t.Errorf("gate form missing site field:\n%s", w.Body)
+	}
+
+	// unlock carrying the site id
+	form := "password=sesame&redirect=%2Fv%2F" + c.ID + "%2Fpage&site=" + c.ID
+	ureq := httptest.NewRequest("POST", "/_sitebin/unlock", strings.NewReader(form))
+	ureq.Host = "sitebin.example"
+	ureq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	uw := e.public(t, ureq)
+	if uw.Code != 303 {
+		t.Fatalf("unlock: %d %s", uw.Code, uw.Body)
+	}
+	if loc := uw.Header().Get("Location"); loc != "/v/"+c.ID+"/page" {
+		t.Errorf("redirect = %q", loc)
+	}
+	cookie := uw.Header().Get("Set-Cookie")
+	if !strings.Contains(cookie, "Path=/v/"+c.ID+"/") {
+		t.Fatalf("cookie not path-scoped: %q", cookie)
+	}
+
+	// cookie passes the path-mode gate
+	creq := httptest.NewRequest("GET", "/internal/authz", nil)
+	creq.Header.Set("X-Sitebin-View", c.ID)
+	creq.Header.Set("Cookie", strings.Split(cookie, ";")[0])
+	if w := e.internal(t, creq); w.Code != 200 {
+		t.Fatalf("cookie path authz: %d", w.Code)
+	}
+}
+
 func TestHealth(t *testing.T) {
 	e := newEnv(t, nil)
 	w := e.internal(t, httptest.NewRequest("GET", "/internal/health", nil))

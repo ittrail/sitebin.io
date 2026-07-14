@@ -35,27 +35,34 @@ func Generate(cfg config.Config) string {
 		scheme = "http://"
 	}
 
-	// ---- main domain: UI + API + WebDAV, never user content ----
+	// ---- main domain: UI + API + WebDAV (+ optional /v/<id> path views) ----
 	fmt.Fprintf(&b, "%s%s {\n", scheme, cfg.BaseDomain)
 	b.WriteString("\tencode zstd gzip\n")
-	fmt.Fprintf(&b, "\treverse_proxy %s\n", backend("8080"))
+	if cfg.PathViews() {
+		writePathViewRoutes(&b, backend, cfg.DataDir)
+		fmt.Fprintf(&b, "\thandle {\n\t\treverse_proxy %s\n\t}\n", backend("8080"))
+	} else {
+		fmt.Fprintf(&b, "\treverse_proxy %s\n", backend("8080"))
+	}
 	b.WriteString("}\n\n")
 
 	// ---- view subdomains: wildcard cert, pure static serving ----
-	fmt.Fprintf(&b, "%s*.%s {\n", scheme, cfg.BaseDomain)
-	if !cfg.HTTPOnly {
-		b.WriteString("\ttls {\n")
-		if cfg.TLSSnippet != "" {
-			for _, line := range strings.Split(cfg.TLSSnippet, "\n") {
-				fmt.Fprintf(&b, "\t\t%s\n", line)
+	if cfg.SubdomainViews() {
+		fmt.Fprintf(&b, "%s*.%s {\n", scheme, cfg.BaseDomain)
+		if !cfg.HTTPOnly {
+			b.WriteString("\ttls {\n")
+			if cfg.TLSSnippet != "" {
+				for _, line := range strings.Split(cfg.TLSSnippet, "\n") {
+					fmt.Fprintf(&b, "\t\t%s\n", line)
+				}
+			} else {
+				fmt.Fprintf(&b, "\t\tdns %s {env.SITEBIN_DNS_TOKEN}\n", cfg.DNSProvider)
 			}
-		} else {
-			fmt.Fprintf(&b, "\t\tdns %s {env.SITEBIN_DNS_TOKEN}\n", cfg.DNSProvider)
+			b.WriteString("\t}\n")
 		}
-		b.WriteString("\t}\n")
+		writeContentRoutes(&b, backend, fmt.Sprintf("%s/sites/{labels.%d}/files", cfg.DataDir, labelIdx))
+		b.WriteString("}\n\n")
 	}
-	writeContentRoutes(&b, backend, fmt.Sprintf("%s/sites/{labels.%d}/files", cfg.DataDir, labelIdx))
-	b.WriteString("}\n\n")
 
 	// ---- custom domains: catch-all with on-demand TLS ----
 	if cfg.HTTPOnly {
@@ -72,6 +79,24 @@ func Generate(cfg config.Config) string {
 		b.WriteString("\nhttp:// {\n\tredir https://{host}{uri} permanent\n}\n")
 	}
 	return b.String()
+}
+
+// writePathViewRoutes emits main-domain routing for /v/<view-id> path views.
+// A `route` block preserves directive order so forward_auth sees the full URI
+// (for the gate redirect) before it is stripped for the file server.
+func writePathViewRoutes(b *strings.Builder, backend func(string) string, dataDir string) {
+	b.WriteString("\t# --- path-served sites: /v/<view-id>/ (SITEBIN_VIEW_ACCESS=path|both) ---\n")
+	b.WriteString("\t@viewbare path_regexp vb ^/v/([a-z2-7]{26})$\n")
+	b.WriteString("\tredir @viewbare /v/{re.vb.1}/ 308\n")
+	b.WriteString("\t@view path_regexp view ^/v/([a-z2-7]{26})/.*$\n")
+	b.WriteString("\thandle @view {\n")
+	b.WriteString("\t\troute {\n")
+	fmt.Fprintf(b, "\t\t\tforward_auth %s {\n\t\t\t\turi /internal/authz\n\t\t\t\theader_up X-Sitebin-View {re.view.1}\n\t\t\t\tcopy_headers Set-Cookie\n\t\t\t}\n", backend("9000"))
+	b.WriteString("\t\t\turi strip_prefix /v/{re.view.1}\n")
+	fmt.Fprintf(b, "\t\t\troot * %s/sites/{re.view.1}/files\n", dataDir)
+	b.WriteString("\t\t\tfile_server {\n\t\t\t\tbrowse\n\t\t\t}\n")
+	b.WriteString("\t\t}\n")
+	b.WriteString("\t}\n")
 }
 
 // writeContentRoutes emits the shared routing shape of every content origin:

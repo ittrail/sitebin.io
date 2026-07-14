@@ -91,6 +91,57 @@ func TestGenerateHTTPOnly(t *testing.T) {
 	}
 }
 
+func TestGeneratePathMode(t *testing.T) {
+	cfg := mustLoad(t, map[string]string{
+		"SITEBIN_BASE_DOMAIN": "sitebin.example",
+		"SITEBIN_HTTP_ONLY":   "true",
+		"SITEBIN_VIEW_ACCESS": "path",
+	})
+	out := Generate(cfg)
+	for _, want := range []string{
+		"@view path_regexp view ^/v/([a-z2-7]{26})/.*$",
+		"redir @viewbare /v/{re.vb.1}/ 308",
+		"header_up X-Sitebin-View {re.view.1}",
+		"uri strip_prefix /v/{re.view.1}",
+		"root * /data/sites/{re.view.1}/files",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("path mode missing %q:\n%s", want, out)
+		}
+	}
+	// path-only: no wildcard subdomain block
+	if strings.Contains(out, "*.sitebin.example") {
+		t.Errorf("path-only mode should not emit a wildcard block:\n%s", out)
+	}
+}
+
+func TestGenerateBothMode(t *testing.T) {
+	cfg := mustLoad(t, map[string]string{
+		"SITEBIN_BASE_DOMAIN":  "sitebin.example",
+		"SITEBIN_DNS_PROVIDER": "cloudflare",
+		"SITEBIN_DNS_TOKEN":    "tok",
+		"SITEBIN_VIEW_ACCESS":  "both",
+	})
+	out := Generate(cfg)
+	if !strings.Contains(out, "*.sitebin.example {") {
+		t.Errorf("both mode should keep the wildcard block:\n%s", out)
+	}
+	if !strings.Contains(out, "@view path_regexp view ^/v/") {
+		t.Errorf("both mode should add path routes:\n%s", out)
+	}
+}
+
+func TestGenerateSubdomainOnlyHasNoPathRoutes(t *testing.T) {
+	cfg := mustLoad(t, map[string]string{
+		"SITEBIN_BASE_DOMAIN": "sitebin.example",
+		"SITEBIN_HTTP_ONLY":   "true",
+	})
+	out := Generate(cfg)
+	if strings.Contains(out, "/v/") {
+		t.Errorf("subdomain-only mode should not emit /v/ routes:\n%s", out)
+	}
+}
+
 func TestGenerateTLSSnippet(t *testing.T) {
 	cfg := mustLoad(t, map[string]string{
 		"SITEBIN_BASE_DOMAIN": "sitebin.example",

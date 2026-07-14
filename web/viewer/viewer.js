@@ -22,8 +22,12 @@ function rendererFor(name) {
   return rendererByExt[ext] || "text";
 }
 
+// RAW_BASE is the wrapper's own directory, so raw-file URLs work whether the
+// site is served at a subdomain root ("/") or a /v/<id>/ path.
+const RAW_BASE = location.pathname.replace(/[^/]*$/, "");
+
 function rawURL(path) {
-  return "/_raw/" + path.split("/").map(encodeURIComponent).join("/");
+  return RAW_BASE + "_raw/" + path.split("/").map(encodeURIComponent).join("/");
 }
 
 function fmtBytes(n) {

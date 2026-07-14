@@ -14,6 +14,8 @@ type Config struct {
 	PublicPort int    // non-standard public port for URL construction (0 = default)
 	DataDir    string
 
+	ViewAccess string // how view URLs are served: subdomain (default) | path | both
+
 	DNSProvider string // caddy dns module for the wildcard cert (cloudflare|hetzner|duckdns)
 	DNSToken    string
 	TLSSnippet  string // raw lines injected into the wildcard tls block (advanced providers)
@@ -36,6 +38,21 @@ type Config struct {
 	CleanupInterval   time.Duration
 }
 
+// View-access modes for serving site content.
+const (
+	ViewSubdomain = "subdomain" // <view-id>.base (default; needs a wildcard cert)
+	ViewPath      = "path"      // base/v/<view-id> (no wildcard needed)
+	ViewBoth      = "both"      // served on both
+)
+
+// SubdomainViews reports whether sites are served on random subdomains.
+func (c Config) SubdomainViews() bool {
+	return c.ViewAccess == ViewSubdomain || c.ViewAccess == ViewBoth
+}
+
+// PathViews reports whether sites are served under /v/<id> on the main domain.
+func (c Config) PathViews() bool { return c.ViewAccess == ViewPath || c.ViewAccess == ViewBoth }
+
 // singleTokenProviders are DNS modules configurable via SITEBIN_DNS_TOKEN alone.
 var singleTokenProviders = map[string]bool{
 	"cloudflare": true,
@@ -47,6 +64,7 @@ var singleTokenProviders = map[string]bool{
 func Load(getenv func(string) string) (Config, error) {
 	cfg := Config{
 		DataDir:           "/data",
+		ViewAccess:        ViewSubdomain,
 		MaxSiteBytes:      104857600,
 		MaxFiles:          1000,
 		WebDAVAllowed:     true,
@@ -89,6 +107,14 @@ func Load(getenv func(string) string) (Config, error) {
 	if v := getenv("SITEBIN_INTERNAL_ADDR"); v != "" {
 		cfg.InternalAddr = v
 	}
+	if v := strings.ToLower(strings.TrimSpace(getenv("SITEBIN_VIEW_ACCESS"))); v != "" {
+		switch v {
+		case ViewSubdomain, ViewPath, ViewBoth:
+			cfg.ViewAccess = v
+		default:
+			return cfg, fmt.Errorf("SITEBIN_VIEW_ACCESS %q is invalid (want subdomain|path|both)", v)
+		}
+	}
 
 	var err error
 	if cfg.HTTPOnly, err = boolVar(getenv, "SITEBIN_HTTP_ONLY", false); err != nil {
@@ -126,12 +152,15 @@ func Load(getenv func(string) string) (Config, error) {
 		cfg.CleanupInterval = d
 	}
 
-	if !cfg.HTTPOnly {
+	// The wildcard cert (and thus a DNS challenge) is only needed when sites are
+	// served on random subdomains. Path-only mode works with a normal cert for
+	// the single main domain.
+	if !cfg.HTTPOnly && cfg.SubdomainViews() {
 		switch {
 		case cfg.TLSSnippet != "":
 			// advanced escape hatch, accepted as-is
 		case cfg.DNSProvider == "":
-			return cfg, fmt.Errorf("the *.%s wildcard certificate needs a DNS challenge: set SITEBIN_DNS_PROVIDER + SITEBIN_DNS_TOKEN (or SITEBIN_TLS_SNIPPET, or SITEBIN_HTTP_ONLY=true behind your own proxy)", cfg.BaseDomain)
+			return cfg, fmt.Errorf("the *.%s wildcard certificate needs a DNS challenge: set SITEBIN_DNS_PROVIDER + SITEBIN_DNS_TOKEN (or SITEBIN_TLS_SNIPPET, or SITEBIN_VIEW_ACCESS=path to serve sites as paths without a wildcard, or SITEBIN_HTTP_ONLY=true behind your own proxy)", cfg.BaseDomain)
 		case !singleTokenProviders[cfg.DNSProvider]:
 			return cfg, fmt.Errorf("SITEBIN_DNS_PROVIDER %q is not a built-in single-token provider (cloudflare, hetzner, duckdns); use SITEBIN_TLS_SNIPPET for other providers", cfg.DNSProvider)
 		case cfg.DNSToken == "":
@@ -183,9 +212,18 @@ func (c Config) SiteURL(host string) string {
 	return c.scheme() + "://" + host + c.portSuffix()
 }
 
-// ViewURL returns the public URL for a site's view id.
+// ViewURL returns the primary public URL for a site's view id. Subdomain form
+// is preferred when enabled; otherwise the path form is used.
 func (c Config) ViewURL(viewID string) string {
-	return c.SiteURL(viewID + "." + c.BaseDomain)
+	if c.SubdomainViews() {
+		return c.SiteURL(viewID + "." + c.BaseDomain)
+	}
+	return c.PathViewURL(viewID)
+}
+
+// PathViewURL returns the /v/<id> path URL on the main domain.
+func (c Config) PathViewURL(viewID string) string {
+	return c.scheme() + "://" + c.BaseDomain + c.portSuffix() + "/v/" + viewID + "/"
 }
 
 // EditURL returns the public edit-page URL for an edit id.
