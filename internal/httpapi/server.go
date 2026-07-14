@@ -38,6 +38,7 @@ type API struct {
 
 	verifyCache    *auth.VerifyCache
 	createLimiter  *auth.Limiter
+	reportLimiter  *auth.Limiter
 	authLimiter    *auth.Limiter // per (ip, target)
 	targetLimiter  *auth.Limiter // per target, any source
 	davLockSystems *davLocks
@@ -57,6 +58,7 @@ func New(cfg config.Config, st *store.Store, secret []byte, webFS fs.FS) (*API, 
 		log:            slog.Default(),
 		verifyCache:    auth.NewVerifyCache(5 * time.Minute),
 		createLimiter:  auth.NewLimiter(float64(cfg.RateCreatePerHour), cfg.RateCreateBurst),
+		reportLimiter:  auth.NewLimiter(20, 5),
 		authLimiter:    auth.NewLimiter(float64(cfg.RateAuthPer5Min)*12, cfg.RateAuthPer5Min), // per-5min → per-hour
 		targetLimiter:  auth.NewLimiter(float64(cfg.RateAuthPer5Min)*12*6, cfg.RateAuthPer5Min*6),
 		davLockSystems: newDavLocks(),
@@ -72,6 +74,7 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("GET /e/{editID}", a.editPage)
 
 	mux.HandleFunc("POST /api/sites", a.createSite)
+	mux.HandleFunc("POST /api/report", a.report)
 	mux.HandleFunc("GET /api/sites/{editID}", a.withEditAuth(a.getSite))
 	mux.HandleFunc("GET /api/sites/{editID}/download", a.withEditAuth(a.downloadSite))
 	mux.HandleFunc("GET /api/sites/{editID}/content/{path...}", a.withEditAuth(a.getFileContent))

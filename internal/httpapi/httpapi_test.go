@@ -755,6 +755,31 @@ func TestFTPAuthGloballyDisabled(t *testing.T) {
 	}
 }
 
+func TestAbuseReport(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+
+	req := httptest.NewRequest("POST", "/api/report",
+		strings.NewReader(`{"target":"`+c.ViewURL+`","reason":"phishing","details":"looks fake"}`))
+	req.Header.Set("Content-Type", "application/json")
+	if w := e.public(t, req); w.Code != 202 {
+		t.Fatalf("report: %d %s", w.Code, w.Body)
+	}
+	reports, err := e.st.ListReports()
+	if err != nil || len(reports) != 1 {
+		t.Fatalf("reports = %v, %v", reports, err)
+	}
+	if reports[0].Reason != "phishing" || reports[0].ViewID != c.ID {
+		t.Errorf("report resolved wrong: %+v", reports[0])
+	}
+	// reason required
+	req = httptest.NewRequest("POST", "/api/report", strings.NewReader(`{"target":"x"}`))
+	req.Header.Set("Content-Type", "application/json")
+	if w := e.public(t, req); w.Code != 400 {
+		t.Errorf("missing reason: %d", w.Code)
+	}
+}
+
 func TestViewCounter(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.createSite(t, nil, map[string]string{"index.html": "x"})

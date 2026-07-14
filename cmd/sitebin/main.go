@@ -5,7 +5,11 @@
 //	sitebin caddyfile    print the generated Caddyfile and exit
 //	sitebin cleanup      run one cleanup sweep and exit
 //	sitebin healthcheck  probe the internal health endpoint (container HEALTHCHECK)
+//	sitebin list         list all sites (operator)
+//	sitebin reports      list filed abuse reports (operator)
 //	sitebin delete <id|domain>  operator takedown of a site
+//	sitebin backup [file]       write a tar.gz of the data dir
+//	sitebin restore <file>      restore the data dir from a backup
 package main
 
 import (
@@ -70,6 +74,16 @@ func main() {
 		}
 		if err := deleteSite(os.Args[2]); err != nil {
 			fmt.Fprintln(os.Stderr, "delete failed:", err)
+			os.Exit(1)
+		}
+	case "list":
+		if err := listSites(); err != nil {
+			fmt.Fprintln(os.Stderr, "list failed:", err)
+			os.Exit(1)
+		}
+	case "reports":
+		if err := listReports(); err != nil {
+			fmt.Fprintln(os.Stderr, "reports failed:", err)
 			os.Exit(1)
 		}
 	case "version", "--version", "-v":
@@ -241,6 +255,65 @@ func healthcheck(cfg config.Config) error {
 		return fmt.Errorf("status %d", res.StatusCode)
 	}
 	return nil
+}
+
+// listSites prints all sites for the operator (`sitebin list`).
+func listSites() error {
+	cfg := mustConfig()
+	st := mustStore(cfg)
+	sites, err := st.AllSites()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%-26s  %-9s  %5s  %-10s  %-20s  %s\n", "VIEW-ID", "SIZE", "FILES", "MODE", "CREATED", "OWNER/DOMAINS")
+	for _, site := range sites {
+		bytes, files, _ := st.Usage(site)
+		owner := site.Meta.OwnerAccountID
+		if len(site.Meta.CustomDomains) > 0 {
+			owner += " " + strings.Join(site.Meta.CustomDomains, ",")
+		}
+		fmt.Printf("%-26s  %-9s  %5d  %-10s  %-20s  %s\n",
+			site.ViewID, humanSize(bytes), files, site.Meta.Mode,
+			site.Meta.CreatedAt.Format("2006-01-02 15:04"), strings.TrimSpace(owner))
+	}
+	fmt.Printf("\n%d site(s).\n", len(sites))
+	return nil
+}
+
+// listReports prints filed abuse reports (`sitebin reports`).
+func listReports() error {
+	cfg := mustConfig()
+	st := mustStore(cfg)
+	reports, err := st.ListReports()
+	if err != nil {
+		return err
+	}
+	if len(reports) == 0 {
+		fmt.Println("No reports.")
+		return nil
+	}
+	for _, r := range reports {
+		fmt.Printf("%s  target=%s  site=%s  ip=%s\n  reason: %s\n",
+			r.Time.Format("2006-01-02 15:04:05"), r.Target, r.ViewID, r.IP, r.Reason)
+		if r.Details != "" {
+			fmt.Printf("  details: %s\n", r.Details)
+		}
+	}
+	fmt.Printf("\n%d report(s). Take down a site with: sitebin delete <view-id|domain>\n", len(reports))
+	return nil
+}
+
+func humanSize(n int64) string {
+	if n < 1024 {
+		return fmt.Sprintf("%dB", n)
+	}
+	const u = "KMGT"
+	f, i := float64(n), -1
+	for f >= 1024 && i < len(u)-1 {
+		f /= 1024
+		i++
+	}
+	return fmt.Sprintf("%.1f%cB", f, u[i])
 }
 
 // deleteSite is the operator/abuse takedown: accepts a view id, edit id, or
