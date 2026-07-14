@@ -1,0 +1,141 @@
+//go:build ee
+
+package eeconfig
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+// Mode selects how site creation is gated.
+type Mode string
+
+const (
+	ModeOpen     Mode = "open"     // no accounts (community behavior)
+	ModeAccounts Mode = "accounts" // login required, optional per-account quota
+	ModeTiers    Mode = "tiers"    // tiered quotas, optional paid/anon tiers
+)
+
+// Price maps a paid tier to the provider price/product identifiers.
+type Price struct {
+	Stripe  string `json:"stripe"`
+	Paddle  string `json:"paddle"`
+	Display string `json:"display"`
+}
+
+// Tier is a named quota bundle. Zero MaxSiteBytes/MaxFiles/MaxSites mean "fall
+// back to the global SITEBIN_MAX_* / unlimited"; the enforcing code decides.
+type Tier struct {
+	ID            string `json:"id"`
+	Label         string `json:"label"`
+	MaxSiteBytes  int64  `json:"max_site_bytes"`
+	MaxFiles      int    `json:"max_files"`
+	MaxSites      int    `json:"max_sites"`
+	WebDAV        bool   `json:"webdav"`
+	CustomDomains int    `json:"custom_domains"`
+	MaxExpiryDays int    `json:"max_expiry_days"`
+	Price         *Price `json:"price,omitempty"`
+}
+
+// Paid reports whether the tier requires payment to activate.
+func (t Tier) Paid() bool { return t.Price != nil && (t.Price.Stripe != "" || t.Price.Paddle != "") }
+
+// Config is the parsed enterprise configuration.
+type Config struct {
+	Mode        Mode
+	Tiers       []Tier
+	DefaultTier string // tier assigned to a new/free account
+	AnonTier    string // tier for anonymous creation ("" = anonymous disabled in tiers mode)
+	SelfSelect  bool   // may users pick their own (free) tier
+	AllowAnon   bool   // in accounts mode, still allow anonymous creation
+
+	byID map[string]Tier
+}
+
+// Enabled reports whether account gating is active.
+func (c Config) Enabled() bool { return c.Mode != ModeOpen }
+
+// Tier looks up a tier by id.
+func (c Config) Tier(id string) (Tier, bool) { t, ok := c.byID[id]; return t, ok }
+
+// Load parses the enterprise configuration. readFile reads SITEBIN_TIERS_FILE
+// (injected for testability).
+func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Config, error) {
+	cfg := Config{Mode: ModeOpen, byID: map[string]Tier{}}
+
+	mode := strings.ToLower(strings.TrimSpace(getenv("SITEBIN_ACCOUNT_MODE")))
+	if mode == "" {
+		mode = string(ModeOpen)
+	}
+	switch Mode(mode) {
+	case ModeOpen, ModeAccounts, ModeTiers:
+		cfg.Mode = Mode(mode)
+	default:
+		return cfg, fmt.Errorf("SITEBIN_ACCOUNT_MODE %q is invalid (want open|accounts|tiers)", mode)
+	}
+
+	cfg.SelfSelect = boolish(getenv("SITEBIN_TIER_SELF_SELECT"))
+	cfg.AllowAnon = boolish(getenv("SITEBIN_ALLOW_ANON_CREATE"))
+	cfg.DefaultTier = strings.TrimSpace(getenv("SITEBIN_DEFAULT_TIER"))
+	cfg.AnonTier = strings.TrimSpace(getenv("SITEBIN_ANON_TIER"))
+
+	raw, err := tierBytes(getenv, readFile)
+	if err != nil {
+		return cfg, err
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &cfg.Tiers); err != nil {
+			return cfg, fmt.Errorf("tiers config: %w", err)
+		}
+	}
+	for _, t := range cfg.Tiers {
+		if strings.TrimSpace(t.ID) == "" {
+			return cfg, fmt.Errorf("tiers config: a tier has an empty id")
+		}
+		if _, dup := cfg.byID[t.ID]; dup {
+			return cfg, fmt.Errorf("tiers config: duplicate tier id %q", t.ID)
+		}
+		cfg.byID[t.ID] = t
+	}
+
+	if cfg.Mode == ModeTiers {
+		if len(cfg.Tiers) == 0 {
+			return cfg, fmt.Errorf("SITEBIN_ACCOUNT_MODE=tiers requires SITEBIN_TIERS or SITEBIN_TIERS_FILE")
+		}
+		if cfg.DefaultTier == "" {
+			return cfg, fmt.Errorf("SITEBIN_DEFAULT_TIER is required in tiers mode")
+		}
+		if _, ok := cfg.byID[cfg.DefaultTier]; !ok {
+			return cfg, fmt.Errorf("SITEBIN_DEFAULT_TIER %q is not one of the configured tiers", cfg.DefaultTier)
+		}
+		if cfg.AnonTier != "" {
+			if _, ok := cfg.byID[cfg.AnonTier]; !ok {
+				return cfg, fmt.Errorf("SITEBIN_ANON_TIER %q is not one of the configured tiers", cfg.AnonTier)
+			}
+		}
+	}
+	return cfg, nil
+}
+
+func tierBytes(getenv func(string) string, readFile func(string) ([]byte, error)) ([]byte, error) {
+	if inline := strings.TrimSpace(getenv("SITEBIN_TIERS")); inline != "" {
+		return []byte(inline), nil
+	}
+	if path := strings.TrimSpace(getenv("SITEBIN_TIERS_FILE")); path != "" {
+		b, err := readFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("SITEBIN_TIERS_FILE: %w", err)
+		}
+		return b, nil
+	}
+	return nil, nil
+}
+
+func boolish(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
