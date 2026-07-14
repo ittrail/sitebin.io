@@ -338,7 +338,45 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 
 // ---- handlers ----
 
+// createCORS emits CORS headers for POST /api/sites when the request Origin
+// is allowlisted via SITEBIN_EMBED_ORIGINS *and* the enterprise extension is
+// active — cross-origin embedding of the create flow is a premium capability.
+// Reports whether the origin was allowed. Credentials are never allowed.
+func (a *API) createCORS(w http.ResponseWriter, r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" || len(a.cfg.EmbedOrigins) == 0 {
+		return false
+	}
+	if p, ok := ext.Get(); !ok || !p.EmbedOriginsAllowed() {
+		return false
+	}
+	w.Header().Add("Vary", "Origin")
+	lo := strings.ToLower(origin)
+	for _, allowed := range a.cfg.EmbedOrigins {
+		if allowed == "*" || allowed == lo {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			return true
+		}
+	}
+	return false
+}
+
+// createPreflight answers CORS preflights for the create endpoint. Multipart
+// posts from <sitebin-drop> are "simple requests" that skip preflight, but
+// answering OPTIONS keeps stricter clients and future headers working.
+func (a *API) createPreflight(w http.ResponseWriter, r *http.Request) {
+	if !a.createCORS(w, r) {
+		writeError(w, 404, "not found")
+		return
+	}
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Access-Control-Max-Age", "86400")
+	w.WriteHeader(204)
+}
+
 func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
+	a.createCORS(w, r)
 	if a.cfg.ReadOnly {
 		writeError(w, 503, "this instance is read-only: new sites are disabled")
 		return

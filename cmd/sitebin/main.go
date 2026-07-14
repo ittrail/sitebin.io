@@ -171,6 +171,9 @@ func serve(withCaddy bool) error {
 		slog.Info("extension active", "name", p.Name(), "version", p.Version(),
 			"accounts_enabled", p.AccountsEnabled())
 	}
+	if p, ok := ext.Get(); len(cfg.EmbedOrigins) > 0 && (!ok || !p.EmbedOriginsAllowed()) {
+		slog.Warn("SITEBIN_EMBED_ORIGINS is set, but cross-origin embedding is an enterprise feature; ignoring it in this edition")
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

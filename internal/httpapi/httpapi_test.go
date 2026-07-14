@@ -1011,3 +1011,91 @@ func TestEmbedScriptRoute(t *testing.T) {
 		t.Fatalf("content-type = %q", ct)
 	}
 }
+
+// corsCreate posts a minimal create request with an Origin header and
+// returns the recorder (no status assertion — CORS headers matter here).
+func (e *env) corsCreate(t *testing.T, origin string) *httptest.ResponseRecorder {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	h := textproto.MIMEHeader{}
+	h.Set("Content-Disposition", `form-data; name="files"; filename="index.html"`)
+	p, _ := mw.CreatePart(h)
+	p.Write([]byte("<html>hi</html>"))
+	mw.Close()
+	req := httptest.NewRequest("POST", "/api/sites", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if origin != "" {
+		req.Header.Set("Origin", origin)
+	}
+	return e.public(t, req)
+}
+
+func TestCreateCORS(t *testing.T) {
+	cases := []struct {
+		name     string
+		provider bool // register an embed-capable fake provider
+		origins  string
+		origin   string
+		wantACAO string
+	}{
+		{"community ignores allowlist", false, "https://sitebin.io", "https://sitebin.io", ""},
+		{"ee allowed origin", true, "https://sitebin.io", "https://sitebin.io", "https://sitebin.io"},
+		{"ee allowed origin case-insensitive", true, "https://sitebin.io", "https://Sitebin.IO", "https://Sitebin.IO"},
+		{"ee wildcard", true, "*", "https://anything.example", "https://anything.example"},
+		{"ee disallowed origin", true, "https://sitebin.io", "https://evil.example", ""},
+		{"no origin header", true, "*", "", ""},
+		{"ee no allowlist", true, "", "https://sitebin.io", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if c.provider {
+				ext.Register(&fakeProvider{embedOK: true})
+				defer ext.Reset()
+			}
+			over := map[string]string{}
+			if c.origins != "" {
+				over["SITEBIN_EMBED_ORIGINS"] = c.origins
+			}
+			e := newEnv(t, over)
+			rr := e.corsCreate(t, c.origin)
+			if rr.Code != 201 {
+				t.Fatalf("create: %d %s", rr.Code, rr.Body)
+			}
+			if got := rr.Header().Get("Access-Control-Allow-Origin"); got != c.wantACAO {
+				t.Fatalf("ACAO = %q, want %q", got, c.wantACAO)
+			}
+			if c.wantACAO != "" && !strings.Contains(rr.Header().Get("Vary"), "Origin") {
+				t.Fatalf("Vary = %q, want to contain Origin", rr.Header().Get("Vary"))
+			}
+		})
+	}
+}
+
+func TestCreatePreflight(t *testing.T) {
+	// EE + allowed origin → 204 with methods.
+	ext.Register(&fakeProvider{embedOK: true})
+	e := newEnv(t, map[string]string{"SITEBIN_EMBED_ORIGINS": "https://sitebin.io"})
+	req := httptest.NewRequest("OPTIONS", "/api/sites", nil)
+	req.Header.Set("Origin", "https://sitebin.io")
+	rr := e.public(t, req)
+	if rr.Code != 204 {
+		t.Fatalf("preflight status = %d", rr.Code)
+	}
+	if m := rr.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(m, "POST") {
+		t.Fatalf("allow-methods = %q", m)
+	}
+	ext.Reset()
+
+	// Community → gate closed.
+	e2 := newEnv(t, map[string]string{"SITEBIN_EMBED_ORIGINS": "https://sitebin.io"})
+	req2 := httptest.NewRequest("OPTIONS", "/api/sites", nil)
+	req2.Header.Set("Origin", "https://sitebin.io")
+	rr2 := e2.public(t, req2)
+	if rr2.Code == 204 {
+		t.Fatalf("community preflight should not succeed, got %d", rr2.Code)
+	}
+	if got := rr2.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("community ACAO = %q, want empty", got)
+	}
+}

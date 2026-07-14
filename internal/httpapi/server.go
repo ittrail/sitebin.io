@@ -74,6 +74,7 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("GET /e/{editID}", a.editPage)
 
 	mux.HandleFunc("POST /api/sites", a.createSite)
+	mux.HandleFunc("OPTIONS /api/sites", a.createPreflight)
 	mux.HandleFunc("POST /api/report", a.report)
 	mux.HandleFunc("GET /api/sites/{editID}", a.withEditAuth(a.getSite))
 	mux.HandleFunc("GET /api/sites/{editID}/download", a.withEditAuth(a.downloadSite))
