@@ -1,0 +1,163 @@
+# =============================================================================
+# Sitebin — vollständig kommentierte Beispiel-Compose (All-in-one Image)
+# =============================================================================
+#
+# Diese Datei dient zum Ausprobieren aller Einstellungen. Sie ist für den
+# LOKALEN Test vorkonfiguriert:
+#
+#     docker compose -f deploy/docker-compose.example.yml up -d
+#     # Browser:  http://sitebin.localtest.me:8080/
+#
+# (localtest.me löst inkl. aller Subdomains auf 127.0.0.1 auf.)
+#
+# Aufräumen:
+#     docker compose -f deploy/docker-compose.example.yml down          # Container weg, Daten bleiben
+#     docker compose -f deploy/docker-compose.example.yml down -v       # auch Daten löschen
+#
+# -----------------------------------------------------------------------------
+# SCHNELL-VARIANTEN (jeweils die passenden Zeilen unten ein-/auskommentieren):
+#
+#   A) Lokal, Subdomains (Standard)   → so wie unten vorkonfiguriert
+#   B) Lokal, Pfad-Modus              → SITEBIN_VIEW_ACCESS: "path"
+#   C) Enterprise + Accounts          → image: sitebin:dev-ee  +  SITEBIN_ACCOUNT_MODE: "accounts"
+#                                       (Achtung: path/both + accounts wird bewusst abgelehnt)
+#   D) Enterprise + Tiers + Bezahlung → siehe Enterprise-Block unten
+#   E) Produktion mit echten Certs    → SITEBIN_HTTP_ONLY entfernen, DNS-Provider setzen,
+#                                       Ports auf 80/443, Basisdomain ohne Port
+# =============================================================================
+
+services:
+  sitebin:
+    # Community-Image (rein MIT). Für die Enterprise-Features (Accounts, Tiers,
+    # OAuth, SMTP, Billing) stattdessen das -ee Image verwenden:
+    #   image: sitebin:dev-ee
+    # In Produktion aus der Registry:
+    #   image: ghcr.io/ittrail/sitebin:latest        # bzw. :latest-ee
+    image: sitebin:latest
+
+    container_name: sitebin
+
+    # Lokal: Host-Port 8080 → Container-Port 80.
+    # In PRODUKTION stattdessen die echten Ports freigeben:
+    #   - "80:80"
+    #   - "443:443"
+    #   - "443:443/udp"     # HTTP/3
+    ports:
+      - "8080:80"
+
+    # Alle dauerhaften Daten (Sites, Indizes, Metafiles UND Caddys Zertifikate)
+    # liegen unter /data. Ein Volume sichern = alles gesichert.
+    volumes:
+      - sitebin-data:/data
+      # Für Tiers per Datei (siehe SITEBIN_TIERS_FILE) eine tiers.json mounten:
+      # - ./tiers.json:/cfg/tiers.json:ro
+
+    restart: unless-stopped
+
+    environment:
+      # =======================================================================
+      # KERN (Community) — gilt für beide Editionen
+      # =======================================================================
+
+      # PFLICHT. Hauptdomain. View-Subdomains, Edit-UI, API und WebDAV leben hier.
+      # Lokal MIT Port, damit die generierten URLs stimmen; in Produktion OHNE Port.
+      SITEBIN_BASE_DOMAIN: "sitebin.localtest.me:8080"
+
+      # TLS komplett aus — reines HTTP. Für lokalen Test oder wenn ein externer
+      # Proxy das TLS übernimmt. In Produktion diese Zeile ENTFERNEN.
+      SITEBIN_HTTP_ONLY: "true"
+
+      # Wie werden Site-Inhalte ausgeliefert?
+      #   subdomain (Standard) → <id>.base           (braucht Wildcard-Zertifikat)
+      #   path                 → base/v/<id>/         (KEIN Wildcard nötig)
+      #   both                 → auf beiden Wegen
+      # Sicherheitshinweis: path/both teilen sich den Origin mit Dashboard/API;
+      # in Kombination mit Accounts verweigert die Enterprise-Edition den Start.
+      SITEBIN_VIEW_ACCESS: "subdomain"
+
+      # --- TLS in Produktion (nur bei entferntem SITEBIN_HTTP_ONLY relevant) ---
+      # Wildcard-Zertifikat für *.base via DNS-Challenge. Nur für subdomain/both.
+      # Eingebaute Ein-Token-Provider: cloudflare | hetzner | duckdns.
+      # SITEBIN_DNS_PROVIDER: "cloudflare"
+      # SITEBIN_DNS_TOKEN:    "dein-dns-api-token"
+      # E-Mail für das ACME/Let's-Encrypt-Konto:
+      # SITEBIN_ACME_EMAIL:   "ops@example.com"
+      # Für Provider mit mehreren Zugangsdaten (netcup, porkbun): rohe Zeilen für
+      # den tls-Block statt Provider/Token:
+      # SITEBIN_TLS_SNIPPET:  "dns netcup { customer_number 1 api_key ... }"
+
+      # --- Limits & Betrieb ---
+      # SITEBIN_DATA_DIR:              "/data"          # Datenwurzel
+      # SITEBIN_MAX_SITE_BYTES:        "104857600"      # 100 MiB pro Site
+      # SITEBIN_MAX_FILES:             "1000"           # Dateien pro Site
+      # SITEBIN_MAX_EXPIRY_DAYS:       "0"              # 0 = kein Maximum
+      # SITEBIN_WEBDAV_ENABLED:        "true"           # WebDAV instanzweit erlauben
+      # SITEBIN_READONLY:              "false"          # true = keine neuen Sites
+      # SITEBIN_RATE_CREATE_PER_HOUR:  "30"             # Sites/Stunde/IP
+      # SITEBIN_RATE_CREATE_BURST:     "10"
+      # SITEBIN_RATE_AUTH_PER_5MIN:    "10"             # Passwort-Versuche/5min/(IP,Ziel)
+      # SITEBIN_CLEANUP_INTERVAL:      "10m"            # Aufräum-Intervall für Abläufe
+      # SITEBIN_BACKEND_HOST:          "127.0.0.1"      # nur für die Compose-Split-Variante nötig
+      # SITEBIN_PUBLIC_ADDR:           ":8080"          # interner Backend-Listener
+      # SITEBIN_INTERNAL_ADDR:         ":9000"          # authz/tls-check/health (nie öffentlich)
+
+      # =======================================================================
+      # ENTERPRISE (nur mit dem -ee Image wirksam)
+      # Dazu oben image: sitebin:dev-ee setzen.
+      # =======================================================================
+
+      # Zugriffsmodell für das Anlegen von Sites:
+      #   open (Standard) → wie Community, keine Konten
+      #   accounts        → Login nötig; Sites gehören dem Konto
+      #   tiers           → Kontingente je Tarif, optional bezahlt
+      # SITEBIN_ACCOUNT_MODE: "accounts"
+
+      # Tarif für neue/kostenlose Konten (Pflicht im tiers-Modus):
+      # SITEBIN_DEFAULT_TIER: "free"
+      # Tarif für anonymes Anlegen (leer = Konto erforderlich):
+      # SITEBIN_ANON_TIER: ""
+      # Dürfen Nutzer selbst zwischen (kostenlosen) Tarifen wechseln?
+      # SITEBIN_TIER_SELF_SELECT: "false"
+      # Im accounts-Modus trotzdem anonymes Anlegen erlauben?
+      # SITEBIN_ALLOW_ANON_CREATE: "false"
+
+      # Tarif-Definitionen. Entweder inline als JSON (YAML-Single-Quotes außen,
+      # JSON-Double-Quotes innen) ...
+      # SITEBIN_TIERS: '[
+      #   {"id":"free","label":"Free","max_site_bytes":104857600,"max_files":100,"max_sites":3,"webdav":false,"custom_domains":0,"max_expiry_days":30},
+      #   {"id":"pro","label":"Pro","max_site_bytes":5368709120,"max_files":5000,"max_sites":100,"webdav":true,"custom_domains":10,"max_expiry_days":0,"price":{"stripe":"price_123","paddle":"pri_456","display":"9 EUR/mo"}}
+      # ]'
+      # ... oder sauberer per gemounteter Datei (siehe volumes oben):
+      # SITEBIN_TIERS_FILE: "/cfg/tiers.json"
+
+      # --- OAuth (Google / Microsoft OIDC) — braucht echte HTTPS-Domain ---
+      # Redirect-URIs beim Provider registrieren:
+      #   https://<base>/account/auth/google/callback
+      #   https://<base>/account/auth/microsoft/callback
+      # SITEBIN_OAUTH_GOOGLE_CLIENT_ID:     "..."
+      # SITEBIN_OAUTH_GOOGLE_CLIENT_SECRET: "..."
+      # SITEBIN_OAUTH_MICROSOFT_CLIENT_ID:     "..."
+      # SITEBIN_OAUTH_MICROSOFT_CLIENT_SECRET: "..."
+      # SITEBIN_OAUTH_MICROSOFT_TENANT:        "common"
+
+      # --- SMTP (E-Mail-Verifizierung & Passwort-Reset) ---
+      # SITEBIN_SMTP_HOST: "smtp.example.com"
+      # SITEBIN_SMTP_PORT: "587"                 # 587 = STARTTLS; 465 = implizites TLS
+      # SITEBIN_SMTP_USER: "postmaster@example.com"
+      # SITEBIN_SMTP_PASS: "..."
+      # SITEBIN_SMTP_FROM: "Sitebin <no-reply@example.com>"
+      # SITEBIN_SMTP_TLS:  "false"               # true für Port 465
+
+      # --- Bezahlung (Stripe und/oder Paddle); Preise kommen aus den Tarifen ---
+      # Webhook-Ziel: https://<base>/account/billing/stripe/webhook  bzw. .../paddle/webhook
+      # SITEBIN_STRIPE_SECRET_KEY:     "sk_live_..."
+      # SITEBIN_STRIPE_WEBHOOK_SECRET: "whsec_..."
+      # SITEBIN_PADDLE_API_KEY:        "..."
+      # SITEBIN_PADDLE_WEBHOOK_SECRET: "..."
+      # SITEBIN_PADDLE_SANDBOX:        "false"
+
+      # --- Lizenz (optional; wenn gesetzt, muss sie gültig sein) ---
+      # SITEBIN_LICENSE_KEY: "<ed25519-signierter-key>"
+
+volumes:
+  sitebin-data:

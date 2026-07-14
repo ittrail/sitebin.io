@@ -67,10 +67,14 @@ docker build -t sitebin:latest .
 `docker buildx build --platform linux/amd64,linux/arm64`. A GitHub Actions
 workflow in `.github/workflows/release.yml` publishes multi-arch images.)
 
-### Compose variant (separate Caddy + backend)
+### Compose
 
-See [`deploy/docker-compose.yml`](deploy/docker-compose.yml) for the
-multi-service shape (same image, `server` command + a Caddy sidecar).
+- [`deploy/docker-compose.example.yml`](deploy/docker-compose.example.yml) —
+  a fully commented all-in-one example documenting **every** setting, with a
+  ready-to-run local config (`docker compose -f deploy/docker-compose.example.yml up -d`
+  → `http://sitebin.localtest.me:8080/`). Good for trying the variants.
+- [`deploy/docker-compose.yml`](deploy/docker-compose.yml) — the multi-service
+  shape (separate Caddy + backend, same image).
 
 ### Local / behind an existing proxy
 
