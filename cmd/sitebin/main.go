@@ -25,6 +25,7 @@ import (
 	"github.com/ittrail/sitebin/internal/caddygen"
 	"github.com/ittrail/sitebin/internal/cleanup"
 	"github.com/ittrail/sitebin/internal/config"
+	"github.com/ittrail/sitebin/internal/ext"
 	"github.com/ittrail/sitebin/internal/httpapi"
 	"github.com/ittrail/sitebin/internal/store"
 	"github.com/ittrail/sitebin/internal/supervisor"
@@ -71,7 +72,7 @@ func main() {
 			os.Exit(1)
 		}
 	case "version", "--version", "-v":
-		fmt.Println("sitebin", version)
+		fmt.Printf("sitebin %s (%s edition)\n", version, edition)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n", cmd)
 		os.Exit(2)
@@ -128,6 +129,16 @@ func serve(withCaddy bool) error {
 		return err
 	}
 
+	// Initialize the premium extension when this is an enterprise build with a
+	// provider registered; the community build has none and stays fully open.
+	if p, ok := ext.Get(); ok {
+		if err := p.Init(extHost{cfg: cfg, secret: secret}); err != nil {
+			return fmt.Errorf("init %s extension: %w", p.Name(), err)
+		}
+		slog.Info("extension active", "name", p.Name(), "version", p.Version(),
+			"accounts_enabled", p.AccountsEnabled())
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -139,7 +150,8 @@ func serve(withCaddy bool) error {
 	go cleanup.Run(ctx, st, cfg.CleanupInterval)
 	slog.Info("sitebin backend up",
 		"base_domain", cfg.BaseDomain, "public", cfg.PublicAddr,
-		"internal", cfg.InternalAddr, "data", cfg.DataDir, "version", version)
+		"internal", cfg.InternalAddr, "data", cfg.DataDir,
+		"version", version, "edition", edition)
 
 	var caddyDone <-chan error
 	if withCaddy {

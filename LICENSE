@@ -1,3 +1,11 @@
+Sitebin is open-core. This MIT License covers the entire repository EXCEPT the
+ee/ directory (Sitebin Enterprise Edition — the premium accounts, tiers, SMTP,
+OAuth, and billing features), which is licensed separately under ee/LICENSE and
+is NOT MIT. The community build (`go build`, the default Docker image) contains
+no ee/ code; the enterprise features require the `ee` build tag.
+
+-------------------------------------------------------------------------------
+
 MIT License
 
 Copyright (c) 2026 Sitebin contributors

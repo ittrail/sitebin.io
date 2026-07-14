@@ -248,6 +248,23 @@ Layout: `cmd/sitebin` (entrypoint + supervisor), `internal/*` (config, ids,
 auth, store, viewer, caddygen, httpapi, cleanup), `web/` (embedded UI +
 vendored viewer libraries — no Node build step).
 
+## Editions
+
+Sitebin is **open-core**:
+
+- **Community** (default) — everything documented above. MIT licensed, built
+  with `go build` / the default `sitebin:latest` image. Fully open, no
+  accounts, no feature gates.
+- **Enterprise** (`ee/`) — optional premium features (user accounts, tiers &
+  quotas, Google/Microsoft OAuth, SMTP, and Stripe/Paddle billing), compiled in
+  only with the `ee` build tag (`go build -tags ee`, image `sitebin:latest-ee`).
+  This tree is **not** MIT — see [`ee/LICENSE`](ee/LICENSE). The community image
+  contains none of this code; it is excluded at compile time. All caps and
+  toggles are configured at container startup. Design:
+  [`docs/superpowers/specs/2026-07-14-accounts-tiers-billing-design.md`](docs/superpowers/specs/2026-07-14-accounts-tiers-billing-design.md).
+
 ## License
 
-[MIT](LICENSE)
+The repository is [MIT](LICENSE), **except** the `ee/` directory, which is
+licensed separately under [`ee/LICENSE`](ee/LICENSE) (Business Source License
+1.1).
