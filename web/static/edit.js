@@ -79,9 +79,13 @@ $("lockform").addEventListener("submit", async (e) => {
 function render() {
   $("site-id").textContent = site.id;
   $("view-link").href = site.view_url;
-  $("site-meta").textContent =
-    "created " + new Date(site.created_at).toLocaleString() +
+  let meta = "created " + new Date(site.created_at).toLocaleString() +
     " · updated " + new Date(site.updated_at).toLocaleString();
+  if (typeof site.views === "number") {
+    meta += " · " + site.views + (site.views === 1 ? " view" : " views");
+    if (site.last_seen) meta += " (last " + new Date(site.last_seen).toLocaleString() + ")";
+  }
+  $("site-meta").textContent = meta;
 
   // files
   const rows = $("filerows");

@@ -755,6 +755,54 @@ func TestFTPAuthGloballyDisabled(t *testing.T) {
 	}
 }
 
+func TestViewCounter(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+
+	page := func() *http.Request {
+		r := authzReq(c.ID+".sitebin.example", "/", "")
+		r.Header.Set("Accept", "text/html")
+		return r
+	}
+	for i := 0; i < 3; i++ {
+		if w := e.internal(t, page()); w.Code != 200 {
+			t.Fatalf("authz %d: %d", i, w.Code)
+		}
+	}
+	// an asset fetch (no text/html Accept) must NOT be counted
+	if w := e.internal(t, authzReq(c.ID+".sitebin.example", "/app.js", "")); w.Code != 200 {
+		t.Fatal("asset authz")
+	}
+
+	site, _ := e.st.ByViewID(c.ID)
+	st := e.st.Stats(site)
+	if st.Views != 3 {
+		t.Errorf("views = %d, want 3", st.Views)
+	}
+	if st.LastSeen == nil {
+		t.Error("last_seen not set")
+	}
+
+	// payload surfaces the count
+	edit := editIDFrom(t, c.EditURL)
+	w := e.public(t, authed(httptest.NewRequest("GET", "/api/sites/"+edit, nil), c.EditPassword))
+	if !strings.Contains(w.Body.String(), `"views":3`) {
+		t.Errorf("payload missing views: %s", w.Body)
+	}
+}
+
+func TestViewCounterDisabled(t *testing.T) {
+	e := newEnv(t, map[string]string{"SITEBIN_TRACK_VIEWS": "false"})
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	r := authzReq(c.ID+".sitebin.example", "/", "")
+	r.Header.Set("Accept", "text/html")
+	e.internal(t, r)
+	site, _ := e.st.ByViewID(c.ID)
+	if e.st.Stats(site).Views != 0 {
+		t.Error("views counted while tracking disabled")
+	}
+}
+
 func TestHealth(t *testing.T) {
 	e := newEnv(t, nil)
 	w := e.internal(t, httptest.NewRequest("GET", "/internal/health", nil))

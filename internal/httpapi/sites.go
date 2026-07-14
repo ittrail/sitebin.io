@@ -280,8 +280,11 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		files = []store.FileInfo{}
 	}
 	bytes, count, _ := a.st.Usage(site)
+	stats := a.st.Stats(site)
 	m := site.Meta
 	payload := map[string]any{
+		"views":                   stats.Views,
+		"last_seen":               stats.LastSeen,
 		"id":                      m.ID,
 		"view_url":                a.cfg.ViewURL(m.ID),
 		"edit_url":                a.cfg.EditURL(m.EditID),

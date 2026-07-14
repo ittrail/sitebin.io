@@ -27,6 +27,7 @@ type Config struct {
 	MaxFiles      int
 	MaxExpiryDays int // 0 = unlimited
 	WebDAVAllowed bool
+	TrackViews    bool
 	ReadOnly      bool
 
 	PublicAddr   string // backend listener proxied by Caddy
@@ -135,6 +136,9 @@ func Load(getenv func(string) string) (Config, error) {
 		return cfg, err
 	}
 	if cfg.WebDAVAllowed, err = boolVar(getenv, "SITEBIN_WEBDAV_ENABLED", true); err != nil {
+		return cfg, err
+	}
+	if cfg.TrackViews, err = boolVar(getenv, "SITEBIN_TRACK_VIEWS", true); err != nil {
 		return cfg, err
 	}
 	if cfg.ReadOnly, err = boolVar(getenv, "SITEBIN_READONLY", false); err != nil {

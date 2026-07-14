@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ittrail/sitebin/internal/store"
@@ -34,10 +35,12 @@ func (a *API) authz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !site.Meta.ViewPasswordProtected {
+		a.countView(r, site)
 		w.WriteHeader(200)
 		return
 	}
 	if a.hasViewAccess(r, site) {
+		a.countView(r, site)
 		w.WriteHeader(200)
 		return
 	}
@@ -67,4 +70,12 @@ func (a *API) tlsCheck(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+// countView records a page view when tracking is on and the request looks like
+// a browser navigation (Accept: text/html), so asset fetches aren't counted.
+func (a *API) countView(r *http.Request, site *store.Site) {
+	if a.cfg.TrackViews && strings.Contains(r.Header.Get("Accept"), "text/html") {
+		a.st.RecordView(site)
+	}
 }

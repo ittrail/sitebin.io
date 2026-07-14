@@ -16,7 +16,7 @@ func TestRendererFor(t *testing.T) {
 		"report.docx": "docx",
 		"data.csv":    "table", "sheet.TSV": "table",
 		"analysis.ipynb": "notebook",
-		"logo.png":    "image", "photo.JPEG": "image", "art.svg": "image", "a.webp": "image",
+		"logo.png":       "image", "photo.JPEG": "image", "art.svg": "image", "a.webp": "image",
 		"clip.mp4": "video", "clip.webm": "video",
 		"song.mp3": "audio", "voice.wav": "audio",
 		"main.go": "text", "data.json": "text", "page.html": "text", "no-extension": "text",
