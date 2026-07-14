@@ -284,6 +284,20 @@ $("publish").addEventListener("click", () => {
 
 // ---- ticket ----
 
+// renderQR draws a QR of the view URL into #t-qr (dependency-free lib).
+function renderQR(url) {
+  const box = $("t-qr");
+  if (typeof qrcode !== "function") { box.parentElement.classList.add("hidden"); return; }
+  try {
+    const qr = qrcode(0, "M");
+    qr.addData(url);
+    qr.make();
+    box.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 1, scalable: true });
+  } catch {
+    box.parentElement.classList.add("hidden");
+  }
+}
+
 function showTicket(body) {
   $("create").classList.add("hidden");
   const done = $("done");
@@ -291,6 +305,7 @@ function showTicket(body) {
 
   $("t-view").textContent = body.view_url;
   $("t-view").href = body.view_url;
+  renderQR(body.view_url);
   $("t-edit").textContent = body.edit_url;
   $("t-edit").href = body.edit_url;
   $("t-pass").textContent = body.edit_password;

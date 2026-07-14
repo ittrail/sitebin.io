@@ -146,6 +146,11 @@
         <span><strong>Save the edit password now.</strong> It is shown only this once — Sitebin keeps just a hash and cannot recover it for you.</span>
       </div>
 
+      <div class="qrbox">
+        <div class="qr" id="t-qr" aria-label="QR code for the view URL"></div>
+        <span class="qrcap">Scan to open the site on your phone</span>
+      </div>
+
       <div class="ticketactions">
         <a class="btn primary" id="t-open" href="#" target="_blank" rel="noopener">Open site</a>
         <a class="btn" id="t-editlink" href="#">Manage site</a>
@@ -162,6 +167,7 @@
 </main>
 
 <div id="toast" role="status"></div>
+<script src="/_sitebin/assets/vendor/qrcode.min.js" defer></script>
 <script src="/_sitebin/assets/static/app.js" defer></script>
 </body>
 </html>
