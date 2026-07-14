@@ -27,6 +27,7 @@ var testFS = fstest.MapFS{
 	"static/app.css":        {Data: []byte("body{}")},
 	"viewer/viewer.js":      {Data: []byte("// viewer")},
 	"static/favicon.svg":    {Data: []byte("<svg/>")},
+	"static/embed.js":       {Data: []byte("// sitebin-drop")},
 	"vendor/markdown-it.js": {Data: []byte("// md")},
 }
 
@@ -994,5 +995,19 @@ func TestPages(t *testing.T) {
 	w = e.public(t, httptest.NewRequest("GET", "/_sitebin/assets/../../go.mod", nil))
 	if w.Code == 200 {
 		t.Fatalf("asset traversal: %d", w.Code)
+	}
+}
+
+func TestEmbedScriptRoute(t *testing.T) {
+	e := newEnv(t, nil)
+	rr := e.public(t, httptest.NewRequest("GET", "/_sitebin/embed.js", nil))
+	if rr.Code != 200 {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("ACAO = %q, want *", got)
+	}
+	if ct := rr.Header().Get("Content-Type"); !strings.Contains(ct, "javascript") {
+		t.Fatalf("content-type = %q", ct)
 	}
 }

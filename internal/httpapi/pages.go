@@ -75,3 +75,14 @@ func (a *API) asset(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeFileFS(w, r, a.webFS, p)
 }
+
+// embedScript serves the <sitebin-drop> component at a stable, short URL so
+// external pages can load it with one script tag. CORS * because the script
+// itself is public code — the gated surface is cross-origin creation
+// (SITEBIN_EMBED_ORIGINS), not the file.
+func (a *API) embedScript(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeFileFS(w, r, a.webFS, "static/embed.js")
+}

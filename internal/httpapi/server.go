@@ -88,6 +88,7 @@ func (a *API) Public() http.Handler {
 	mux.Handle("/dav/", http.HandlerFunc(a.webdav))
 
 	mux.HandleFunc("GET /_sitebin/assets/{path...}", a.asset)
+	mux.HandleFunc("GET /_sitebin/embed.js", a.embedScript)
 	mux.HandleFunc("POST /_sitebin/unlock", a.unlock)
 
 	// Enterprise: mount the account dashboard + auth routes when a provider is
