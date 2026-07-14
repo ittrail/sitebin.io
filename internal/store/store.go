@@ -37,7 +37,27 @@ const (
 	editIndexName = "edit-index"
 	domainIndex   = "domain-index"
 	rawDirName    = "_raw"
+
+	// SPAMarker is an empty file in a webserver site's files/ that a Caddy
+	// file-matcher keys on to enable index.html fallback for unknown paths.
+	SPAMarker = ".sitebin-spa"
 )
+
+// WriteSPAMarker creates the SPA-fallback marker in the site's files/ dir.
+func (s *Store) WriteSPAMarker(site *Site) error {
+	f, err := os.OpenFile(filepath.Join(site.FilesDir(), SPAMarker), os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// RemoveSPAMarker removes the SPA marker from files/ and _raw/ (the latter in
+// case a mode switch swept it there).
+func (s *Store) RemoveSPAMarker(site *Site) {
+	os.Remove(filepath.Join(site.FilesDir(), SPAMarker))
+	os.Remove(filepath.Join(site.FilesDir(), rawDirName, SPAMarker))
+}
 
 // Store provides all site persistence. Methods are safe for concurrent use.
 type Store struct {

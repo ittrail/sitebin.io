@@ -5,7 +5,14 @@ import (
 	"testing"
 
 	"github.com/ittrail/sitebin/internal/config"
+	"github.com/ittrail/sitebin/internal/store"
 )
+
+func TestSPAMarkerNameMatchesStore(t *testing.T) {
+	if spaMarkerName != store.SPAMarker {
+		t.Fatalf("caddygen spaMarkerName %q != store.SPAMarker %q", spaMarkerName, store.SPAMarker)
+	}
+}
 
 func mustLoad(t *testing.T, env map[string]string) config.Config {
 	t.Helper()
@@ -37,6 +44,9 @@ func TestGenerateHTTPS(t *testing.T) {
 		"forward_auth 127.0.0.1:9000",
 		"uri /internal/authz",
 		"header_up X-Forwarded-Host {host}",
+		"@spa file /.sitebin-spa",
+		"try_files {path} /index.html",
+		"hide .sitebin-spa",
 		"reverse_proxy 127.0.0.1:8080",
 		"path /_sitebin/*",
 		"on_demand",

@@ -46,7 +46,8 @@ func CleanRelPath(p string) (string, error) {
 		return "", ErrBadPath
 	}
 	segs := strings.Split(c, "/")
-	if reservedTopLevel[strings.ToLower(segs[0])] {
+	first := strings.ToLower(segs[0])
+	if reservedTopLevel[first] || strings.HasPrefix(first, ".sitebin-") {
 		return "", ErrBadPath
 	}
 	for _, seg := range segs {
@@ -288,6 +289,9 @@ func (s *Store) ListFiles(site *Site) ([]FileInfo, error) {
 		}
 		if d.IsDir() {
 			return nil
+		}
+		if d.Name() == SPAMarker {
+			return nil // internal marker, not a user file
 		}
 		fi, err := d.Info()
 		if err != nil {

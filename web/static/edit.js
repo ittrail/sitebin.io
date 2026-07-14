@@ -147,6 +147,8 @@ function render() {
   // mode + entry
   document.querySelector(`input[name=emode][value=${site.mode}]`).checked = true;
   $("entrywrap").classList.toggle("hidden", site.mode !== "viewer");
+  $("spawrap").classList.toggle("hidden", site.mode !== "webserver");
+  $("e-spa").checked = !!site.spa_fallback;
   if (site.mode === "viewer") {
     const sel = $("entry-file");
     sel.innerHTML = "";
@@ -255,6 +257,9 @@ $("e-webdav").addEventListener("change", (e) =>
 
 $("e-ftp").addEventListener("change", (e) =>
   put({ ftp_enabled: e.target.checked }, e.target.checked ? "FTP enabled" : "FTP disabled"));
+
+$("e-spa").addEventListener("change", (e) =>
+  put({ spa_fallback: e.target.checked }, e.target.checked ? "SPA fallback on" : "SPA fallback off"));
 
 $("save-expiry").addEventListener("click", () => {
   const v = $("e-expires").value;

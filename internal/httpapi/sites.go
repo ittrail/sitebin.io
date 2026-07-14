@@ -28,6 +28,7 @@ type updateSet struct {
 	ViewProtected *bool           `json:"view_password_protected"`
 	WebDAV        *bool           `json:"webdav_enabled"`
 	FTP           *bool           `json:"ftp_enabled"`
+	SPA           *bool           `json:"spa_fallback"`
 	ExpiresAt     json.RawMessage `json:"expires_at"` // absent=keep, null=clear, string=set
 	Domains       []string        `json:"custom_domains"`
 }
@@ -52,6 +53,9 @@ func settingsFromForm(fields url.Values) (updateSet, error) {
 	}
 	if v := fields.Get("ftp"); v != "" {
 		set.FTP = boolPtr(v == "true" || v == "on" || v == "1")
+	}
+	if v := fields.Get("spa"); v != "" {
+		set.SPA = boolPtr(v == "true" || v == "on" || v == "1")
 	}
 	if v := fields.Get("expires_at"); v != "" {
 		set.ExpiresAt = json.RawMessage(fmt.Sprintf("%q", v))
@@ -136,6 +140,9 @@ func (a *API) applySettings(site *store.Site, set updateSet) error {
 			// Silently clamp to false when FTP is off instance-wide (like WebDAV).
 			m.FTPEnabled = *set.FTP && a.cfg.FTPEnabled
 		}
+		if set.SPA != nil {
+			m.SPAFallback = *set.SPA
+		}
 		if expires != nil {
 			m.ExpiresAt = *expires
 		}
@@ -180,18 +187,28 @@ func asAPIError(err error, target **apiError) bool {
 // viewer sites get their wrapper (re)generated, webserver sites get raw
 // files restored. Persists the effective entry file when it changed.
 func (a *API) syncViewerLayout(site *store.Site) error {
+	spaOn := site.Meta.Mode == store.ModeWebserver && site.Meta.SPAFallback
+	// Clear the SPA marker before any viewer move so it isn't swept into _raw.
+	if !spaOn {
+		a.st.RemoveSPAMarker(site)
+	}
 	if site.Meta.Mode != store.ModeViewer {
-		return viewer.Remove(site)
+		if err := viewer.Remove(site); err != nil {
+			return err
+		}
+	} else {
+		entry, err := viewer.Apply(site)
+		if err != nil {
+			return err
+		}
+		if entry != site.Meta.EntryFile {
+			if err := a.st.Update(site, func(m *store.Meta) error { m.EntryFile = entry; return nil }); err != nil {
+				return err
+			}
+		}
 	}
-	entry, err := viewer.Apply(site)
-	if err != nil {
-		return err
-	}
-	if entry != site.Meta.EntryFile {
-		return a.st.Update(site, func(m *store.Meta) error {
-			m.EntryFile = entry
-			return nil
-		})
+	if spaOn {
+		return a.st.WriteSPAMarker(site)
 	}
 	return nil
 }
@@ -290,6 +307,7 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"edit_url":                a.cfg.EditURL(m.EditID),
 		"mode":                    m.Mode,
 		"entry_file":              m.EntryFile,
+		"spa_fallback":            m.SPAFallback,
 		"view_password_protected": m.ViewPasswordProtected,
 		"webdav_enabled":          m.WebDAVEnabled,
 		"webdav_available":        a.cfg.WebDAVAllowed,

@@ -79,6 +79,15 @@
         <select id="entry-file"></select>
       </div>
     </div>
+    <div class="opt hidden" id="spawrap" style="margin-top:16px">
+      <label class="switch">
+        <input type="checkbox" id="e-spa">
+        <span class="knob"></span>
+        <span class="lbl">SPA fallback</span>
+      </label>
+      <span class="sub">Serve <code>index.html</code> for unknown paths — needed for single-page apps
+        (React/Vue/etc.) so deep links and reloads work. Use relative asset paths.</span>
+    </div>
   </section>
 
   <section class="card">

@@ -21,6 +21,7 @@ type Meta struct {
 	FTPEnabled            bool     `json:"ftp_enabled"`
 	CustomDomains         []string `json:"custom_domains"`
 	EntryFile             string   `json:"entry_file"`
+	SPAFallback           bool     `json:"spa_fallback"`               // webserver mode: serve index.html for unknown paths
 	OwnerAccountID        string   `json:"owner_account_id,omitempty"` // enterprise: owning account (empty = anonymous)
 
 	// Per-site quota caps stamped from the owner's tier (enterprise). Zero /
