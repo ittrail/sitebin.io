@@ -86,6 +86,24 @@ func main() {
 			fmt.Fprintln(os.Stderr, "reports failed:", err)
 			os.Exit(1)
 		}
+	case "backup":
+		out := ""
+		if len(os.Args) > 2 {
+			out = os.Args[2]
+		}
+		if err := backup(out); err != nil {
+			fmt.Fprintln(os.Stderr, "backup failed:", err)
+			os.Exit(1)
+		}
+	case "restore":
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "usage: sitebin restore <backup.tar.gz>")
+			os.Exit(2)
+		}
+		if err := restore(os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, "restore failed:", err)
+			os.Exit(1)
+		}
 	case "version", "--version", "-v":
 		fmt.Printf("sitebin %s (%s edition)\n", version, edition)
 	default:
