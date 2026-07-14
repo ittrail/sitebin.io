@@ -258,10 +258,17 @@ Sitebin is **open-core**:
 - **Enterprise** (`ee/`) — optional premium features (user accounts, tiers &
   quotas, Google/Microsoft OAuth, SMTP, and Stripe/Paddle billing), compiled in
   only with the `ee` build tag (`go build -tags ee`, image `sitebin:latest-ee`).
-  This tree is **not** MIT — see [`ee/LICENSE`](ee/LICENSE). The community image
-  contains none of this code; it is excluded at compile time. All caps and
-  toggles are configured at container startup. Design:
+  All caps and toggles are configured at container startup. Design:
   [`docs/superpowers/specs/2026-07-14-accounts-tiers-billing-design.md`](docs/superpowers/specs/2026-07-14-accounts-tiers-billing-design.md).
+
+The `ee/` tree is **source-available**, not hidden: the full premium source
+lives in this repo for you to read, audit, self-host, and modify. It is simply
+not MIT — it is governed by [`ee/LICENSE`](ee/LICENSE) (Elastic License 2.0),
+which permits all of the above and your own commercial use, but not reselling
+Sitebin as a hosted/managed service or circumventing the license key. The two
+editions build from the same repository; the community `sitebin:latest` image
+still contains none of the `ee/` code (it is excluded at compile time, so the
+community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 
 ### Enterprise configuration (all startup env vars)
 
@@ -289,7 +296,11 @@ still work over the API with their edit password.
 ## License
 
 The repository is [MIT](LICENSE), **except** the `ee/` directory, which is
-licensed separately under [`ee/LICENSE`](ee/LICENSE) ([Elastic License
-2.0](https://www.elastic.co/licensing/elastic-license) — source-available;
-self-host and modify freely, but no reselling it as a hosted service and no
-circumventing the license key).
+licensed separately under [`ee/LICENSE`](ee/LICENSE) — the [Elastic License
+2.0](https://www.elastic.co/licensing/elastic-license).
+
+The premium `ee/` code is deliberately kept **source-available** (published in
+this repo), not closed. Under ELv2 you may read, self-host, modify, and use it
+commercially for your own purposes; you may not offer it to third parties as a
+hosted/managed service or circumvent the license-key functionality. ELv2 is
+perpetual — it does not convert to open source over time.
