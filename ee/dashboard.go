@@ -17,7 +17,7 @@ func (p *provider) PublicRoutes() map[string]http.Handler {
 	if !p.cfg.Enabled() {
 		return nil
 	}
-	return map[string]http.Handler{
+	routes := map[string]http.Handler{
 		"GET /account":                    http.HandlerFunc(p.handleRoot),
 		"GET /account/login":              http.HandlerFunc(p.handleLoginGet),
 		"POST /account/login":             http.HandlerFunc(p.handleLoginPost),
@@ -29,6 +29,17 @@ func (p *provider) PublicRoutes() map[string]http.Handler {
 		"POST /account/sites/{id}/delete": http.HandlerFunc(p.handleDeleteSite),
 		"POST /account/delete":            http.HandlerFunc(p.handleDeleteAccount),
 	}
+	p.oauthRoutes(routes)
+	return routes
+}
+
+// oauthButtons returns the configured providers for the login/signup page.
+func (p *provider) oauthButtons() []string {
+	var out []string
+	for _, prov := range p.oidc.Providers() {
+		out = append(out, string(prov))
+	}
+	return out
 }
 
 func (p *provider) handleRoot(w http.ResponseWriter, r *http.Request) {
@@ -204,14 +215,15 @@ func (p *provider) securityHeaders(w http.ResponseWriter) {
 }
 
 type authView struct {
-	Mode  string // login | signup
-	Email string
-	Error string
+	Mode      string // login | signup
+	Email     string
+	Error     string
+	Providers []string
 }
 
 func (p *provider) renderAuth(w http.ResponseWriter, mode, email, errMsg string) {
 	p.securityHeaders(w)
-	authTmpl.Execute(w, authView{Mode: mode, Email: email, Error: errMsg})
+	authTmpl.Execute(w, authView{Mode: mode, Email: email, Error: errMsg, Providers: p.oauthButtons()})
 }
 
 type siteRow struct {

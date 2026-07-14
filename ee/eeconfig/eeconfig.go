@@ -41,6 +41,13 @@ type Tier struct {
 // Paid reports whether the tier requires payment to activate.
 func (t Tier) Paid() bool { return t.Price != nil && (t.Price.Stripe != "" || t.Price.Paddle != "") }
 
+// OAuthProvider holds one OIDC provider's credentials.
+type OAuthProvider struct {
+	ClientID     string
+	ClientSecret string
+	Tenant       string // Microsoft only (default "common")
+}
+
 // Config is the parsed enterprise configuration.
 type Config struct {
 	Mode        Mode
@@ -50,8 +57,14 @@ type Config struct {
 	SelfSelect  bool   // may users pick their own (free) tier
 	AllowAnon   bool   // in accounts mode, still allow anonymous creation
 
+	Google    *OAuthProvider // nil = not configured
+	Microsoft *OAuthProvider
+
 	byID map[string]Tier
 }
+
+// OAuthEnabled reports whether any OAuth provider is configured.
+func (c Config) OAuthEnabled() bool { return c.Google != nil || c.Microsoft != nil }
 
 // Enabled reports whether account gating is active.
 func (c Config) Enabled() bool { return c.Mode != ModeOpen }
@@ -79,6 +92,17 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Co
 	cfg.AllowAnon = boolish(getenv("SITEBIN_ALLOW_ANON_CREATE"))
 	cfg.DefaultTier = strings.TrimSpace(getenv("SITEBIN_DEFAULT_TIER"))
 	cfg.AnonTier = strings.TrimSpace(getenv("SITEBIN_ANON_TIER"))
+
+	if id := strings.TrimSpace(getenv("SITEBIN_OAUTH_GOOGLE_CLIENT_ID")); id != "" {
+		cfg.Google = &OAuthProvider{ClientID: id, ClientSecret: getenv("SITEBIN_OAUTH_GOOGLE_CLIENT_SECRET")}
+	}
+	if id := strings.TrimSpace(getenv("SITEBIN_OAUTH_MICROSOFT_CLIENT_ID")); id != "" {
+		tenant := strings.TrimSpace(getenv("SITEBIN_OAUTH_MICROSOFT_TENANT"))
+		if tenant == "" {
+			tenant = "common"
+		}
+		cfg.Microsoft = &OAuthProvider{ClientID: id, ClientSecret: getenv("SITEBIN_OAUTH_MICROSOFT_CLIENT_SECRET"), Tenant: tenant}
+	}
 
 	raw, err := tierBytes(getenv, readFile)
 	if err != nil {

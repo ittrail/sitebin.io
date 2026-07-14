@@ -132,6 +132,46 @@ func TestDuplicateTierRejected(t *testing.T) {
 	}
 }
 
+func TestOAuthParsing(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"SITEBIN_ACCOUNT_MODE":                  "accounts",
+		"SITEBIN_OAUTH_GOOGLE_CLIENT_ID":        "gid",
+		"SITEBIN_OAUTH_GOOGLE_CLIENT_SECRET":    "gsecret",
+		"SITEBIN_OAUTH_MICROSOFT_CLIENT_ID":     "mid",
+		"SITEBIN_OAUTH_MICROSOFT_CLIENT_SECRET": "msecret",
+		"SITEBIN_OAUTH_MICROSOFT_TENANT":        "my-tenant",
+	}), noFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.OAuthEnabled() {
+		t.Fatal("OAuth should be enabled")
+	}
+	if cfg.Google == nil || cfg.Google.ClientID != "gid" || cfg.Google.ClientSecret != "gsecret" {
+		t.Errorf("google config wrong: %+v", cfg.Google)
+	}
+	if cfg.Microsoft == nil || cfg.Microsoft.ClientID != "mid" || cfg.Microsoft.Tenant != "my-tenant" {
+		t.Errorf("microsoft config wrong: %+v", cfg.Microsoft)
+	}
+}
+
+func TestOAuthDefaultsTenantCommon(t *testing.T) {
+	cfg, _ := Load(env(map[string]string{
+		"SITEBIN_ACCOUNT_MODE":              "accounts",
+		"SITEBIN_OAUTH_MICROSOFT_CLIENT_ID": "mid",
+	}), noFile)
+	if cfg.Microsoft == nil || cfg.Microsoft.Tenant != "common" {
+		t.Errorf("tenant default = %+v", cfg.Microsoft)
+	}
+}
+
+func TestOAuthDisabledByDefault(t *testing.T) {
+	cfg, _ := Load(env(map[string]string{"SITEBIN_ACCOUNT_MODE": "accounts"}), noFile)
+	if cfg.OAuthEnabled() {
+		t.Error("OAuth should be off with no config")
+	}
+}
+
 func TestBadTierJSON(t *testing.T) {
 	_, err := Load(env(map[string]string{
 		"SITEBIN_ACCOUNT_MODE": "accounts",

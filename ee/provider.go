@@ -27,6 +27,7 @@ type provider struct {
 	accounts *account.Store
 	sessions *session.Manager
 	local    *authn.Local
+	oidc     *authn.OIDC
 	secret   []byte
 }
 
@@ -52,6 +53,7 @@ func (p *provider) Init(h ext.Host) error {
 	p.accounts = store
 	p.sessions = session.New(h.Secret(), !h.HTTPOnly(), session.DefaultTTL)
 	p.local = authn.NewLocal(store)
+	p.oidc = authn.NewOIDC(cfg, p.baseURL())
 	return nil
 }
 
