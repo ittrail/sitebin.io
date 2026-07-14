@@ -1,0 +1,74 @@
+name: Deploy to Sitebin
+description: Upload a folder to a Sitebin instance and get a public URL.
+branding:
+  icon: upload-cloud
+  color: orange
+
+inputs:
+  folder:
+    description: Folder to deploy (its contents become the site).
+    required: true
+  base_url:
+    description: Sitebin base URL, e.g. https://sitebin.example.com (for creating a new site).
+    required: false
+  edit_url:
+    description: Existing site's edit URL (to update instead of create).
+    required: false
+  edit_password:
+    description: Edit password (required with edit_url).
+    required: false
+  mode:
+    description: webserver (default) or viewer.
+    required: false
+    default: webserver
+  view_password:
+    description: Optional view password for a new site.
+    required: false
+
+outputs:
+  view_url:
+    description: The site's public view URL (create mode).
+    value: ${{ steps.deploy.outputs.view_url }}
+  edit_url:
+    description: The site's edit URL (create mode).
+    value: ${{ steps.deploy.outputs.edit_url }}
+  edit_password:
+    description: The site's edit password, shown once (create mode).
+    value: ${{ steps.deploy.outputs.edit_password }}
+
+runs:
+  using: composite
+  steps:
+    - id: deploy
+      shell: bash
+      env:
+        FOLDER: ${{ inputs.folder }}
+        BASE_URL: ${{ inputs.base_url }}
+        EDIT_URL: ${{ inputs.edit_url }}
+        EDIT_PASSWORD: ${{ inputs.edit_password }}
+        MODE: ${{ inputs.mode }}
+        VIEW_PASSWORD: ${{ inputs.view_password }}
+      run: |
+        set -euo pipefail
+        [ -d "$FOLDER" ] || { echo "folder '$FOLDER' not found"; exit 1; }
+        tmp="$(mktemp -d)"
+        ( cd "$FOLDER" && zip -qr "$tmp/site.zip" . )
+        if [ -n "${EDIT_URL:-}" ]; then
+          : "${EDIT_PASSWORD:?edit_password is required with edit_url}"
+          edit_id="${EDIT_URL##*/e/}"
+          base="${EDIT_URL%%/e/*}"
+          curl -fsS -X POST -H "X-Edit-Password: $EDIT_PASSWORD" \
+            -F "zip=@$tmp/site.zip" "$base/api/sites/$edit_id/files?replace=true" > "$tmp/resp.json"
+          echo "Updated $EDIT_URL"
+        else
+          : "${BASE_URL:?base_url is required to create a site}"
+          args=(-F "zip=@$tmp/site.zip" -F "mode=${MODE:-webserver}")
+          [ -n "${VIEW_PASSWORD:-}" ] && args+=(-F "view_password=$VIEW_PASSWORD")
+          curl -fsS -X POST "${args[@]}" "$BASE_URL/api/sites" > "$tmp/resp.json"
+        fi
+        # surface the useful fields as step outputs (no jq dependency)
+        for k in view_url edit_url edit_password; do
+          v="$(grep -o "\"$k\":\"[^\"]*\"" "$tmp/resp.json" | head -1 | sed "s/\"$k\":\"//;s/\"$//")"
+          echo "$k=$v" >> "$GITHUB_OUTPUT"
+        done
+        cat "$tmp/resp.json"

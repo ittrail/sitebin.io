@@ -397,6 +397,32 @@ func TestCustomDomainsGatedInCommunity(t *testing.T) {
 	}
 }
 
+func TestReplaceAllUpload(t *testing.T) {
+	// deploy's update mode uses POST /files?replace=true: old files are wiped
+	// and only the new upload remains.
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "v1", "css/old.css": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	h := textproto.MIMEHeader{}
+	h.Set("Content-Disposition", `form-data; name="files"; filename="index.html"`)
+	p, _ := mw.CreatePart(h)
+	p.Write([]byte("v2"))
+	mw.Close()
+	req := authed(httptest.NewRequest("POST", "/api/sites/"+edit+"/files?replace=true", &buf), c.EditPassword)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if w := e.public(t, req); w.Code != 200 {
+		t.Fatalf("replace upload: %d %s", w.Code, w.Body)
+	}
+	site, _ := e.st.ByViewID(c.ID)
+	files, _ := e.st.ListFiles(site)
+	if len(files) != 1 || files[0].Path != "index.html" {
+		t.Errorf("after replace: %+v (old files should be gone)", files)
+	}
+}
+
 func TestDomains(t *testing.T) {
 	ext.Register(&fakeProvider{domainsOK: true}) // enterprise: custom domains on
 	defer ext.Reset()
