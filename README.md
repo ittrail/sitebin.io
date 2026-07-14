@@ -182,6 +182,17 @@ password = the **edit password**.
 WebDAV grants full write access — treat the mount URL + edit password like
 the edit URL itself.
 
+> **Windows/macOS + plain HTTP → 401.** The built-in WebDAV clients in Windows
+> Explorer and macOS Finder refuse to send Basic-auth credentials over an
+> unencrypted `http://` connection, so mounting a local/HTTP-only instance
+> fails with 401 (the password is never sent). This is a client policy, not a
+> server rejection. Fixes: use an **HTTPS** instance (the normal production
+> case — it just works), or a client that allows Basic-over-HTTP such as
+> `rclone`, WinSCP, Cyberduck, or `curl`. On Windows you can also set
+> `HKLM\SYSTEM\CurrentControlSet\Services\WebClient\Parameters\BasicAuthLevel`
+> to `2` and restart the `WebClient` service. Windows Explorer also caps
+> downloads at 50 MB by default (`FileSizeLimitInBytes`).
+
 ### Custom domains
 
 Add a domain in the edit UI (or API), then point DNS at your server

@@ -98,6 +98,13 @@
       <div id="davinfo" class="dnshint hidden">
         Mount <span class="dav-url" id="dav-url"></span><br>
         Any username · password = your <strong>edit password</strong>.
+        <div id="dav-http-note" class="hidden" style="margin-top:10px;color:#ffd9a0">
+          <strong>On plain HTTP:</strong> Windows Explorer and macOS Finder refuse to send
+          the password over an unencrypted connection, so mounting fails with a 401. Use an
+          HTTPS instance, or a client that allows it — <code>rclone</code>, WinSCP, Cyberduck,
+          or <code>curl</code>. (Windows: set <code>BasicAuthLevel</code> to 2 and restart the
+          WebClient service.)
+        </div>
       </div>
     </div>
     <div class="opt" style="margin-top:16px">

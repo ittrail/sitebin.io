@@ -154,7 +154,11 @@ function render() {
   $("clear-viewpw").classList.toggle("hidden", !site.view_password_protected);
   $("e-webdav").checked = site.webdav_enabled;
   $("davinfo").classList.toggle("hidden", !site.webdav_enabled || !site.webdav_url);
-  if (site.webdav_url) $("dav-url").textContent = site.webdav_url;
+  if (site.webdav_url) {
+    $("dav-url").textContent = site.webdav_url;
+    // Windows/macOS built-in WebDAV clients won't send Basic auth over plain HTTP.
+    $("dav-http-note").classList.toggle("hidden", !site.webdav_url.startsWith("http://"));
+  }
 
   if (site.expires_at) {
     const d = new Date(site.expires_at);
