@@ -317,13 +317,14 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("edit
 
 $("editor-save").addEventListener("click", async () => {
   if (!editingPath) return;
+  const name = editingPath;
   const fd = new FormData();
-  fd.append("files", new Blob([$("editor-text").value]), editingPath);
+  fd.append("files", new Blob([$("editor-text").value]), name);
   try {
     site = await api("POST", "/files", fd, true);
     closeEditor();
     render();
-    toast("Saved " + editingPath);
+    toast("Saved " + name);
   } catch (err) { toast(err.message, true); }
 });
 
