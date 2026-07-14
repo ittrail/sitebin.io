@@ -31,7 +31,20 @@ func (p *provider) PublicRoutes() map[string]http.Handler {
 	}
 	p.oauthRoutes(routes)
 	p.emailRoutes(routes)
+	p.billingRoutes(routes)
 	return routes
+}
+
+// checkoutProvider returns the billing provider to use for upgrades ("stripe",
+// "paddle", or "" if none), preferring Stripe when both are configured.
+func (p *provider) checkoutProvider() string {
+	if p.stripe != nil {
+		return "stripe"
+	}
+	if p.paddle != nil {
+		return "paddle"
+	}
+	return ""
 }
 
 // oauthButtons returns the configured providers for the login/signup page.
@@ -253,6 +266,7 @@ type dashView struct {
 	CSRF       string
 	Base       string
 	SelfSelect bool
+	Checkout   string // billing provider for paid upgrades ("" = none)
 	Tiers      []tierOption
 }
 
@@ -270,8 +284,10 @@ func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, 
 	if l, ok := p.cfg.Tier(acc.Tier); ok && l.Label != "" {
 		tier = l.Label
 	}
+	checkout := p.checkoutProvider()
 	var opts []tierOption
-	if p.cfg.SelfSelect {
+	showPlans := p.cfg.SelfSelect || checkout != ""
+	if showPlans {
 		for _, t := range p.cfg.Tiers {
 			label := t.Label
 			if label == "" {
@@ -286,7 +302,7 @@ func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, 
 	}
 	dashTmpl.Execute(w, dashView{
 		Email: acc.Email, Tier: tier, Sites: rows, CSRF: token, Base: p.baseURL(),
-		SelfSelect: p.cfg.SelfSelect, Tiers: opts,
+		SelfSelect: p.cfg.SelfSelect, Checkout: checkout, Tiers: opts,
 	})
 }
 

@@ -14,6 +14,7 @@ import (
 
 	"github.com/ittrail/sitebin/ee/account"
 	"github.com/ittrail/sitebin/ee/authn"
+	"github.com/ittrail/sitebin/ee/billing"
 	"github.com/ittrail/sitebin/ee/eeconfig"
 	"github.com/ittrail/sitebin/ee/session"
 	"github.com/ittrail/sitebin/ee/smtp"
@@ -30,6 +31,8 @@ type provider struct {
 	local    *authn.Local
 	oidc     *authn.OIDC
 	mailer   *smtp.Mailer
+	stripe   *billing.Stripe
+	paddle   *billing.Paddle
 	secret   []byte
 }
 
@@ -58,6 +61,14 @@ func (p *provider) Init(h ext.Host) error {
 	p.oidc = authn.NewOIDC(cfg, p.baseURL())
 	if cfg.EmailEnabled() {
 		p.mailer = smtp.New(*cfg.SMTP)
+	}
+	if cfg.BillingEnabled() {
+		if cfg.Billing.Stripe != nil {
+			p.stripe = billing.NewStripe(*cfg.Billing.Stripe)
+		}
+		if cfg.Billing.Paddle != nil {
+			p.paddle = billing.NewPaddle(*cfg.Billing.Paddle)
+		}
 	}
 	return nil
 }

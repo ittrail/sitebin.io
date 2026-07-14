@@ -127,21 +127,30 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
     {{end}}
   </div>
 
-  {{if .SelfSelect}}
+  {{if .Tiers}}
   <div class="card">
     <h3>Plan</h3>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
     {{range .Tiers}}
-      <form class="inline" method="post" action="/account/tier">
-        <input type="hidden" name="csrf" value="{{$.CSRF}}">
-        <input type="hidden" name="tier" value="{{.ID}}">
-        <button class="btn small{{if .Current}} primary{{end}}" type="submit"{{if or .Current .Paid}} disabled{{end}}>
-          {{.Label}}{{if .Price}} · {{.Price}}{{end}}{{if .Current}} (current){{end}}{{if and .Paid (not .Current)}} · upgrade via checkout{{end}}
-        </button>
-      </form>
+      {{if .Current}}
+        <button class="btn small primary" type="button" disabled>{{.Label}}{{if .Price}} · {{.Price}}{{end}} (current)</button>
+      {{else if and .Paid $.Checkout}}
+        <form class="inline" method="post" action="/account/billing/{{$.Checkout}}/checkout">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <input type="hidden" name="tier" value="{{.ID}}">
+          <button class="btn small" type="submit">Upgrade to {{.Label}}{{if .Price}} · {{.Price}}{{end}}</button>
+        </form>
+      {{else if and (not .Paid) $.SelfSelect}}
+        <form class="inline" method="post" action="/account/tier">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <input type="hidden" name="tier" value="{{.ID}}">
+          <button class="btn small" type="submit">Switch to {{.Label}}</button>
+        </form>
+      {{else}}
+        <button class="btn small" type="button" disabled>{{.Label}}{{if .Price}} · {{.Price}}{{end}}</button>
+      {{end}}
     {{end}}
     </div>
-    <p class="muted" style="margin-top:8px">Paid plans are activated through checkout.</p>
   </div>
   {{end}}
 

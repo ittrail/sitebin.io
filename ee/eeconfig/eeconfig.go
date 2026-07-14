@@ -61,9 +61,28 @@ type Config struct {
 	Google    *OAuthProvider // nil = not configured
 	Microsoft *OAuthProvider
 
-	SMTP *SMTPConfig // nil = email disabled
+	SMTP    *SMTPConfig    // nil = email disabled
+	Billing *BillingConfig // nil = billing disabled
 
 	byID map[string]Tier
+}
+
+// BillingConfig holds payment-provider credentials. Prices per tier come from
+// the tier config (Tier.Price).
+type BillingConfig struct {
+	Stripe *StripeConfig
+	Paddle *PaddleConfig
+}
+
+type StripeConfig struct {
+	SecretKey     string
+	WebhookSecret string
+}
+
+type PaddleConfig struct {
+	APIKey        string
+	WebhookSecret string
+	Sandbox       bool
 }
 
 // SMTPConfig configures outbound email (verification, password reset, notices).
@@ -81,6 +100,11 @@ func (c Config) OAuthEnabled() bool { return c.Google != nil || c.Microsoft != n
 
 // EmailEnabled reports whether SMTP is configured.
 func (c Config) EmailEnabled() bool { return c.SMTP != nil }
+
+// BillingEnabled reports whether any payment provider is configured.
+func (c Config) BillingEnabled() bool {
+	return c.Billing != nil && (c.Billing.Stripe != nil || c.Billing.Paddle != nil)
+}
 
 // Enabled reports whether account gating is active.
 func (c Config) Enabled() bool { return c.Mode != ModeOpen }
@@ -138,6 +162,20 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Co
 			User: getenv("SITEBIN_SMTP_USER"), Pass: getenv("SITEBIN_SMTP_PASS"),
 			TLS: boolish(getenv("SITEBIN_SMTP_TLS")),
 		}
+	}
+
+	var billing BillingConfig
+	if k := strings.TrimSpace(getenv("SITEBIN_STRIPE_SECRET_KEY")); k != "" {
+		billing.Stripe = &StripeConfig{SecretKey: k, WebhookSecret: getenv("SITEBIN_STRIPE_WEBHOOK_SECRET")}
+	}
+	if k := strings.TrimSpace(getenv("SITEBIN_PADDLE_API_KEY")); k != "" {
+		billing.Paddle = &PaddleConfig{
+			APIKey: k, WebhookSecret: getenv("SITEBIN_PADDLE_WEBHOOK_SECRET"),
+			Sandbox: boolish(getenv("SITEBIN_PADDLE_SANDBOX")),
+		}
+	}
+	if billing.Stripe != nil || billing.Paddle != nil {
+		cfg.Billing = &billing
 	}
 
 	raw, err := tierBytes(getenv, readFile)

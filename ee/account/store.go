@@ -253,6 +253,25 @@ func (s *Store) UnlinkSite(a *Account, viewID string) error {
 	return nil
 }
 
+// LinkBilling records a provider customer → account mapping so future webhooks
+// (which carry only the customer id) resolve to this account.
+func (s *Store) LinkBilling(a *Account, provider, customer string) error {
+	if customer == "" {
+		return nil
+	}
+	p := filepath.Join(s.indexDir("billing"), hashKey(provider+":"+customer))
+	return os.WriteFile(p, []byte(a.ID), 0o644)
+}
+
+// ByBilling resolves an account by provider + customer id.
+func (s *Store) ByBilling(provider, customer string) (*Account, error) {
+	id, err := s.resolveIndex("billing", hashKey(provider+":"+customer))
+	if err != nil {
+		return nil, err
+	}
+	return s.ByID(id)
+}
+
 // ListSiteIDs returns the view ids of the sites this account owns.
 func (s *Store) ListSiteIDs(a *Account) ([]string, error) {
 	entries, err := os.ReadDir(filepath.Join(s.accountDir(a.ID), "sites"))
@@ -292,7 +311,7 @@ func (s *Store) Delete(a *Account, deleteSite func(viewID string) error) error {
 		os.Remove(filepath.Join(s.indexDir("oauth"), hashKey(string(a.Provider)+":"+a.OAuthSubject)))
 	}
 	if a.Billing != nil && a.Billing.Customer != "" {
-		os.Remove(filepath.Join(s.indexDir("billing"), a.Billing.Provider+":"+a.Billing.Customer))
+		os.Remove(filepath.Join(s.indexDir("billing"), hashKey(a.Billing.Provider+":"+a.Billing.Customer)))
 	}
 	if err := os.RemoveAll(s.accountDir(a.ID)); err != nil {
 		return err
