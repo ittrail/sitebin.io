@@ -18,15 +18,16 @@ startup** (env / mounted config).
 - The core exposes a small **extension seam** (`internal/ext`): interfaces the
   core calls if a provider is registered, with open/no-op behavior otherwise.
   `ee/` registers the real provider in an `init()` guarded by `//go:build ee`.
-- **License choice (recommended, NOT final — confirm with counsel):**
-  **BSL 1.1** (Business Source License) for `ee/` — source-available, an
-  Additional Use Grant that forbids offering Sitebin's premium features as a
-  competing commercial hosted service, auto-converting to MIT after 4 years.
-  This mirrors Sentry/CockroachDB and is more community-friendly than fully
-  closed while protecting a paid-hosting business. Alternative: a fully
-  proprietary "Sitebin Commercial License" + license-key activation
-  (closer to Portainer Business Edition). The scaffold ships BSL as the
-  default and marks it as requiring the owner's sign-off.
+- **License choice (decided): Elastic License 2.0** for `ee/` —
+  source-available and **perpetual** (never converts to open source). It
+  forbids offering the software to third parties as a hosted/managed service
+  and forbids circumventing the license-key functionality, while permitting
+  self-hosting, modification, and the owner's own commercial use. Chosen over
+  BSL 1.1 (which mandates conversion to open source after a Change Date) and
+  over a fully proprietary license (Portainer-BE style). Confirm with counsel
+  before public release. Protection is legal, not technical: because the `ee/`
+  source is published, the license key is enforced by the license terms rather
+  than by withholding source.
 - **Runtime activation:** enterprise features additionally require
   `SITEBIN_LICENSE_KEY` (signed, offline-verifiable) so the enterprise image
   can ship publicly but only unlock with a key. Community image never contains

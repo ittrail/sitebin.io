@@ -289,5 +289,7 @@ still work over the API with their edit password.
 ## License
 
 The repository is [MIT](LICENSE), **except** the `ee/` directory, which is
-licensed separately under [`ee/LICENSE`](ee/LICENSE) (Business Source License
-1.1).
+licensed separately under [`ee/LICENSE`](ee/LICENSE) ([Elastic License
+2.0](https://www.elastic.co/licensing/elastic-license) — source-available;
+self-host and modify freely, but no reselling it as a hosted service and no
+circumventing the license key).

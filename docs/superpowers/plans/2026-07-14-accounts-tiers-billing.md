@@ -2,7 +2,7 @@
 
 > Executes the design at
 > `docs/superpowers/specs/2026-07-14-accounts-tiers-billing-design.md`.
-> All premium code lives under `ee/` (BSL, `ee` build tag). TDD; the community
+> All premium code lives under `ee/` (Elastic License 2.0, `ee` build tag). TDD; the community
 > build must stay green at every step. Enterprise tests run with `-tags ee`.
 
 **Foundation (done):** `internal/ext` seam, `ee/` tree + license, build-tag

@@ -55,8 +55,9 @@ func (p *provider) Init(h ext.Host) error {
 	}
 	p.cfg = cfg
 
-	// License check: a key is optional (self-host is permitted under the BSL
-	// Additional Use Grant), but if supplied it must be valid.
+	// License check: a key is optional (self-host is permitted under the Elastic
+	// License 2.0), but if supplied it must be valid. Circumventing this check
+	// is prohibited by ee/LICENSE.
 	if key := strings.TrimSpace(os.Getenv("SITEBIN_LICENSE_KEY")); key != "" {
 		pub, err := licensing.VendorKey()
 		if err != nil {
