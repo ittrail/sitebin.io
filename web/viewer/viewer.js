@@ -11,6 +11,8 @@ const rendererByExt = {
   pdf: "pdf",
   md: "markdown", markdown: "markdown", mdown: "markdown",
   docx: "docx",
+  csv: "table", tsv: "table",
+  ipynb: "notebook",
   png: "image", jpg: "image", jpeg: "image", gif: "image", webp: "image",
   svg: "image", avif: "image", bmp: "image", ico: "image",
   mp4: "video", webm: "video", mov: "video", m4v: "video",
@@ -188,6 +190,105 @@ async function renderText(stage, path) {
   if (truncated) stage.appendChild(el("p", "v-msg", "Preview truncated — download for the full file."));
 }
 
+// parseDelimited splits CSV/TSV text into rows, honoring quoted fields.
+function parseDelimited(text, delim) {
+  const rows = [];
+  let row = [], field = "", i = 0, inQ = false;
+  while (i < text.length) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i += 2; continue; }
+        inQ = false; i++; continue;
+      }
+      field += c; i++; continue;
+    }
+    if (c === '"') { inQ = true; i++; continue; }
+    if (c === delim) { row.push(field); field = ""; i++; continue; }
+    if (c === "\r") { i++; continue; }
+    if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; i++; continue; }
+    field += c; i++;
+  }
+  if (field !== "" || row.length) { row.push(field); rows.push(row); }
+  return rows.filter((r) => r.length > 1 || (r.length === 1 && r[0] !== ""));
+}
+
+async function renderTable(stage, path) {
+  const res = await fetch(rawURL(path));
+  if (!res.ok) throw new Error("could not load the file (" + res.status + ")");
+  const text = await res.text();
+  const delim = /\.tsv$/i.test(path) ? "\t" : ",";
+  const rows = parseDelimited(text, delim);
+  if (!rows.length) { stage.appendChild(el("p", "v-msg", "Empty file.")); return; }
+
+  const wrap = el("div", "v-table-wrap");
+  const table = el("table", "v-table");
+  const thead = el("thead");
+  const htr = el("tr");
+  rows[0].forEach((h) => htr.appendChild(el("th", null, h)));
+  thead.appendChild(htr);
+  table.appendChild(thead);
+  const tbody = el("tbody");
+  for (let r = 1; r < rows.length; r++) {
+    const tr = el("tr");
+    for (let c = 0; c < rows[0].length; c++) tr.appendChild(el("td", null, rows[r][c] ?? ""));
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  stage.appendChild(wrap);
+  const note = el("p", "v-msg", (rows.length - 1) + " rows × " + rows[0].length + " columns");
+  note.style.textAlign = "left";
+  stage.appendChild(note);
+}
+
+async function renderNotebook(stage, path) {
+  await Promise.all([
+    loadScript(ASSETS + "/vendor/markdown-it.min.js"),
+    loadScript(ASSETS + "/vendor/purify.min.js"),
+    loadScript(ASSETS + "/vendor/highlight.min.js"),
+    loadCSS(ASSETS + "/vendor/highlight-theme.min.css"),
+  ]);
+  const res = await fetch(rawURL(path));
+  if (!res.ok) throw new Error("could not load the file (" + res.status + ")");
+  const nb = await res.json();
+  const md = window.markdownit({ html: false, linkify: true });
+  const art = el("article", "paper notebook");
+  const lang = (nb.metadata && nb.metadata.language_info && nb.metadata.language_info.name) || "python";
+  const src = (cell) => Array.isArray(cell.source) ? cell.source.join("") : (cell.source || "");
+
+  for (const cell of nb.cells || []) {
+    if (cell.cell_type === "markdown") {
+      const d = el("div", "nb-md");
+      d.innerHTML = window.DOMPurify.sanitize(md.render(src(cell)));
+      art.appendChild(d);
+    } else if (cell.cell_type === "code") {
+      const pre = el("pre", "nb-code");
+      const code = el("code", "language-" + lang, src(cell));
+      pre.appendChild(code);
+      art.appendChild(pre);
+      try { window.hljs.highlightElement(code); } catch {}
+      for (const out of cell.outputs || []) renderNbOutput(art, out);
+    }
+  }
+  stage.appendChild(art);
+}
+
+function renderNbOutput(art, out) {
+  const data = out.data || {};
+  if (data["image/png"]) {
+    const img = el("img", "nb-out-img");
+    img.src = "data:image/png;base64," + (Array.isArray(data["image/png"]) ? data["image/png"].join("") : data["image/png"]);
+    art.appendChild(img);
+    return;
+  }
+  let text = "";
+  if (out.output_type === "stream") text = Array.isArray(out.text) ? out.text.join("") : out.text;
+  else if (out.output_type === "error") text = (out.traceback || []).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+  else if (data["text/plain"]) text = Array.isArray(data["text/plain"]) ? data["text/plain"].join("") : data["text/plain"];
+  if (text) art.appendChild(el("pre", "nb-out", text));
+}
+
 function renderMedia(stage, path, kind) {
   const wrap = el("div", "v-media");
   let m;
@@ -240,6 +341,8 @@ async function show(path) {
     if (kind === "pdf") await renderPDF(target, path);
     else if (kind === "markdown") await renderMarkdown(target, path);
     else if (kind === "docx") await renderDocx(target, path);
+    else if (kind === "table") await renderTable(target, path);
+    else if (kind === "notebook") await renderNotebook(target, path);
     else if (kind === "image" || kind === "video" || kind === "audio") renderMedia(target, path, kind);
     else await renderText(target, path);
     loading.remove();

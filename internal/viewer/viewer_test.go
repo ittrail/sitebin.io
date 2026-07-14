@@ -14,6 +14,8 @@ func TestRendererFor(t *testing.T) {
 		"doc.pdf": "pdf", "DOC.PDF": "pdf",
 		"readme.md": "markdown", "notes.markdown": "markdown",
 		"report.docx": "docx",
+		"data.csv":    "table", "sheet.TSV": "table",
+		"analysis.ipynb": "notebook",
 		"logo.png":    "image", "photo.JPEG": "image", "art.svg": "image", "a.webp": "image",
 		"clip.mp4": "video", "clip.webm": "video",
 		"song.mp3": "audio", "voice.wav": "audio",

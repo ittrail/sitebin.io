@@ -112,6 +112,20 @@ body {
 .v-code pre { margin: 0; padding: 18px 20px; overflow-x: auto; }
 .v-code code { font: 13.5px/1.6 var(--mono); }
 
+/* CSV/TSV table */
+.v-table-wrap { width: min(1100px, 100%); margin: 0 auto; overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+.v-table { border-collapse: collapse; width: 100%; font: 13.5px var(--mono); color: var(--ink); }
+.v-table th, .v-table td { border: 1px solid var(--line); padding: 6px 11px; text-align: left; white-space: nowrap; }
+.v-table th { background: var(--bg-raise); position: sticky; top: 0; font-weight: 600; }
+.v-table tbody tr:nth-child(even) { background: rgba(255,255,255,.02); }
+
+/* Jupyter notebook */
+.paper.notebook { display: grid; gap: 4px; }
+.nb-md { margin: 8px 0; }
+.paper .nb-code { background: #0e1421; border: 1px solid #e4e1d8; border-left: 3px solid #5b8cff; margin: 6px 0 2px; }
+.paper .nb-out { background: #f6f5f1; border: 1px solid #e4e1d8; color: #333; margin: 0 0 12px; padding: 10px 14px; overflow-x: auto; font-size: 12.5px; }
+.nb-out-img { max-width: 100%; margin: 4px 0 12px; background: #fff; border-radius: 6px; }
+
 /* media */
 .v-media { display: grid; justify-items: center; gap: 14px; }
 .v-media img, .v-media video {
