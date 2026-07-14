@@ -397,6 +397,24 @@ input::placeholder { color: var(--ink-faint); }
 #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
 #toast.err { border-color: rgba(242,109,109,.5); color: #ffb4b4; }
 
+/* in-browser editor */
+#editor-overlay {
+  position: fixed; inset: 0; z-index: 60; display: grid; place-items: center;
+  background: rgba(4,7,14,.66); backdrop-filter: blur(3px); padding: 24px;
+}
+.editor-box {
+  width: min(900px, 100%); height: min(78vh, 640px); display: flex; flex-direction: column;
+  background: var(--bg-card); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: 0 24px 70px rgba(0,0,0,.5); overflow: hidden;
+}
+.editor-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); }
+.editor-name { font: 600 14px var(--mono); color: var(--ink); word-break: break-all; }
+#editor-text {
+  flex: 1; width: 100%; resize: none; border: 0; outline: none;
+  background: #0e1421; color: #e6eaf3; font: 13.5px/1.6 var(--mono);
+  padding: 14px 16px; tab-size: 2;
+}
+
 .hidden { display: none !important; }
 
 @media (max-width: 560px) {

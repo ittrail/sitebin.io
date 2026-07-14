@@ -218,6 +218,33 @@ func (s *Store) ClearFiles(site *Site) error {
 	return nil
 }
 
+// MaxEditableBytes caps files that can be read for in-browser editing.
+const MaxEditableBytes = 2 << 20
+
+// ReadContentFile returns the bytes of a content file (for the in-browser
+// editor). Files larger than MaxEditableBytes are refused.
+func (s *Store) ReadContentFile(site *Site, relPath string) ([]byte, error) {
+	rel, err := CleanRelPath(relPath)
+	if err != nil {
+		return nil, err
+	}
+	p := filepath.Join(site.ContentDir(), filepath.FromSlash(rel))
+	fi, err := os.Lstat(p)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if fi.IsDir() {
+		return nil, ErrBadPath
+	}
+	if fi.Size() > MaxEditableBytes {
+		return nil, ErrTooLarge
+	}
+	return os.ReadFile(p)
+}
+
 // ZipContent writes a zip archive of the site's content files to w.
 func (s *Store) ZipContent(site *Site, w io.Writer) error {
 	root := site.ContentDir()

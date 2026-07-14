@@ -111,9 +111,17 @@ function render() {
     s.textContent = fmtBytes(f.size);
     const act = document.createElement("td");
     act.className = "fact";
+    if (isEditable(f.path)) {
+      const ed = document.createElement("button");
+      ed.className = "btn small";
+      ed.textContent = "Edit";
+      ed.addEventListener("click", () => openEditor(f.path));
+      act.appendChild(ed);
+    }
     const del = document.createElement("button");
     del.className = "btn small danger";
     del.textContent = "Delete";
+    del.style.marginLeft = "6px";
     del.addEventListener("click", async () => {
       try {
         site = await api("DELETE", "/files/" + encodePath(f.path));
@@ -265,6 +273,50 @@ async function uploadFiles(files, isZip) {
     toast("Files uploaded");
   } catch (err) { toast(err.message, true); }
 }
+
+// ---- in-browser editor ----
+
+const EDITABLE = /\.(html?|css|js|mjs|json|md|markdown|txt|svg|xml|csv|tsv|yaml|yml|toml|ini|log|c|cc|cpp|h|go|py|rb|rs|ts|tsx|jsx|sh|conf)$/i;
+function isEditable(path) { return EDITABLE.test(path); }
+
+let editingPath = null;
+async function openEditor(path) {
+  try {
+    const res = await fetch("/api/sites/" + editID + "/content/" + encodePath(path), {
+      headers: { "X-Edit-Password": sitePw },
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.error || "could not open file (" + res.status + ")");
+    }
+    $("editor-text").value = await res.text();
+    $("editor-name").textContent = path;
+    editingPath = path;
+    $("editor-overlay").classList.remove("hidden");
+    $("editor-text").focus();
+  } catch (err) { toast(err.message, true); }
+}
+
+function closeEditor() {
+  $("editor-overlay").classList.add("hidden");
+  editingPath = null;
+}
+
+$("editor-cancel").addEventListener("click", closeEditor);
+$("editor-overlay").addEventListener("click", (e) => { if (e.target.id === "editor-overlay") closeEditor(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("editor-overlay").classList.contains("hidden")) closeEditor(); });
+
+$("editor-save").addEventListener("click", async () => {
+  if (!editingPath) return;
+  const fd = new FormData();
+  fd.append("files", new Blob([$("editor-text").value]), editingPath);
+  try {
+    site = await api("POST", "/files", fd, true);
+    closeEditor();
+    render();
+    toast("Saved " + editingPath);
+  } catch (err) { toast(err.message, true); }
+});
 
 $("download-zip").addEventListener("click", async () => {
   try {

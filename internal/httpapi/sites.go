@@ -436,6 +436,19 @@ func (a *API) getSite(w http.ResponseWriter, r *http.Request, site *store.Site) 
 	writeJSON(w, 200, a.sitePayload(site))
 }
 
+// getFileContent returns a single content file's bytes (for the editor).
+func (a *API) getFileContent(w http.ResponseWriter, r *http.Request, site *store.Site) {
+	b, err := a.st.ReadContentFile(site, r.PathValue("path"))
+	if err != nil {
+		respondErr(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Write(b)
+}
+
 // downloadSite streams the site's content files as a zip.
 func (a *API) downloadSite(w http.ResponseWriter, r *http.Request, site *store.Site) {
 	w.Header().Set("Content-Type", "application/zip")

@@ -659,6 +659,29 @@ func TestPathModeGateAndUnlock(t *testing.T) {
 	}
 }
 
+func TestReadFileContent(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"js/app.js": "console.log(42)"})
+	edit := editIDFrom(t, c.EditURL)
+
+	w := e.public(t, authed(httptest.NewRequest("GET", "/api/sites/"+edit+"/content/js/app.js", nil), c.EditPassword))
+	if w.Code != 200 || w.Body.String() != "console.log(42)" {
+		t.Fatalf("read file = %d %q", w.Code, w.Body)
+	}
+	// missing file → 404
+	if w := e.public(t, authed(httptest.NewRequest("GET", "/api/sites/"+edit+"/content/nope.txt", nil), c.EditPassword)); w.Code != 404 {
+		t.Errorf("missing file: %d", w.Code)
+	}
+	// traversal rejected
+	if w := e.public(t, authed(httptest.NewRequest("GET", "/api/sites/"+edit+"/content/../meta.json", nil), c.EditPassword)); w.Code == 200 {
+		t.Errorf("traversal read allowed: %d", w.Code)
+	}
+	// auth required
+	if w := e.public(t, httptest.NewRequest("GET", "/api/sites/"+edit+"/content/js/app.js", nil)); w.Code != 401 {
+		t.Errorf("no auth: %d", w.Code)
+	}
+}
+
 func TestDownloadZip(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.createSite(t, nil, map[string]string{"index.html": "<h1>hi</h1>", "css/x.css": "body{}"})
