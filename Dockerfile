@@ -4,9 +4,13 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN go vet ./... && go test ./...
+# EDITION=community (default, MIT) or enterprise (adds the ee/ premium tree).
+ARG EDITION=community
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/sitebin ./cmd/sitebin
+RUN set -eux; \
+    if [ "$EDITION" = "enterprise" ]; then TAGS="-tags ee"; else TAGS=""; fi; \
+    go vet $TAGS ./... && go test $TAGS ./...; \
+    CGO_ENABLED=0 go build $TAGS -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/sitebin ./cmd/sitebin
 
 # ---- caddy with DNS modules for the wildcard certificate ----
 FROM caddy:2-builder AS caddybuild
