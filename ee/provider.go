@@ -16,6 +16,7 @@ import (
 	"github.com/ittrail/sitebin/ee/authn"
 	"github.com/ittrail/sitebin/ee/eeconfig"
 	"github.com/ittrail/sitebin/ee/session"
+	"github.com/ittrail/sitebin/ee/smtp"
 	"github.com/ittrail/sitebin/internal/ext"
 )
 
@@ -28,6 +29,7 @@ type provider struct {
 	sessions *session.Manager
 	local    *authn.Local
 	oidc     *authn.OIDC
+	mailer   *smtp.Mailer
 	secret   []byte
 }
 
@@ -54,6 +56,9 @@ func (p *provider) Init(h ext.Host) error {
 	p.sessions = session.New(h.Secret(), !h.HTTPOnly(), session.DefaultTTL)
 	p.local = authn.NewLocal(store)
 	p.oidc = authn.NewOIDC(cfg, p.baseURL())
+	if cfg.EmailEnabled() {
+		p.mailer = smtp.New(*cfg.SMTP)
+	}
 	return nil
 }
 

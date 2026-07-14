@@ -30,6 +30,7 @@ func (p *provider) PublicRoutes() map[string]http.Handler {
 		"POST /account/delete":            http.HandlerFunc(p.handleDeleteAccount),
 	}
 	p.oauthRoutes(routes)
+	p.emailRoutes(routes)
 	return routes
 }
 
@@ -94,6 +95,7 @@ func (p *provider) handleSignupPost(w http.ResponseWriter, r *http.Request) {
 		p.renderAuth(w, "signup", email, msg)
 		return
 	}
+	p.sendVerification(acc)
 	http.SetCookie(w, p.sessions.Cookie(acc.ID, acc.TokenVersion))
 	p.redirect(w, r, "/account")
 }
@@ -215,15 +217,19 @@ func (p *provider) securityHeaders(w http.ResponseWriter) {
 }
 
 type authView struct {
-	Mode      string // login | signup
-	Email     string
-	Error     string
-	Providers []string
+	Mode         string // login | signup
+	Email        string
+	Error        string
+	Providers    []string
+	EmailEnabled bool
 }
 
 func (p *provider) renderAuth(w http.ResponseWriter, mode, email, errMsg string) {
 	p.securityHeaders(w)
-	authTmpl.Execute(w, authView{Mode: mode, Email: email, Error: errMsg, Providers: p.oauthButtons()})
+	authTmpl.Execute(w, authView{
+		Mode: mode, Email: email, Error: errMsg,
+		Providers: p.oauthButtons(), EmailEnabled: p.mailer != nil,
+	})
 }
 
 type siteRow struct {

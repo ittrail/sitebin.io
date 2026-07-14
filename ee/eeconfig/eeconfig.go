@@ -5,6 +5,7 @@ package eeconfig
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -60,11 +61,26 @@ type Config struct {
 	Google    *OAuthProvider // nil = not configured
 	Microsoft *OAuthProvider
 
+	SMTP *SMTPConfig // nil = email disabled
+
 	byID map[string]Tier
+}
+
+// SMTPConfig configures outbound email (verification, password reset, notices).
+type SMTPConfig struct {
+	Host string
+	Port int
+	User string
+	Pass string
+	From string
+	TLS  bool // implicit TLS (port 465); otherwise STARTTLS
 }
 
 // OAuthEnabled reports whether any OAuth provider is configured.
 func (c Config) OAuthEnabled() bool { return c.Google != nil || c.Microsoft != nil }
+
+// EmailEnabled reports whether SMTP is configured.
+func (c Config) EmailEnabled() bool { return c.SMTP != nil }
 
 // Enabled reports whether account gating is active.
 func (c Config) Enabled() bool { return c.Mode != ModeOpen }
@@ -102,6 +118,26 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Co
 			tenant = "common"
 		}
 		cfg.Microsoft = &OAuthProvider{ClientID: id, ClientSecret: getenv("SITEBIN_OAUTH_MICROSOFT_CLIENT_SECRET"), Tenant: tenant}
+	}
+
+	if host := strings.TrimSpace(getenv("SITEBIN_SMTP_HOST")); host != "" {
+		port := 587
+		if v := strings.TrimSpace(getenv("SITEBIN_SMTP_PORT")); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return cfg, fmt.Errorf("SITEBIN_SMTP_PORT: %q is not a number", v)
+			}
+			port = n
+		}
+		from := strings.TrimSpace(getenv("SITEBIN_SMTP_FROM"))
+		if from == "" {
+			return cfg, fmt.Errorf("SITEBIN_SMTP_FROM is required when SITEBIN_SMTP_HOST is set")
+		}
+		cfg.SMTP = &SMTPConfig{
+			Host: host, Port: port, From: from,
+			User: getenv("SITEBIN_SMTP_USER"), Pass: getenv("SITEBIN_SMTP_PASS"),
+			TLS: boolish(getenv("SITEBIN_SMTP_TLS")),
+		}
 	}
 
 	raw, err := tierBytes(getenv, readFile)

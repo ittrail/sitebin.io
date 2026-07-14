@@ -65,7 +65,34 @@ var authTmpl = template.Must(template.New("auth").Parse(pageHead + `
   {{end}}
   <div class="switch-link">
     {{if eq .Mode "signup"}}Already have an account? <a href="/account/login">Sign in</a>{{else}}New here? <a href="/account/signup">Create an account</a>{{end}}
+    {{if and (eq .Mode "login") .EmailEnabled}}<br><a href="/account/reset">Forgot your password?</a>{{end}}
   </div>
+</div></div></main>
+` + pageFoot))
+
+var resetReqTmpl = template.Must(template.New("resetreq").Parse(pageHead + `
+<main class="acct"><div class="authwrap"><div class="card">
+  <h1>Reset your password</h1>
+  <p class="muted">Enter your email and we'll send a reset link.</p>
+  <form method="post" action="/account/reset">
+    <label class="f" for="email">Email</label>
+    <input type="email" id="email" name="email" required autocomplete="email" autofocus>
+    <div style="margin-top:16px"><button class="btn primary" type="submit">Send reset link</button></div>
+  </form>
+  <div class="switch-link"><a href="/account/login">Back to sign in</a></div>
+</div></div></main>
+` + pageFoot))
+
+var resetConfirmTmpl = template.Must(template.New("resetconfirm").Parse(pageHead + `
+<main class="acct"><div class="authwrap"><div class="card">
+  <h1>Choose a new password</h1>
+  <form method="post" action="/account/reset/confirm">
+    <input type="hidden" name="token" value="{{.Token}}">
+    <label class="f" for="password">New password</label>
+    <input type="password" id="password" name="password" required autocomplete="new-password" autofocus>
+    {{if .Error}}<div class="inline-status err" style="margin-top:10px">{{.Error}}</div>{{end}}
+    <div style="margin-top:16px"><button class="btn primary" type="submit">Update password</button></div>
+  </form>
 </div></div></main>
 ` + pageFoot))
 
