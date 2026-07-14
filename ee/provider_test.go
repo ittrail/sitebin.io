@@ -33,14 +33,16 @@ func (s *fakeSites) Delete(id string) error {
 }
 
 type fakeHost struct {
-	dir   string
-	sites *fakeSites
+	dir       string
+	sites     *fakeSites
+	pathViews bool
 }
 
 func (h *fakeHost) DataDir() string        { return h.dir }
 func (h *fakeHost) BaseDomain() string     { return "sitebin.example" }
 func (h *fakeHost) HTTPOnly() bool         { return true }
 func (h *fakeHost) Secret() []byte         { return []byte("0123456789abcdef0123456789abcdef") }
+func (h *fakeHost) PathViews() bool        { return h.pathViews }
 func (h *fakeHost) Sites() ext.SiteService { return h.sites }
 
 func setupAccounts(t *testing.T) (*provider, *fakeHost, http.Handler) {
@@ -62,6 +64,23 @@ func form(v url.Values) *http.Request {
 	r := httptest.NewRequest("POST", "/", strings.NewReader(v.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	return r
+}
+
+func TestPathViewsRefusedWithAccounts(t *testing.T) {
+	t.Setenv("SITEBIN_ACCOUNT_MODE", "accounts")
+	p := newProvider()
+	host := &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}, pathViews: true}
+	err := p.Init(host)
+	if err == nil || !strings.Contains(err.Error(), "SITEBIN_VIEW_ACCESS") {
+		t.Fatalf("expected path+accounts to be refused, got %v", err)
+	}
+}
+
+func TestCustomDomainsAllowedInEnterprise(t *testing.T) {
+	p, _, _ := setupAccounts(t) // enterprise provider
+	if !p.CustomDomainsAllowed() {
+		t.Error("enterprise should allow custom domains")
+	}
 }
 
 func TestAuthorizeCreateRequiresLogin(t *testing.T) {

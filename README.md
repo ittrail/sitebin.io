@@ -85,7 +85,8 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | Variable | Default | Purpose |
 |---|---|---|
 | `SITEBIN_BASE_DOMAIN` | — (required) | Main domain. View subdomains, edit UI, API and WebDAV live under it. May include a port for URL generation (`host:8085`). |
-| `SITEBIN_DNS_PROVIDER` | — | DNS module for the wildcard cert: `cloudflare`, `hetzner`, `duckdns`. |
+| `SITEBIN_VIEW_ACCESS` | `subdomain` | How site content is served: `subdomain` (`<id>.base`, needs a wildcard cert), `path` (`base/v/<id>/`, **no wildcard needed**), or `both`. See [View access modes](#view-access-modes). |
+| `SITEBIN_DNS_PROVIDER` | — | DNS module for the wildcard cert: `cloudflare`, `hetzner`, `duckdns`. Only needed for `subdomain`/`both`. |
 | `SITEBIN_DNS_TOKEN` | — | API token for the DNS provider (read via env by Caddy, never written to disk). |
 | `SITEBIN_TLS_SNIPPET` | — | Advanced: raw lines injected into the wildcard site's `tls { … }` block (for multi-credential providers like netcup/porkbun). |
 | `SITEBIN_ACME_EMAIL` | — | ACME account email. |
@@ -158,7 +159,7 @@ curl -X POST -H "X-Edit-Password: $PW" -F "zip=@all.zip" \
 curl -X DELETE -H "X-Edit-Password: $PW" \
      https://sitebin.example.com/api/sites/$EDIT_ID/files/js/app.js
 
-# custom domains
+# custom domains (Enterprise edition only; 403 in community)
 curl -X POST -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
      -d '{"domain":"docs.client.com"}' \
      https://sitebin.example.com/api/sites/$EDIT_ID/domains
@@ -193,13 +194,37 @@ the edit URL itself.
 > to `2` and restart the `WebClient` service. Windows Explorer also caps
 > downloads at 50 MB by default (`FileSizeLimitInBytes`).
 
-### Custom domains
+### View access modes
 
-Add a domain in the edit UI (or API), then point DNS at your server
+By default each site is served on its own random **subdomain**
+(`<id>.sitebin.example.com`), which needs a wildcard certificate (hence the DNS
+challenge). Set `SITEBIN_VIEW_ACCESS` to change this:
+
+- `subdomain` (default) — random subdomains; strong per-site origin isolation.
+- `path` — sites are served at `sitebin.example.com/v/<id>/` on the main
+  domain. **No wildcard certificate is needed** (a normal cert for the single
+  main domain suffices), which is handy when you can't get wildcard DNS/certs.
+- `both` — served on subdomains *and* paths.
+
+> **Security note for `path`/`both`:** path-served content shares the main
+> domain's origin with the edit UI and API, so it does **not** get the origin
+> isolation that subdomains provide. For that reason the Enterprise edition
+> refuses to start with path/both view access **and** accounts enabled (a
+> malicious path-hosted page could ride a logged-in visitor's session). Prefer
+> `subdomain` whenever you run accounts or host untrusted HTML/JS; use `path`
+> for simple, wildcard-free deployments of trusted content. Path-served sites
+> should use relative links (`css/x` not `/css/x`).
+
+### Custom domains *(Enterprise)*
+
+Custom domains are an [Enterprise](#editions) feature. In the enterprise
+edition, add a domain in the edit UI (or API), then point DNS at your server
 (`A <domain> → server IP`, or `CNAME → sitebin.example.com`). The certificate
-is issued automatically on the first HTTPS request. The internal
+is issued automatically on the first HTTPS request, and the internal
 `tls-check` endpoint ensures certificates are only issued for domains that
-actually belong to a site (prevents issuance-DoS).
+actually belong to a site (prevents issuance-DoS). Per-account limits follow
+the tier's `custom_domains` cap. In the community edition the domain API
+returns `403`.
 
 ### Expiry
 

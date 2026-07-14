@@ -34,6 +34,11 @@ function Req([string]$method, [string]$url, [string[]]$extra = @()) {
     return @{ code = [int]$code; body = $body; headers = $headers }
 }
 
+# PS 5.1: pass quoted JSON to curl via a temp file to avoid arg mangling
+function JsonBodyA([string]$json) {
+    $p = Join-Path $work ("ja" + (Get-Random) + ".json"); [IO.File]::WriteAllText($p, $json); return "@$p"
+}
+
 Write-Host "== starting enterprise image (accounts mode) on $Port" -ForegroundColor Cyan
 docker rm -f $name 2>$null | Out-Null
 docker volume rm $vol 2>$null | Out-Null
@@ -94,6 +99,13 @@ if ($site) {
     Req "POST" "$origin/account/signup" @("-c", $jar2, "--data-urlencode", "email=other@example.com", "--data-urlencode", "password=password12345") | Out-Null
     $r = Req "GET" "$origin/account" @("-b", $jar2)
     Assert "other account sees no sites" ($r.body -match "No sites yet")
+
+    # custom domains ARE available in the enterprise edition
+    $edit = ($site.edit_url -split "/e/")[1]
+    $r = Req "POST" "$origin/api/sites/$edit/domains" @("-H", "X-Edit-Password: $($site.edit_password)", "-H", "Content-Type: application/json", "--data", (JsonBodyA '{"domain":"acct.e2e.test"}'))
+    Assert "custom domain allowed in enterprise (200)" ($r.code -eq 200) "got $($r.code): $($r.body)"
+    $r = Req "GET" "http://127.0.0.1:$Port/" @("-H", "Host: acct.e2e.test")
+    Assert "custom domain serves owned site" ($r.body -match "owned-site-ok") "code $($r.code)"
 }
 
 # duplicate email rejected

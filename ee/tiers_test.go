@@ -44,7 +44,8 @@ func TestTierGrantCarriesCaps(t *testing.T) {
 		t.Fatalf("grant: %v", err)
 	}
 	if grant.OwnerAccountID != acc.ID || grant.MaxSiteBytes != 1000 || grant.MaxFiles != 10 ||
-		grant.MaxCustomDomain != 0 || grant.MaxExpiryDays != 7 || grant.WebDAV == nil || *grant.WebDAV {
+		grant.MaxCustomDomain == nil || *grant.MaxCustomDomain != 0 || grant.MaxExpiryDays != 7 ||
+		grant.WebDAV == nil || *grant.WebDAV {
 		t.Errorf("free tier caps wrong: %+v", grant)
 	}
 }

@@ -17,6 +17,7 @@ func (h extHost) DataDir() string        { return h.cfg.DataDir }
 func (h extHost) BaseDomain() string     { return h.cfg.BaseDomain }
 func (h extHost) HTTPOnly() bool         { return h.cfg.HTTPOnly }
 func (h extHost) Secret() []byte         { return h.secret }
+func (h extHost) PathViews() bool        { return h.cfg.PathViews() }
 func (h extHost) Sites() ext.SiteService { return h.sites }
 
 var _ ext.Host = extHost{}

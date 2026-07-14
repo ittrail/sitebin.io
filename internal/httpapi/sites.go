@@ -349,13 +349,12 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 	// Stamp ownership + per-site quota caps BEFORE uploads are processed, so the
 	// tier caps are enforced on this request's files.
 	if gated {
-		domainCap := grant.MaxCustomDomain
 		if err := a.st.Update(site, func(m *store.Meta) error {
 			m.OwnerAccountID = owner
 			m.QuotaBytes = grant.MaxSiteBytes
 			m.QuotaFiles = grant.MaxFiles
 			m.QuotaExpiryDays = grant.MaxExpiryDays
-			m.QuotaDomains = &domainCap
+			m.QuotaDomains = grant.MaxCustomDomain
 			m.QuotaWebDAV = grant.WebDAV
 			return nil
 		}); err != nil {
@@ -489,6 +488,12 @@ func (a *API) deleteFile(w http.ResponseWriter, r *http.Request, site *store.Sit
 }
 
 func (a *API) addDomain(w http.ResponseWriter, r *http.Request, site *store.Site) {
+	// Custom domains are an enterprise feature; the community build has no
+	// provider and rejects them.
+	if p, ok := ext.Get(); !ok || !p.CustomDomainsAllowed() {
+		writeError(w, 403, "custom domains are an enterprise feature; see the Enterprise edition")
+		return
+	}
 	var body struct {
 		Domain string `json:"domain"`
 	}

@@ -11,16 +11,18 @@ import (
 // fakeProvider is a test double for the enterprise extension, exercising the
 // core create-gate + route-mount seam without the ee/ build tag.
 type fakeProvider struct {
-	enabled bool
-	owner   string
-	rejErr  error
-	created []string
+	enabled   bool
+	domainsOK bool
+	owner     string
+	rejErr    error
+	created   []string
 }
 
-func (f *fakeProvider) Name() string          { return "fake" }
-func (f *fakeProvider) Version() string       { return "0" }
-func (f *fakeProvider) Init(ext.Host) error   { return nil }
-func (f *fakeProvider) AccountsEnabled() bool { return f.enabled }
+func (f *fakeProvider) Name() string               { return "fake" }
+func (f *fakeProvider) Version() string            { return "0" }
+func (f *fakeProvider) Init(ext.Host) error        { return nil }
+func (f *fakeProvider) AccountsEnabled() bool      { return f.enabled }
+func (f *fakeProvider) CustomDomainsAllowed() bool { return f.domainsOK }
 func (f *fakeProvider) AuthorizeCreate(*http.Request) (ext.CreateGrant, error) {
 	return ext.CreateGrant{OwnerAccountID: f.owner}, f.rejErr
 }

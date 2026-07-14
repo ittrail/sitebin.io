@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ittrail/sitebin/internal/config"
+	"github.com/ittrail/sitebin/internal/ext"
 	"github.com/ittrail/sitebin/internal/store"
 )
 
@@ -384,7 +385,20 @@ func TestUploadAndDeleteFiles(t *testing.T) {
 	}
 }
 
+func TestCustomDomainsGatedInCommunity(t *testing.T) {
+	e := newEnv(t, nil) // no provider registered = community
+	c := e.createSite(t, nil, nil)
+	edit := editIDFrom(t, c.EditURL)
+	req := authed(httptest.NewRequest("POST", "/api/sites/"+edit+"/domains", strings.NewReader(`{"domain":"client.example.org"}`)), c.EditPassword)
+	req.Header.Set("Content-Type", "application/json")
+	if w := e.public(t, req); w.Code != 403 {
+		t.Fatalf("custom domains should be gated in community: %d", w.Code)
+	}
+}
+
 func TestDomains(t *testing.T) {
+	ext.Register(&fakeProvider{domainsOK: true}) // enterprise: custom domains on
+	defer ext.Reset()
 	e := newEnv(t, nil)
 	c := e.createSite(t, nil, nil)
 	edit := editIDFrom(t, c.EditURL)
@@ -569,6 +583,8 @@ func TestAuthzExpired(t *testing.T) {
 }
 
 func TestAuthzCustomDomain(t *testing.T) {
+	ext.Register(&fakeProvider{domainsOK: true})
+	defer ext.Reset()
 	e := newEnv(t, nil)
 	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
 	edit := editIDFrom(t, c.EditURL)

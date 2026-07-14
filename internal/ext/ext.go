@@ -32,6 +32,11 @@ type Provider interface {
 	// AccountsEnabled reports whether account gating is active (mode != open).
 	AccountsEnabled() bool
 
+	// CustomDomainsAllowed reports whether custom domains may be added — a
+	// premium feature. The community build has no provider, so custom domains
+	// are off there.
+	CustomDomainsAllowed() bool
+
 	// AuthorizeCreate is consulted before a site is created. It returns a
 	// CreateGrant (owner + per-site quota caps to stamp), or a *CreateError to
 	// reject creation. In the community build it is never called and creation
@@ -51,7 +56,7 @@ type CreateGrant struct {
 	MaxSiteBytes    int64
 	MaxFiles        int
 	MaxExpiryDays   int
-	MaxCustomDomain int
+	MaxCustomDomain *int  // nil = inherit global; value (incl. 0) = explicit cap
 	WebDAV          *bool // nil = inherit global
 }
 
@@ -71,6 +76,9 @@ type Host interface {
 	BaseDomain() string
 	HTTPOnly() bool
 	Secret() []byte
+	// PathViews reports whether sites are served on /v/<id> main-domain paths
+	// (SITEBIN_VIEW_ACCESS=path|both), which shares an origin with the API.
+	PathViews() bool
 	// Sites exposes the core site operations the dashboard needs.
 	Sites() SiteService
 }

@@ -72,6 +72,14 @@ func (p *provider) Init(h ext.Host) error {
 		slog.Warn("running Sitebin Enterprise without a license key (self-host mode); see ee/LICENSE")
 	}
 
+	// Safety: serving user content on /v/<id> paths puts it on the SAME origin
+	// as the account dashboard and API. Combined with accounts, a malicious
+	// path-hosted page could ride a logged-in visitor's session (same-origin
+	// fetch of the CSRF-protected dashboard). Refuse that combination.
+	if cfg.Enabled() && h.PathViews() {
+		return fmt.Errorf("SITEBIN_VIEW_ACCESS=path/both cannot be combined with accounts (SITEBIN_ACCOUNT_MODE=%s): serving user content on the main-domain origin alongside the account session is an account-takeover risk. Use subdomain view access with accounts, or run without accounts", cfg.Mode)
+	}
+
 	store, err := account.New(h.DataDir())
 	if err != nil {
 		return fmt.Errorf("account store: %w", err)
@@ -95,6 +103,11 @@ func (p *provider) Init(h ext.Host) error {
 }
 
 func (p *provider) AccountsEnabled() bool { return p.cfg.Enabled() }
+
+// CustomDomainsAllowed makes custom domains available in the enterprise
+// edition. Per-account/per-tier limits are still enforced by the tier's
+// custom_domains cap.
+func (p *provider) CustomDomainsAllowed() bool { return true }
 
 // AuthorizeCreate gates site creation and returns the owner + per-site quota
 // caps. Logged-in users own their sites; anonymous creation is allowed only
@@ -149,12 +162,13 @@ func (p *provider) grantForAccount(acc *account.Account) (ext.CreateGrant, error
 // grantFromTier stamps a tier's caps into a CreateGrant.
 func grantFromTier(owner string, t eeconfig.Tier) ext.CreateGrant {
 	webdav := t.WebDAV
+	domains := t.CustomDomains
 	return ext.CreateGrant{
 		OwnerAccountID:  owner,
 		MaxSiteBytes:    t.MaxSiteBytes,
 		MaxFiles:        t.MaxFiles,
 		MaxExpiryDays:   t.MaxExpiryDays,
-		MaxCustomDomain: t.CustomDomains,
+		MaxCustomDomain: &domains,
 		WebDAV:          &webdav,
 	}
 }

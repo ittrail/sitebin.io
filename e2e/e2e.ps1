@@ -289,25 +289,15 @@ if ($xsite) {
     Assert "expired site serves 410" ($r.code -eq 410) "got $($r.code)"
 }
 
-# ---------- custom domains + tls-check ----------
+# ---------- custom domains are an enterprise feature (gated in community) ----------
 
 if ($site) {
     $edit = EditId $site
     $r = Req "POST" "$origin/api/sites/$edit/domains" @("-H", "X-Edit-Password: $($site.edit_password)", "-H", "Content-Type: application/json", "--data", (JsonBody '{"domain":"client.e2e.test"}'))
-    Assert "add custom domain" ($r.code -eq 200) "got $($r.code): $($r.body)"
-
+    Assert "custom domains gated in community (403)" ($r.code -eq 403) "got $($r.code): $($r.body)"
+    # tls-check still guards the (empty) domain index
     $tls = docker exec $name sh -c "wget -q -O- 'http://127.0.0.1:9000/internal/tls-check?domain=client.e2e.test' >/dev/null 2>&1 && echo YES || echo NO"
-    Assert "tls-check approves known domain" ($tls.Trim() -eq "YES") "$tls"
-    $tls = docker exec $name sh -c "wget -q -O- 'http://127.0.0.1:9000/internal/tls-check?domain=evil.example.com' >/dev/null 2>&1 && echo YES || echo NO"
-    Assert "tls-check refuses unknown domain" ($tls.Trim() -eq "NO") "$tls"
-
-    $r = Req "GET" "http://127.0.0.1:$Port/" @("-H", "Host: client.e2e.test")
-    Assert "custom domain serves site content" ($r.body -match "sitebin-e2e-webserver-ok") "code $($r.code)"
-
-    $r = Req "DELETE" "$origin/api/sites/$edit/domains/client.e2e.test" @("-H", "X-Edit-Password: $($site.edit_password)")
-    Assert "remove custom domain" ($r.code -eq 200)
-    $r = Req "GET" "http://127.0.0.1:$Port/" @("-H", "Host: client.e2e.test")
-    Assert "removed domain stops serving" ($r.code -ge 400) "got $($r.code)"
+    Assert "tls-check refuses unregistered domain" ($tls.Trim() -eq "NO") "$tls"
 }
 
 # ---------- WebDAV ----------
