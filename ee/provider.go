@@ -8,14 +8,18 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/ittrail/sitebin/ee/account"
 	"github.com/ittrail/sitebin/ee/authn"
 	"github.com/ittrail/sitebin/ee/billing"
 	"github.com/ittrail/sitebin/ee/eeconfig"
+	"github.com/ittrail/sitebin/ee/licensing"
 	"github.com/ittrail/sitebin/ee/session"
 	"github.com/ittrail/sitebin/ee/smtp"
 	"github.com/ittrail/sitebin/internal/ext"
@@ -50,6 +54,22 @@ func (p *provider) Init(h ext.Host) error {
 		return fmt.Errorf("enterprise config: %w", err)
 	}
 	p.cfg = cfg
+
+	// License check: a key is optional (self-host is permitted under the BSL
+	// Additional Use Grant), but if supplied it must be valid.
+	if key := strings.TrimSpace(os.Getenv("SITEBIN_LICENSE_KEY")); key != "" {
+		pub, err := licensing.VendorKey()
+		if err != nil {
+			return err
+		}
+		lic, err := licensing.Verify(key, pub, time.Now())
+		if err != nil {
+			return fmt.Errorf("SITEBIN_LICENSE_KEY: %w", err)
+		}
+		slog.Info("enterprise license", "holder", lic.Holder, "plan", lic.Plan, "expires", lic.ExpiresAt)
+	} else if cfg.Enabled() {
+		slog.Warn("running Sitebin Enterprise without a license key (self-host mode); see ee/LICENSE")
+	}
 
 	store, err := account.New(h.DataDir())
 	if err != nil {

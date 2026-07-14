@@ -4,3 +4,4 @@
 *.test
 /.scratch/
 /e2e/.work/
+/vendor-license-private-key.txt

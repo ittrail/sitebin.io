@@ -263,6 +263,29 @@ Sitebin is **open-core**:
   toggles are configured at container startup. Design:
   [`docs/superpowers/specs/2026-07-14-accounts-tiers-billing-design.md`](docs/superpowers/specs/2026-07-14-accounts-tiers-billing-design.md).
 
+### Enterprise configuration (all startup env vars)
+
+| Variable | Purpose |
+|---|---|
+| `SITEBIN_ACCOUNT_MODE` | `open` (default) · `accounts` (login to create) · `tiers` (tiered quotas). |
+| `SITEBIN_TIERS` / `SITEBIN_TIERS_FILE` | Tier definitions (inline JSON or mounted file). |
+| `SITEBIN_DEFAULT_TIER` | Tier new/free accounts start on (required in tiers mode). |
+| `SITEBIN_ANON_TIER` | Tier for anonymous creation (empty = require an account). |
+| `SITEBIN_TIER_SELF_SELECT` | Allow users to switch among free tiers. |
+| `SITEBIN_ALLOW_ANON_CREATE` | In accounts mode, still allow anonymous sites. |
+| `SITEBIN_OAUTH_GOOGLE_CLIENT_ID` / `_SECRET` | Google OIDC login. |
+| `SITEBIN_OAUTH_MICROSOFT_CLIENT_ID` / `_SECRET` / `_TENANT` | Microsoft OIDC (`_TENANT` default `common`). |
+| `SITEBIN_SMTP_HOST` / `_PORT` / `_USER` / `_PASS` / `_FROM` / `_TLS` | Email (verification, password reset). Port default 587; `_TLS=true` for implicit TLS (465). |
+| `SITEBIN_STRIPE_SECRET_KEY` / `_WEBHOOK_SECRET` | Stripe billing. Webhook: `POST /account/billing/stripe/webhook`. |
+| `SITEBIN_PADDLE_API_KEY` / `_WEBHOOK_SECRET` / `_SANDBOX` | Paddle billing. Webhook: `POST /account/billing/paddle/webhook`. |
+| `SITEBIN_LICENSE_KEY` | Optional Ed25519 license key; if set it must be valid. |
+
+A tier's `price` maps it to provider price IDs, e.g. a tier with
+`"price":{"stripe":"price_123","paddle":"pri_456","display":"€9/mo"}` becomes a
+paid plan the dashboard sells via checkout. The dashboard lives at `/account`
+on the main domain; sites created while signed in are owned by the account and
+still work over the API with their edit password.
+
 ## License
 
 The repository is [MIT](LICENSE), **except** the `ee/` directory, which is

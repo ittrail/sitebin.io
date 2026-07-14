@@ -14,8 +14,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
-      - run: go vet ./...
-      - run: go test ./...
+      - run: go vet ./... && go test ./...              # community
+      - run: go vet -tags ee ./... && go test -tags ee ./...  # enterprise
 
   image:
     needs: test
@@ -24,6 +24,13 @@ jobs:
     permissions:
       contents: read
       packages: write
+    strategy:
+      matrix:
+        include:
+          - edition: community
+            suffix: ""
+          - edition: enterprise
+            suffix: "-ee"
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
@@ -37,6 +44,8 @@ jobs:
         id: meta
         with:
           images: ghcr.io/${{ github.repository }}
+          flavor: |
+            suffix=${{ matrix.suffix }},onlatest=true
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
@@ -48,6 +57,7 @@ jobs:
           push: true
           build-args: |
             VERSION=${{ github.ref_name }}
+            EDITION=${{ matrix.edition }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
