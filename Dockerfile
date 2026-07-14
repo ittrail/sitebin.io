@@ -37,7 +37,9 @@ ENV SITEBIN_DATA_DIR=/data \
     XDG_DATA_HOME=/data/caddy-home \
     XDG_CONFIG_HOME=/data/caddy-home
 VOLUME /data
-EXPOSE 80 443 443/udp
+# 80/443 = HTTP(S); 21 + 21000-21010 = optional FTP control + passive data
+# (only used when SITEBIN_FTP_ENABLED=true; map them at `docker run` as needed).
+EXPOSE 80 443 443/udp 21 21000-21010
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["sitebin", "healthcheck"]
 ENTRYPOINT ["/sbin/tini", "--", "sitebin"]
 CMD ["run"]

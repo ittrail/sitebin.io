@@ -160,6 +160,12 @@ function render() {
     $("dav-http-note").classList.toggle("hidden", !site.webdav_url.startsWith("http://"));
   }
 
+  // FTP (only shown when the instance has FTP enabled)
+  $("ftp-opt").classList.toggle("hidden", !site.ftp_available);
+  $("e-ftp").checked = site.ftp_enabled;
+  $("ftpinfo").classList.toggle("hidden", !site.ftp_enabled || !site.ftp_url);
+  if (site.ftp_url) $("ftp-url").textContent = site.ftp_url;
+
   if (site.expires_at) {
     const d = new Date(site.expires_at);
     $("e-expires").value = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
@@ -234,6 +240,9 @@ $("clear-viewpw").addEventListener("click", () => put({ view_password: "" }, "Pr
 
 $("e-webdav").addEventListener("change", (e) =>
   put({ webdav_enabled: e.target.checked }, e.target.checked ? "WebDAV enabled" : "WebDAV disabled"));
+
+$("e-ftp").addEventListener("change", (e) =>
+  put({ ftp_enabled: e.target.checked }, e.target.checked ? "FTP enabled" : "FTP disabled"));
 
 $("save-expiry").addEventListener("click", () => {
   const v = $("e-expires").value;

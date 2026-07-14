@@ -18,6 +18,7 @@ type Meta struct {
 	ViewPasswordProtected bool     `json:"view_password_protected"`
 	ViewPasswordHash      string   `json:"view_password_hash,omitempty"`
 	WebDAVEnabled         bool     `json:"webdav_enabled"`
+	FTPEnabled            bool     `json:"ftp_enabled"`
 	CustomDomains         []string `json:"custom_domains"`
 	EntryFile             string   `json:"entry_file"`
 	OwnerAccountID        string   `json:"owner_account_id,omitempty"` // enterprise: owning account (empty = anonymous)

@@ -44,6 +44,10 @@ services:
     #   - "443:443/udp"     # HTTP/3
     ports:
       - "8080:80"
+      # FTP (nur bei SITEBIN_FTP_ENABLED=true): Steuerport + Passiv-Portbereich
+      # müssen 1:1 gemappt werden, damit der Passiv-Modus durch Docker funktioniert.
+      # - "21:21"
+      # - "21000-21010:21000-21010"
 
     # Alle dauerhaften Daten (Sites, Indizes, Metafiles UND Caddys Zertifikate)
     # liegen unter /data. Ein Volume sichern = alles gesichert.
@@ -92,6 +96,21 @@ services:
       # SITEBIN_MAX_FILES:             "1000"           # Dateien pro Site
       # SITEBIN_MAX_EXPIRY_DAYS:       "0"              # 0 = kein Maximum
       # SITEBIN_WEBDAV_ENABLED:        "true"           # WebDAV instanzweit erlauben
+
+      # --- FTP (optional, standardmäßig AUS) ---
+      # Login je Site: Benutzername = Edit-UUID, Passwort = Edit-Passwort.
+      # ACHTUNG: reines FTP überträgt das Passwort im Klartext — nur in
+      # vertrauenswürdigen Netzen oder mit FTPS (Zertifikat unten) nutzen.
+      # Zusätzlich muss FTP pro Site aktiviert werden (Edit-Seite/API).
+      # Ports oben mappen (21 + Passiv-Bereich)!
+      # SITEBIN_FTP_ENABLED:        "true"
+      # SITEBIN_FTP_ADDR:           ":21"                # Steuerport
+      # SITEBIN_FTP_PASV_PORT_MIN:  "21000"              # Passiv-Datenports (Bereich)
+      # SITEBIN_FTP_PASV_PORT_MAX:  "21010"
+      # SITEBIN_FTP_PUBLIC_HOST:    "sitebin.localtest.me"  # für Passiv-Modus angekündigter Host
+      # Optional FTPS (explizites AUTH TLS) — dann werden Zugangsdaten verschlüsselt:
+      # SITEBIN_FTP_TLS_CERT:       "/certs/ftp.crt"
+      # SITEBIN_FTP_TLS_KEY:        "/certs/ftp.key"
       # SITEBIN_READONLY:              "false"          # true = keine neuen Sites
       # SITEBIN_RATE_CREATE_PER_HOUR:  "30"             # Sites/Stunde/IP
       # SITEBIN_RATE_CREATE_BURST:     "10"

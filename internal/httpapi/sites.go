@@ -27,6 +27,7 @@ type updateSet struct {
 	ViewPassword  *string         `json:"view_password"`
 	ViewProtected *bool           `json:"view_password_protected"`
 	WebDAV        *bool           `json:"webdav_enabled"`
+	FTP           *bool           `json:"ftp_enabled"`
 	ExpiresAt     json.RawMessage `json:"expires_at"` // absent=keep, null=clear, string=set
 	Domains       []string        `json:"custom_domains"`
 }
@@ -48,6 +49,9 @@ func settingsFromForm(fields url.Values) (updateSet, error) {
 	}
 	if v := fields.Get("webdav"); v != "" {
 		set.WebDAV = boolPtr(v == "true" || v == "on" || v == "1")
+	}
+	if v := fields.Get("ftp"); v != "" {
+		set.FTP = boolPtr(v == "true" || v == "on" || v == "1")
 	}
 	if v := fields.Get("expires_at"); v != "" {
 		set.ExpiresAt = json.RawMessage(fmt.Sprintf("%q", v))
@@ -127,6 +131,10 @@ func (a *API) applySettings(site *store.Site, set updateSet) error {
 				return &apiError{403, "WebDAV is not available on this site's tier"}
 			}
 			m.WebDAVEnabled = *set.WebDAV && a.cfg.WebDAVAllowed
+		}
+		if set.FTP != nil {
+			// Silently clamp to false when FTP is off instance-wide (like WebDAV).
+			m.FTPEnabled = *set.FTP && a.cfg.FTPEnabled
 		}
 		if expires != nil {
 			m.ExpiresAt = *expires
@@ -282,6 +290,8 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"view_password_protected": m.ViewPasswordProtected,
 		"webdav_enabled":          m.WebDAVEnabled,
 		"webdav_available":        a.cfg.WebDAVAllowed,
+		"ftp_enabled":             m.FTPEnabled,
+		"ftp_available":           a.cfg.FTPEnabled,
 		"custom_domains":          m.CustomDomains,
 		"expires_at":              m.ExpiresAt,
 		"created_at":              m.CreatedAt,
@@ -298,6 +308,9 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 	}
 	if m.WebDAVEnabled && a.cfg.WebDAVAllowed {
 		payload["webdav_url"] = a.cfg.DAVURL(m.EditID)
+	}
+	if m.FTPEnabled && a.cfg.FTPEnabled {
+		payload["ftp_url"] = a.cfg.FTPURL(m.EditID)
 	}
 	return payload
 }

@@ -658,6 +658,50 @@ func TestPathModeGateAndUnlock(t *testing.T) {
 	}
 }
 
+func TestFTPAuth(t *testing.T) {
+	e := newEnv(t, map[string]string{"SITEBIN_FTP_ENABLED": "true"})
+	c := e.createSite(t, map[string]string{"ftp": "true"}, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	dir, maxBytes, _, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4")
+	if err != nil {
+		t.Fatalf("FTPAuth: %v", err)
+	}
+	if dir == "" || maxBytes == 0 {
+		t.Errorf("dir=%q maxBytes=%d", dir, maxBytes)
+	}
+	// wrong password
+	if _, _, _, err := e.api.FTPAuth(edit, "wrong", "1.2.3.4"); err == nil {
+		t.Error("wrong password accepted")
+	}
+	// unknown site
+	if _, _, _, err := e.api.FTPAuth("aaaaaaaaaaaaaaaaaaaaaaaaaa", c.EditPassword, "1.2.3.4"); err == nil {
+		t.Error("unknown site accepted")
+	}
+}
+
+func TestFTPAuthDisabledPerSite(t *testing.T) {
+	e := newEnv(t, map[string]string{"SITEBIN_FTP_ENABLED": "true"})
+	c := e.createSite(t, nil, nil) // ftp not enabled on the site
+	edit := editIDFrom(t, c.EditURL)
+	if _, _, _, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4"); err == nil {
+		t.Error("ftp should be off for this site")
+	}
+}
+
+func TestFTPAuthGloballyDisabled(t *testing.T) {
+	e := newEnv(t, nil) // SITEBIN_FTP_ENABLED unset = off
+	c := e.createSite(t, map[string]string{"ftp": "true"}, nil)
+	edit := editIDFrom(t, c.EditURL)
+	site, _ := e.st.ByViewID(c.ID)
+	if site.Meta.FTPEnabled {
+		t.Error("per-site ftp should not enable when global ftp is off")
+	}
+	if _, _, _, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4"); err == nil {
+		t.Error("ftp should be globally disabled")
+	}
+}
+
 func TestHealth(t *testing.T) {
 	e := newEnv(t, nil)
 	w := e.internal(t, httptest.NewRequest("GET", "/internal/health", nil))

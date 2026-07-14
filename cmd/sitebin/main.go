@@ -26,6 +26,7 @@ import (
 	"github.com/ittrail/sitebin/internal/cleanup"
 	"github.com/ittrail/sitebin/internal/config"
 	"github.com/ittrail/sitebin/internal/ext"
+	"github.com/ittrail/sitebin/internal/ftp"
 	"github.com/ittrail/sitebin/internal/httpapi"
 	"github.com/ittrail/sitebin/internal/store"
 	"github.com/ittrail/sitebin/internal/supervisor"
@@ -148,6 +149,23 @@ func serve(withCaddy bool) error {
 	go func() { errs <- fmt.Errorf("public listener: %w", public.ListenAndServe()) }()
 	go func() { errs <- fmt.Errorf("internal listener: %w", internal.ListenAndServe()) }()
 	go cleanup.Run(ctx, st, cfg.CleanupInterval)
+
+	// Optional FTP server (off by default). Login is the edit UUID + edit
+	// password; each session is confined to that site's files.
+	var ftpSrv *ftp.Server
+	if cfg.FTPEnabled {
+		ftpSrv, err = ftp.New(cfg, api)
+		if err != nil {
+			return fmt.Errorf("ftp server: %w", err)
+		}
+		go func() { errs <- fmt.Errorf("ftp listener: %w", ftpSrv.ListenAndServe()) }()
+		scheme := "ftp (plaintext)"
+		if cfg.FTPTLSCert != "" {
+			scheme = "ftps (TLS)"
+		}
+		slog.Warn("FTP enabled", "addr", cfg.FTPAddr, "mode", scheme,
+			"passive_ports", fmt.Sprintf("%d-%d", cfg.FTPPasvMin, cfg.FTPPasvMax))
+	}
 	slog.Info("sitebin backend up",
 		"base_domain", cfg.BaseDomain, "public", cfg.PublicAddr,
 		"internal", cfg.InternalAddr, "data", cfg.DataDir,
@@ -185,6 +203,9 @@ func serve(withCaddy bool) error {
 	defer cancel()
 	public.Shutdown(shutdownCtx)
 	internal.Shutdown(shutdownCtx)
+	if ftpSrv != nil {
+		ftpSrv.Stop()
+	}
 	if caddyDone != nil {
 		select { // give caddy a moment to drain
 		case <-caddyDone:

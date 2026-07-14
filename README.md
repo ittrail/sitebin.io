@@ -100,6 +100,10 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | `SITEBIN_MAX_FILES` | `1000` | Per-site file-count cap. |
 | `SITEBIN_MAX_EXPIRY_DAYS` | `0` (off) | Optional cap on how far in the future expiry may be set. |
 | `SITEBIN_WEBDAV_ENABLED` | `true` | Global WebDAV switch (per-site toggle still applies). |
+| `SITEBIN_FTP_ENABLED` | `false` | Global FTP switch (per-site toggle also required). See [FTP](#ftp). |
+| `SITEBIN_FTP_ADDR` / `SITEBIN_FTP_PASV_PORT_MIN` / `_MAX` | `:21` / `21000` / `21010` | FTP control port + passive data-port range (map them in `docker run`). |
+| `SITEBIN_FTP_PUBLIC_HOST` | base domain | Host advertised for FTP passive mode. |
+| `SITEBIN_FTP_TLS_CERT` / `SITEBIN_FTP_TLS_KEY` | — | Optional PEM cert/key for FTPS (encrypts credentials). |
 | `SITEBIN_READONLY` | `false` | Freeze new site creation. |
 | `SITEBIN_RATE_CREATE_PER_HOUR` / `SITEBIN_RATE_CREATE_BURST` | `30` / `10` | Anonymous creation limit per IP. |
 | `SITEBIN_RATE_AUTH_PER_5MIN` | `10` | Password-attempt limit per (IP, site) — edit, view, and WebDAV auth. |
@@ -197,6 +201,34 @@ the edit URL itself.
 > `HKLM\SYSTEM\CurrentControlSet\Services\WebClient\Parameters\BasicAuthLevel`
 > to `2` and restart the `WebClient` service. Windows Explorer also caps
 > downloads at 50 MB by default (`FileSizeLimitInBytes`).
+
+### FTP
+
+As an alternative to WebDAV, a site's files can be exposed over **FTP**. It is
+**off by default** and must be enabled both instance-wide
+(`SITEBIN_FTP_ENABLED=true`) and per site (toggle on the edit page, or
+`"ftp_enabled": true`). Then connect with any FTP client:
+
+- **Username** = the site's **edit UUID**
+- **Password** = the site's **edit password**
+
+```bash
+# list, upload, download (curl speaks FTP)
+curl --user "$EDIT_ID:$PW" ftp://sitebin.example.com/
+curl -T local.html --user "$EDIT_ID:$PW" ftp://sitebin.example.com/page.html
+curl --user "$EDIT_ID:$PW" ftp://sitebin.example.com/index.html
+```
+
+Each session is confined to that one site's files, with the same path and
+quota rules as every other write path. Ports: map the control port (`21`) and
+the passive range (`21000-21010` by default) at `docker run`
+(`-p 21:21 -p 21000-21010:21000-21010`), and set `SITEBIN_FTP_PUBLIC_HOST` to
+the address clients reach.
+
+> **Plain FTP is unencrypted** — username and password travel in clear text.
+> Use it only on a trusted network, or configure FTPS with
+> `SITEBIN_FTP_TLS_CERT` / `SITEBIN_FTP_TLS_KEY`. Like WebDAV, FTP grants full
+> write access to the site.
 
 ### View access modes
 

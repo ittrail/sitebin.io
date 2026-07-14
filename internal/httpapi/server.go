@@ -244,12 +244,18 @@ const (
 // render their own error responses (JSON for the API, Basic challenge for
 // WebDAV).
 func (a *API) verifyEdit(r *http.Request, site *store.Site, pw string) verifyResult {
+	return a.verifyEditIP(clientIP(r), site, pw)
+}
+
+// verifyEditIP is verifyEdit keyed by a client IP string (used by non-HTTP
+// callers such as the FTP server).
+func (a *API) verifyEditIP(clientIP string, site *store.Site, pw string) verifyResult {
 	sum := sha256.Sum256([]byte(pw))
 	cacheKey := site.EditID + ":" + hex.EncodeToString(sum[:])
 	if a.verifyCache.Check(cacheKey) {
 		return verifyOK
 	}
-	if !a.authLimiter.Allow(clientIP(r)+"|"+site.EditID) || !a.targetLimiter.Allow(site.EditID) {
+	if !a.authLimiter.Allow(clientIP+"|"+site.EditID) || !a.targetLimiter.Allow(site.EditID) {
 		return verifyThrottled
 	}
 	if !auth.VerifyPassword(site.Meta.EditPasswordHash, pw) {

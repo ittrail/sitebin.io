@@ -107,6 +107,21 @@
         </div>
       </div>
     </div>
+    <div class="opt hidden" id="ftp-opt" style="margin-top:16px">
+      <label class="switch">
+        <input type="checkbox" id="e-ftp">
+        <span class="knob"></span>
+        <span class="lbl">FTP access</span>
+      </label>
+      <div id="ftpinfo" class="dnshint hidden">
+        Connect <span class="dav-url" id="ftp-url"></span><br>
+        Username = your site's <strong>edit UUID</strong> · password = your <strong>edit password</strong>.
+        <div style="margin-top:10px;color:#ffd9a0">
+          <strong>Heads-up:</strong> plain FTP sends your password unencrypted — use it only on a
+          trusted network (or an FTPS-configured instance). Clients: FileZilla, WinSCP, <code>curl</code>, rclone.
+        </div>
+      </div>
+    </div>
     <div class="opt" style="margin-top:16px">
       <label for="e-expires">Expires</label>
       <div class="row">

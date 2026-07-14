@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -36,6 +37,16 @@ type Config struct {
 	RateCreateBurst   int
 	RateAuthPer5Min   int
 	CleanupInterval   time.Duration
+
+	// FTP (optional, off by default). Serves a site's files over FTP; login is
+	// the edit UUID + edit password. Plaintext unless FTPS certs are set.
+	FTPEnabled    bool
+	FTPAddr       string // control-connection listener (default ":21")
+	FTPPasvMin    int    // passive data-port range start
+	FTPPasvMax    int    // passive data-port range end
+	FTPPublicHost string // host advertised for passive mode (default: BaseDomain)
+	FTPTLSCert    string // optional PEM cert for explicit FTPS (AUTH TLS)
+	FTPTLSKey     string // optional PEM key
 }
 
 // View-access modes for serving site content.
@@ -75,6 +86,9 @@ func Load(getenv func(string) string) (Config, error) {
 		RateCreateBurst:   10,
 		RateAuthPer5Min:   10,
 		CleanupInterval:   10 * time.Minute,
+		FTPAddr:           ":21",
+		FTPPasvMin:        21000,
+		FTPPasvMax:        21010,
 	}
 
 	base := strings.ToLower(strings.TrimSpace(getenv("SITEBIN_BASE_DOMAIN")))
@@ -150,6 +164,28 @@ func Load(getenv func(string) string) (Config, error) {
 			return cfg, fmt.Errorf("SITEBIN_CLEANUP_INTERVAL: %v", err)
 		}
 		cfg.CleanupInterval = d
+	}
+
+	if cfg.FTPEnabled, err = boolVar(getenv, "SITEBIN_FTP_ENABLED", false); err != nil {
+		return cfg, err
+	}
+	if v := strings.TrimSpace(getenv("SITEBIN_FTP_ADDR")); v != "" {
+		cfg.FTPAddr = v
+	}
+	if cfg.FTPPasvMin, err = intVar(getenv, "SITEBIN_FTP_PASV_PORT_MIN", cfg.FTPPasvMin); err != nil {
+		return cfg, err
+	}
+	if cfg.FTPPasvMax, err = intVar(getenv, "SITEBIN_FTP_PASV_PORT_MAX", cfg.FTPPasvMax); err != nil {
+		return cfg, err
+	}
+	cfg.FTPPublicHost = strings.TrimSpace(getenv("SITEBIN_FTP_PUBLIC_HOST"))
+	if cfg.FTPPublicHost == "" {
+		cfg.FTPPublicHost = cfg.BaseDomain
+	}
+	cfg.FTPTLSCert = strings.TrimSpace(getenv("SITEBIN_FTP_TLS_CERT"))
+	cfg.FTPTLSKey = strings.TrimSpace(getenv("SITEBIN_FTP_TLS_KEY"))
+	if cfg.FTPEnabled && cfg.FTPPasvMax < cfg.FTPPasvMin {
+		return cfg, fmt.Errorf("SITEBIN_FTP_PASV_PORT_MAX (%d) must be >= MIN (%d)", cfg.FTPPasvMax, cfg.FTPPasvMin)
 	}
 
 	// The wildcard cert (and thus a DNS challenge) is only needed when sites are
@@ -234,6 +270,36 @@ func (c Config) EditURL(editID string) string {
 // DAVURL returns the WebDAV mount URL for an edit id.
 func (c Config) DAVURL(editID string) string {
 	return c.scheme() + "://" + c.BaseDomain + c.portSuffix() + "/dav/" + editID + "/"
+}
+
+// FTPPort returns the numeric FTP control port parsed from FTPAddr.
+func (c Config) FTPPort() int {
+	_, port, err := net.SplitHostPort(c.FTPAddr)
+	if err != nil {
+		return 21
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil {
+		return 21
+	}
+	return p
+}
+
+// FTPURL returns the FTP connection URL for an edit id (login = edit id).
+func (c Config) FTPURL(editID string) string {
+	scheme := "ftp"
+	if c.FTPTLSCert != "" {
+		scheme = "ftps"
+	}
+	host := c.FTPPublicHost
+	if host == "" {
+		host = c.BaseDomain
+	}
+	port := ""
+	if p := c.FTPPort(); p != 21 {
+		port = ":" + strconv.Itoa(p)
+	}
+	return scheme + "://" + editID + "@" + host + port + "/"
 }
 
 func (c Config) scheme() string {
