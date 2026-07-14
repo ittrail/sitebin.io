@@ -24,6 +24,7 @@ func (p *provider) PublicRoutes() map[string]http.Handler {
 		"GET /account/signup":             http.HandlerFunc(p.handleSignupGet),
 		"POST /account/signup":            http.HandlerFunc(p.handleSignupPost),
 		"POST /account/logout":            http.HandlerFunc(p.handleLogout),
+		"POST /account/tier":              http.HandlerFunc(p.handleSelectTier),
 		"POST /account/sites/{id}/rotate": http.HandlerFunc(p.handleRotate),
 		"POST /account/sites/{id}/delete": http.HandlerFunc(p.handleDeleteSite),
 		"POST /account/delete":            http.HandlerFunc(p.handleDeleteAccount),
@@ -89,6 +90,34 @@ func (p *provider) handleSignupPost(w http.ResponseWriter, r *http.Request) {
 func (p *provider) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, p.sessions.Clear())
 	p.redirect(w, r, "/account/login")
+}
+
+// handleSelectTier lets a user switch to a free (non-paid) tier when
+// self-select is enabled. Upgrading to a paid tier goes through billing.
+func (p *provider) handleSelectTier(w http.ResponseWriter, r *http.Request) {
+	acc, ok := p.currentAccount(r)
+	if !ok {
+		p.redirect(w, r, "/account/login")
+		return
+	}
+	if !p.checkCSRF(r, acc) || !p.cfg.SelfSelect {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	t, ok := p.cfg.Tier(r.PostFormValue("tier"))
+	if !ok {
+		http.Error(w, "unknown tier", http.StatusBadRequest)
+		return
+	}
+	if t.Paid() {
+		http.Error(w, "upgrading to a paid tier requires checkout", http.StatusForbidden)
+		return
+	}
+	if err := p.accounts.Update(acc, func(cur *account.Account) error { cur.Tier = t.ID; return nil }); err != nil {
+		http.Error(w, "could not change tier", http.StatusInternalServerError)
+		return
+	}
+	p.redirect(w, r, "/account")
 }
 
 func (p *provider) handleRotate(w http.ResponseWriter, r *http.Request) {
@@ -191,12 +220,22 @@ type siteRow struct {
 	CSRF     string
 }
 
+type tierOption struct {
+	ID      string
+	Label   string
+	Current bool
+	Paid    bool
+	Price   string
+}
+
 type dashView struct {
-	Email string
-	Tier  string
-	Sites []siteRow
-	CSRF  string
-	Base  string
+	Email      string
+	Tier       string
+	Sites      []siteRow
+	CSRF       string
+	Base       string
+	SelfSelect bool
+	Tiers      []tierOption
 }
 
 func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, flash string) {
@@ -213,8 +252,23 @@ func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, 
 	if l, ok := p.cfg.Tier(acc.Tier); ok && l.Label != "" {
 		tier = l.Label
 	}
+	var opts []tierOption
+	if p.cfg.SelfSelect {
+		for _, t := range p.cfg.Tiers {
+			label := t.Label
+			if label == "" {
+				label = t.ID
+			}
+			price := ""
+			if t.Price != nil {
+				price = t.Price.Display
+			}
+			opts = append(opts, tierOption{ID: t.ID, Label: label, Current: t.ID == acc.Tier, Paid: t.Paid(), Price: price})
+		}
+	}
 	dashTmpl.Execute(w, dashView{
 		Email: acc.Email, Tier: tier, Sites: rows, CSRF: token, Base: p.baseURL(),
+		SelfSelect: p.cfg.SelfSelect, Tiers: opts,
 	})
 }
 

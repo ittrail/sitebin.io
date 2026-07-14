@@ -57,26 +57,67 @@ func (p *provider) Init(h ext.Host) error {
 
 func (p *provider) AccountsEnabled() bool { return p.cfg.Enabled() }
 
-// AuthorizeCreate gates site creation. Logged-in users own their sites;
-// anonymous creation is allowed only when the mode/config permits it.
-func (p *provider) AuthorizeCreate(r *http.Request) (string, error) {
+// AuthorizeCreate gates site creation and returns the owner + per-site quota
+// caps. Logged-in users own their sites; anonymous creation is allowed only
+// when the mode/config permits it.
+func (p *provider) AuthorizeCreate(r *http.Request) (ext.CreateGrant, error) {
 	if !p.cfg.Enabled() {
-		return "", nil
+		return ext.CreateGrant{}, nil
 	}
 	if acc, ok := p.currentAccount(r); ok {
-		return acc.ID, nil
+		return p.grantForAccount(acc)
 	}
 	switch p.cfg.Mode {
 	case eeconfig.ModeAccounts:
 		if p.cfg.AllowAnon {
-			return "", nil
+			return ext.CreateGrant{}, nil
 		}
 	case eeconfig.ModeTiers:
 		if p.cfg.AnonTier != "" {
-			return "", nil
+			t, _ := p.cfg.Tier(p.cfg.AnonTier)
+			return grantFromTier("", t), nil
 		}
 	}
-	return "", &ext.CreateError{Status: 401, Msg: "sign in to create a site: " + p.baseURL() + "/account"}
+	return ext.CreateGrant{}, &ext.CreateError{Status: 401, Msg: "sign in to create a site: " + p.baseURL() + "/account"}
+}
+
+// grantForAccount enforces the account's tier site-count cap and returns the
+// grant carrying its per-site quota caps.
+func (p *provider) grantForAccount(acc *account.Account) (ext.CreateGrant, error) {
+	if p.cfg.Mode != eeconfig.ModeTiers {
+		return ext.CreateGrant{OwnerAccountID: acc.ID}, nil // accounts mode: ownership only
+	}
+	tier, ok := p.cfg.Tier(acc.Tier)
+	if !ok {
+		tier, _ = p.cfg.Tier(p.cfg.DefaultTier)
+	}
+	if tier.MaxSites > 0 {
+		owned, _ := p.accounts.ListSiteIDs(acc)
+		if len(owned) >= tier.MaxSites {
+			label := tier.Label
+			if label == "" {
+				label = tier.ID
+			}
+			return ext.CreateGrant{}, &ext.CreateError{
+				Status: 403,
+				Msg:    fmt.Sprintf("your %s plan allows %d site(s); delete one or upgrade at %s/account", label, tier.MaxSites, p.baseURL()),
+			}
+		}
+	}
+	return grantFromTier(acc.ID, tier), nil
+}
+
+// grantFromTier stamps a tier's caps into a CreateGrant.
+func grantFromTier(owner string, t eeconfig.Tier) ext.CreateGrant {
+	webdav := t.WebDAV
+	return ext.CreateGrant{
+		OwnerAccountID:  owner,
+		MaxSiteBytes:    t.MaxSiteBytes,
+		MaxFiles:        t.MaxFiles,
+		MaxExpiryDays:   t.MaxExpiryDays,
+		MaxCustomDomain: t.CustomDomains,
+		WebDAV:          &webdav,
+	}
 }
 
 // OnSiteCreated records site ownership on the account.

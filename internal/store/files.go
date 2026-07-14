@@ -84,6 +84,23 @@ func (s *Store) Usage(site *Site) (int64, int, error) {
 	return usage(site.ContentDir())
 }
 
+// EffMaxBytes returns the site's effective storage cap: its stamped per-site
+// quota (from the owner's tier) if set, else the instance global.
+func (s *Store) EffMaxBytes(site *Site) int64 {
+	if site.Meta.QuotaBytes > 0 {
+		return site.Meta.QuotaBytes
+	}
+	return s.maxSiteBytes
+}
+
+// EffMaxFiles returns the site's effective file-count cap.
+func (s *Store) EffMaxFiles(site *Site) int {
+	if site.Meta.QuotaFiles > 0 {
+		return site.Meta.QuotaFiles
+	}
+	return s.maxFiles
+}
+
 // SaveFile stores one file at relPath inside the site's content root,
 // enforcing the per-site byte and file-count limits.
 func (s *Store) SaveFile(site *Site, relPath string, r io.Reader) error {
@@ -103,6 +120,7 @@ func (s *Store) saveFileLocked(site *Site, rel string, r io.Reader) error {
 	if err != nil {
 		return err
 	}
+	maxBytes, maxFiles := s.EffMaxBytes(site), s.EffMaxFiles(site)
 	dst := filepath.Join(dir, filepath.FromSlash(rel))
 	var existing int64
 	if fi, err := os.Lstat(dst); err == nil {
@@ -110,10 +128,10 @@ func (s *Store) saveFileLocked(site *Site, rel string, r io.Reader) error {
 			return ErrBadPath
 		}
 		existing = fi.Size()
-	} else if count+1 > s.maxFiles {
+	} else if count+1 > maxFiles {
 		return ErrTooManyFiles
 	}
-	budget := s.maxSiteBytes - (used - existing)
+	budget := maxBytes - (used - existing)
 	if budget < 0 {
 		return ErrTooLarge
 	}

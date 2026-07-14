@@ -11,19 +11,27 @@ import (
 // Meta is the per-site metadata file (meta.json), the single source of truth
 // for a site's settings. Plaintext passwords are never stored here.
 type Meta struct {
-	ID                    string     `json:"id"`
-	EditID                string     `json:"edit_id"`
-	EditPasswordHash      string     `json:"edit_password_hash"`
-	Mode                  string     `json:"mode"`
-	ViewPasswordProtected bool       `json:"view_password_protected"`
-	ViewPasswordHash      string     `json:"view_password_hash,omitempty"`
-	WebDAVEnabled         bool       `json:"webdav_enabled"`
-	CustomDomains         []string   `json:"custom_domains"`
-	EntryFile             string     `json:"entry_file"`
-	OwnerAccountID        string     `json:"owner_account_id,omitempty"` // enterprise: owning account (empty = anonymous)
-	ExpiresAt             *time.Time `json:"expires_at"`
-	CreatedAt             time.Time  `json:"created_at"`
-	UpdatedAt             time.Time  `json:"updated_at"`
+	ID                    string   `json:"id"`
+	EditID                string   `json:"edit_id"`
+	EditPasswordHash      string   `json:"edit_password_hash"`
+	Mode                  string   `json:"mode"`
+	ViewPasswordProtected bool     `json:"view_password_protected"`
+	ViewPasswordHash      string   `json:"view_password_hash,omitempty"`
+	WebDAVEnabled         bool     `json:"webdav_enabled"`
+	CustomDomains         []string `json:"custom_domains"`
+	EntryFile             string   `json:"entry_file"`
+	OwnerAccountID        string   `json:"owner_account_id,omitempty"` // enterprise: owning account (empty = anonymous)
+
+	// Per-site quota caps stamped from the owner's tier (enterprise). Zero /
+	// nil means "inherit the instance global".
+	QuotaBytes      int64      `json:"quota_bytes,omitempty"`
+	QuotaFiles      int        `json:"quota_files,omitempty"`
+	QuotaExpiryDays int        `json:"quota_expiry_days,omitempty"`
+	QuotaDomains    *int       `json:"quota_domains,omitempty"` // nil = inherit global; value (incl. 0) = explicit cap
+	QuotaWebDAV     *bool      `json:"quota_webdav,omitempty"`  // nil = inherit global
+	ExpiresAt       *time.Time `json:"expires_at"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 // Expired reports whether the site is past its expiry at time now.

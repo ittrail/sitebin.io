@@ -240,6 +240,56 @@ func TestExtractZipTraversal(t *testing.T) {
 	}
 }
 
+func TestPerSiteQuotaOverridesGlobal(t *testing.T) {
+	// Global caps are generous; the per-site stamped quota is stricter.
+	s, _ := New(t.TempDir(), "sitebin.example", 1<<20, 1000)
+	site, _, _ := s.Create()
+	if err := s.Update(site, func(m *Meta) error {
+		m.QuotaBytes = 50
+		m.QuotaFiles = 2
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.EffMaxBytes(site); got != 50 {
+		t.Errorf("EffMaxBytes = %d, want 50", got)
+	}
+	if err := s.SaveFile(site, "a", strings.NewReader(strings.Repeat("x", 60))); !errors.Is(err, ErrTooLarge) {
+		t.Errorf("per-site byte cap: %v", err)
+	}
+	if err := s.SaveFile(site, "a", strings.NewReader("ok")); err != nil {
+		t.Fatalf("within cap: %v", err)
+	}
+	if err := s.SaveFile(site, "b", strings.NewReader("ok")); err != nil {
+		t.Fatalf("second file: %v", err)
+	}
+	if err := s.SaveFile(site, "c", strings.NewReader("x")); !errors.Is(err, ErrTooManyFiles) {
+		t.Errorf("per-site file cap: %v", err)
+	}
+}
+
+func TestPerSiteDomainCap(t *testing.T) {
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	zero := 0
+	if err := s.Update(site, func(m *Meta) error { m.QuotaDomains = &zero; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddDomain(site, "nope.example.org"); !errors.Is(err, ErrTooManyDomain) {
+		t.Errorf("zero-domain tier should reject: %v", err)
+	}
+	one := 1
+	if err := s.Update(site, func(m *Meta) error { m.QuotaDomains = &one; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddDomain(site, "ok.example.org"); err != nil {
+		t.Fatalf("first domain within cap: %v", err)
+	}
+	if err := s.AddDomain(site, "two.example.org"); !errors.Is(err, ErrTooManyDomain) {
+		t.Errorf("second domain over cap: %v", err)
+	}
+}
+
 func TestExtractZipBudget(t *testing.T) {
 	s, _ := New(t.TempDir(), "sitebin.example", 50, 100)
 	site, _, _ := s.Create()

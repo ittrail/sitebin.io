@@ -73,10 +73,15 @@ func (a *API) applySettings(site *store.Site, set updateSet) error {
 			if err != nil {
 				return &apiError{400, "expires_at must be an RFC3339 timestamp, e.g. 2026-08-01T12:00:00Z"}
 			}
-			if a.cfg.MaxExpiryDays > 0 {
-				max := time.Now().Add(time.Duration(a.cfg.MaxExpiryDays) * 24 * time.Hour)
+			// Per-site tier cap (if stamped) overrides the instance global.
+			expiryCap := a.cfg.MaxExpiryDays
+			if site.Meta.QuotaExpiryDays > 0 {
+				expiryCap = site.Meta.QuotaExpiryDays
+			}
+			if expiryCap > 0 {
+				max := time.Now().Add(time.Duration(expiryCap) * 24 * time.Hour)
 				if t.After(max) {
-					return &apiError{400, fmt.Sprintf("expiry exceeds this instance's maximum of %d days", a.cfg.MaxExpiryDays)}
+					return &apiError{400, fmt.Sprintf("expiry exceeds the maximum of %d days for this site", expiryCap)}
 				}
 			}
 			tt := t.UTC()
@@ -118,6 +123,9 @@ func (a *API) applySettings(site *store.Site, set updateSet) error {
 			}
 		}
 		if set.WebDAV != nil {
+			if *set.WebDAV && m.QuotaWebDAV != nil && !*m.QuotaWebDAV {
+				return &apiError{403, "WebDAV is not available on this site's tier"}
+			}
 			m.WebDAVEnabled = *set.WebDAV && a.cfg.WebDAVAllowed
 		}
 		if expires != nil {
@@ -284,8 +292,8 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"usage": map[string]any{
 			"bytes":     bytes,
 			"files":     count,
-			"max_bytes": a.cfg.MaxSiteBytes,
-			"max_files": a.cfg.MaxFiles,
+			"max_bytes": a.st.EffMaxBytes(site),
+			"max_files": a.st.EffMaxFiles(site),
 		},
 	}
 	if m.WebDAVEnabled && a.cfg.WebDAVAllowed {
@@ -308,10 +316,12 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 
 	// Enterprise: gate creation behind accounts/tiers when a provider is active.
 	// The community build has no provider and creation stays fully open.
-	var owner string
+	var grant ext.CreateGrant
+	gated := false
 	if p, ok := ext.Get(); ok && p.AccountsEnabled() {
+		gated = true
 		var err error
-		if owner, err = p.AuthorizeCreate(r); err != nil {
+		if grant, err = p.AuthorizeCreate(r); err != nil {
 			var ce *ext.CreateError
 			if errors.As(err, &ce) {
 				writeError(w, ce.Status, ce.Msg)
@@ -321,6 +331,7 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	owner := grant.OwnerAccountID
 
 	r.Body = http.MaxBytesReader(w, r.Body, a.cfg.MaxSiteBytes+(10<<20))
 
@@ -333,6 +344,24 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 	fail := func(err error) {
 		a.st.Delete(site)
 		respondErr(w, err)
+	}
+
+	// Stamp ownership + per-site quota caps BEFORE uploads are processed, so the
+	// tier caps are enforced on this request's files.
+	if gated {
+		domainCap := grant.MaxCustomDomain
+		if err := a.st.Update(site, func(m *store.Meta) error {
+			m.OwnerAccountID = owner
+			m.QuotaBytes = grant.MaxSiteBytes
+			m.QuotaFiles = grant.MaxFiles
+			m.QuotaExpiryDays = grant.MaxExpiryDays
+			m.QuotaDomains = &domainCap
+			m.QuotaWebDAV = grant.WebDAV
+			return nil
+		}); err != nil {
+			fail(err)
+			return
+		}
 	}
 
 	var set updateSet
@@ -373,9 +402,8 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Stamp and record ownership when the site was created by an account.
+	// Record ownership on the account once creation fully succeeded.
 	if owner != "" {
-		a.st.Update(site, func(m *store.Meta) error { m.OwnerAccountID = owner; return nil })
 		if p, ok := ext.Get(); ok {
 			if err := p.OnSiteCreated(owner, site.ViewID); err != nil {
 				a.log.Error("link owned site", "account", owner, "site", site.ViewID, "err", err)

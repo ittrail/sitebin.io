@@ -32,15 +32,27 @@ type Provider interface {
 	// AccountsEnabled reports whether account gating is active (mode != open).
 	AccountsEnabled() bool
 
-	// AuthorizeCreate is consulted before a site is created. It returns the
-	// owner account id to stamp on the new site (empty for anonymous), or a
-	// *CreateError to reject creation. In the community build it is never
-	// called and creation stays open.
-	AuthorizeCreate(r *http.Request) (ownerAccountID string, err error)
+	// AuthorizeCreate is consulted before a site is created. It returns a
+	// CreateGrant (owner + per-site quota caps to stamp), or a *CreateError to
+	// reject creation. In the community build it is never called and creation
+	// stays open.
+	AuthorizeCreate(r *http.Request) (CreateGrant, error)
 
 	// OnSiteCreated records ownership after a site is created (no-op for
 	// anonymous owners). Errors are logged, not surfaced to the client.
 	OnSiteCreated(ownerAccountID, viewID string) error
+}
+
+// CreateGrant is the result of a successful AuthorizeCreate: who owns the new
+// site and the per-site quota caps to stamp on it. Zero-valued cap fields mean
+// "inherit the instance global"; they are set only in tiers mode.
+type CreateGrant struct {
+	OwnerAccountID  string
+	MaxSiteBytes    int64
+	MaxFiles        int
+	MaxExpiryDays   int
+	MaxCustomDomain int
+	WebDAV          *bool // nil = inherit global
 }
 
 // CreateError rejects a site creation with an HTTP status and message.

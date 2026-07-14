@@ -39,8 +39,13 @@ func (s *Store) AddDomain(site *Site, domain string) error {
 	if d == s.baseDomain || strings.HasSuffix(d, "."+s.baseDomain) {
 		return fmt.Errorf("%w: %s is reserved by this Sitebin instance", ErrBadDomain, d)
 	}
-	if !slices.Contains(site.Meta.CustomDomains, d) && len(site.Meta.CustomDomains) >= maxDomainsPerSite {
-		return fmt.Errorf("%w: at most %d custom domains per site", ErrTooManyDomain, maxDomainsPerSite)
+	// Per-site cap: the owner's tier value if stamped, else the instance default.
+	cap := maxDomainsPerSite
+	if site.Meta.QuotaDomains != nil {
+		cap = *site.Meta.QuotaDomains
+	}
+	if !slices.Contains(site.Meta.CustomDomains, d) && len(site.Meta.CustomDomains) >= cap {
+		return fmt.Errorf("%w: at most %d custom domain(s) allowed for this site", ErrTooManyDomain, cap)
 	}
 	link := filepath.Join(s.domainIndexDir(), d)
 	if linkExists(link) {

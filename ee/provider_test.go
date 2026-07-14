@@ -90,9 +90,9 @@ func TestSignupLoginDashboardFlow(t *testing.T) {
 	acc, _ := p.accounts.ByEmail("user@example.com")
 	authReq := httptest.NewRequest("POST", "/api/sites", nil)
 	authReq.AddCookie(cookie)
-	owner, err := p.AuthorizeCreate(authReq)
-	if err != nil || owner != acc.ID {
-		t.Fatalf("AuthorizeCreate after login = %q, %v", owner, err)
+	grant, err := p.AuthorizeCreate(authReq)
+	if err != nil || grant.OwnerAccountID != acc.ID {
+		t.Fatalf("AuthorizeCreate after login = %+v, %v", grant, err)
 	}
 
 	// give the account a site and confirm the dashboard shows it

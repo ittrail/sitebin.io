@@ -94,6 +94,24 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
     {{end}}
   </div>
 
+  {{if .SelfSelect}}
+  <div class="card">
+    <h3>Plan</h3>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+    {{range .Tiers}}
+      <form class="inline" method="post" action="/account/tier">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <input type="hidden" name="tier" value="{{.ID}}">
+        <button class="btn small{{if .Current}} primary{{end}}" type="submit"{{if or .Current .Paid}} disabled{{end}}>
+          {{.Label}}{{if .Price}} · {{.Price}}{{end}}{{if .Current}} (current){{end}}{{if and .Paid (not .Current)}} · upgrade via checkout{{end}}
+        </button>
+      </form>
+    {{end}}
+    </div>
+    <p class="muted" style="margin-top:8px">Paid plans are activated through checkout.</p>
+  </div>
+  {{end}}
+
   <div class="card" style="border-color:rgba(242,109,109,.25)">
     <h3 style="color:var(--danger)">Danger zone</h3>
     <form method="post" action="/account/delete" onsubmit="return confirm('Delete your account AND all its sites? This cannot be undone.')">
