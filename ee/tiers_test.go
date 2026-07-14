@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
+	"github.com/ittrail/sitebin/ee/account"
 	"github.com/ittrail/sitebin/internal/ext"
 )
 
@@ -124,5 +126,130 @@ func TestSelfSelectTier(t *testing.T) {
 	mux.ServeHTTP(w, pay)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("self-select to paid tier = %d, want 403", w.Code)
+	}
+}
+
+// ---- PayGate as tier source ----
+
+func pgStub(t *testing.T, tier, status string, code int) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if code != 200 {
+			w.WriteHeader(code)
+			return
+		}
+		w.Write([]byte(`{"data":{"tier":"` + tier + `","status":"` + status + `"}}`))
+	}))
+}
+
+func setupPayGate(t *testing.T, srvURL string) *provider {
+	t.Helper()
+	t.Setenv("SITEBIN_ACCOUNT_MODE", "tiers")
+	t.Setenv("SITEBIN_TIERS", tiersJSON)
+	t.Setenv("SITEBIN_DEFAULT_TIER", "free")
+	t.Setenv("SITEBIN_PAYGATE_URL", srvURL)
+	t.Setenv("SITEBIN_PAYGATE_APP_ID", "sitebin")
+	t.Setenv("SITEBIN_PAYGATE_API_KEY", "ssk_test_k")
+	t.Setenv("SITEBIN_OAUTH_OIDC_ISSUER", "https://auth.stack.example/api/v1/sitebin")
+	t.Setenv("SITEBIN_OAUTH_OIDC_CLIENT_ID", "sitebin")
+	p := newProvider()
+	host := &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}
+	if err := p.Init(host); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	return p
+}
+
+func TestPayGateTierGovernsOIDCAccount(t *testing.T) {
+	srv := pgStub(t, "pro", "active", 200)
+	defer srv.Close()
+	p := setupPayGate(t, srv.URL)
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-1", "u@example.com", "free")
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, err := p.grantForAccount(acc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grant.MaxSiteBytes != 5000000 || grant.MaxCustomDomain == nil || *grant.MaxCustomDomain != 5 {
+		t.Errorf("grant should carry pro caps from PayGate, got %+v", grant)
+	}
+}
+
+func TestPayGateFallsBackToStoredTier(t *testing.T) {
+	srv := pgStub(t, "", "", 500)
+	defer srv.Close()
+	p := setupPayGate(t, srv.URL)
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-2", "u2@example.com", "free")
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, err := p.grantForAccount(acc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grant.MaxSiteBytes != 1000 {
+		t.Errorf("PayGate outage should fall back to stored free tier, got %+v", grant)
+	}
+}
+
+func TestPayGateIgnoresNonOIDCAccounts(t *testing.T) {
+	srv := pgStub(t, "pro", "active", 200)
+	defer srv.Close()
+	p := setupPayGate(t, srv.URL)
+	acc, err := p.local.Signup("local@example.com", "password123", p.tierForNewAccount())
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, err := p.grantForAccount(acc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grant.MaxSiteBytes != 1000 {
+		t.Errorf("local account must keep its stored tier, got %+v", grant)
+	}
+}
+
+func TestPayGateUnknownTierFallsBack(t *testing.T) {
+	srv := pgStub(t, "mega", "active", 200)
+	defer srv.Close()
+	p := setupPayGate(t, srv.URL)
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-3", "u3@example.com", "free")
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, err := p.grantForAccount(acc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grant.MaxSiteBytes != 1000 {
+		t.Errorf("unknown stack tier id should fall back to stored tier, got %+v", grant)
+	}
+}
+
+func TestPayGateDashboardShowsManageLink(t *testing.T) {
+	srv := pgStub(t, "pro", "active", 200)
+	defer srv.Close()
+	t.Setenv("SITEBIN_PAYGATE_MANAGE_URL", "https://stack.example/account")
+	p := setupPayGate(t, srv.URL)
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-9", "u9@example.com", "free")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := serveMux(p)
+	req := httptest.NewRequest("GET", "/account", nil)
+	req.AddCookie(p.sessions.Cookie(acc.ID, acc.TokenVersion))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	body := w.Body.String()
+	if !strings.Contains(body, "https://stack.example/account") || !strings.Contains(body, "Manage subscription") {
+		t.Error("manage-subscription link missing from dashboard")
+	}
+	if strings.Contains(body, "/account/billing/") {
+		t.Error("built-in checkout should be hidden for PayGate-resolved accounts")
+	}
+	if !strings.Contains(body, "Pro tier") {
+		t.Errorf("dashboard should show the PayGate-resolved tier; body header: %.200s", body)
 	}
 }

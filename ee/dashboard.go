@@ -277,6 +277,7 @@ type tierOption struct {
 }
 
 type dashView struct {
+	ManageURL  string // PayGate manage link ('' = built-in plans card)
 	Email      string
 	Tier       string
 	Sites      []siteRow
@@ -297,14 +298,22 @@ func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, 
 			rows = append(rows, siteRow{SiteInfo: info, SizeText: humanBytes(info.Bytes), CSRF: token})
 		}
 	}
-	tier := acc.Tier
-	if l, ok := p.cfg.Tier(acc.Tier); ok && l.Label != "" {
-		tier = l.Label
+	current := p.effectiveTier(acc)
+	tier := current.Label
+	if tier == "" {
+		tier = current.ID
+	}
+	if tier == "" {
+		tier = acc.Tier
 	}
 	checkout := p.checkoutProvider()
 	var opts []tierOption
-	showPlans := p.cfg.SelfSelect || checkout != ""
-	if showPlans {
+	var manageURL string
+	if p.paygate != nil && acc.Provider == account.OIDCProv {
+		// PayGate owns this account's subscription: no built-in checkout or
+		// self-select — just a link to the stack's own management page.
+		manageURL = p.paygate.ManageURL()
+	} else if p.cfg.SelfSelect || checkout != "" {
 		for _, t := range p.cfg.Tiers {
 			label := t.Label
 			if label == "" {
@@ -314,12 +323,12 @@ func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, 
 			if t.Price != nil {
 				price = t.Price.Display
 			}
-			opts = append(opts, tierOption{ID: t.ID, Label: label, Current: t.ID == acc.Tier, Paid: t.Paid(), Price: price})
+			opts = append(opts, tierOption{ID: t.ID, Label: label, Current: t.ID == current.ID, Paid: t.Paid(), Price: price})
 		}
 	}
 	dashTmpl.Execute(w, dashView{
 		Email: acc.Email, Tier: tier, Sites: rows, CSRF: token, Base: p.baseURL(),
-		SelfSelect: p.cfg.SelfSelect, Checkout: checkout, Tiers: opts,
+		SelfSelect: p.cfg.SelfSelect, Checkout: checkout, Tiers: opts, ManageURL: manageURL,
 	})
 }
 

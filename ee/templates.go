@@ -127,6 +127,14 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
     {{end}}
   </div>
 
+  {{if .ManageURL}}
+  <div class="card">
+    <h3>Plan</h3>
+    <p class="muted">Your plan is managed through your organization's subscription.</p>
+    <a class="btn small" href="{{.ManageURL}}" target="_blank" rel="noopener">Manage subscription</a>
+  </div>
+  {{end}}
+
   {{if .Tiers}}
   <div class="card">
     <h3>Plan</h3>

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Mode selects how site creation is gated.
@@ -74,8 +75,20 @@ type Config struct {
 
 	SMTP    *SMTPConfig    // nil = email disabled
 	Billing *BillingConfig // nil = billing disabled
+	PayGate *PayGateConfig // nil = built-in billing / stored tiers only
 
 	byID map[string]Tier
+}
+
+// PayGateConfig points Sitebin at a SaaS-Stack PayGate as the subscription
+// source of truth: accounts signed in via the generic OIDC provider get their
+// tier from PayGate (stack tier ids must match tiers.json ids).
+type PayGateConfig struct {
+	URL       string        // PayGate base URL, no trailing slash
+	AppID     string        // the stack app id Sitebin is onboarded as
+	APIKey    string        // stack app API key (ssk_…)
+	CacheTTL  time.Duration // per-user tier cache (default 5m)
+	ManageURL string        // optional dashboard "manage subscription" link
 }
 
 // BillingConfig holds payment-provider credentials. Prices per tier come from
@@ -207,6 +220,33 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Co
 	}
 	if billing.Stripe != nil || billing.Paddle != nil {
 		cfg.Billing = &billing
+	}
+
+	pgURL := strings.TrimSpace(getenv("SITEBIN_PAYGATE_URL"))
+	pgApp := strings.TrimSpace(getenv("SITEBIN_PAYGATE_APP_ID"))
+	pgKey := strings.TrimSpace(getenv("SITEBIN_PAYGATE_API_KEY"))
+	if pgURL != "" || pgApp != "" || pgKey != "" {
+		if pgURL == "" || pgApp == "" || pgKey == "" {
+			return cfg, fmt.Errorf("SITEBIN_PAYGATE_URL, SITEBIN_PAYGATE_APP_ID and SITEBIN_PAYGATE_API_KEY must be set together")
+		}
+		if !strings.HasPrefix(pgURL, "https://") && !strings.HasPrefix(pgURL, "http://") {
+			return cfg, fmt.Errorf("SITEBIN_PAYGATE_URL: %q is not an http(s) URL", pgURL)
+		}
+		if cfg.Mode != ModeTiers {
+			return cfg, fmt.Errorf("PayGate integration requires SITEBIN_ACCOUNT_MODE=tiers (got %q): PayGate maps stack subscriptions onto tiers", cfg.Mode)
+		}
+		ttl := 5 * time.Minute
+		if v := strings.TrimSpace(getenv("SITEBIN_PAYGATE_CACHE_TTL")); v != "" {
+			d, err := time.ParseDuration(v)
+			if err != nil || d <= 0 {
+				return cfg, fmt.Errorf("SITEBIN_PAYGATE_CACHE_TTL: %q is not a positive duration", v)
+			}
+			ttl = d
+		}
+		cfg.PayGate = &PayGateConfig{
+			URL: strings.TrimRight(pgURL, "/"), AppID: pgApp, APIKey: pgKey,
+			CacheTTL: ttl, ManageURL: strings.TrimSpace(getenv("SITEBIN_PAYGATE_MANAGE_URL")),
+		}
 	}
 
 	raw, err := tierBytes(getenv, readFile)

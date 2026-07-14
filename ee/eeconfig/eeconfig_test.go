@@ -236,3 +236,80 @@ func TestLoadGenericOIDCInvalid(t *testing.T) {
 		t.Fatalf("want issuer error, got %v", err)
 	}
 }
+
+func TestLoadPayGate(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"SITEBIN_ACCOUNT_MODE":       "tiers",
+		"SITEBIN_TIERS":              twoTiers,
+		"SITEBIN_DEFAULT_TIER":       "free",
+		"SITEBIN_PAYGATE_URL":        "https://paygate.stack.example/",
+		"SITEBIN_PAYGATE_APP_ID":     "sitebin",
+		"SITEBIN_PAYGATE_API_KEY":    "ssk_live_x",
+		"SITEBIN_PAYGATE_CACHE_TTL":  "2m",
+		"SITEBIN_PAYGATE_MANAGE_URL": "https://stack.example/account",
+	}), noFile)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.PayGate == nil {
+		t.Fatal("PayGate not parsed")
+	}
+	if cfg.PayGate.URL != "https://paygate.stack.example" || cfg.PayGate.AppID != "sitebin" ||
+		cfg.PayGate.APIKey != "ssk_live_x" || cfg.PayGate.CacheTTL.Minutes() != 2 ||
+		cfg.PayGate.ManageURL != "https://stack.example/account" {
+		t.Fatalf("PayGate = %+v", cfg.PayGate)
+	}
+}
+
+func TestLoadPayGateDefaultsAndErrors(t *testing.T) {
+	// default TTL 5m
+	cfg, err := Load(env(map[string]string{
+		"SITEBIN_ACCOUNT_MODE":    "tiers",
+		"SITEBIN_TIERS":           twoTiers,
+		"SITEBIN_DEFAULT_TIER":    "free",
+		"SITEBIN_PAYGATE_URL":     "https://paygate.stack.example",
+		"SITEBIN_PAYGATE_APP_ID":  "sitebin",
+		"SITEBIN_PAYGATE_API_KEY": "ssk_live_x",
+	}), noFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PayGate.CacheTTL.Minutes() != 5 {
+		t.Fatalf("default TTL = %v", cfg.PayGate.CacheTTL)
+	}
+
+	// incomplete trio
+	_, err = Load(env(map[string]string{
+		"SITEBIN_ACCOUNT_MODE": "tiers",
+		"SITEBIN_TIERS":        twoTiers,
+		"SITEBIN_DEFAULT_TIER": "free",
+		"SITEBIN_PAYGATE_URL":  "https://paygate.stack.example",
+	}), noFile)
+	if err == nil || !strings.Contains(err.Error(), "SITEBIN_PAYGATE") {
+		t.Fatalf("want incomplete-paygate error, got %v", err)
+	}
+
+	// paygate requires tiers mode
+	_, err = Load(env(map[string]string{
+		"SITEBIN_ACCOUNT_MODE":    "accounts",
+		"SITEBIN_PAYGATE_URL":     "https://paygate.stack.example",
+		"SITEBIN_PAYGATE_APP_ID":  "sitebin",
+		"SITEBIN_PAYGATE_API_KEY": "ssk_live_x",
+	}), noFile)
+	if err == nil || !strings.Contains(err.Error(), "tiers") {
+		t.Fatalf("want tiers-mode error, got %v", err)
+	}
+
+	// bad URL
+	_, err = Load(env(map[string]string{
+		"SITEBIN_ACCOUNT_MODE":    "tiers",
+		"SITEBIN_TIERS":           twoTiers,
+		"SITEBIN_DEFAULT_TIER":    "free",
+		"SITEBIN_PAYGATE_URL":     "paygate.stack.example",
+		"SITEBIN_PAYGATE_APP_ID":  "sitebin",
+		"SITEBIN_PAYGATE_API_KEY": "ssk_live_x",
+	}), noFile)
+	if err == nil || !strings.Contains(err.Error(), "SITEBIN_PAYGATE_URL") {
+		t.Fatalf("want url error, got %v", err)
+	}
+}

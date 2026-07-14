@@ -3,6 +3,7 @@
 package ee
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -37,6 +38,7 @@ type provider struct {
 	mailer   *smtp.Mailer
 	stripe   *billing.Stripe
 	paddle   *billing.Paddle
+	paygate  *billing.PayGate
 	secret   []byte
 }
 
@@ -99,6 +101,19 @@ func (p *provider) Init(h ext.Host) error {
 			p.paddle = billing.NewPaddle(*cfg.Billing.Paddle)
 		}
 	}
+	if cfg.PayGate != nil {
+		p.paygate = billing.NewPayGate(*cfg.PayGate)
+		slog.Info("paygate tier source active", "url", cfg.PayGate.URL, "app", cfg.PayGate.AppID)
+		if cfg.OIDC == nil {
+			slog.Warn("PayGate is configured but SITEBIN_OAUTH_OIDC_* is not: only accounts signed in through the generic OIDC provider resolve tiers via PayGate")
+		}
+		if cfg.SelfSelect {
+			slog.Warn("SITEBIN_TIER_SELF_SELECT is ignored for PayGate-resolved accounts (PayGate owns their subscription)")
+		}
+		if cfg.BillingEnabled() {
+			slog.Warn("built-in Stripe/Paddle billing and PayGate are both configured; PayGate takes precedence for SSO accounts")
+		}
+	}
 	return nil
 }
 
@@ -137,16 +152,38 @@ func (p *provider) AuthorizeCreate(r *http.Request) (ext.CreateGrant, error) {
 	return ext.CreateGrant{}, &ext.CreateError{Status: 401, Msg: "sign in to create a site: " + p.baseURL() + "/account"}
 }
 
+// effectiveTier resolves the tier that governs an account's quotas. With
+// PayGate configured, accounts signed in through the generic OIDC provider
+// (their OAuth subject is the stack user id) resolve live from PayGate;
+// everything else — other providers, unknown tier ids, PayGate misses or
+// outages — falls back to the stored tier, then the default.
+func (p *provider) effectiveTier(acc *account.Account) eeconfig.Tier {
+	if p.paygate != nil && acc.Provider == account.OIDCProv && acc.OAuthSubject != "" {
+		id, ok, err := p.paygate.TierFor(context.Background(), acc.OAuthSubject)
+		switch {
+		case err != nil:
+			slog.Warn("paygate lookup failed; using stored tier", "account", acc.ID, "err", err)
+		case ok:
+			if t, found := p.cfg.Tier(id); found {
+				return t
+			}
+			slog.Warn("paygate returned a tier missing from tiers config; using stored tier", "tier", id)
+		}
+	}
+	if t, ok := p.cfg.Tier(acc.Tier); ok {
+		return t
+	}
+	t, _ := p.cfg.Tier(p.cfg.DefaultTier)
+	return t
+}
+
 // grantForAccount enforces the account's tier site-count cap and returns the
 // grant carrying its per-site quota caps.
 func (p *provider) grantForAccount(acc *account.Account) (ext.CreateGrant, error) {
 	if p.cfg.Mode != eeconfig.ModeTiers {
 		return ext.CreateGrant{OwnerAccountID: acc.ID}, nil // accounts mode: ownership only
 	}
-	tier, ok := p.cfg.Tier(acc.Tier)
-	if !ok {
-		tier, _ = p.cfg.Tier(p.cfg.DefaultTier)
-	}
+	tier := p.effectiveTier(acc)
 	if tier.MaxSites > 0 {
 		owned, _ := p.accounts.ListSiteIDs(acc)
 		if len(owned) >= tier.MaxSites {
