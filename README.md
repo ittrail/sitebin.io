@@ -113,6 +113,7 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | `SITEBIN_FTP_TLS_CERT` / `SITEBIN_FTP_TLS_KEY` | — | Optional PEM cert/key for FTPS (encrypts credentials). |
 | `SITEBIN_TRACK_VIEWS` | `true` | Count per-site page views (Accept: text/html) + last-seen. |
 | `SITEBIN_READONLY` | `false` | Freeze new site creation. |
+| `SITEBIN_EMBED_ORIGINS` | — | Origins allowed to embed the create flow cross-origin (comma-separated, or `*`). *(Enterprise; ignored with a warning in community.)* See [Embed the drop area](#embed-the-drop-area-on-your-own-site). |
 | `SITEBIN_RATE_CREATE_PER_HOUR` / `SITEBIN_RATE_CREATE_BURST` | `30` / `10` | Anonymous creation limit per IP. |
 | `SITEBIN_RATE_AUTH_PER_5MIN` | `10` | Password-attempt limit per (IP, site) — edit, view, and WebDAV auth. |
 | `SITEBIN_CLEANUP_INTERVAL` | `10m` | Expiry sweep interval. |
@@ -290,6 +291,29 @@ Docker is the part that trips everyone up. Two rules:
 Because of all this, WebDAV (`/dav/<edit-id>/`, plain HTTPS, no extra ports) is
 the smoother remote-mount option; reach for FTP when a client or workflow
 specifically needs it.
+
+### Embed the drop area on your own site
+
+The startpage's drop-files-get-a-website flow is a reusable web component,
+served by every instance:
+
+```html
+<script src="https://sitebin.example.com/_sitebin/embed.js" defer></script>
+<sitebin-drop instance="https://sitebin.example.com"></sitebin-drop>
+```
+
+Attributes: `instance` (API base; defaults to the origin the script came
+from), `demo` (simulate publishing, no network — great for landing pages),
+`no-domains` (hide the custom-domains option), `event-only` (emit events
+instead of rendering the built-in claim ticket). Events: `sitebin-published`
+(detail = create response) and `sitebin-error` (detail = `{status, error}`).
+Sitebin's own startpage is built on this component.
+
+Embedding on a **different origin** needs the instance to allowlist that
+origin — set `SITEBIN_EMBED_ORIGINS=https://your-site.com` (or `*`) so the
+create endpoint answers with CORS headers. This is an
+[Enterprise](#editions) capability; the community edition ignores the
+variable (same-origin use and iframes work everywhere).
 
 ### View access modes
 

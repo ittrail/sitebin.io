@@ -119,6 +119,10 @@ services:
       # SITEBIN_FTP_TLS_KEY:        "/certs/ftp.key"
       # SITEBIN_TRACK_VIEWS:           "true"           # Seitenaufrufe pro Site zählen
       # SITEBIN_READONLY:              "false"          # true = keine neuen Sites
+      # Fremde Origins, die den <sitebin-drop>-Embed gegen diese Instanz
+      # nutzen dürfen (Komma-Liste oder "*"). Enterprise-Feature — die
+      # Community-Edition ignoriert die Variable mit einer Warnung.
+      # SITEBIN_EMBED_ORIGINS:         "https://example.com,https://www.example.com"
       # SITEBIN_RATE_CREATE_PER_HOUR:  "30"             # Sites/Stunde/IP
       # SITEBIN_RATE_CREATE_BURST:     "10"
       # SITEBIN_RATE_AUTH_PER_5MIN:    "10"             # Passwort-Versuche/5min/(IP,Ziel)
