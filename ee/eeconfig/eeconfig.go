@@ -68,6 +68,7 @@ type Config struct {
 	AnonTier    string // tier for anonymous creation ("" = anonymous disabled in tiers mode)
 	SelfSelect  bool   // may users pick their own (free) tier
 	AllowAnon   bool   // in accounts mode, still allow anonymous creation
+	LocalAuth   bool   // email+password auth (default true; false = SSO only)
 
 	Google    *OAuthProvider // nil = not configured
 	Microsoft *OAuthProvider
@@ -156,6 +157,10 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Co
 
 	cfg.SelfSelect = boolish(getenv("SITEBIN_TIER_SELF_SELECT"))
 	cfg.AllowAnon = boolish(getenv("SITEBIN_ALLOW_ANON_CREATE"))
+	cfg.LocalAuth = true
+	if v := strings.ToLower(strings.TrimSpace(getenv("SITEBIN_LOCAL_AUTH"))); v != "" {
+		cfg.LocalAuth = boolish(v)
+	}
 	cfg.DefaultTier = strings.TrimSpace(getenv("SITEBIN_DEFAULT_TIER"))
 	cfg.AnonTier = strings.TrimSpace(getenv("SITEBIN_ANON_TIER"))
 
@@ -266,6 +271,10 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Co
 			return cfg, fmt.Errorf("tiers config: duplicate tier id %q", t.ID)
 		}
 		cfg.byID[t.ID] = t
+	}
+
+	if !cfg.LocalAuth && !cfg.OAuthEnabled() {
+		return cfg, fmt.Errorf("SITEBIN_LOCAL_AUTH=false requires at least one OAuth provider (SITEBIN_OAUTH_*), otherwise nobody can sign in")
 	}
 
 	if cfg.Mode == ModeTiers {

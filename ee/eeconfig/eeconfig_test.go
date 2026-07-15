@@ -313,3 +313,31 @@ func TestLoadPayGateDefaultsAndErrors(t *testing.T) {
 		t.Fatalf("want url error, got %v", err)
 	}
 }
+
+func TestLoadLocalAuthDisabled(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"SITEBIN_ACCOUNT_MODE":         "accounts",
+		"SITEBIN_LOCAL_AUTH":           "false",
+		"SITEBIN_OAUTH_OIDC_ISSUER":    "https://idp.example",
+		"SITEBIN_OAUTH_OIDC_CLIENT_ID": "cid",
+	}), noFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LocalAuth {
+		t.Fatal("LocalAuth should be disabled")
+	}
+	// default: enabled
+	cfg2, _ := Load(env(map[string]string{"SITEBIN_ACCOUNT_MODE": "accounts"}), noFile)
+	if !cfg2.LocalAuth {
+		t.Fatal("LocalAuth should default to enabled")
+	}
+	// disabling without any OAuth provider locks everyone out → error
+	_, err = Load(env(map[string]string{
+		"SITEBIN_ACCOUNT_MODE": "accounts",
+		"SITEBIN_LOCAL_AUTH":   "false",
+	}), noFile)
+	if err == nil || !strings.Contains(err.Error(), "SITEBIN_LOCAL_AUTH") {
+		t.Fatalf("want lockout error, got %v", err)
+	}
+}

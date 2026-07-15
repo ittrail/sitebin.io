@@ -43,7 +43,7 @@ func (p *provider) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 	})
 	url, err := p.oidc.AuthCodeURL(r.Context(), prov, state, nonce)
 	if err != nil {
-		p.renderMessage(w, msgView{Title: "Sign-in unavailable", Body: "This provider is temporarily unavailable. Try again shortly.", Back: "/account/login"})
+		p.renderMessage(w, msgView{Title: "Sign-in unavailable", Body: "This provider is temporarily unavailable. Try again shortly.", Back: "/account/login?stay=1"})
 		return
 	}
 	http.Redirect(w, r, url, http.StatusSeeOther)
@@ -90,7 +90,7 @@ func (p *provider) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *provider) oauthError(w http.ResponseWriter, msg string) {
-	p.renderMessage(w, msgView{Title: "Sign-in failed", Body: msg, Back: "/account/login"})
+	p.renderMessage(w, msgView{Title: "Sign-in failed", Body: msg, Back: "/account/login?stay=1"})
 }
 
 // linkOrCreateOAuth resolves an OAuth identity to an account: an existing

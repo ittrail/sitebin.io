@@ -482,6 +482,7 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_OAUTH_GOOGLE_CLIENT_ID` / `_SECRET` | Google OIDC login. |
 | `SITEBIN_OAUTH_MICROSOFT_CLIENT_ID` / `_SECRET` / `_TENANT` | Microsoft OIDC (`_TENANT` default `common`). |
 | `SITEBIN_OAUTH_OIDC_ISSUER` / `_CLIENT_ID` / `_CLIENT_SECRET` / `_LABEL` | Generic OIDC sign-in against any issuer (Keycloak, Okta, Authentik, the [SaaS Stack](#saas-stack-integration)). `_LABEL` is the login-button text (default `SSO`). |
+| `SITEBIN_LOCAL_AUTH` | `true` | `false` = SSO only: no email/password form, signup/reset disabled; with a single OAuth provider, `/account/login` redirects straight to it. Requires an `SITEBIN_OAUTH_*` provider. |
 | `SITEBIN_PAYGATE_URL` / `_APP_ID` / `_API_KEY` | Resolve subscription tiers from a SaaS-Stack PayGate instead of built-in billing. See [SaaS-Stack integration](#saas-stack-integration). |
 | `SITEBIN_PAYGATE_CACHE_TTL` / `_MANAGE_URL` | Per-user tier cache (default `5m`); optional dashboard "manage subscription" link. |
 | `SITEBIN_SMTP_HOST` / `_PORT` / `_USER` / `_PASS` / `_FROM` / `_TLS` | Email (verification, password reset). Port default 587; `_TLS=true` for implicit TLS (465). |
@@ -509,6 +510,9 @@ SITEBIN_OAUTH_OIDC_ISSUER=https://auth.saas-stack.example.com/api/v1/sitebin
 SITEBIN_OAUTH_OIDC_CLIENT_ID=sitebin
 SITEBIN_OAUTH_OIDC_CLIENT_SECRET=…
 SITEBIN_OAUTH_OIDC_LABEL="Example SSO"
+
+# (recommended) SSO only — local accounts would bypass PayGate billing
+SITEBIN_LOCAL_AUTH=false
 
 # 2. Tiers from PayGate (requires SITEBIN_ACCOUNT_MODE=tiers)
 SITEBIN_PAYGATE_URL=https://paygate.saas-stack.example.com

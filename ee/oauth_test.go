@@ -139,3 +139,61 @@ func TestGenericOIDCLoginButtonLabel(t *testing.T) {
 		t.Error("configured label missing from login page")
 	}
 }
+
+func setupSSOOnly(t *testing.T) *provider {
+	t.Helper()
+	t.Setenv("SITEBIN_ACCOUNT_MODE", "accounts")
+	t.Setenv("SITEBIN_LOCAL_AUTH", "false")
+	t.Setenv("SITEBIN_OAUTH_OIDC_ISSUER", "https://auth.stack.example/api/v1/sitebin")
+	t.Setenv("SITEBIN_OAUTH_OIDC_CLIENT_ID", "sitebin")
+	t.Setenv("SITEBIN_OAUTH_OIDC_LABEL", "IT-Trail Login")
+	p := newProvider()
+	if err := p.Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestSSOOnlyLoginRedirectsToProvider(t *testing.T) {
+	p := setupSSOOnly(t)
+	mux := serveMux(p)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/account/login", nil))
+	if w.Code != 303 || w.Header().Get("Location") != "/account/auth/oidc" {
+		t.Fatalf("login = %d -> %q, want 303 -> /account/auth/oidc", w.Code, w.Header().Get("Location"))
+	}
+	// ?stay=1 renders the page (no redirect loop from OAuth error pages),
+	// without the email/password form
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, httptest.NewRequest("GET", "/account/login?stay=1", nil))
+	if w2.Code != 200 {
+		t.Fatalf("stay page = %d", w2.Code)
+	}
+	body := w2.Body.String()
+	if strings.Contains(body, "type=\"password\"") || strings.Contains(body, "Create an account") {
+		t.Error("local login form should be hidden in SSO-only mode")
+	}
+	if !strings.Contains(body, "IT-Trail Login") {
+		t.Error("SSO button missing")
+	}
+}
+
+func TestSSOOnlyDisablesLocalPosts(t *testing.T) {
+	p := setupSSOOnly(t)
+	mux := serveMux(p)
+	for _, path := range []string{"/account/login", "/account/signup"} {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", path, strings.NewReader("email=a@b.c&password=longenough1"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		mux.ServeHTTP(w, req)
+		if w.Code != 404 {
+			t.Errorf("POST %s = %d, want 404", path, w.Code)
+		}
+	}
+	// signup page redirects into the provider too
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/account/signup", nil))
+	if w.Code != 303 || w.Header().Get("Location") != "/account/auth/oidc" {
+		t.Errorf("signup = %d -> %q", w.Code, w.Header().Get("Location"))
+	}
+}

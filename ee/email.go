@@ -13,8 +13,10 @@ import (
 )
 
 // emailRoutes adds verification + password-reset endpoints when SMTP is on.
+// Both concern local email+password accounts only, so SSO-only instances
+// (SITEBIN_LOCAL_AUTH=false) don't mount them.
 func (p *provider) emailRoutes(routes map[string]http.Handler) {
-	if p.mailer == nil {
+	if p.mailer == nil || !p.cfg.LocalAuth {
 		return
 	}
 	routes["GET /account/verify"] = http.HandlerFunc(p.handleVerify)

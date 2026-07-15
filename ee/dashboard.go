@@ -76,10 +76,25 @@ func (p *provider) oauthButtons() []providerButton {
 func (p *provider) handleRoot(w http.ResponseWriter, r *http.Request) {
 	acc, ok := p.currentAccount(r)
 	if !ok {
-		p.renderAuth(w, "login", "", "")
+		p.redirect(w, r, "/account/login")
 		return
 	}
 	p.renderDashboard(w, acc, "")
+}
+
+// ssoRedirect sends the visitor straight to the identity provider when local
+// auth is off and exactly one provider is configured — no login mask at all.
+// ?stay=1 renders the page instead (used by OAuth error pages to avoid a
+// redirect loop).
+func (p *provider) ssoRedirect(w http.ResponseWriter, r *http.Request) bool {
+	if p.cfg.LocalAuth || r.URL.Query().Get("stay") == "1" {
+		return false
+	}
+	if btns := p.oauthButtons(); len(btns) == 1 {
+		p.redirect(w, r, "/account/auth/"+btns[0].ID)
+		return true
+	}
+	return false
 }
 
 func (p *provider) handleLoginGet(w http.ResponseWriter, r *http.Request) {
@@ -87,10 +102,17 @@ func (p *provider) handleLoginGet(w http.ResponseWriter, r *http.Request) {
 		p.redirect(w, r, "/account")
 		return
 	}
+	if p.ssoRedirect(w, r) {
+		return
+	}
 	p.renderAuth(w, "login", "", "")
 }
 
 func (p *provider) handleLoginPost(w http.ResponseWriter, r *http.Request) {
+	if !p.cfg.LocalAuth {
+		http.NotFound(w, r)
+		return
+	}
 	email := r.PostFormValue("email")
 	acc, err := p.local.Login(email, r.PostFormValue("password"))
 	if err != nil {
@@ -106,10 +128,17 @@ func (p *provider) handleSignupGet(w http.ResponseWriter, r *http.Request) {
 		p.redirect(w, r, "/account")
 		return
 	}
+	if p.ssoRedirect(w, r) {
+		return
+	}
 	p.renderAuth(w, "signup", "", "")
 }
 
 func (p *provider) handleSignupPost(w http.ResponseWriter, r *http.Request) {
+	if !p.cfg.LocalAuth {
+		http.NotFound(w, r)
+		return
+	}
 	email := r.PostFormValue("email")
 	acc, err := p.local.Signup(email, r.PostFormValue("password"), p.tierForNewAccount())
 	if err != nil {
@@ -252,6 +281,7 @@ type authView struct {
 	Error        string
 	Providers    []providerButton
 	EmailEnabled bool
+	LocalAuth    bool
 }
 
 func (p *provider) renderAuth(w http.ResponseWriter, mode, email, errMsg string) {
@@ -259,6 +289,7 @@ func (p *provider) renderAuth(w http.ResponseWriter, mode, email, errMsg string)
 	authTmpl.Execute(w, authView{
 		Mode: mode, Email: email, Error: errMsg,
 		Providers: p.oauthButtons(), EmailEnabled: p.mailer != nil,
+		LocalAuth: p.cfg.LocalAuth,
 	})
 }
 

@@ -44,12 +44,12 @@ var authTmpl = template.Must(template.New("auth").Parse(pageHead + `
   {{if eq .Mode "signup"}}
     <h1>Create your account</h1>
     <p class="muted">Sign up to publish and manage your sites.</p>
-    <form method="post" action="/account/signup">
   {{else}}
     <h1>Sign in</h1>
     <p class="muted">Access your account dashboard.</p>
-    <form method="post" action="/account/login">
   {{end}}
+  {{if .LocalAuth}}
+  <form method="post" action="{{if eq .Mode "signup"}}/account/signup{{else}}/account/login{{end}}">
     <label class="f" for="email">Email</label>
     <input type="email" id="email" name="email" required autocomplete="email" value="{{.Email}}">
     <label class="f" for="password">Password</label>
@@ -57,16 +57,19 @@ var authTmpl = template.Must(template.New("auth").Parse(pageHead + `
     {{if .Error}}<div class="inline-status err" style="margin-top:10px">{{.Error}}</div>{{end}}
     <div style="margin-top:16px"><button class="btn primary" type="submit">{{if eq .Mode "signup"}}Create account{{else}}Sign in{{end}}</button></div>
   </form>
+  {{else if .Error}}<div class="inline-status err" style="margin-top:10px">{{.Error}}</div>{{end}}
   {{if .Providers}}
-  <div style="margin:18px 0;text-align:center;color:var(--ink-faint);font-size:13px">or continue with</div>
+  {{if .LocalAuth}}<div style="margin:18px 0;text-align:center;color:var(--ink-faint);font-size:13px">or continue with</div>{{end}}
   <div style="display:grid;gap:8px">
-    {{range .Providers}}<a class="btn" style="justify-content:center" href="/account/auth/{{.ID}}">{{.Label}}</a>{{end}}
+    {{range .Providers}}<a class="btn primary" style="justify-content:center" href="/account/auth/{{.ID}}">{{.Label}}</a>{{end}}
   </div>
   {{end}}
+  {{if .LocalAuth}}
   <div class="switch-link">
     {{if eq .Mode "signup"}}Already have an account? <a href="/account/login">Sign in</a>{{else}}New here? <a href="/account/signup">Create an account</a>{{end}}
     {{if and (eq .Mode "login") .EmailEnabled}}<br><a href="/account/reset">Forgot your password?</a>{{end}}
   </div>
+  {{end}}
 </div></div></main>
 ` + pageFoot))
 
