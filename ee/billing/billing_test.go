@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ittrail/sitebin/ee/eeconfig"
+	"github.com/ittrail/sitebin.io/ee/eeconfig"
 )
 
 func sign(secret, payload string) string {

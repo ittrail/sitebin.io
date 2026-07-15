@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ittrail/sitebin/internal/store"
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 func TestSweep(t *testing.T) {

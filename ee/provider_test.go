@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ittrail/sitebin/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/ext"
 )
 
 // --- fakes ---

@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ittrail/sitebin/internal/config"
+	"github.com/ittrail/sitebin.io/internal/config"
 )
 
 // Generate renders the complete Caddyfile for cfg.

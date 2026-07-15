@@ -1,7 +1,7 @@
 package httpapi
 
 import (
-	"github.com/ittrail/sitebin/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/ext"
 )
 
 // SiteService returns the ext.SiteService implementation the enterprise

@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/afero"
 
-	"github.com/ittrail/sitebin/internal/store"
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 // errQuota is returned when a write would exceed the site's byte/file caps.

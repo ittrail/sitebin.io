@@ -66,7 +66,7 @@ container itself is disposable.
 ### Build the image yourself
 
 ```bash
-git clone <this repo> && cd sitebin
+git clone https://github.com/ittrail/sitebin.io && cd sitebin.io
 docker build -t sitebin:latest .
 ```
 
@@ -213,7 +213,7 @@ SITEBIN_EDIT_URL=https://sitebin.example.com/e/<id> SITEBIN_EDIT_PASSWORD=... \
 Or use the GitHub Action ([`.github/actions/deploy`](.github/actions/deploy)):
 
 ```yaml
-- uses: ./.github/actions/deploy   # or your-org/sitebin/.github/actions/deploy@v1
+- uses: ./.github/actions/deploy   # or ittrail/sitebin.io/.github/actions/deploy@main
   with:
     folder: dist
     edit_url: ${{ secrets.SITEBIN_EDIT_URL }}

@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ittrail/sitebin/internal/auth"
-	"github.com/ittrail/sitebin/internal/ext"
-	"github.com/ittrail/sitebin/internal/store"
-	"github.com/ittrail/sitebin/internal/viewer"
+	"github.com/ittrail/sitebin.io/internal/auth"
+	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/store"
+	"github.com/ittrail/sitebin.io/internal/viewer"
 )
 
 // updateSet carries settings changes. Pointers distinguish "absent" from

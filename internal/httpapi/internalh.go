@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ittrail/sitebin/internal/store"
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 // authz answers Caddy's forward_auth subrequest for every content request on

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ittrail/sitebin/internal/store"
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 func TestRendererFor(t *testing.T) {

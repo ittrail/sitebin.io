@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ittrail/sitebin/ee/account"
-	"github.com/ittrail/sitebin/ee/authn"
-	"github.com/ittrail/sitebin/ee/eeconfig"
-	"github.com/ittrail/sitebin/internal/ext"
+	"github.com/ittrail/sitebin.io/ee/account"
+	"github.com/ittrail/sitebin.io/ee/authn"
+	"github.com/ittrail/sitebin.io/ee/eeconfig"
+	"github.com/ittrail/sitebin.io/internal/ext"
 )
 
 func setupOAuth(t *testing.T) *provider {

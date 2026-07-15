@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ittrail/sitebin/ee/eeconfig"
+	"github.com/ittrail/sitebin.io/ee/eeconfig"
 )
 
 // Mailer sends transactional email. The low-level delivery function is

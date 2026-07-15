@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/ittrail/sitebin/ee/account"
-	"github.com/ittrail/sitebin/ee/authn"
-	"github.com/ittrail/sitebin/internal/ext"
+	"github.com/ittrail/sitebin.io/ee/account"
+	"github.com/ittrail/sitebin.io/ee/authn"
+	"github.com/ittrail/sitebin.io/internal/ext"
 )
 
 // PublicRoutes mounts the account dashboard and auth endpoints on the main

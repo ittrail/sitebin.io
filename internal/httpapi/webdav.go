@@ -8,7 +8,7 @@ import (
 
 	"golang.org/x/net/webdav"
 
-	"github.com/ittrail/sitebin/internal/store"
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 // davLocks keeps one in-memory WebDAV lock system per site.

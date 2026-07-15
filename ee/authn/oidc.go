@@ -11,8 +11,8 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
-	"github.com/ittrail/sitebin/ee/account"
-	"github.com/ittrail/sitebin/ee/eeconfig"
+	"github.com/ittrail/sitebin.io/ee/account"
+	"github.com/ittrail/sitebin.io/ee/eeconfig"
 )
 
 // Identity is the verified result of an OAuth login.

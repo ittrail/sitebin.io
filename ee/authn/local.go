@@ -6,8 +6,8 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/ittrail/sitebin/ee/account"
-	"github.com/ittrail/sitebin/internal/auth"
+	"github.com/ittrail/sitebin.io/ee/account"
+	"github.com/ittrail/sitebin.io/internal/auth"
 )
 
 // MinPasswordLen is the minimum local-account password length.

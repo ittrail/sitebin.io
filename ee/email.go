@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ittrail/sitebin/ee/account"
+	"github.com/ittrail/sitebin.io/ee/account"
 )
 
 // emailRoutes adds verification + password-reset endpoints when SMTP is on.

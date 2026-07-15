@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ittrail/sitebin/internal/auth"
-	"github.com/ittrail/sitebin/internal/ids"
+	"github.com/ittrail/sitebin.io/internal/auth"
+	"github.com/ittrail/sitebin.io/internal/ids"
 )
 
 var (

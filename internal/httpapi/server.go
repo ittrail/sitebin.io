@@ -17,10 +17,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ittrail/sitebin/internal/auth"
-	"github.com/ittrail/sitebin/internal/config"
-	"github.com/ittrail/sitebin/internal/ext"
-	"github.com/ittrail/sitebin/internal/store"
+	"github.com/ittrail/sitebin.io/internal/auth"
+	"github.com/ittrail/sitebin.io/internal/config"
+	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 const (

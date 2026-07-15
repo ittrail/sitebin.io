@@ -15,7 +15,7 @@ import (
 
 	ftpserver "github.com/fclairamb/ftpserverlib"
 
-	"github.com/ittrail/sitebin/internal/config"
+	"github.com/ittrail/sitebin.io/internal/config"
 )
 
 // Authenticator verifies an FTP login and returns the directory to serve plus

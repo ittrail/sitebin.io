@@ -16,14 +16,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ittrail/sitebin/ee/account"
-	"github.com/ittrail/sitebin/ee/authn"
-	"github.com/ittrail/sitebin/ee/billing"
-	"github.com/ittrail/sitebin/ee/eeconfig"
-	"github.com/ittrail/sitebin/ee/licensing"
-	"github.com/ittrail/sitebin/ee/session"
-	"github.com/ittrail/sitebin/ee/smtp"
-	"github.com/ittrail/sitebin/internal/ext"
+	"github.com/ittrail/sitebin.io/ee/account"
+	"github.com/ittrail/sitebin.io/ee/authn"
+	"github.com/ittrail/sitebin.io/ee/billing"
+	"github.com/ittrail/sitebin.io/ee/eeconfig"
+	"github.com/ittrail/sitebin.io/ee/licensing"
+	"github.com/ittrail/sitebin.io/ee/session"
+	"github.com/ittrail/sitebin.io/ee/smtp"
+	"github.com/ittrail/sitebin.io/internal/ext"
 )
 
 // provider is the enterprise ext.Provider: it gates site creation behind

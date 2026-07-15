@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ittrail/sitebin/ee/account"
+	"github.com/ittrail/sitebin.io/ee/account"
 )
 
 func newLocal(t *testing.T) *Local {

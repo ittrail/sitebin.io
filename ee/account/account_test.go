@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ittrail/sitebin/internal/ids"
+	"github.com/ittrail/sitebin.io/internal/ids"
 )
 
 func newStore(t *testing.T) *Store {

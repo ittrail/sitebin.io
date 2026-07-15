@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ittrail/sitebin/internal/auth"
+	"github.com/ittrail/sitebin.io/internal/auth"
 )
 
 // CookieName is the account-session cookie on the main domain.

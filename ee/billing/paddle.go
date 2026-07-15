@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ittrail/sitebin/ee/eeconfig"
+	"github.com/ittrail/sitebin.io/ee/eeconfig"
 )
 
 // Paddle integrates Paddle Billing checkout + webhooks via direct HTTP.

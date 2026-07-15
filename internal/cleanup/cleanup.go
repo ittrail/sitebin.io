@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/ittrail/sitebin/internal/store"
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 // grace is how long an expired site is kept (serving 410) before deletion.

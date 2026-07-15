@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/ittrail/sitebin/internal/ids"
+	"github.com/ittrail/sitebin.io/internal/ids"
 )
 
 // uiSecurityHeaders hardens the backend-served HTML pages (landing, edit).

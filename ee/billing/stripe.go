@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ittrail/sitebin/ee/eeconfig"
+	"github.com/ittrail/sitebin.io/ee/eeconfig"
 )
 
 // Stripe integrates Stripe Checkout + webhooks via direct HTTP (no SDK).

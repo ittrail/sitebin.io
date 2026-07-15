@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ittrail/sitebin/ee/eeconfig"
+	"github.com/ittrail/sitebin.io/ee/eeconfig"
 )
 
 func pgServer(t *testing.T, hits *atomic.Int32, tier, status string, code int) *httptest.Server {

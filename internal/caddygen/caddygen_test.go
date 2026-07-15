@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ittrail/sitebin/internal/config"
-	"github.com/ittrail/sitebin/internal/store"
+	"github.com/ittrail/sitebin.io/internal/config"
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 func TestSPAMarkerNameMatchesStore(t *testing.T) {

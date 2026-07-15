@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ittrail/sitebin/ee/eeconfig"
+	"github.com/ittrail/sitebin.io/ee/eeconfig"
 )
 
 // failTTL is how long a failed PayGate lookup is remembered, so an outage

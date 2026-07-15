@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ittrail/sitebin/internal/auth"
+	"github.com/ittrail/sitebin.io/internal/auth"
 )
 
 func newTestStore(t *testing.T) *Store {

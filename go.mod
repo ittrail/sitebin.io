@@ -1,4 +1,4 @@
-module github.com/ittrail/sitebin
+module github.com/ittrail/sitebin.io
 
 go 1.25.0
 

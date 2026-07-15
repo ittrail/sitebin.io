@@ -16,9 +16,9 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/ittrail/sitebin/internal/config"
-	"github.com/ittrail/sitebin/internal/ext"
-	"github.com/ittrail/sitebin/internal/store"
+	"github.com/ittrail/sitebin.io/internal/config"
+	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 var testFS = fstest.MapFS{

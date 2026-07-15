@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ittrail/sitebin/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/ext"
 )
 
 func setupEmail(t *testing.T) *provider {

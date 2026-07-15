@@ -8,7 +8,7 @@
 // with the `ee` build tag; the community build excludes it entirely.
 package ee
 
-import "github.com/ittrail/sitebin/internal/ext"
+import "github.com/ittrail/sitebin.io/internal/ext"
 
 // Version of the enterprise extension.
 const Version = "0.1.0-phase1"

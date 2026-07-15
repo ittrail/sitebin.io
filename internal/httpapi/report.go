@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ittrail/sitebin/internal/store"
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 // report accepts a public abuse/takedown report. It is rate-limited and writes

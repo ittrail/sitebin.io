@@ -25,16 +25,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ittrail/sitebin/internal/auth"
-	"github.com/ittrail/sitebin/internal/caddygen"
-	"github.com/ittrail/sitebin/internal/cleanup"
-	"github.com/ittrail/sitebin/internal/config"
-	"github.com/ittrail/sitebin/internal/ext"
-	"github.com/ittrail/sitebin/internal/ftp"
-	"github.com/ittrail/sitebin/internal/httpapi"
-	"github.com/ittrail/sitebin/internal/store"
-	"github.com/ittrail/sitebin/internal/supervisor"
-	"github.com/ittrail/sitebin/web"
+	"github.com/ittrail/sitebin.io/internal/auth"
+	"github.com/ittrail/sitebin.io/internal/caddygen"
+	"github.com/ittrail/sitebin.io/internal/cleanup"
+	"github.com/ittrail/sitebin.io/internal/config"
+	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/ftp"
+	"github.com/ittrail/sitebin.io/internal/httpapi"
+	"github.com/ittrail/sitebin.io/internal/store"
+	"github.com/ittrail/sitebin.io/internal/supervisor"
+	"github.com/ittrail/sitebin.io/web"
 )
 
 func main() {

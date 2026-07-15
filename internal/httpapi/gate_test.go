@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/ittrail/sitebin/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/ext"
 )
 
 // fakeProvider is a test double for the enterprise extension, exercising the

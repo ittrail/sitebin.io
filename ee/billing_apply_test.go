@@ -5,8 +5,8 @@ package ee
 import (
 	"testing"
 
-	"github.com/ittrail/sitebin/ee/billing"
-	"github.com/ittrail/sitebin/internal/ext"
+	"github.com/ittrail/sitebin.io/ee/billing"
+	"github.com/ittrail/sitebin.io/internal/ext"
 )
 
 func setupBilling(t *testing.T) *provider {

@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/ittrail/sitebin/internal/config"
-	"github.com/ittrail/sitebin/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/config"
+	"github.com/ittrail/sitebin.io/internal/ext"
 )
 
 // extHost adapts the running instance to the ext.Host interface handed to the

@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ittrail/sitebin/ee/account"
-	"github.com/ittrail/sitebin/ee/billing"
+	"github.com/ittrail/sitebin.io/ee/account"
+	"github.com/ittrail/sitebin.io/ee/billing"
 )
 
 // billingRoutes adds checkout + webhook endpoints for configured providers.

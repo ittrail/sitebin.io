@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ittrail/sitebin/internal/ids"
+	"github.com/ittrail/sitebin.io/internal/ids"
 )
 
 // Store persists accounts under the data root. Indexes (email, oauth) are
