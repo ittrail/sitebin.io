@@ -16,7 +16,7 @@ RUN set -eux; \
 FROM caddy:2-builder AS caddybuild
 RUN xcaddy build \
     --with github.com/caddy-dns/cloudflare \
-    --with github.com/caddy-dns/hetzner \
+    --with github.com/caddy-dns/hetzner/v2 \
     --with github.com/caddy-dns/duckdns \
     --with github.com/caddy-dns/netcup \
     --with github.com/caddy-dns/porkbun
