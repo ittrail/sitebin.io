@@ -15,6 +15,7 @@ type fakeProvider struct {
 	domainsOK bool
 	embedOK   bool
 	owner     string
+	grant     ext.CreateGrant // extra caps to stamp (owner merged in)
 	rejErr    error
 	created   []string
 }
@@ -26,7 +27,11 @@ func (f *fakeProvider) AccountsEnabled() bool      { return f.enabled }
 func (f *fakeProvider) CustomDomainsAllowed() bool { return f.domainsOK }
 func (f *fakeProvider) EmbedOriginsAllowed() bool  { return f.embedOK }
 func (f *fakeProvider) AuthorizeCreate(*http.Request) (ext.CreateGrant, error) {
-	return ext.CreateGrant{OwnerAccountID: f.owner}, f.rejErr
+	g := f.grant
+	if g.OwnerAccountID == "" {
+		g.OwnerAccountID = f.owner
+	}
+	return g, f.rejErr
 }
 func (f *fakeProvider) OnSiteCreated(owner, viewID string) error {
 	f.created = append(f.created, owner+":"+viewID)

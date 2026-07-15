@@ -461,6 +461,16 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 		fail(err)
 		return
 	}
+	// A tier expiry cap is also the default lifetime: capped sites created
+	// without an explicit expiry (e.g. anonymous drops on a hosted instance)
+	// expire at the cap instead of living forever.
+	if site.Meta.QuotaExpiryDays > 0 && site.Meta.ExpiresAt == nil {
+		exp := time.Now().Add(time.Duration(site.Meta.QuotaExpiryDays) * 24 * time.Hour).UTC()
+		if err := a.st.Update(site, func(m *store.Meta) error { m.ExpiresAt = &exp; return nil }); err != nil {
+			fail(err)
+			return
+		}
+	}
 	// entry file default: single-file viewer uploads should just work
 	if err := a.syncViewerLayout(site); err != nil {
 		fail(err)

@@ -1099,3 +1099,36 @@ func TestCreatePreflight(t *testing.T) {
 		t.Fatalf("community ACAO = %q, want empty", got)
 	}
 }
+
+func TestExpiryCapDefaultsExpiry(t *testing.T) {
+	// A tier with max_expiry_days must not just cap chosen expiry — sites
+	// created without an explicit expiry default to the cap (the hosted
+	// "Drop" tier's 7-day lifetime).
+	ext.Register(&fakeProvider{enabled: true, grant: ext.CreateGrant{MaxExpiryDays: 7}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	site, err := e.st.ByViewID(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if site.Meta.ExpiresAt == nil {
+		t.Fatal("capped-tier site should get a default expiry")
+	}
+	want := time.Now().Add(7 * 24 * time.Hour)
+	if d := site.Meta.ExpiresAt.Sub(want); d > time.Minute || d < -time.Minute {
+		t.Fatalf("default expiry = %v, want ~%v", site.Meta.ExpiresAt, want)
+	}
+}
+
+func TestExpiryCapKeepsExplicitExpiry(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, grant: ext.CreateGrant{MaxExpiryDays: 7}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	exp := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)
+	c := e.createSite(t, map[string]string{"expires_at": exp}, map[string]string{"index.html": "x"})
+	site, _ := e.st.ByViewID(c.ID)
+	if site.Meta.ExpiresAt == nil || site.Meta.ExpiresAt.Sub(time.Now()) > 25*time.Hour {
+		t.Fatalf("explicit expiry should win, got %v", site.Meta.ExpiresAt)
+	}
+}
