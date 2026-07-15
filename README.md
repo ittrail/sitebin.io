@@ -375,6 +375,48 @@ Operator commands (run inside the container, e.g. `docker exec sitebin sitebin <
 - **Freeze:** `SITEBIN_READONLY=true` disables new-site creation.
 - **Logs:** structured request + lifecycle logs on stdout (`docker logs`).
 
+### Availability & failover
+
+Sitebin is a **single-writer** system: writes are serialized by in-process
+locks, so exactly **one instance** may run against a given `/data` at any
+time. Never run two containers on the same, shared, or bidirectionally
+synced volume — multi-step operations (uploads with quota enforcement,
+index updates, replace-all) can interleave and corrupt state. Everything
+else about the design makes failover easy: the container is disposable and
+`/data` is the entire instance (sites, indexes, accounts, certificates, and
+the `.secret` that keeps sessions valid across a move).
+
+**Baseline (every deployment): restore-to-fresh-server.** With streaming
+backups and a low DNS TTL this alone gives minutes-level recovery:
+
+```bash
+# continuously (cron) on the primary:
+docker exec sitebin sitebin backup - | ssh backup-host 'cat > sitebin-latest.tar.gz'
+
+# disaster: on any fresh server with Docker
+docker run -d --name sitebin -v sitebin-data:/data … sitebin:latest   # same env as before
+cat sitebin-latest.tar.gz | docker exec -i sitebin sitebin restore /dev/stdin
+docker restart sitebin
+# point DNS (A records for the base domain, wildcard, and custom domains)
+# at the new server; certificates re-issue automatically if missing.
+```
+
+Keep the env/compose file in version control — server + compose file +
+backup is the complete instance. **Test the restore before you need it.**
+
+**Active–passive standby (when minutes of downtime are too many):**
+replicate the volume block-level to a second server — DRBD (synchronous,
+RPO ≈ 0) or ZFS `send/recv` on a tight interval — with the container
+*stopped* on the standby. On failure: promote the replica, start the
+container, move the floating IP (or flip low-TTL DNS). The only inviolable
+rule is the single-writer one: make sure the old primary is down (fencing)
+before the standby starts.
+
+**Not supported:** active–active, and serving from an rsync'd copy while
+the primary accepts writes. Read replicas (one writer, many readers for
+view traffic) are architecturally feasible and on the enterprise roadmap,
+but not implemented.
+
 ### Security notes (please read before hosting publicly)
 
 - User content is **only** served on random subdomains and custom domains —
