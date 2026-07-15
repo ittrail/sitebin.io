@@ -57,6 +57,10 @@ func Generate(cfg config.Config) string {
 				}
 			} else {
 				fmt.Fprintf(&b, "\t\tdns %s {env.SITEBIN_DNS_TOKEN}\n", cfg.DNSProvider)
+				// Managed DNS backends publish zone changes with a delay, and
+				// recursive resolvers negative-cache the challenge name; skip
+				// the pre-check and give the record a fixed head start instead.
+				b.WriteString("\t\tpropagation_delay 60s\n")
 			}
 			b.WriteString("\t}\n")
 		}
