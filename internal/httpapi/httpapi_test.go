@@ -783,6 +783,45 @@ func TestFTPAuthGloballyDisabled(t *testing.T) {
 	}
 }
 
+func TestFTPAuthRefusesAnonymousSiteWhenAccountsEnabled(t *testing.T) {
+	// FTP authenticates with the edit password directly, bypassing the JSON
+	// API entirely. ee/eeconfig.Tier has no FTP field at all, so nothing else
+	// stops an anonymous drop from toggling ftp_enabled on its own edit page
+	// and then being driven by an FTP client unless FTPAuth enforces the
+	// "no account, no API" rule itself.
+	ext.Register(&fakeProvider{enabled: true})
+	defer ext.Reset()
+	e := newEnv(t, map[string]string{"SITEBIN_FTP_ENABLED": "true"})
+	c := e.createSite(t, map[string]string{"ftp": "true"}, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	if _, _, _, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4"); err == nil {
+		t.Error("anonymous site should have no FTP access when accounts are enabled")
+	}
+}
+
+func TestFTPAuthAllowsOwnedSiteWhenAccountsEnabled(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1"})
+	defer ext.Reset()
+	e := newEnv(t, map[string]string{"SITEBIN_FTP_ENABLED": "true"})
+	c := e.createSite(t, map[string]string{"ftp": "true"}, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	if _, _, _, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4"); err != nil {
+		t.Errorf("owned site should have FTP access: %v", err)
+	}
+}
+
+func TestFTPAuthCommunityBuildStaysOpen(t *testing.T) {
+	e := newEnv(t, map[string]string{"SITEBIN_FTP_ENABLED": "true"}) // no provider registered
+	c := e.createSite(t, map[string]string{"ftp": "true"}, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	if _, _, _, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4"); err != nil {
+		t.Errorf("community build should have FTP access: %v", err)
+	}
+}
+
 func TestAbuseReport(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
@@ -1020,6 +1059,43 @@ func TestWebDAVUsesPerSiteTierFileQuota(t *testing.T) {
 
 	if w := davReq(t, e, "PUT", base+"second.txt", c.EditPassword, strings.NewReader("x")); w.Code != http.StatusInsufficientStorage {
 		t.Fatalf("PUT over tier file quota: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestWebDAVRefusesAnonymousSiteWhenAccountsEnabled(t *testing.T) {
+	// WebDAV authenticates with the edit password through its own path, so it
+	// must enforce the same "no account, no API" rule the JSON API does —
+	// otherwise it's a back door around the gate.
+	ext.Register(&fakeProvider{enabled: true})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, map[string]string{"webdav": "true"}, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	if w := davReq(t, e, "GET", "/dav/"+edit+"/index.html", c.EditPassword, nil); w.Code != 403 {
+		t.Fatalf("anonymous site over webdav: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestWebDAVAllowsOwnedSiteWhenAccountsEnabled(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1"})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, map[string]string{"webdav": "true"}, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	if w := davReq(t, e, "GET", "/dav/"+edit+"/index.html", c.EditPassword, nil); w.Code != 200 {
+		t.Fatalf("owned site over webdav: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestWebDAVCommunityBuildStaysOpen(t *testing.T) {
+	e := newEnv(t, nil) // no provider registered
+	c := e.createSite(t, map[string]string{"webdav": "true"}, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	if w := davReq(t, e, "GET", "/dav/"+edit+"/index.html", c.EditPassword, nil); w.Code != 200 {
+		t.Fatalf("community build over webdav: %d %s", w.Code, w.Body)
 	}
 }
 

@@ -71,3 +71,18 @@ func (a *API) apiAllowedFor(site *store.Site, r *http.Request) bool {
 func (a *API) apiAccountHint() string {
 	return a.cfg.SiteURL(a.cfg.BaseDomain) + "/account"
 }
+
+// noAccountProtocolAccess reports whether site must be refused on a
+// non-browser write protocol (WebDAV, FTP) because it has no owning
+// account. WebDAV and FTP clients never send browser fetch metadata, so
+// apiAllowedFor's fromOwnBrowser fallback is meaningless here — ownership is
+// checked directly instead. Gated only where a provider gates creation at
+// all, exactly like apiAllowedFor, so the community build (no provider)
+// stays fully open.
+func (a *API) noAccountProtocolAccess(site *store.Site) bool {
+	p, ok := ext.Get()
+	if !ok || !p.AccountsEnabled() {
+		return false
+	}
+	return site.Meta.OwnerAccountID == ""
+}

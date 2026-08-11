@@ -67,6 +67,14 @@ func (a *API) webdav(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The API is an account feature, and WebDAV must not be a back door
+	// around that: when accounts are enabled, an anonymous site has no
+	// WebDAV either, exactly like it has no JSON API.
+	if a.noAccountProtocolAccess(site) {
+		writeError(w, 403, "this site was created without an account, so it has no WebDAV access — create it while signed in at "+a.apiAccountHint()+" to use WebDAV")
+		return
+	}
+
 	if davMutating[r.Method] {
 		if sub != "" {
 			if _, err := store.CleanRelPath(sub); err != nil {
