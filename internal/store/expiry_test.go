@@ -166,7 +166,9 @@ func TestApplyQuotaUpgradeClearsTierExpiry(t *testing.T) {
 	s := newExpiryStore(t)
 	site := quotaSite(t, s, 7, 3*24*time.Hour, true)
 
-	if err := s.ApplyQuota(site, Quota{Bytes: 1 << 30, Files: 5000, ExpiryDays: 0}, DowngradeGrace); err != nil {
+	domains := 10
+	webdav := true
+	if err := s.ApplyQuota(site, Quota{Bytes: 1 << 30, Files: 5000, ExpiryDays: 0, Domains: &domains, WebDAV: &webdav}, DowngradeGrace); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := s.ByViewID(site.ViewID)
@@ -175,6 +177,12 @@ func TestApplyQuotaUpgradeClearsTierExpiry(t *testing.T) {
 	}
 	if got.Meta.QuotaBytes != 1<<30 || got.Meta.QuotaFiles != 5000 || got.Meta.QuotaExpiryDays != 0 {
 		t.Fatalf("quotas not restamped: %+v", got.Meta)
+	}
+	if got.Meta.QuotaDomains == nil || *got.Meta.QuotaDomains != 10 {
+		t.Fatalf("QuotaDomains not restamped: %+v", got.Meta.QuotaDomains)
+	}
+	if got.Meta.QuotaWebDAV == nil || *got.Meta.QuotaWebDAV != true {
+		t.Fatalf("QuotaWebDAV not restamped: %+v", got.Meta.QuotaWebDAV)
 	}
 }
 
@@ -223,6 +231,9 @@ func TestApplyQuotaClampsExpiryBeyondNewCap(t *testing.T) {
 	want := time.Now().Add(7 * 24 * time.Hour)
 	if d := got.Meta.ExpiresAt.Sub(want); d > time.Minute || d < -time.Minute {
 		t.Fatalf("expiry beyond the new cap = %v, want clamped to ~%v", got.Meta.ExpiresAt, want)
+	}
+	if !got.Meta.ExpiryFromTier {
+		t.Fatal("a clamped expiry must be marked as tier-imposed, or a later upgrade will never lift it")
 	}
 }
 

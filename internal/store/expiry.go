@@ -99,7 +99,7 @@ func (s *Store) ApplyQuota(site *Site, q Quota, grace time.Duration) error {
 			until := now.Add(grace).UTC()
 			m.ExpiresAt = &until
 			m.ExpiryFromTier = true
-		case m.ExpiresAt.After(limit):
+		case m.ExpiresAt.After(limit): // an expiry exactly at the limit counts as "within" and is left alone
 			m.ExpiresAt = &limit
 			m.ExpiryFromTier = true
 		}
