@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -175,6 +176,53 @@ func (p *provider) effectiveTier(acc *account.Account) eeconfig.Tier {
 	}
 	t, _ := p.cfg.Tier(p.cfg.DefaultTier)
 	return t
+}
+
+// effectiveTierStrict resolves an account's tier like effectiveTier, but
+// surfaces a PayGate failure instead of falling back to the stored tier.
+// Callers that would destroy data on a wrong answer use this one.
+func (p *provider) effectiveTierStrict(acc *account.Account) (eeconfig.Tier, error) {
+	if p.paygate != nil && acc.Provider == account.OIDCProv && acc.OAuthSubject != "" {
+		id, ok, err := p.paygate.TierFor(context.Background(), acc.OAuthSubject)
+		if err != nil {
+			return eeconfig.Tier{}, fmt.Errorf("paygate tier lookup for %s: %w", acc.ID, err)
+		}
+		if ok {
+			if t, found := p.cfg.Tier(id); found {
+				return t, nil
+			}
+			slog.Warn("paygate returned a tier missing from tiers config; using stored tier", "tier", id)
+		}
+	}
+	if t, ok := p.cfg.Tier(acc.Tier); ok {
+		return t, nil
+	}
+	t, _ := p.cfg.Tier(p.cfg.DefaultTier)
+	return t, nil
+}
+
+// QuotaFor returns the caps the owner's current tier grants. See ext.Provider.
+func (p *provider) QuotaFor(ownerAccountID string) (ext.CreateGrant, bool, error) {
+	if !p.cfg.Enabled() || ownerAccountID == "" {
+		return ext.CreateGrant{}, false, nil
+	}
+	acc, err := p.accounts.ByID(ownerAccountID)
+	if err != nil {
+		if errors.Is(err, account.ErrNotFound) {
+			// an account that no longer exists is not an error: the site is
+			// orphaned and its caller may proceed
+			return ext.CreateGrant{}, false, nil
+		}
+		return ext.CreateGrant{}, false, err
+	}
+	if p.cfg.Mode != eeconfig.ModeTiers {
+		return ext.CreateGrant{OwnerAccountID: acc.ID}, true, nil
+	}
+	t, err := p.effectiveTierStrict(acc)
+	if err != nil {
+		return ext.CreateGrant{}, false, err
+	}
+	return grantFromTier(acc.ID, t), true, nil
 }
 
 // grantForAccount enforces the account's tier site-count cap and returns the

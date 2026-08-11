@@ -19,6 +19,7 @@ type fakeSites struct {
 	infos   map[string]ext.SiteInfo
 	deleted []string
 	rotated []string
+	quotas  map[string]ext.CreateGrant
 }
 
 func (s *fakeSites) Info(id string) (ext.SiteInfo, bool) { i, ok := s.infos[id]; return i, ok }
@@ -29,6 +30,13 @@ func (s *fakeSites) RotateEditPassword(id string) (string, error) {
 func (s *fakeSites) Delete(id string) error {
 	s.deleted = append(s.deleted, id)
 	delete(s.infos, id)
+	return nil
+}
+func (s *fakeSites) ApplyQuota(id string, g ext.CreateGrant) error {
+	if s.quotas == nil {
+		s.quotas = map[string]ext.CreateGrant{}
+	}
+	s.quotas[id] = g
 	return nil
 }
 

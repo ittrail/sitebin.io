@@ -18,6 +18,9 @@ type fakeProvider struct {
 	grant     ext.CreateGrant // extra caps to stamp (owner merged in)
 	rejErr    error
 	created   []string
+	quota     ext.CreateGrant
+	quotaOK   bool
+	quotaErr  error
 }
 
 func (f *fakeProvider) Name() string               { return "fake" }
@@ -36,6 +39,9 @@ func (f *fakeProvider) AuthorizeCreate(*http.Request) (ext.CreateGrant, error) {
 func (f *fakeProvider) OnSiteCreated(owner, viewID string) error {
 	f.created = append(f.created, owner+":"+viewID)
 	return nil
+}
+func (f *fakeProvider) QuotaFor(string) (ext.CreateGrant, bool, error) {
+	return f.quota, f.quotaOK, f.quotaErr
 }
 func (f *fakeProvider) PublicRoutes() map[string]http.Handler {
 	return map[string]http.Handler{

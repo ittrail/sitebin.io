@@ -49,6 +49,14 @@ type Provider interface {
 	// stays open.
 	AuthorizeCreate(r *http.Request) (CreateGrant, error)
 
+	// QuotaFor returns the caps the owner's CURRENT tier grants, so the core can
+	// restamp a site whose stamped quotas predate a tier change. ok=false means
+	// the account is unknown (deleted, or accounts are not enabled). A non-nil
+	// error means the tier could not be determined — callers MUST NOT act
+	// destructively on an error; a site kept too long is recoverable, a deleted
+	// one is not.
+	QuotaFor(ownerAccountID string) (CreateGrant, bool, error)
+
 	// OnSiteCreated records ownership after a site is created (no-op for
 	// anonymous owners). Errors are logged, not surfaced to the client.
 	OnSiteCreated(ownerAccountID, viewID string) error
@@ -99,6 +107,9 @@ type SiteService interface {
 	RotateEditPassword(viewID string) (newPassword string, err error)
 	// Delete removes a site and its indexes.
 	Delete(viewID string) error
+	// ApplyQuota restamps a site's per-site caps from a grant and reconciles its
+	// expiry with the new lifetime cap.
+	ApplyQuota(viewID string, g CreateGrant) error
 }
 
 // SiteInfo is the dashboard's view of an owned site.

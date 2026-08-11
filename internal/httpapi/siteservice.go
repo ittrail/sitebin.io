@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 // SiteService returns the ext.SiteService implementation the enterprise
@@ -49,4 +50,23 @@ func (s siteService) Delete(viewID string) error {
 	}
 	s.a.verifyCache.Drop(site.EditID + ":")
 	return s.a.st.Delete(site)
+}
+
+func (s siteService) ApplyQuota(viewID string, g ext.CreateGrant) error {
+	site, err := s.a.st.ByViewID(viewID)
+	if err != nil {
+		return err
+	}
+	return s.a.st.ApplyQuota(site, quotaFromGrant(g), store.DowngradeGrace)
+}
+
+// quotaFromGrant maps the extension's grant onto the store's cap set.
+func quotaFromGrant(g ext.CreateGrant) store.Quota {
+	return store.Quota{
+		Bytes:      g.MaxSiteBytes,
+		Files:      g.MaxFiles,
+		ExpiryDays: g.MaxExpiryDays,
+		Domains:    g.MaxCustomDomain,
+		WebDAV:     g.WebDAV,
+	}
 }
