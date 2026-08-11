@@ -230,6 +230,12 @@ func (a *API) withEditAuth(next func(http.ResponseWriter, *http.Request, *store.
 		}
 		switch a.verifyEdit(r, site, pw) {
 		case verifyOK:
+			// The API is an account feature. An anonymous site keeps its claim
+			// ticket and its edit page; it just cannot be scripted.
+			if !a.apiAllowedFor(site, r) {
+				writeError(w, 403, "this site was created without an account, so it has no API — create it while signed in at "+a.apiAccountHint()+" to script it")
+				return
+			}
 			next(w, r, site)
 		case verifyThrottled:
 			writeError(w, 429, "too many password attempts, slow down")

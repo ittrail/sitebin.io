@@ -106,6 +106,7 @@ func (e *env) createSite(t *testing.T, fields map[string]string, files map[strin
 	mw.Close()
 	req := httptest.NewRequest("POST", "/api/sites", &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	w := e.public(t, req)
 	if w.Code != 201 {
 		t.Fatalf("create: %d %s", w.Code, w.Body)

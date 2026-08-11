@@ -83,3 +83,37 @@ func TestAPIAllowedFor(t *testing.T) {
 		t.Error("owned site must allow a scripted call")
 	}
 }
+
+func TestAnonymousSiteAPIRefusesScripts(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	// script-shaped: correct password, no browser fetch metadata
+	req := authed(httptest.NewRequest("GET", "/api/sites/"+edit, nil), c.EditPassword)
+	if w := e.public(t, req); w.Code != 403 {
+		t.Fatalf("scripted call on an anonymous site: %d %s", w.Code, w.Body)
+	}
+
+	// the edit page's own fetch
+	req = authed(httptest.NewRequest("GET", "/api/sites/"+edit, nil), c.EditPassword)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	if w := e.public(t, req); w.Code != 200 {
+		t.Fatalf("edit page call: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestOwnedSiteAPIAllowsScripts(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1"})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	req := authed(httptest.NewRequest("GET", "/api/sites/"+edit, nil), c.EditPassword)
+	if w := e.public(t, req); w.Code != 200 {
+		t.Fatalf("scripted call on an owned site: %d %s", w.Code, w.Body)
+	}
+}
