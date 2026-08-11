@@ -995,6 +995,34 @@ func TestWebDAVWriteRenewsExpiry(t *testing.T) {
 	}
 }
 
+func TestWebDAVUsesPerSiteTierByteQuota(t *testing.T) {
+	// A tight per-site tier cap must be enforced even though it is far below
+	// the instance-wide global (WebDAV previously checked only the global).
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1", grant: ext.CreateGrant{MaxSiteBytes: 20}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, map[string]string{"webdav": "true"}, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+	base := "/dav/" + edit + "/"
+
+	if w := davReq(t, e, "PUT", base+"big.txt", c.EditPassword, strings.NewReader(strings.Repeat("a", 30))); w.Code != http.StatusInsufficientStorage {
+		t.Fatalf("PUT over tier byte quota: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestWebDAVUsesPerSiteTierFileQuota(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1", grant: ext.CreateGrant{MaxFiles: 1}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, map[string]string{"webdav": "true"}, map[string]string{"index.html": "x"}) // already at the 1-file cap
+	edit := editIDFrom(t, c.EditURL)
+	base := "/dav/" + edit + "/"
+
+	if w := davReq(t, e, "PUT", base+"second.txt", c.EditPassword, strings.NewReader("x")); w.Code != http.StatusInsufficientStorage {
+		t.Fatalf("PUT over tier file quota: %d %s", w.Code, w.Body)
+	}
+}
+
 // ---- pages & assets ----
 
 func TestPages(t *testing.T) {

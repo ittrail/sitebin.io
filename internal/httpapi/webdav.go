@@ -86,12 +86,12 @@ func (a *API) webdav(w http.ResponseWriter, r *http.Request) {
 				writeError(w, 500, "internal error")
 				return
 			}
-			remaining := a.cfg.MaxSiteBytes - used
+			remaining := a.st.EffMaxBytes(site) - used
 			if r.ContentLength > remaining || remaining <= 0 {
 				http.Error(w, "site size limit exceeded", http.StatusInsufficientStorage)
 				return
 			}
-			if count >= a.cfg.MaxFiles {
+			if count >= a.st.EffMaxFiles(site) {
 				http.Error(w, "file count limit exceeded", http.StatusInsufficientStorage)
 				return
 			}
