@@ -140,3 +140,115 @@ func TestRenewMarksExpiryAsTierImposed(t *testing.T) {
 		t.Fatal("renewal did not mark the expiry as tier-imposed")
 	}
 }
+
+func quotaSite(t *testing.T, s *Store, days int, expiresIn time.Duration, fromTier bool) *Site {
+	t.Helper()
+	site, _, err := s.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Update(site, func(m *Meta) error {
+		m.OwnerAccountID = "acct-1"
+		m.QuotaExpiryDays = days
+		if expiresIn != 0 {
+			exp := time.Now().Add(expiresIn).UTC()
+			m.ExpiresAt = &exp
+			m.ExpiryFromTier = fromTier
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return site
+}
+
+func TestApplyQuotaUpgradeClearsTierExpiry(t *testing.T) {
+	s := newExpiryStore(t)
+	site := quotaSite(t, s, 7, 3*24*time.Hour, true)
+
+	if err := s.ApplyQuota(site, Quota{Bytes: 1 << 30, Files: 5000, ExpiryDays: 0}, DowngradeGrace); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ByViewID(site.ViewID)
+	if got.Meta.ExpiresAt != nil {
+		t.Fatalf("tier expiry survived an upgrade to unlimited: %v", got.Meta.ExpiresAt)
+	}
+	if got.Meta.QuotaBytes != 1<<30 || got.Meta.QuotaFiles != 5000 || got.Meta.QuotaExpiryDays != 0 {
+		t.Fatalf("quotas not restamped: %+v", got.Meta)
+	}
+}
+
+func TestApplyQuotaUpgradeKeepsUserExpiry(t *testing.T) {
+	s := newExpiryStore(t)
+	site := quotaSite(t, s, 7, 3*24*time.Hour, false) // the owner chose this date
+	before := *site.Meta.ExpiresAt
+
+	if err := s.ApplyQuota(site, Quota{ExpiryDays: 0}, DowngradeGrace); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ByViewID(site.ViewID)
+	if got.Meta.ExpiresAt == nil || !got.Meta.ExpiresAt.Equal(before) {
+		t.Fatalf("a caller-chosen expiry was discarded: %v", got.Meta.ExpiresAt)
+	}
+}
+
+func TestApplyQuotaDowngradeStampsGrace(t *testing.T) {
+	s := newExpiryStore(t)
+	site := quotaSite(t, s, 0, 0, false) // paid site: no expiry at all
+
+	if err := s.ApplyQuota(site, Quota{ExpiryDays: 7}, DowngradeGrace); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ByViewID(site.ViewID)
+	if got.Meta.ExpiresAt == nil {
+		t.Fatal("downgrade did not stamp a grace expiry")
+	}
+	want := time.Now().Add(DowngradeGrace)
+	if d := got.Meta.ExpiresAt.Sub(want); d > time.Minute || d < -time.Minute {
+		t.Fatalf("grace expiry = %v, want ~%v", got.Meta.ExpiresAt, want)
+	}
+	if !got.Meta.ExpiryFromTier {
+		t.Fatal("the grace expiry must be marked as tier-imposed")
+	}
+}
+
+func TestApplyQuotaClampsExpiryBeyondNewCap(t *testing.T) {
+	s := newExpiryStore(t)
+	site := quotaSite(t, s, 0, 90*24*time.Hour, false) // far-future date the owner chose
+
+	if err := s.ApplyQuota(site, Quota{ExpiryDays: 7}, DowngradeGrace); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ByViewID(site.ViewID)
+	want := time.Now().Add(7 * 24 * time.Hour)
+	if d := got.Meta.ExpiresAt.Sub(want); d > time.Minute || d < -time.Minute {
+		t.Fatalf("expiry beyond the new cap = %v, want clamped to ~%v", got.Meta.ExpiresAt, want)
+	}
+}
+
+func TestApplyQuotaLeavesExpiryWithinNewCap(t *testing.T) {
+	s := newExpiryStore(t)
+	site := quotaSite(t, s, 7, 2*24*time.Hour, true)
+	before := *site.Meta.ExpiresAt
+
+	if err := s.ApplyQuota(site, Quota{ExpiryDays: 7}, DowngradeGrace); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ByViewID(site.ViewID)
+	if !got.Meta.ExpiresAt.Equal(before) {
+		t.Fatalf("expiry within the cap was moved: %v -> %v", before, got.Meta.ExpiresAt)
+	}
+}
+
+func TestApplyQuotaWithZeroGraceDoesNotStampAnExpiry(t *testing.T) {
+	s := newExpiryStore(t)
+	site := quotaSite(t, s, 0, 0, false)
+
+	if err := s.ApplyQuota(site, Quota{ExpiryDays: 7}, 0); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ByViewID(site.ViewID)
+	if got.Meta.ExpiresAt != nil {
+		t.Fatalf("grace 0 must not impose an expiry, got %v", got.Meta.ExpiresAt)
+	}
+}

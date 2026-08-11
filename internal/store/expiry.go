@@ -46,3 +46,63 @@ func (s *Store) RenewExpiry(site *Site) error {
 	defer l.Unlock()
 	return s.renewExpiryLocked(site)
 }
+
+// DowngradeGrace is how long a site that had no expiry keeps living after its
+// owner moves to a tier that caps lifetimes. It is deliberately longer than any
+// tier's own cap: dropping a permanent site to its new tier's lifetime would be
+// a deletion in all but name.
+const DowngradeGrace = 30 * 24 * time.Hour
+
+// Quota is the set of per-site caps a tier grants. It mirrors the Quota* fields
+// of Meta; nil pointers mean "inherit the instance global".
+type Quota struct {
+	Bytes      int64
+	Files      int
+	ExpiryDays int
+	Domains    *int
+	WebDAV     *bool
+}
+
+// ApplyQuota restamps a site's per-site caps and reconciles its expiry with the
+// new lifetime cap. It is the single place the tier-change transition table
+// lives, so the cleanup sweep and the enterprise tier sync cannot drift apart.
+//
+// grace is how long a site that currently has NO expiry gets before the new cap
+// applies. Callers that must not create an expiry (the cleanup sweep, which is
+// only ever looking at sites that already have one) pass 0.
+//
+// An expiry the owner chose is never lifted, only clamped when it exceeds the
+// new cap.
+func (s *Store) ApplyQuota(site *Site, q Quota, grace time.Duration) error {
+	return s.Update(site, func(m *Meta) error {
+		m.QuotaBytes = q.Bytes
+		m.QuotaFiles = q.Files
+		m.QuotaExpiryDays = q.ExpiryDays
+		m.QuotaDomains = q.Domains
+		m.QuotaWebDAV = q.WebDAV
+
+		now := time.Now()
+		if q.ExpiryDays <= 0 {
+			// the tier no longer expires sites; lift only what the tier imposed
+			if m.ExpiryFromTier {
+				m.ExpiresAt = nil
+				m.ExpiryFromTier = false
+			}
+			return nil
+		}
+		limit := now.Add(time.Duration(q.ExpiryDays) * 24 * time.Hour).UTC()
+		switch {
+		case m.ExpiresAt == nil:
+			if grace <= 0 {
+				return nil
+			}
+			until := now.Add(grace).UTC()
+			m.ExpiresAt = &until
+			m.ExpiryFromTier = true
+		case m.ExpiresAt.After(limit):
+			m.ExpiresAt = &limit
+			m.ExpiryFromTier = true
+		}
+		return nil
+	})
+}
