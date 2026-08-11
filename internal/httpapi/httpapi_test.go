@@ -1181,6 +1181,58 @@ func TestCappedExpiryCannotBeCleared(t *testing.T) {
 	}
 }
 
+func TestAnonymousCappedExpiryCannotBeExtended(t *testing.T) {
+	// A capped anonymous site must not be able to renew itself by repeatedly
+	// pushing a new expiry that stays within the cap: that would turn a fixed
+	// 24h drop into a permanently-alive site (one PUT per day).
+	ext.Register(&fakeProvider{enabled: true, grant: ext.CreateGrant{MaxExpiryDays: 1}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	// wind the stored expiry back, as if most of the 24h window had elapsed
+	site, _ := e.st.ByViewID(c.ID)
+	soon := time.Now().Add(1 * time.Hour).UTC()
+	if err := e.st.Update(site, func(m *store.Meta) error { m.ExpiresAt = &soon; return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	// still inside the 1-day cap, but later than the current expiry
+	extend := time.Now().Add(23 * time.Hour).UTC().Format(time.RFC3339)
+	req := authed(httptest.NewRequest("PUT", "/api/sites/"+edit, strings.NewReader(`{"expires_at":"`+extend+`"}`)), c.EditPassword)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	if w := e.public(t, req); w.Code != 400 {
+		t.Fatalf("extending an anonymous capped expiry should be 400, got %d %s", w.Code, w.Body)
+	}
+	got, _ := e.st.ByViewID(c.ID)
+	if got.Meta.ExpiresAt == nil || !got.Meta.ExpiresAt.Equal(soon) {
+		t.Fatalf("expiry changed anyway: %v, want %v", got.Meta.ExpiresAt, soon)
+	}
+}
+
+func TestAnonymousCappedExpiryCanBeShortened(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, grant: ext.CreateGrant{MaxExpiryDays: 1}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	shorten := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339)
+	req := authed(httptest.NewRequest("PUT", "/api/sites/"+edit, strings.NewReader(`{"expires_at":"`+shorten+`"}`)), c.EditPassword)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	if w := e.public(t, req); w.Code != 200 {
+		t.Fatalf("shortening an anonymous capped expiry should be allowed, got %d %s", w.Code, w.Body)
+	}
+	got, _ := e.st.ByViewID(c.ID)
+	want, _ := time.Parse(time.RFC3339, shorten)
+	if got.Meta.ExpiresAt == nil || !got.Meta.ExpiresAt.Equal(want) {
+		t.Fatalf("expiry not shortened: %v, want %v", got.Meta.ExpiresAt, want)
+	}
+}
+
 func TestUncappedExpiryCanBeCleared(t *testing.T) {
 	e := newEnv(t, nil) // no provider: no cap stamped, no instance global
 	c := e.createSite(t, map[string]string{"expires_at": time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339)}, map[string]string{"index.html": "x"})

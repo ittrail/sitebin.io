@@ -105,6 +105,11 @@ func (a *API) applySettings(site *store.Site, set updateSet) error {
 					return &apiError{400, fmt.Sprintf("expiry exceeds the maximum of %d days for this site", expiryCap)}
 				}
 			}
+			// anonymous capped sites may shorten their lifetime, never extend it
+			if site.Meta.OwnerAccountID == "" && site.Meta.ExpiresAt != nil &&
+				a.expiryCap(site) > 0 && t.After(*site.Meta.ExpiresAt) {
+				return &apiError{400, "this site's expiry is fixed at creation; sign in to create sites that renew"}
+			}
 			tt := t.UTC()
 			p := &tt
 			expires = &p
