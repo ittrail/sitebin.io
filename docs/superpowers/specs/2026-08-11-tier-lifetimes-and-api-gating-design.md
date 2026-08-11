@@ -46,6 +46,14 @@ called from the write paths — `saveFileLocked`, `DeleteFile`, `ClearFiles`,
 it in the store means WebDAV and FTP writes are covered by construction, since
 both go through the same file operations.
 
+> **Correction (post-implementation):** `applySettings` deliberately does
+> *not* call `RenewExpiry`. A settings PUT can itself carry an explicit
+> `expires_at`, and renewing unconditionally on every settings change would
+> silently override a date the owner just chose in the same request. Renewal
+> stays scoped to the content-write paths listed above (plus WebDAV's
+> explicit call in `internal/httpapi/webdav.go`, since it writes through its
+> own filesystem outside the store's file methods).
+
 To avoid rewriting `meta.json` once per file during a 500-file upload,
 `RenewExpiry` is a no-op when the newly computed expiry is within one minute of
 the stored one.
