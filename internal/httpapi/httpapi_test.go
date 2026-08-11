@@ -966,6 +966,34 @@ func TestWebDAVGloballyDisabled(t *testing.T) {
 	}
 }
 
+func TestWebDAVWriteRenewsExpiry(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1", grant: ext.CreateGrant{MaxExpiryDays: 7}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, map[string]string{"webdav": "true"}, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	// wind the expiry back so a renewal is visible
+	site, _ := e.st.ByViewID(c.ID)
+	soon := time.Now().Add(2 * time.Hour).UTC()
+	if err := e.st.Update(site, func(m *store.Meta) error { m.ExpiresAt = &soon; return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	if w := davReq(t, e, "PUT", "/dav/"+edit+"/new.html", c.EditPassword, strings.NewReader("hi")); w.Code != 201 {
+		t.Fatalf("PUT: %d %s", w.Code, w.Body)
+	}
+
+	got, _ := e.st.ByViewID(c.ID)
+	want := time.Now().Add(7 * 24 * time.Hour)
+	if got.Meta.ExpiresAt == nil {
+		t.Fatal("expiry cleared")
+	}
+	if d := got.Meta.ExpiresAt.Sub(want); d > time.Minute || d < -time.Minute {
+		t.Fatalf("expiry = %v, want ~%v", got.Meta.ExpiresAt, want)
+	}
+}
+
 // ---- pages & assets ----
 
 func TestPages(t *testing.T) {

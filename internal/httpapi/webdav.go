@@ -111,6 +111,12 @@ func (a *API) webdav(w http.ResponseWriter, r *http.Request) {
 		h.ServeHTTP(w, r)
 	}
 
+	if davMutating[r.Method] {
+		if err := a.st.RenewExpiry(site); err != nil {
+			a.log.Error("renew expiry after webdav", "id", site.ViewID, "err", err)
+		}
+	}
+
 	if davMutating[r.Method] && site.Meta.Mode == store.ModeViewer {
 		if err := a.syncViewerLayout(site); err != nil {
 			a.log.Error("viewer regen after webdav", "id", site.ViewID, "err", err)
