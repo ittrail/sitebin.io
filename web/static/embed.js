@@ -402,6 +402,7 @@ input::placeholder { color: var(--ink-faint); }
     </div>
     <h2>Your claim ticket</h2>
     <p class="sub" id="ticket-sub">Everything you need to view, share and edit this site.</p>
+    <p class="sub" id="t-life"></p>
 
     <div class="secretrows">
       <div class="secretrow">
@@ -709,6 +710,15 @@ input::placeholder { color: var(--ink-faint); }
       this.$("t-view").textContent = body.view_url;
       this.$("t-edit").textContent = body.edit_url;
       this.$("t-pass").textContent = body.edit_password;
+
+      const life = this.$("t-life");
+      if (life && body.expires_at) {
+        const d = new Date(body.expires_at);
+        const hours = Math.round((d - Date.now()) / 3600000);
+        life.textContent = hours <= 48
+          ? "Disappears in " + hours + " hours — sign in to keep it."
+          : "Expires " + d.toLocaleString() + "; every change pushes that back.";
+      }
 
       if (this.demo) {
         this.$("stamp-text").textContent = "demo — nothing was uploaded";

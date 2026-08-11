@@ -328,6 +328,7 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"ftp_available":           a.cfg.FTPEnabled,
 		"custom_domains":          m.CustomDomains,
 		"expires_at":              m.ExpiresAt,
+		"expiry_cap_days":         a.expiryCap(site),
 		"created_at":              m.CreatedAt,
 		"updated_at":              m.UpdatedAt,
 		"files":                   files,
