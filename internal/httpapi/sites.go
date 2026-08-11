@@ -105,8 +105,16 @@ func (a *API) applySettings(site *store.Site, set updateSet) error {
 					return &apiError{400, fmt.Sprintf("expiry exceeds the maximum of %d days for this site", expiryCap)}
 				}
 			}
-			// anonymous capped sites may shorten their lifetime, never extend it
-			if site.Meta.OwnerAccountID == "" && site.Meta.ExpiresAt != nil &&
+			// Anonymous capped sites may shorten their lifetime, never extend
+			// it. Gated the same way gatedAnonymous gates WebDAV/FTP: only
+			// where a provider is registered and reports AccountsEnabled().
+			// A community build has no owner on *any* site (OwnerAccountID is
+			// only ever stamped inside the `if gated` branch of createSite)
+			// and no concept of "sign in", so without this gate the same
+			// condition would misfire there and freeze a site's expiry at
+			// whatever date was first picked, forever refusing to move it —
+			// even though the community build must stay fully open.
+			if a.gatedAnonymous(site) && site.Meta.ExpiresAt != nil &&
 				a.expiryCap(site) > 0 && t.After(*site.Meta.ExpiresAt) {
 				return &apiError{400, "this site's expiry is fixed at creation; sign in to create sites that renew"}
 			}
@@ -321,6 +329,14 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 	if p, ok := ext.Get(); ok {
 		accountsEnabled = p.AccountsEnabled()
 	}
+	// An anonymous site on an accounts-enabled instance has no WebDAV or FTP
+	// — gatedAnonymous is the same rule webdav.go and ftpauth.go enforce on
+	// the connection itself. Reporting availability from instance config
+	// alone would let the edit page keep offering a toggle and mount URL
+	// that the server then refuses with 403.
+	protocolsGated := a.gatedAnonymous(site)
+	webdavAvailable := a.cfg.WebDAVAllowed && !protocolsGated
+	ftpAvailable := a.cfg.FTPEnabled && !protocolsGated
 	payload := map[string]any{
 		"views":                   stats.Views,
 		"last_seen":               stats.LastSeen,
@@ -332,9 +348,9 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"spa_fallback":            m.SPAFallback,
 		"view_password_protected": m.ViewPasswordProtected,
 		"webdav_enabled":          m.WebDAVEnabled,
-		"webdav_available":        a.cfg.WebDAVAllowed,
+		"webdav_available":        webdavAvailable,
 		"ftp_enabled":             m.FTPEnabled,
-		"ftp_available":           a.cfg.FTPEnabled,
+		"ftp_available":           ftpAvailable,
 		"custom_domains":          m.CustomDomains,
 		"expires_at":              m.ExpiresAt,
 		"expiry_cap_days":         a.expiryCap(site),
@@ -352,10 +368,10 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 			"max_files": a.st.EffMaxFiles(site),
 		},
 	}
-	if m.WebDAVEnabled && a.cfg.WebDAVAllowed {
+	if m.WebDAVEnabled && webdavAvailable {
 		payload["webdav_url"] = a.cfg.DAVURL(m.EditID)
 	}
-	if m.FTPEnabled && a.cfg.FTPEnabled {
+	if m.FTPEnabled && ftpAvailable {
 		payload["ftp_url"] = a.cfg.FTPURL(m.EditID)
 	}
 	return payload

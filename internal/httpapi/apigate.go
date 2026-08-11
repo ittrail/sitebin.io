@@ -99,14 +99,16 @@ func (a *API) apiAccountHint() string {
 	return a.cfg.SiteURL(a.cfg.BaseDomain) + "/account"
 }
 
-// noAccountProtocolAccess reports whether site must be refused on a
-// non-browser write protocol (WebDAV, FTP) because it has no owning
-// account. WebDAV and FTP clients never send browser fetch metadata, so
-// apiAllowedFor's fromOwnBrowser fallback is meaningless here — ownership is
-// checked directly instead. Gated only where a provider gates creation at
-// all, exactly like apiAllowedFor, so the community build (no provider)
-// stays fully open.
-func (a *API) noAccountProtocolAccess(site *store.Site) bool {
+// gatedAnonymous reports whether site is an account-less site on an instance
+// where accounts are actually enabled — the condition every "no account, no
+// X" rule in this package keys on: WebDAV and FTP refuse the connection
+// entirely (they never carry browser fetch metadata, so apiAllowedFor's
+// fromOwnBrowser fallback would be meaningless there — ownership is checked
+// directly), and applySettings refuses to push a capped anonymous site's
+// expiry later. Gated only where a provider is registered and reports
+// AccountsEnabled(), exactly like apiAllowedFor, so the community build (no
+// provider, no concept of "sign in") is never affected by it.
+func (a *API) gatedAnonymous(site *store.Site) bool {
 	p, ok := ext.Get()
 	if !ok || !p.AccountsEnabled() {
 		return false

@@ -188,7 +188,7 @@ function render() {
     if (capped) {
       note = site.expiry_renews
         ? " — this plan's sites always have an expiry, renewed to the full term on every change. An earlier date set here will be overwritten by your next upload."
-        : " — this plan's sites always have an expiry.";
+        : " — this plan's sites always have an expiry. You can bring the date forward, but not push it back.";
     }
     $("expiry-status").textContent = "Expires " + d.toLocaleString() + note;
   } else {
