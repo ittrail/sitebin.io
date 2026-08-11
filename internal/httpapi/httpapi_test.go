@@ -1160,3 +1160,76 @@ func TestExpiryCapKeepsExplicitExpiry(t *testing.T) {
 		t.Fatalf("explicit expiry should win, got %v", site.Meta.ExpiresAt)
 	}
 }
+
+func TestCappedExpiryCannotBeCleared(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, grant: ext.CreateGrant{MaxExpiryDays: 1}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	req := authed(httptest.NewRequest("PUT", "/api/sites/"+edit, strings.NewReader(`{"expires_at":null}`)), c.EditPassword)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	if w := e.public(t, req); w.Code != 400 {
+		t.Fatalf("clearing a capped expiry should be 400, got %d %s", w.Code, w.Body)
+	}
+	site, _ := e.st.ByViewID(c.ID)
+	if site.Meta.ExpiresAt == nil {
+		t.Fatal("expiry was cleared anyway")
+	}
+}
+
+func TestUncappedExpiryCanBeCleared(t *testing.T) {
+	e := newEnv(t, nil) // no provider: no cap stamped, no instance global
+	c := e.createSite(t, map[string]string{"expires_at": time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339)}, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	req := authed(httptest.NewRequest("PUT", "/api/sites/"+edit, strings.NewReader(`{"expires_at":null}`)), c.EditPassword)
+	req.Header.Set("Content-Type", "application/json")
+	if w := e.public(t, req); w.Code != 200 {
+		t.Fatalf("PUT: %d %s", w.Code, w.Body)
+	}
+	site, _ := e.st.ByViewID(c.ID)
+	if site.Meta.ExpiresAt != nil {
+		t.Fatalf("expiry not cleared: %v", site.Meta.ExpiresAt)
+	}
+}
+
+func TestJsonCreationWithNullExpiryAppliesToCappedSites(t *testing.T) {
+	// Regression test: JSON creation with explicit expires_at:null should not
+	// be blocked by the tier cap. The null is a no-op; the default-lifetime
+	// block immediately below applySettings stamps the cap.
+	ext.Register(&fakeProvider{enabled: true, grant: ext.CreateGrant{MaxExpiryDays: 1}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+
+	req := httptest.NewRequest("POST", "/api/sites", strings.NewReader(`{"expires_at":null}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := e.public(t, req)
+	if w.Code != 201 {
+		t.Fatalf("JSON create with expires_at:null should succeed for capped site: got %d %s", w.Code, w.Body)
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	expiresAt := payload["expires_at"]
+	if expiresAt == nil {
+		t.Fatal("capped site created with null expiry should get the default lifetime")
+	}
+	// expires_at is serialized as an RFC3339 string in the JSON response
+	expiresAtStr, ok := expiresAt.(string)
+	if !ok {
+		t.Fatalf("expires_at should be a string, got %T", expiresAt)
+	}
+	parsedTime, err := time.Parse(time.RFC3339, expiresAtStr)
+	if err != nil {
+		t.Fatalf("parse expires_at: %v", err)
+	}
+	want := time.Now().Add(24 * time.Hour)
+	if d := parsedTime.Sub(want); d > time.Minute || d < -time.Minute {
+		t.Fatalf("expiry = %v, want ~%v", parsedTime, want)
+	}
+}

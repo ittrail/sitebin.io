@@ -36,6 +36,15 @@ type updateSet struct {
 func strPtr(s string) *string { return &s }
 func boolPtr(b bool) *bool    { return &b }
 
+// expiryCap returns the effective maximum lifetime in days for a site: the
+// per-site tier stamp when present, else the instance global. 0 = unlimited.
+func (a *API) expiryCap(site *store.Site) int {
+	if site.Meta.QuotaExpiryDays > 0 {
+		return site.Meta.QuotaExpiryDays
+	}
+	return a.cfg.MaxExpiryDays
+}
+
 // settingsFromForm maps multipart form fields onto an updateSet.
 func settingsFromForm(fields url.Values) (updateSet, error) {
 	var set updateSet
@@ -70,6 +79,13 @@ func (a *API) applySettings(site *store.Site, set updateSet) error {
 	if len(set.ExpiresAt) > 0 {
 		raw := strings.TrimSpace(string(set.ExpiresAt))
 		if raw == "null" || raw == `""` {
+			// A capped site has a lifetime, not an optional one: letting the
+			// holder clear it would turn a 24-hour drop into a permanent site.
+			if site.Meta.ExpiresAt != nil {
+				if maxDays := a.expiryCap(site); maxDays > 0 {
+					return &apiError{400, fmt.Sprintf("this site's plan limits it to %d day(s); its expiry cannot be removed", maxDays)}
+				}
+			}
 			var cleared *time.Time
 			expires = &cleared
 		} else {
@@ -82,10 +98,7 @@ func (a *API) applySettings(site *store.Site, set updateSet) error {
 				return &apiError{400, "expires_at must be an RFC3339 timestamp, e.g. 2026-08-01T12:00:00Z"}
 			}
 			// Per-site tier cap (if stamped) overrides the instance global.
-			expiryCap := a.cfg.MaxExpiryDays
-			if site.Meta.QuotaExpiryDays > 0 {
-				expiryCap = site.Meta.QuotaExpiryDays
-			}
+			expiryCap := a.expiryCap(site)
 			if expiryCap > 0 {
 				max := time.Now().Add(time.Duration(expiryCap) * 24 * time.Hour)
 				if t.After(max) {
