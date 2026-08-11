@@ -120,7 +120,7 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 
 A tier's `max_expiry_days` works the same way per site and adds one rule:
 while a site **owned by an account** stays under a cap, every content change
-(upload, delete, replace, WebDAV write) slides its expiry to `now + cap`. An
+(upload, delete, replace, zip extraction, WebDAV write) slides its expiry to `now + cap`. An
 anonymous site keeps the expiry stamped at creation — a drop cannot renew
 itself. FTP writes do not slide the expiry.
 
@@ -178,7 +178,7 @@ curl -F "zip=@site.zip" https://sitebin.example.com/api/sites
 # read settings / files / usage
 curl -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID
 
-# update settings (any subset; expires_at: null clears)
+# update settings (any subset; expires_at: null clears it, unless a tier caps the site)
 curl -X PUT -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
      -d '{"mode":"viewer","entry_file":"report.pdf","webdav_enabled":true}' \
      https://sitebin.example.com/api/sites/$EDIT_ID
