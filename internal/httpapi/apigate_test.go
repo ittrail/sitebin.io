@@ -175,6 +175,13 @@ func TestAnonymousCreateAllowsAllowlistedEmbed(t *testing.T) {
 	}
 }
 
+func TestCommunityBuildCreateAllowsScripts(t *testing.T) {
+	e := newEnv(t, nil) // no provider registered: community build stays fully open
+	if w := scriptCreate(t, e, nil); w.Code != 201 {
+		t.Fatalf("community build scripted create: %d %s", w.Code, w.Body)
+	}
+}
+
 func TestOwnedCreateAllowsScripts(t *testing.T) {
 	ext.Register(&fakeProvider{enabled: true, owner: "acct-1"})
 	defer ext.Reset()

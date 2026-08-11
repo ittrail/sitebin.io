@@ -80,13 +80,16 @@ func (e *env) internal(t *testing.T, req *http.Request) *httptest.ResponseRecord
 }
 
 type createResp struct {
-	ID           string   `json:"id"`
-	ViewURL      string   `json:"view_url"`
-	EditURL      string   `json:"edit_url"`
-	EditPassword string   `json:"edit_password"`
-	Mode         string   `json:"mode"`
-	WebDAVURL    string   `json:"webdav_url"`
-	Domains      []string `json:"custom_domains"`
+	ID              string   `json:"id"`
+	ViewURL         string   `json:"view_url"`
+	EditURL         string   `json:"edit_url"`
+	EditPassword    string   `json:"edit_password"`
+	Mode            string   `json:"mode"`
+	WebDAVURL       string   `json:"webdav_url"`
+	Domains         []string `json:"custom_domains"`
+	ExpiryCapDays   int      `json:"expiry_cap_days"`
+	ExpiryRenews    bool     `json:"expiry_renews"`
+	AccountsEnabled bool     `json:"accounts_enabled"`
 }
 
 // createSite posts a multipart create request with the given files.
@@ -1282,6 +1285,43 @@ func TestCappedExpiryCannotBeCleared(t *testing.T) {
 	site, _ := e.st.ByViewID(c.ID)
 	if site.Meta.ExpiresAt == nil {
 		t.Fatal("expiry was cleared anyway")
+	}
+}
+
+func TestCreateResponseFieldsOwnedCappedSite(t *testing.T) {
+	// expiry_cap_days, expiry_renews and accounts_enabled drive every piece of
+	// user-facing lifetime copy (claim ticket + edit page); pin them directly
+	// on the create response instead of only verifying by hand.
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1", grant: ext.CreateGrant{MaxExpiryDays: 7}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+
+	if c.ExpiryCapDays != 7 {
+		t.Errorf("expiry_cap_days = %d, want 7", c.ExpiryCapDays)
+	}
+	if !c.ExpiryRenews {
+		t.Error("expiry_renews = false, want true for an owned capped site")
+	}
+	if !c.AccountsEnabled {
+		t.Error("accounts_enabled = false, want true")
+	}
+}
+
+func TestCreateResponseFieldsAnonymousSite(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, grant: ext.CreateGrant{MaxExpiryDays: 1}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+
+	if c.ExpiryCapDays != 1 {
+		t.Errorf("expiry_cap_days = %d, want 1", c.ExpiryCapDays)
+	}
+	if c.ExpiryRenews {
+		t.Error("expiry_renews = true, want false for an anonymous site (it never renews)")
+	}
+	if !c.AccountsEnabled {
+		t.Error("accounts_enabled = false, want true")
 	}
 }
 
