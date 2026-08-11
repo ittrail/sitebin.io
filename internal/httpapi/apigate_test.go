@@ -23,17 +23,26 @@ func TestFromOwnBrowser(t *testing.T) {
 		want    bool
 	}{
 		{"bare script", nil, false},
-		{"origin without fetch metadata", map[string]string{"Origin": "http://sitebin.example"}, false},
+		// A host-matching Origin is browser-shaped even with no Sec-Fetch-Site
+		// at all: older Safari, embedded WebViews and header-stripping
+		// corporate proxies never send it (it only shipped in Safari 16.4).
+		{"own-host origin without fetch metadata", map[string]string{"Origin": "http://sitebin.example"}, true},
+		{"foreign origin without fetch metadata", map[string]string{"Origin": "http://evil.example"}, false},
 		{"same-origin fetch", map[string]string{"Sec-Fetch-Site": "same-origin"}, true},
 		{"same-origin fetch with origin", map[string]string{
 			"Sec-Fetch-Site": "same-origin", "Origin": "http://sitebin.example",
 		}, true},
+		// SITEBIN_HTTP_ONLY=true behind an external TLS terminator: the
+		// backend computes "http://" for itself but the browser sends
+		// "https://". Comparing by host, not full URL, tolerates the mismatch.
+		{"own-host origin, mismatched scheme", map[string]string{"Origin": "https://sitebin.example"}, true},
 		{"allowlisted embed", map[string]string{
 			"Sec-Fetch-Site": "cross-site", "Origin": "https://sitebin.io",
 		}, true},
 		{"foreign origin", map[string]string{
 			"Sec-Fetch-Site": "cross-site", "Origin": "https://evil.example",
 		}, false},
+		{"cross-site with no origin", map[string]string{"Sec-Fetch-Site": "cross-site"}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

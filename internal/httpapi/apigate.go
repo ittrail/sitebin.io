@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/ittrail/sitebin.io/internal/ext"
@@ -28,26 +29,52 @@ func (a *API) embedOriginAllowed(origin string) bool {
 
 // fromOwnBrowser reports whether the request carries the fetch metadata a
 // browser sends when Sitebin's own pages — or an allowlisted embed — call the
-// API. Scripts, CI jobs and agents send neither header.
+// API. Scripts, CI jobs and agents typically send neither header.
 //
 // This is a PLAN boundary, not a security boundary. Sec-Fetch-Site and Origin
 // are trivially forgeable outside a browser; the point is to keep automation
 // on accounts, not to make anonymous automation impossible. Never use this to
-// protect anything that matters.
+// protect anything that matters. Because it costs nothing to be permissive
+// here — curl sends neither header by default, and that's the entire
+// population being gated — false positives (a real browser 403ing on its own
+// edit page) are treated as bugs, while false negatives (a script that goes
+// out of its way to look browser-shaped) are accepted by design.
 func (a *API) fromOwnBrowser(r *http.Request) bool {
-	fetchSite := r.Header.Get("Sec-Fetch-Site")
-	if fetchSite == "" {
-		return false
-	}
-	origin := strings.ToLower(r.Header.Get("Origin"))
-	if origin == "" {
-		// Same-origin GETs and some same-origin fetches omit Origin entirely.
-		return fetchSite == "same-origin"
-	}
-	if origin == strings.ToLower(a.cfg.SiteURL(a.cfg.BaseDomain)) {
+	if r.Header.Get("Sec-Fetch-Site") == "same-origin" {
 		return true
 	}
-	return a.embedOriginAllowed(origin)
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return false
+	}
+	// Compare by host, not the full URL: under SITEBIN_HTTP_ONLY=true behind
+	// an external TLS terminator (a supported configuration), a.cfg.SiteURL
+	// computes "http://base" for the backend's own unterminated scheme while
+	// the browser sends "Origin: https://base". A host-matching Origin is
+	// treated as browser-shaped even without Sec-Fetch-Site: older Safari,
+	// embedded WebViews and header-stripping proxies send Origin but not
+	// Sec-Fetch-Site (which only shipped in Safari 16.4).
+	if a.originIsOwnHost(origin) {
+		return true
+	}
+	if r.Header.Get("Sec-Fetch-Site") == "" {
+		return false
+	}
+	return a.embedOriginAllowed(strings.ToLower(origin))
+}
+
+// originIsOwnHost reports whether origin's host matches the instance's own
+// host, ignoring scheme.
+func (a *API) originIsOwnHost(origin string) bool {
+	ou, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	su, err := url.Parse(a.cfg.SiteURL(a.cfg.BaseDomain))
+	if err != nil {
+		return false
+	}
+	return ou.Host != "" && strings.EqualFold(ou.Host, su.Host)
 }
 
 // apiAllowedFor reports whether the caller may drive site through the JSON
