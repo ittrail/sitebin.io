@@ -364,14 +364,11 @@ func (a *API) createCORS(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	w.Header().Add("Vary", "Origin")
-	lo := strings.ToLower(origin)
-	for _, allowed := range a.cfg.EmbedOrigins {
-		if allowed == "*" || allowed == lo {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			return true
-		}
+	if !a.embedOriginAllowed(strings.ToLower(origin)) {
+		return false
 	}
-	return false
+	w.Header().Set("Access-Control-Allow-Origin", origin)
+	return true
 }
 
 // createPreflight answers CORS preflights for the create endpoint. Multipart
