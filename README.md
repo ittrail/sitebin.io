@@ -105,7 +105,7 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | `SITEBIN_DATA_DIR` | `/data` | Data root. |
 | `SITEBIN_MAX_SITE_BYTES` | `104857600` | Per-site storage cap (100 MiB). |
 | `SITEBIN_MAX_FILES` | `1000` | Per-site file-count cap. |
-| `SITEBIN_MAX_EXPIRY_DAYS` | `0` (off) | Optional cap on how far in the future expiry may be set. |
+| `SITEBIN_MAX_EXPIRY_DAYS` | `0` (off) | Cap on how far in the future expiry may be set. A cap is also the default lifetime of a site created without an explicit expiry, and it cannot be cleared from the API. |
 | `SITEBIN_WEBDAV_ENABLED` | `true` | Global WebDAV switch (per-site toggle still applies). |
 | `SITEBIN_FTP_ENABLED` | `false` | Global FTP switch (per-site toggle also required). See [FTP](#ftp). |
 | `SITEBIN_FTP_ADDR` / `SITEBIN_FTP_PASV_PORT_MIN` / `_MAX` | `:21` / `21000` / `21010` | FTP control port + passive data-port range (map them in `docker run`). |
@@ -117,6 +117,12 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | `SITEBIN_RATE_CREATE_PER_HOUR` / `SITEBIN_RATE_CREATE_BURST` | `30` / `10` | Anonymous creation limit per IP. |
 | `SITEBIN_RATE_AUTH_PER_5MIN` | `10` | Password-attempt limit per (IP, site) — edit, view, and WebDAV auth. |
 | `SITEBIN_CLEANUP_INTERVAL` | `10m` | Expiry sweep interval. |
+
+A tier's `max_expiry_days` works the same way per site and adds one rule:
+while a site **owned by an account** stays under a cap, every content change
+(upload, delete, replace, WebDAV write) slides its expiry to `now + cap`. An
+anonymous site keeps the expiry stamped at creation — a drop cannot renew
+itself. FTP writes do not slide the expiry.
 
 ---
 
@@ -144,6 +150,15 @@ Creating a site returns three things, shown **exactly once**:
 
 The only credential is the edit id (in the URL) + the edit password
 (`X-Edit-Password` header). No accounts, no OAuth.
+
+On an instance that runs with accounts (`SITEBIN_ACCOUNT_MODE=accounts|tiers`),
+the API is an account feature: a site created anonymously answers `403` to
+scripted calls and is managed through its edit page instead, and creating a
+site from a script needs an account. Requests carrying browser fetch metadata
+(`Sec-Fetch-Site`, plus an `Origin` that is the instance or an allowlisted
+`SITEBIN_EMBED_ORIGINS` entry) are treated as coming from Sitebin's own pages.
+This is a plan boundary, not a security boundary — the headers are forgeable.
+A community instance has no provider and its API stays fully open.
 
 ```bash
 # create a site (multipart; repeat "files" freely; folders via filename paths)
