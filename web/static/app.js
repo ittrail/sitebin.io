@@ -64,6 +64,26 @@ function showTicket(body) {
 
   if (body.warnings) body.warnings.forEach((w) => toast(w, true));
 
+  const life = $("t-life");
+  if (life) {
+    if (!body.expires_at) {
+      life.textContent = "No expiry — this site stays up until you delete it.";
+    } else {
+      const d = new Date(body.expires_at);
+      const hours = Math.round((d - Date.now()) / 3600000);
+      const when = hours <= 48
+        ? "This site disappears in " + hours + " hours"
+        : "This site expires " + d.toLocaleString();
+      if (body.expiry_renews) {
+        life.textContent = when + " — every change you publish pushes that back.";
+      } else if (body.accounts_enabled) {
+        life.textContent = when + ". This one can't be renewed — create a free account and your next site will be.";
+      } else {
+        life.textContent = when + ".";
+      }
+    }
+  }
+
   sessionStorage.setItem("sb-ticket", JSON.stringify({
     view: body.view_url, edit: body.edit_url,
   }));

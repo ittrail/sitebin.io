@@ -106,39 +106,49 @@ var basePageTmpl = template.Must(template.New("page").Parse(`<!doctype html>
   * { box-sizing: border-box; margin: 0; }
   body {
     min-height: 100dvh; display: grid; place-items: center;
-    background: radial-gradient(1200px 800px at 20% -10%, #1c2740 0%, #0b0f1a 55%) #0b0f1a;
-    color: #e8ecf4; font: 16px/1.6 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+    background:
+      radial-gradient(900px 620px at 18% -12%, rgba(91,140,255,.15), transparent 60%),
+      radial-gradient(820px 620px at 112% 112%, rgba(245,184,77,.09), transparent 55%),
+      #0a0e18;
+    color: #eceff7; font: 16px/1.6 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
     padding: 24px;
   }
+  @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
   .card {
-    width: min(420px, 100%); background: rgba(255,255,255,.045);
-    border: 1px solid rgba(255,255,255,.09); border-radius: 16px;
-    padding: 36px 32px; backdrop-filter: blur(12px);
-    box-shadow: 0 24px 60px rgba(0,0,0,.45);
+    width: min(430px, 100%);
+    background: linear-gradient(180deg, rgba(255,255,255,.055), rgba(255,255,255,.018));
+    border: 1px solid rgba(255,255,255,.1); border-radius: 18px;
+    padding: 38px 34px; backdrop-filter: blur(14px);
+    box-shadow: 0 30px 80px rgba(0,0,0,.55);
+    animation: rise .45s cubic-bezier(.2,.7,.25,1) both;
   }
   .badge {
     display: inline-flex; align-items: center; gap: 8px;
-    font-size: 13px; letter-spacing: .08em; text-transform: uppercase;
-    color: #8fa3c8; margin-bottom: 18px;
+    font-size: 12.5px; letter-spacing: .12em; text-transform: uppercase;
+    color: #8fa3c8; margin-bottom: 20px;
   }
   .badge svg { width: 18px; height: 18px; }
-  h1 { font-size: 22px; margin-bottom: 8px; letter-spacing: -.01em; }
-  p { color: #aab6cc; font-size: 15px; }
+  h1 { font-size: 23px; margin-bottom: 8px; letter-spacing: -.02em; }
+  p { color: #9aa5bd; font-size: 15px; }
   form { margin-top: 22px; display: grid; gap: 12px; }
   input[type=password] {
     width: 100%; padding: 12px 14px; border-radius: 10px;
-    border: 1px solid rgba(255,255,255,.14); background: rgba(0,0,0,.35);
-    color: #e8ecf4; font-size: 16px; outline: none;
+    border: 1px solid rgba(255,255,255,.13); background: rgba(5,8,15,.55);
+    color: #eceff7; font-size: 16px; outline: none;
+    transition: border-color .15s, box-shadow .15s;
   }
-  input[type=password]:focus { border-color: #5b8cff; box-shadow: 0 0 0 3px rgba(91,140,255,.25); }
+  input[type=password]:focus { border-color: #5b8cff; box-shadow: 0 0 0 3px rgba(91,140,255,.22); }
   button {
     padding: 12px 14px; border: 0; border-radius: 10px; cursor: pointer;
-    background: linear-gradient(135deg, #f5b84d, #d99a26); color: #1c1503;
+    background: linear-gradient(135deg, #ffd47c, #f5b84d 45%, #d99a26); color: #221902;
     font-size: 15px; font-weight: 650;
+    box-shadow: 0 8px 22px rgba(217,154,38,.3), inset 0 1px 0 rgba(255,255,255,.35);
+    transition: transform .15s, box-shadow .2s, filter .15s;
   }
-  button:hover { filter: brightness(1.07); }
+  button:hover { transform: translateY(-1px); filter: brightness(1.05); box-shadow: 0 12px 30px rgba(217,154,38,.42), inset 0 1px 0 rgba(255,255,255,.35); }
+  button:active { transform: none; box-shadow: 0 8px 22px rgba(217,154,38,.3); }
   .err { color: #ff9d9d; font-size: 14px; }
-  .code { font: 600 44px/1 ui-monospace, monospace; color: #f5b84d; margin-bottom: 10px; }
+  .code { font: 700 46px/1 ui-monospace, monospace; color: #f5b84d; margin-bottom: 12px; text-shadow: 0 0 32px rgba(245,184,77,.4); }
 </style>
 </head>
 <body>

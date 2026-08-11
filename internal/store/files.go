@@ -163,7 +163,7 @@ func (s *Store) saveFileLocked(site *Site, rel string, r io.Reader) error {
 		os.Remove(tmp)
 		return fmt.Errorf("commit file: %w", err)
 	}
-	return nil
+	return s.renewExpiryLocked(site)
 }
 
 // DeleteFile removes one file and prunes now-empty parent directories.
@@ -194,7 +194,7 @@ func (s *Store) DeleteFile(site *Site, relPath string) error {
 			break
 		}
 	}
-	return nil
+	return s.renewExpiryLocked(site)
 }
 
 // ClearFiles wipes the site's content root (used for replace-all uploads).
@@ -216,7 +216,7 @@ func (s *Store) ClearFiles(site *Site) error {
 			return err
 		}
 	}
-	return nil
+	return s.renewExpiryLocked(site)
 }
 
 // MaxEditableBytes caps files that can be read for in-browser editing.

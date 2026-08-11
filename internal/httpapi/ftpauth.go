@@ -19,6 +19,13 @@ func (a *API) FTPAuth(editID, password, clientIP string) (string, int64, int, er
 	}
 	switch a.verifyEditIP(clientIP, site, password) {
 	case verifyOK:
+		// The API is an account feature, and FTP must not be a back door
+		// around that: when accounts are enabled, an anonymous site has no
+		// FTP either, exactly like it has no JSON API. ee/eeconfig.Tier has
+		// no FTP field, so this is the only place that rule is enforced.
+		if a.gatedAnonymous(site) {
+			return "", 0, 0, errors.New("this site was created without an account, so it has no FTP access")
+		}
 		return site.ContentDir(), a.st.EffMaxBytes(site), a.st.EffMaxFiles(site), nil
 	case verifyThrottled:
 		return "", 0, 0, errors.New("too many authentication attempts")

@@ -67,6 +67,14 @@ func (a *API) webdav(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The API is an account feature, and WebDAV must not be a back door
+	// around that: when accounts are enabled, an anonymous site has no
+	// WebDAV either, exactly like it has no JSON API.
+	if a.gatedAnonymous(site) {
+		writeError(w, 403, "this site was created without an account, so it has no WebDAV access — create it while signed in at "+a.apiAccountHint()+" to use WebDAV")
+		return
+	}
+
 	if davMutating[r.Method] {
 		if sub != "" {
 			if _, err := store.CleanRelPath(sub); err != nil {
@@ -86,12 +94,12 @@ func (a *API) webdav(w http.ResponseWriter, r *http.Request) {
 				writeError(w, 500, "internal error")
 				return
 			}
-			remaining := a.cfg.MaxSiteBytes - used
+			remaining := a.st.EffMaxBytes(site) - used
 			if r.ContentLength > remaining || remaining <= 0 {
 				http.Error(w, "site size limit exceeded", http.StatusInsufficientStorage)
 				return
 			}
-			if count >= a.cfg.MaxFiles {
+			if count >= a.st.EffMaxFiles(site) {
 				http.Error(w, "file count limit exceeded", http.StatusInsufficientStorage)
 				return
 			}
@@ -109,6 +117,12 @@ func (a *API) webdav(w http.ResponseWriter, r *http.Request) {
 		a.st.WithLock(site.ViewID, func() error { h.ServeHTTP(w, r); return nil })
 	} else {
 		h.ServeHTTP(w, r)
+	}
+
+	if davMutating[r.Method] {
+		if err := a.st.RenewExpiry(site); err != nil {
+			a.log.Error("renew expiry after webdav", "id", site.ViewID, "err", err)
+		}
 	}
 
 	if davMutating[r.Method] && site.Meta.Mode == store.ModeViewer {

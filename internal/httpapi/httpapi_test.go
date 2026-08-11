@@ -80,13 +80,19 @@ func (e *env) internal(t *testing.T, req *http.Request) *httptest.ResponseRecord
 }
 
 type createResp struct {
-	ID           string   `json:"id"`
-	ViewURL      string   `json:"view_url"`
-	EditURL      string   `json:"edit_url"`
-	EditPassword string   `json:"edit_password"`
-	Mode         string   `json:"mode"`
-	WebDAVURL    string   `json:"webdav_url"`
-	Domains      []string `json:"custom_domains"`
+	ID              string   `json:"id"`
+	ViewURL         string   `json:"view_url"`
+	EditURL         string   `json:"edit_url"`
+	EditPassword    string   `json:"edit_password"`
+	Mode            string   `json:"mode"`
+	WebDAVURL       string   `json:"webdav_url"`
+	FTPURL          string   `json:"ftp_url"`
+	Domains         []string `json:"custom_domains"`
+	ExpiryCapDays   int      `json:"expiry_cap_days"`
+	ExpiryRenews    bool     `json:"expiry_renews"`
+	AccountsEnabled bool     `json:"accounts_enabled"`
+	WebDAVAvailable bool     `json:"webdav_available"`
+	FTPAvailable    bool     `json:"ftp_available"`
 }
 
 // createSite posts a multipart create request with the given files.
@@ -106,6 +112,7 @@ func (e *env) createSite(t *testing.T, fields map[string]string, files map[strin
 	mw.Close()
 	req := httptest.NewRequest("POST", "/api/sites", &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	w := e.public(t, req)
 	if w.Code != 201 {
 		t.Fatalf("create: %d %s", w.Code, w.Body)
@@ -782,6 +789,45 @@ func TestFTPAuthGloballyDisabled(t *testing.T) {
 	}
 }
 
+func TestFTPAuthRefusesAnonymousSiteWhenAccountsEnabled(t *testing.T) {
+	// FTP authenticates with the edit password directly, bypassing the JSON
+	// API entirely. ee/eeconfig.Tier has no FTP field at all, so nothing else
+	// stops an anonymous drop from toggling ftp_enabled on its own edit page
+	// and then being driven by an FTP client unless FTPAuth enforces the
+	// "no account, no API" rule itself.
+	ext.Register(&fakeProvider{enabled: true})
+	defer ext.Reset()
+	e := newEnv(t, map[string]string{"SITEBIN_FTP_ENABLED": "true"})
+	c := e.createSite(t, map[string]string{"ftp": "true"}, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	if _, _, _, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4"); err == nil {
+		t.Error("anonymous site should have no FTP access when accounts are enabled")
+	}
+}
+
+func TestFTPAuthAllowsOwnedSiteWhenAccountsEnabled(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1"})
+	defer ext.Reset()
+	e := newEnv(t, map[string]string{"SITEBIN_FTP_ENABLED": "true"})
+	c := e.createSite(t, map[string]string{"ftp": "true"}, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	if _, _, _, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4"); err != nil {
+		t.Errorf("owned site should have FTP access: %v", err)
+	}
+}
+
+func TestFTPAuthCommunityBuildStaysOpen(t *testing.T) {
+	e := newEnv(t, map[string]string{"SITEBIN_FTP_ENABLED": "true"}) // no provider registered
+	c := e.createSite(t, map[string]string{"ftp": "true"}, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	if _, _, _, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4"); err != nil {
+		t.Errorf("community build should have FTP access: %v", err)
+	}
+}
+
 func TestAbuseReport(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
@@ -966,6 +1012,99 @@ func TestWebDAVGloballyDisabled(t *testing.T) {
 	}
 }
 
+func TestWebDAVWriteRenewsExpiry(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1", grant: ext.CreateGrant{MaxExpiryDays: 7}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, map[string]string{"webdav": "true"}, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	// wind the expiry back so a renewal is visible
+	site, _ := e.st.ByViewID(c.ID)
+	soon := time.Now().Add(2 * time.Hour).UTC()
+	if err := e.st.Update(site, func(m *store.Meta) error { m.ExpiresAt = &soon; return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	if w := davReq(t, e, "PUT", "/dav/"+edit+"/new.html", c.EditPassword, strings.NewReader("hi")); w.Code != 201 {
+		t.Fatalf("PUT: %d %s", w.Code, w.Body)
+	}
+
+	got, _ := e.st.ByViewID(c.ID)
+	want := time.Now().Add(7 * 24 * time.Hour)
+	if got.Meta.ExpiresAt == nil {
+		t.Fatal("expiry cleared")
+	}
+	if d := got.Meta.ExpiresAt.Sub(want); d > time.Minute || d < -time.Minute {
+		t.Fatalf("expiry = %v, want ~%v", got.Meta.ExpiresAt, want)
+	}
+}
+
+func TestWebDAVUsesPerSiteTierByteQuota(t *testing.T) {
+	// A tight per-site tier cap must be enforced even though it is far below
+	// the instance-wide global (WebDAV previously checked only the global).
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1", grant: ext.CreateGrant{MaxSiteBytes: 20}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, map[string]string{"webdav": "true"}, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+	base := "/dav/" + edit + "/"
+
+	if w := davReq(t, e, "PUT", base+"big.txt", c.EditPassword, strings.NewReader(strings.Repeat("a", 30))); w.Code != http.StatusInsufficientStorage {
+		t.Fatalf("PUT over tier byte quota: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestWebDAVUsesPerSiteTierFileQuota(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1", grant: ext.CreateGrant{MaxFiles: 1}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, map[string]string{"webdav": "true"}, map[string]string{"index.html": "x"}) // already at the 1-file cap
+	edit := editIDFrom(t, c.EditURL)
+	base := "/dav/" + edit + "/"
+
+	if w := davReq(t, e, "PUT", base+"second.txt", c.EditPassword, strings.NewReader("x")); w.Code != http.StatusInsufficientStorage {
+		t.Fatalf("PUT over tier file quota: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestWebDAVRefusesAnonymousSiteWhenAccountsEnabled(t *testing.T) {
+	// WebDAV authenticates with the edit password through its own path, so it
+	// must enforce the same "no account, no API" rule the JSON API does —
+	// otherwise it's a back door around the gate.
+	ext.Register(&fakeProvider{enabled: true})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, map[string]string{"webdav": "true"}, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	if w := davReq(t, e, "GET", "/dav/"+edit+"/index.html", c.EditPassword, nil); w.Code != 403 {
+		t.Fatalf("anonymous site over webdav: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestWebDAVAllowsOwnedSiteWhenAccountsEnabled(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1"})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, map[string]string{"webdav": "true"}, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	if w := davReq(t, e, "GET", "/dav/"+edit+"/index.html", c.EditPassword, nil); w.Code != 200 {
+		t.Fatalf("owned site over webdav: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestWebDAVCommunityBuildStaysOpen(t *testing.T) {
+	e := newEnv(t, nil) // no provider registered
+	c := e.createSite(t, map[string]string{"webdav": "true"}, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	if w := davReq(t, e, "GET", "/dav/"+edit+"/index.html", c.EditPassword, nil); w.Code != 200 {
+		t.Fatalf("community build over webdav: %d %s", w.Code, w.Body)
+	}
+}
+
 // ---- pages & assets ----
 
 func TestPages(t *testing.T) {
@@ -1130,5 +1269,258 @@ func TestExpiryCapKeepsExplicitExpiry(t *testing.T) {
 	site, _ := e.st.ByViewID(c.ID)
 	if site.Meta.ExpiresAt == nil || site.Meta.ExpiresAt.Sub(time.Now()) > 25*time.Hour {
 		t.Fatalf("explicit expiry should win, got %v", site.Meta.ExpiresAt)
+	}
+}
+
+func TestCappedExpiryCannotBeCleared(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, grant: ext.CreateGrant{MaxExpiryDays: 1}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	req := authed(httptest.NewRequest("PUT", "/api/sites/"+edit, strings.NewReader(`{"expires_at":null}`)), c.EditPassword)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	if w := e.public(t, req); w.Code != 400 {
+		t.Fatalf("clearing a capped expiry should be 400, got %d %s", w.Code, w.Body)
+	}
+	site, _ := e.st.ByViewID(c.ID)
+	if site.Meta.ExpiresAt == nil {
+		t.Fatal("expiry was cleared anyway")
+	}
+}
+
+func TestCreateResponseFieldsOwnedCappedSite(t *testing.T) {
+	// expiry_cap_days, expiry_renews and accounts_enabled drive every piece of
+	// user-facing lifetime copy (claim ticket + edit page); pin them directly
+	// on the create response instead of only verifying by hand.
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1", grant: ext.CreateGrant{MaxExpiryDays: 7}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+
+	if c.ExpiryCapDays != 7 {
+		t.Errorf("expiry_cap_days = %d, want 7", c.ExpiryCapDays)
+	}
+	if !c.ExpiryRenews {
+		t.Error("expiry_renews = false, want true for an owned capped site")
+	}
+	if !c.AccountsEnabled {
+		t.Error("accounts_enabled = false, want true")
+	}
+}
+
+func TestCreateResponseFieldsAnonymousSite(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, grant: ext.CreateGrant{MaxExpiryDays: 1}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+
+	if c.ExpiryCapDays != 1 {
+		t.Errorf("expiry_cap_days = %d, want 1", c.ExpiryCapDays)
+	}
+	if c.ExpiryRenews {
+		t.Error("expiry_renews = true, want false for an anonymous site (it never renews)")
+	}
+	if !c.AccountsEnabled {
+		t.Error("accounts_enabled = false, want true")
+	}
+}
+
+func TestPayloadHidesWebDAVAndFTPForGatedAnonymousSite(t *testing.T) {
+	// The edit page must not keep offering a WebDAV/FTP toggle and mount URL
+	// that the protocol handlers themselves now refuse with 403 (see
+	// gatedAnonymous in apigate.go). Enable both instance-wide and toggle
+	// both on for the site so the only thing suppressing them is the gate.
+	ext.Register(&fakeProvider{enabled: true})
+	defer ext.Reset()
+	e := newEnv(t, map[string]string{"SITEBIN_FTP_ENABLED": "true"})
+	c := e.createSite(t, map[string]string{"webdav": "true", "ftp": "true"}, map[string]string{"index.html": "x"})
+
+	if c.WebDAVAvailable {
+		t.Error("webdav_available = true, want false for a gated anonymous site")
+	}
+	if c.FTPAvailable {
+		t.Error("ftp_available = true, want false for a gated anonymous site")
+	}
+	if c.WebDAVURL != "" {
+		t.Errorf("webdav_url = %q, want empty for a gated anonymous site", c.WebDAVURL)
+	}
+	if c.FTPURL != "" {
+		t.Errorf("ftp_url = %q, want empty for a gated anonymous site", c.FTPURL)
+	}
+}
+
+func TestPayloadShowsWebDAVAndFTPForOwnedSite(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1"})
+	defer ext.Reset()
+	e := newEnv(t, map[string]string{"SITEBIN_FTP_ENABLED": "true"})
+	c := e.createSite(t, map[string]string{"webdav": "true", "ftp": "true"}, map[string]string{"index.html": "x"})
+
+	if !c.WebDAVAvailable {
+		t.Error("webdav_available = false, want true for an owned site")
+	}
+	if !c.FTPAvailable {
+		t.Error("ftp_available = false, want true for an owned site")
+	}
+	if c.WebDAVURL == "" {
+		t.Error("webdav_url missing for an owned site with webdav enabled")
+	}
+	if c.FTPURL == "" {
+		t.Error("ftp_url missing for an owned site with ftp enabled")
+	}
+}
+
+func TestPayloadShowsWebDAVAndFTPOnCommunityBuild(t *testing.T) {
+	e := newEnv(t, map[string]string{"SITEBIN_FTP_ENABLED": "true"}) // no provider registered
+	c := e.createSite(t, map[string]string{"webdav": "true", "ftp": "true"}, map[string]string{"index.html": "x"})
+
+	if !c.WebDAVAvailable {
+		t.Error("webdav_available = false, want true on the community build")
+	}
+	if !c.FTPAvailable {
+		t.Error("ftp_available = false, want true on the community build")
+	}
+}
+
+func TestAnonymousCappedExpiryCannotBeExtended(t *testing.T) {
+	// A capped anonymous site must not be able to renew itself by repeatedly
+	// pushing a new expiry that stays within the cap: that would turn a fixed
+	// 24h drop into a permanently-alive site (one PUT per day).
+	ext.Register(&fakeProvider{enabled: true, grant: ext.CreateGrant{MaxExpiryDays: 1}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	// wind the stored expiry back, as if most of the 24h window had elapsed
+	site, _ := e.st.ByViewID(c.ID)
+	soon := time.Now().Add(1 * time.Hour).UTC()
+	if err := e.st.Update(site, func(m *store.Meta) error { m.ExpiresAt = &soon; return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	// still inside the 1-day cap, but later than the current expiry
+	extend := time.Now().Add(23 * time.Hour).UTC().Format(time.RFC3339)
+	req := authed(httptest.NewRequest("PUT", "/api/sites/"+edit, strings.NewReader(`{"expires_at":"`+extend+`"}`)), c.EditPassword)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	if w := e.public(t, req); w.Code != 400 {
+		t.Fatalf("extending an anonymous capped expiry should be 400, got %d %s", w.Code, w.Body)
+	}
+	got, _ := e.st.ByViewID(c.ID)
+	if got.Meta.ExpiresAt == nil || !got.Meta.ExpiresAt.Equal(soon) {
+		t.Fatalf("expiry changed anyway: %v, want %v", got.Meta.ExpiresAt, soon)
+	}
+}
+
+func TestAnonymousCappedExpiryCanBeShortened(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, grant: ext.CreateGrant{MaxExpiryDays: 1}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	shorten := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339)
+	req := authed(httptest.NewRequest("PUT", "/api/sites/"+edit, strings.NewReader(`{"expires_at":"`+shorten+`"}`)), c.EditPassword)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	if w := e.public(t, req); w.Code != 200 {
+		t.Fatalf("shortening an anonymous capped expiry should be allowed, got %d %s", w.Code, w.Body)
+	}
+	got, _ := e.st.ByViewID(c.ID)
+	want, _ := time.Parse(time.RFC3339, shorten)
+	if got.Meta.ExpiresAt == nil || !got.Meta.ExpiresAt.Equal(want) {
+		t.Fatalf("expiry not shortened: %v, want %v", got.Meta.ExpiresAt, want)
+	}
+}
+
+func TestCommunityBuildExpiryCanBeExtended(t *testing.T) {
+	// Regression: the anonymous-capped extend-guard must be gated on a
+	// registered provider reporting AccountsEnabled(), exactly like
+	// gatedAnonymous gates WebDAV/FTP. Without that gate, a community build
+	// with SITEBIN_MAX_EXPIRY_DAYS set would misfire — OwnerAccountID is
+	// empty on every site there (it's only ever stamped inside createSite's
+	// `if gated` branch) — and freeze a site's expiry permanently on an
+	// instance that has no concept of "sign in" at all.
+	e := newEnv(t, map[string]string{"SITEBIN_MAX_EXPIRY_DAYS": "30"})
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"}) // no explicit expiry: stays nil, no per-site quota stamped
+	edit := editIDFrom(t, c.EditURL)
+
+	first := time.Now().Add(20 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	req := authed(httptest.NewRequest("PUT", "/api/sites/"+edit, strings.NewReader(`{"expires_at":"`+first+`"}`)), c.EditPassword)
+	req.Header.Set("Content-Type", "application/json")
+	if w := e.public(t, req); w.Code != 200 {
+		t.Fatalf("first PUT: %d %s", w.Code, w.Body)
+	}
+
+	// "a week later": push the date further out, still inside the 30-day
+	// instance-global cap. Must succeed on a community build.
+	later := time.Now().Add(27 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	req = authed(httptest.NewRequest("PUT", "/api/sites/"+edit, strings.NewReader(`{"expires_at":"`+later+`"}`)), c.EditPassword)
+	req.Header.Set("Content-Type", "application/json")
+	if w := e.public(t, req); w.Code != 200 {
+		t.Fatalf("moving expiry later on a community build should succeed, got %d %s", w.Code, w.Body)
+	}
+	site, _ := e.st.ByViewID(c.ID)
+	want, _ := time.Parse(time.RFC3339, later)
+	if site.Meta.ExpiresAt == nil || !site.Meta.ExpiresAt.Equal(want) {
+		t.Fatalf("expiry not moved: %v, want %v", site.Meta.ExpiresAt, want)
+	}
+}
+
+func TestUncappedExpiryCanBeCleared(t *testing.T) {
+	e := newEnv(t, nil) // no provider: no cap stamped, no instance global
+	c := e.createSite(t, map[string]string{"expires_at": time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339)}, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	req := authed(httptest.NewRequest("PUT", "/api/sites/"+edit, strings.NewReader(`{"expires_at":null}`)), c.EditPassword)
+	req.Header.Set("Content-Type", "application/json")
+	if w := e.public(t, req); w.Code != 200 {
+		t.Fatalf("PUT: %d %s", w.Code, w.Body)
+	}
+	site, _ := e.st.ByViewID(c.ID)
+	if site.Meta.ExpiresAt != nil {
+		t.Fatalf("expiry not cleared: %v", site.Meta.ExpiresAt)
+	}
+}
+
+func TestJsonCreationWithNullExpiryAppliesToCappedSites(t *testing.T) {
+	// Regression test: JSON creation with explicit expires_at:null should not
+	// be blocked by the tier cap. The null is a no-op; the default-lifetime
+	// block immediately below applySettings stamps the cap.
+	ext.Register(&fakeProvider{enabled: true, grant: ext.CreateGrant{MaxExpiryDays: 1}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+
+	req := httptest.NewRequest("POST", "/api/sites", strings.NewReader(`{"expires_at":null}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	w := e.public(t, req)
+	if w.Code != 201 {
+		t.Fatalf("JSON create with expires_at:null should succeed for capped site: got %d %s", w.Code, w.Body)
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	expiresAt := payload["expires_at"]
+	if expiresAt == nil {
+		t.Fatal("capped site created with null expiry should get the default lifetime")
+	}
+	// expires_at is serialized as an RFC3339 string in the JSON response
+	expiresAtStr, ok := expiresAt.(string)
+	if !ok {
+		t.Fatalf("expires_at should be a string, got %T", expiresAt)
+	}
+	parsedTime, err := time.Parse(time.RFC3339, expiresAtStr)
+	if err != nil {
+		t.Fatalf("parse expires_at: %v", err)
+	}
+	want := time.Now().Add(24 * time.Hour)
+	if d := parsedTime.Sub(want); d > time.Minute || d < -time.Minute {
+		t.Fatalf("expiry = %v, want ~%v", parsedTime, want)
 	}
 }

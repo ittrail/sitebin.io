@@ -65,11 +65,12 @@ var wrapperTmpl = template.Must(template.New("wrapper").Parse(`<!doctype html>
 ` + wrapperMarker + `
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0a0e18">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; frame-ancestors 'self'; base-uri 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex">
 <title>{{.Title}}</title>
-<link rel="icon" href="/_sitebin/assets/favicon.svg">
+<link rel="icon" href="/_sitebin/assets/static/favicon.svg">
 <link rel="stylesheet" href="/_sitebin/assets/viewer/viewer.css">
 </head>
 <body>

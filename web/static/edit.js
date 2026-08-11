@@ -180,14 +180,22 @@ function render() {
   $("ftpinfo").classList.toggle("hidden", !site.ftp_enabled || !site.ftp_url);
   if (site.ftp_url) $("ftp-url").textContent = site.ftp_url;
 
+  const capped = site.expiry_cap_days > 0;
   if (site.expires_at) {
     const d = new Date(site.expires_at);
     $("e-expires").value = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-    $("expiry-status").textContent = "Expires " + d.toLocaleString();
+    let note = "";
+    if (capped) {
+      note = site.expiry_renews
+        ? " — this plan's sites always have an expiry, renewed to the full term on every change. An earlier date set here will be overwritten by your next upload."
+        : " — this plan's sites always have an expiry. You can bring the date forward, but not push it back.";
+    }
+    $("expiry-status").textContent = "Expires " + d.toLocaleString() + note;
   } else {
     $("e-expires").value = "";
     $("expiry-status").textContent = "No expiry — the site stays up.";
   }
+  $("clear-expiry").classList.toggle("hidden", capped);
 
   // domains
   const dr = $("domainrows");

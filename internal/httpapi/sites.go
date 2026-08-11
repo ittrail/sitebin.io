@@ -36,6 +36,15 @@ type updateSet struct {
 func strPtr(s string) *string { return &s }
 func boolPtr(b bool) *bool    { return &b }
 
+// expiryCap returns the effective maximum lifetime in days for a site: the
+// per-site tier stamp when present, else the instance global. 0 = unlimited.
+func (a *API) expiryCap(site *store.Site) int {
+	if site.Meta.QuotaExpiryDays > 0 {
+		return site.Meta.QuotaExpiryDays
+	}
+	return a.cfg.MaxExpiryDays
+}
+
 // settingsFromForm maps multipart form fields onto an updateSet.
 func settingsFromForm(fields url.Values) (updateSet, error) {
 	var set updateSet
@@ -70,6 +79,13 @@ func (a *API) applySettings(site *store.Site, set updateSet) error {
 	if len(set.ExpiresAt) > 0 {
 		raw := strings.TrimSpace(string(set.ExpiresAt))
 		if raw == "null" || raw == `""` {
+			// A capped site has a lifetime, not an optional one: letting the
+			// holder clear it would turn a 24-hour drop into a permanent site.
+			if site.Meta.ExpiresAt != nil {
+				if maxDays := a.expiryCap(site); maxDays > 0 {
+					return &apiError{400, fmt.Sprintf("this site's plan limits it to %d day(s); its expiry cannot be removed", maxDays)}
+				}
+			}
 			var cleared *time.Time
 			expires = &cleared
 		} else {
@@ -82,15 +98,25 @@ func (a *API) applySettings(site *store.Site, set updateSet) error {
 				return &apiError{400, "expires_at must be an RFC3339 timestamp, e.g. 2026-08-01T12:00:00Z"}
 			}
 			// Per-site tier cap (if stamped) overrides the instance global.
-			expiryCap := a.cfg.MaxExpiryDays
-			if site.Meta.QuotaExpiryDays > 0 {
-				expiryCap = site.Meta.QuotaExpiryDays
-			}
+			expiryCap := a.expiryCap(site)
 			if expiryCap > 0 {
 				max := time.Now().Add(time.Duration(expiryCap) * 24 * time.Hour)
 				if t.After(max) {
 					return &apiError{400, fmt.Sprintf("expiry exceeds the maximum of %d days for this site", expiryCap)}
 				}
+			}
+			// Anonymous capped sites may shorten their lifetime, never extend
+			// it. Gated the same way gatedAnonymous gates WebDAV/FTP: only
+			// where a provider is registered and reports AccountsEnabled().
+			// A community build has no owner on *any* site (OwnerAccountID is
+			// only ever stamped inside the `if gated` branch of createSite)
+			// and no concept of "sign in", so without this gate the same
+			// condition would misfire there and freeze a site's expiry at
+			// whatever date was first picked, forever refusing to move it —
+			// even though the community build must stay fully open.
+			if a.gatedAnonymous(site) && site.Meta.ExpiresAt != nil &&
+				a.expiryCap(site) > 0 && t.After(*site.Meta.ExpiresAt) {
+				return &apiError{400, "this site's expiry is fixed at creation; sign in to create sites that renew"}
 			}
 			tt := t.UTC()
 			p := &tt
@@ -299,6 +325,18 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 	bytes, count, _ := a.st.Usage(site)
 	stats := a.st.Stats(site)
 	m := site.Meta
+	accountsEnabled := false
+	if p, ok := ext.Get(); ok {
+		accountsEnabled = p.AccountsEnabled()
+	}
+	// An anonymous site on an accounts-enabled instance has no WebDAV or FTP
+	// — gatedAnonymous is the same rule webdav.go and ftpauth.go enforce on
+	// the connection itself. Reporting availability from instance config
+	// alone would let the edit page keep offering a toggle and mount URL
+	// that the server then refuses with 403.
+	protocolsGated := a.gatedAnonymous(site)
+	webdavAvailable := a.cfg.WebDAVAllowed && !protocolsGated
+	ftpAvailable := a.cfg.FTPEnabled && !protocolsGated
 	payload := map[string]any{
 		"views":                   stats.Views,
 		"last_seen":               stats.LastSeen,
@@ -310,11 +348,14 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"spa_fallback":            m.SPAFallback,
 		"view_password_protected": m.ViewPasswordProtected,
 		"webdav_enabled":          m.WebDAVEnabled,
-		"webdav_available":        a.cfg.WebDAVAllowed,
+		"webdav_available":        webdavAvailable,
 		"ftp_enabled":             m.FTPEnabled,
-		"ftp_available":           a.cfg.FTPEnabled,
+		"ftp_available":           ftpAvailable,
 		"custom_domains":          m.CustomDomains,
 		"expires_at":              m.ExpiresAt,
+		"expiry_cap_days":         a.expiryCap(site),
+		"expiry_renews":           m.OwnerAccountID != "" && m.QuotaExpiryDays > 0 && m.ExpiresAt != nil,
+		"accounts_enabled":        accountsEnabled,
 		"created_at":              m.CreatedAt,
 		"updated_at":              m.UpdatedAt,
 		"files":                   files,
@@ -327,10 +368,10 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 			"max_files": a.st.EffMaxFiles(site),
 		},
 	}
-	if m.WebDAVEnabled && a.cfg.WebDAVAllowed {
+	if m.WebDAVEnabled && webdavAvailable {
 		payload["webdav_url"] = a.cfg.DAVURL(m.EditID)
 	}
-	if m.FTPEnabled && a.cfg.FTPEnabled {
+	if m.FTPEnabled && ftpAvailable {
 		payload["ftp_url"] = a.cfg.FTPURL(m.EditID)
 	}
 	return payload
@@ -351,14 +392,11 @@ func (a *API) createCORS(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	w.Header().Add("Vary", "Origin")
-	lo := strings.ToLower(origin)
-	for _, allowed := range a.cfg.EmbedOrigins {
-		if allowed == "*" || allowed == lo {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			return true
-		}
+	if !a.embedOriginAllowed(strings.ToLower(origin)) {
+		return false
 	}
-	return false
+	w.Header().Set("Access-Control-Allow-Origin", origin)
+	return true
 }
 
 // createPreflight answers CORS preflights for the create endpoint. Multipart
@@ -404,6 +442,13 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	owner := grant.OwnerAccountID
+
+	// The API is an account feature: an anonymous drop is something you make
+	// on Sitebin's own pages (or an allowlisted embed), not from a script.
+	if gated && owner == "" && !a.fromOwnBrowser(r) {
+		writeError(w, 401, "sign in to create sites from the API: "+a.apiAccountHint())
+		return
+	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, a.cfg.MaxSiteBytes+(10<<20))
 

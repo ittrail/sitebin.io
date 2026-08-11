@@ -154,9 +154,13 @@ services:
       # Tarif-Definitionen. Entweder inline als JSON (YAML-Single-Quotes außen,
       # JSON-Double-Quotes innen) ...
       # SITEBIN_TIERS: '[
-      #   {"id":"free","label":"Free","max_site_bytes":104857600,"max_files":100,"max_sites":3,"webdav":false,"custom_domains":0,"max_expiry_days":30},
-      #   {"id":"pro","label":"Pro","max_site_bytes":5368709120,"max_files":5000,"max_sites":100,"webdav":true,"custom_domains":10,"max_expiry_days":0,"price":{"stripe":"price_123","paddle":"pri_456","display":"9 EUR/mo"}}
+      #   {"id":"drop","label":"Drop","max_sites":0,"max_site_bytes":26214400,"max_files":200,"webdav":false,"custom_domains":0,"max_expiry_days":1},
+      #   {"id":"free","label":"Free","max_sites":10,"max_site_bytes":104857600,"max_files":500,"webdav":true,"custom_domains":0,"max_expiry_days":7},
+      #   {"id":"pro","label":"Pro","max_sites":100,"max_site_bytes":1073741824,"max_files":5000,"webdav":true,"custom_domains":5,"max_expiry_days":0},
+      #   {"id":"studio","label":"Studio","max_sites":500,"max_site_bytes":5368709120,"max_files":10000,"webdav":true,"custom_domains":25,"max_expiry_days":0}
       # ]'
+      # SITEBIN_ANON_TIER: "drop"   # anonymous drops: 24 h, no API
+      # SITEBIN_DEFAULT_TIER: "free"
       # ... oder sauberer per gemounteter Datei (siehe volumes oben):
       # SITEBIN_TIERS_FILE: "/cfg/tiers.json"
 
