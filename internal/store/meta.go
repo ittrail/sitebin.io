@@ -32,8 +32,13 @@ type Meta struct {
 	QuotaDomains    *int       `json:"quota_domains,omitempty"` // nil = inherit global; value (incl. 0) = explicit cap
 	QuotaWebDAV     *bool      `json:"quota_webdav,omitempty"`  // nil = inherit global
 	ExpiresAt       *time.Time `json:"expires_at"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	// ExpiryFromTier records whether ExpiresAt was imposed by the owner's tier
+	// (the creation default, sliding renewal, or a downgrade grace) rather than
+	// chosen by a caller. A tier change may lift an imposed expiry; it must
+	// never silently discard one the owner asked for.
+	ExpiryFromTier bool      `json:"expiry_from_tier,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // Expired reports whether the site is past its expiry at time now.

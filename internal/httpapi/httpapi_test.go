@@ -1524,3 +1524,38 @@ func TestJsonCreationWithNullExpiryAppliesToCappedSites(t *testing.T) {
 		t.Fatalf("expiry = %v, want ~%v", parsedTime, want)
 	}
 }
+
+func TestCreationStampMarksExpiryAsTierImposed(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1", grant: ext.CreateGrant{MaxExpiryDays: 7}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+
+	site, _ := e.st.ByViewID(c.ID)
+	if site.Meta.ExpiresAt == nil {
+		t.Fatal("no expiry stamped")
+	}
+	if !site.Meta.ExpiryFromTier {
+		t.Fatal("the tier's default lifetime should be marked as tier-imposed")
+	}
+}
+
+func TestExplicitExpiryIsNotTierImposed(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1", grant: ext.CreateGrant{MaxExpiryDays: 7}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	when := time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339)
+	req := authed(httptest.NewRequest("PUT", "/api/sites/"+edit, strings.NewReader(`{"expires_at":"`+when+`"}`)), c.EditPassword)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	if w := e.public(t, req); w.Code != 200 {
+		t.Fatalf("PUT: %d %s", w.Code, w.Body)
+	}
+	site, _ := e.st.ByViewID(c.ID)
+	if site.Meta.ExpiryFromTier {
+		t.Fatal("a caller-chosen expiry must not be marked as tier-imposed")
+	}
+}

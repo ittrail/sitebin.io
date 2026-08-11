@@ -28,6 +28,7 @@ func (s *Store) renewExpiryLocked(site *Site) error {
 		return err
 	}
 	meta.ExpiresAt = &want
+	meta.ExpiryFromTier = true
 	meta.UpdatedAt = time.Now().UTC()
 	if err := writeMeta(site.dir, meta); err != nil {
 		return err

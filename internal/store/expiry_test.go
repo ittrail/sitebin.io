@@ -127,3 +127,16 @@ func TestRenewExpiryOnDelete(t *testing.T) {
 		t.Fatalf("expiry after delete = %v, want ~%v", got.Meta.ExpiresAt, want)
 	}
 }
+
+func TestRenewMarksExpiryAsTierImposed(t *testing.T) {
+	s := newExpiryStore(t)
+	site := expiringSite(t, s, "acct-1", 7, 2*time.Hour)
+	// the helper sets the expiry directly, so the flag starts false
+	if err := s.SaveFile(site, "index.html", strings.NewReader("x")); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ByViewID(site.ViewID)
+	if !got.Meta.ExpiryFromTier {
+		t.Fatal("renewal did not mark the expiry as tier-imposed")
+	}
+}

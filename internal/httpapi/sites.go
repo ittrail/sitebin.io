@@ -171,6 +171,7 @@ func (a *API) applySettings(site *store.Site, set updateSet) error {
 		}
 		if expires != nil {
 			m.ExpiresAt = *expires
+			m.ExpiryFromTier = false
 		}
 		return nil
 	})
@@ -511,7 +512,7 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 	// expire at the cap instead of living forever.
 	if site.Meta.QuotaExpiryDays > 0 && site.Meta.ExpiresAt == nil {
 		exp := time.Now().Add(time.Duration(site.Meta.QuotaExpiryDays) * 24 * time.Hour).UTC()
-		if err := a.st.Update(site, func(m *store.Meta) error { m.ExpiresAt = &exp; return nil }); err != nil {
+		if err := a.st.Update(site, func(m *store.Meta) error { m.ExpiresAt = &exp; m.ExpiryFromTier = true; return nil }); err != nil {
 			fail(err)
 			return
 		}
