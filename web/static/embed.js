@@ -724,7 +724,7 @@ input::placeholder { color: var(--ink-faint); }
           if (body.expiry_renews) {
             life.textContent = when + "; every change you publish pushes that back.";
           } else if (body.accounts_enabled) {
-            life.textContent = when + " — sign in to keep it.";
+            life.textContent = when + " — this one's fixed; a free account renews your next one.";
           } else {
             life.textContent = when + ".";
           }
