@@ -184,9 +184,13 @@ function render() {
   if (site.expires_at) {
     const d = new Date(site.expires_at);
     $("e-expires").value = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-    $("expiry-status").textContent = capped
-      ? "Expires " + d.toLocaleString() + " — this plan's sites always have an expiry."
-      : "Expires " + d.toLocaleString();
+    let note = "";
+    if (capped) {
+      note = site.expiry_renews
+        ? " — this plan's sites always have an expiry, renewed to the full term on every change. An earlier date set here will be overwritten by your next upload."
+        : " — this plan's sites always have an expiry.";
+    }
+    $("expiry-status").textContent = "Expires " + d.toLocaleString() + note;
   } else {
     $("e-expires").value = "";
     $("expiry-status").textContent = "No expiry — the site stays up.";
