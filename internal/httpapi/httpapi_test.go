@@ -1207,6 +1207,7 @@ func TestJsonCreationWithNullExpiryAppliesToCappedSites(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/api/sites", strings.NewReader(`{"expires_at":null}`))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	w := e.public(t, req)
 	if w.Code != 201 {
 		t.Fatalf("JSON create with expires_at:null should succeed for capped site: got %d %s", w.Code, w.Body)

@@ -1,8 +1,11 @@
 package httpapi
 
 import (
+	"bytes"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
 	"testing"
 
 	"github.com/ittrail/sitebin.io/internal/ext"
@@ -115,5 +118,60 @@ func TestOwnedSiteAPIAllowsScripts(t *testing.T) {
 	req := authed(httptest.NewRequest("GET", "/api/sites/"+edit, nil), c.EditPassword)
 	if w := e.public(t, req); w.Code != 200 {
 		t.Fatalf("scripted call on an owned site: %d %s", w.Code, w.Body)
+	}
+}
+
+// scriptCreate posts a minimal multipart create with no browser headers.
+func scriptCreate(t *testing.T, e *env, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	h := textproto.MIMEHeader{}
+	h.Set("Content-Disposition", `form-data; name="files"; filename="index.html"`)
+	p, _ := mw.CreatePart(h)
+	p.Write([]byte("<h1>hi</h1>"))
+	mw.Close()
+	req := httptest.NewRequest("POST", "/api/sites", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	return e.public(t, req)
+}
+
+func TestAnonymousCreateRefusesScripts(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+
+	if w := scriptCreate(t, e, nil); w.Code != 401 {
+		t.Fatalf("scripted anonymous create: %d %s", w.Code, w.Body)
+	}
+	if w := scriptCreate(t, e, map[string]string{"Sec-Fetch-Site": "same-origin"}); w.Code != 201 {
+		t.Fatalf("browser anonymous create: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestAnonymousCreateAllowsAllowlistedEmbed(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, embedOK: true})
+	defer ext.Reset()
+	e := newEnv(t, map[string]string{"SITEBIN_EMBED_ORIGINS": "https://sitebin.io"})
+
+	w := scriptCreate(t, e, map[string]string{
+		"Sec-Fetch-Site": "cross-site",
+		"Origin":         "https://sitebin.io",
+	})
+	if w.Code != 201 {
+		t.Fatalf("embed create: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestOwnedCreateAllowsScripts(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1"})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+
+	if w := scriptCreate(t, e, nil); w.Code != 201 {
+		t.Fatalf("owned scripted create: %d %s", w.Code, w.Body)
 	}
 }

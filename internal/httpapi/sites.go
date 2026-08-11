@@ -415,6 +415,13 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 	}
 	owner := grant.OwnerAccountID
 
+	// The API is an account feature: an anonymous drop is something you make
+	// on Sitebin's own pages (or an allowlisted embed), not from a script.
+	if gated && owner == "" && !a.fromOwnBrowser(r) {
+		writeError(w, 401, "sign in to create sites from the API: "+a.apiAccountHint())
+		return
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, a.cfg.MaxSiteBytes+(10<<20))
 
 	site, editPassword, err := a.st.Create()
