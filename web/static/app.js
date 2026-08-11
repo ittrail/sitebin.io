@@ -66,14 +66,21 @@ function showTicket(body) {
 
   const life = $("t-life");
   if (life) {
-    if (body.expires_at) {
+    if (!body.expires_at) {
+      life.textContent = "No expiry — this site stays up until you delete it.";
+    } else {
       const d = new Date(body.expires_at);
       const hours = Math.round((d - Date.now()) / 3600000);
-      life.textContent = hours <= 48
-        ? "This site disappears in " + hours + " hours. Sign in before then to keep it."
-        : "This site expires " + d.toLocaleString() + " — every change you make pushes that back.";
-    } else {
-      life.textContent = "No expiry — this site stays up until you delete it.";
+      const when = hours <= 48
+        ? "This site disappears in " + hours + " hours"
+        : "This site expires " + d.toLocaleString();
+      if (body.expiry_renews) {
+        life.textContent = when + " — every change you publish pushes that back.";
+      } else if (body.accounts_enabled) {
+        life.textContent = when + ". Sign in before then to keep it.";
+      } else {
+        life.textContent = when + ".";
+      }
     }
   }
 

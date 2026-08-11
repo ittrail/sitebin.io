@@ -312,6 +312,10 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 	bytes, count, _ := a.st.Usage(site)
 	stats := a.st.Stats(site)
 	m := site.Meta
+	accountsEnabled := false
+	if p, ok := ext.Get(); ok {
+		accountsEnabled = p.AccountsEnabled()
+	}
 	payload := map[string]any{
 		"views":                   stats.Views,
 		"last_seen":               stats.LastSeen,
@@ -329,6 +333,8 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"custom_domains":          m.CustomDomains,
 		"expires_at":              m.ExpiresAt,
 		"expiry_cap_days":         a.expiryCap(site),
+		"expiry_renews":           m.OwnerAccountID != "" && m.QuotaExpiryDays > 0 && m.ExpiresAt != nil,
+		"accounts_enabled":        accountsEnabled,
 		"created_at":              m.CreatedAt,
 		"updated_at":              m.UpdatedAt,
 		"files":                   files,

@@ -712,12 +712,23 @@ input::placeholder { color: var(--ink-faint); }
       this.$("t-pass").textContent = body.edit_password;
 
       const life = this.$("t-life");
-      if (life && body.expires_at) {
-        const d = new Date(body.expires_at);
-        const hours = Math.round((d - Date.now()) / 3600000);
-        life.textContent = hours <= 48
-          ? "Disappears in " + hours + " hours — sign in to keep it."
-          : "Expires " + d.toLocaleString() + "; every change pushes that back.";
+      if (life) {
+        if (!body.expires_at) {
+          life.textContent = "No expiry — this site stays up until you delete it.";
+        } else {
+          const d = new Date(body.expires_at);
+          const hours = Math.round((d - Date.now()) / 3600000);
+          const when = hours <= 48
+            ? "Disappears in " + hours + " hours"
+            : "Expires " + d.toLocaleString();
+          if (body.expiry_renews) {
+            life.textContent = when + "; every change you publish pushes that back.";
+          } else if (body.accounts_enabled) {
+            life.textContent = when + " — sign in to keep it.";
+          } else {
+            life.textContent = when + ".";
+          }
+        }
       }
 
       if (this.demo) {
