@@ -121,6 +121,11 @@ type SiteInfo struct {
 	ViewURL   string
 	EditURL   string
 	CreatedAt time.Time
+	// ExpiresAt is when the site stops serving, or nil if it has no expiry. A
+	// downgrade stamps a 30-day grace here, and that date is the only warning
+	// the owner gets before the sweep deletes the site — the dashboard must
+	// show it.
+	ExpiresAt *time.Time
 }
 
 var registered Provider

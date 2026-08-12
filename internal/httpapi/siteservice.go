@@ -26,6 +26,7 @@ func (s siteService) Info(viewID string) (ext.SiteInfo, bool) {
 		ViewURL:   s.a.cfg.ViewURL(site.ViewID),
 		EditURL:   s.a.cfg.EditURL(site.Meta.EditID),
 		CreatedAt: site.Meta.CreatedAt,
+		ExpiresAt: site.Meta.ExpiresAt,
 	}, true
 }
 

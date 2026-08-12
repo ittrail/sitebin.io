@@ -276,6 +276,78 @@ func TestPayGateDashboardShowsManageLink(t *testing.T) {
 	}
 }
 
+// TestDashboardShowsSiteExpiry pins the promise the pricing FAQ makes about
+// cancelling: "your existing sites get 30 days — the date shows on each one in
+// your dashboard". Without it a cancelling customer has 30 days to lose their
+// data and no in-product way to learn the deadline.
+func TestDashboardShowsSiteExpiry(t *testing.T) {
+	p := setupTiers(t)
+	acc, err := p.local.Signup("dates@example.com", "password123", p.tierForNewAccount())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const expiring, permanent = "abcdefghijklmnopqrstuvwxyz", "bbcdefghijklmnopqrstuvwxyz"
+	for _, id := range []string{expiring, permanent} {
+		if err := p.accounts.LinkSite(acc, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	when := time.Now().Add(30 * 24 * time.Hour)
+	sites := p.host.Sites().(*fakeSites)
+	sites.infos[expiring] = ext.SiteInfo{ViewID: expiring, Mode: "webserver", ExpiresAt: &when}
+	sites.infos[permanent] = ext.SiteInfo{ViewID: permanent, Mode: "webserver"}
+
+	mux := serveMux(p)
+	req := httptest.NewRequest("GET", "/account", nil)
+	req.AddCookie(p.sessions.Cookie(acc.ID, acc.TokenVersion))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	body := w.Body.String()
+	if want := "expires " + when.Local().Format("2006-01-02"); !strings.Contains(body, want) {
+		t.Errorf("dashboard does not show the deletion date %q", want)
+	}
+	if !strings.Contains(body, "no expiry") {
+		t.Error("dashboard does not label a site that has no expiry")
+	}
+}
+
+// TestDashboardRendersSitesAfterTheTierSync guards the order of two statements
+// in renderDashboard. This render is the first moment a PayGate tier change is
+// noticed, and the sync it triggers rewrites every site's expiry — so building
+// the rows first shows the owner the pre-change dates on precisely the render
+// where the change is news.
+func TestDashboardRendersSitesAfterTheTierSync(t *testing.T) {
+	srv := pgStub(t, "pro", "active", 200) // upgraded: Pro sites never expire
+	defer srv.Close()
+	p := setupPayGate(t, srv.URL)
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-fresh", "fresh@example.com", "free")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const viewID = "abcdefghijklmnopqrstuvwxyz"
+	if err := p.accounts.LinkSite(acc, viewID); err != nil {
+		t.Fatal(err)
+	}
+	stale := time.Now().Add(3 * 24 * time.Hour) // the date the old Free cap left behind
+	sites := p.host.Sites().(*fakeSites)
+	sites.infos[viewID] = ext.SiteInfo{ViewID: viewID, Mode: "webserver", ExpiresAt: &stale}
+
+	mux := serveMux(p)
+	req := httptest.NewRequest("GET", "/account", nil)
+	req.AddCookie(p.sessions.Cookie(acc.ID, acc.TokenVersion))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	body := w.Body.String()
+	if old := "expires " + stale.Local().Format("2006-01-02"); strings.Contains(body, old) {
+		t.Errorf("dashboard shows %q — the rows were built before the tier sync lifted it", old)
+	}
+	if !strings.Contains(body, "no expiry") {
+		t.Error("dashboard does not show the upgraded site as permanent")
+	}
+}
+
 func TestSyncTierRestampsOwnedSitesFromPayGate(t *testing.T) {
 	srv := pgStub(t, "pro", "active", 200)
 	defer srv.Close()

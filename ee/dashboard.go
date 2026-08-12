@@ -5,6 +5,7 @@ package ee
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/ittrail/sitebin.io/ee/account"
 	"github.com/ittrail/sitebin.io/ee/authn"
@@ -297,8 +298,19 @@ func (p *provider) renderAuth(w http.ResponseWriter, mode, email, errMsg string)
 
 type siteRow struct {
 	ext.SiteInfo
-	SizeText string
-	CSRF     string
+	SizeText   string
+	ExpiryText string
+	CSRF       string
+}
+
+// expiryText is the site row's lifetime line. A downgrade puts a 30-day grace
+// date on every site the account owns, and this is where the owner reads it —
+// the pricing FAQ promises exactly that.
+func expiryText(t *time.Time) string {
+	if t == nil {
+		return "no expiry"
+	}
+	return "expires " + t.Local().Format("2006-01-02")
 }
 
 type tierOption struct {
@@ -324,14 +336,22 @@ type dashView struct {
 func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, flash string) {
 	p.securityHeaders(w)
 	token := p.csrf(acc)
+	// Sync first: this render is the first moment a PayGate tier change becomes
+	// visible, and it restamps every site's expiry. Reading the rows before it
+	// would show the owner the pre-change dates on the one render that matters.
+	p.syncTier(acc)
 	ids, _ := p.accounts.ListSiteIDs(acc)
 	rows := make([]siteRow, 0, len(ids))
 	for _, id := range ids {
 		if info, ok := p.host.Sites().Info(id); ok {
-			rows = append(rows, siteRow{SiteInfo: info, SizeText: humanBytes(info.Bytes), CSRF: token})
+			rows = append(rows, siteRow{
+				SiteInfo:   info,
+				SizeText:   humanBytes(info.Bytes),
+				ExpiryText: expiryText(info.ExpiresAt),
+				CSRF:       token,
+			})
 		}
 	}
-	p.syncTier(acc)
 	current := p.effectiveTier(acc)
 	tier := current.Label
 	if tier == "" {

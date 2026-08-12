@@ -1610,4 +1610,12 @@ func TestSiteServiceApplyQuotaMapsTheGrant(t *testing.T) {
 	if !site.Meta.ExpiryFromTier {
 		t.Error("the grace expiry must be marked as tier-imposed, or a later upgrade will never lift it")
 	}
+	// and the dashboard can read that deadline back out of the same seam
+	info, ok := e.api.SiteService().Info(c.ID)
+	if !ok {
+		t.Fatal("Info: site not found")
+	}
+	if info.ExpiresAt == nil || !info.ExpiresAt.Equal(*site.Meta.ExpiresAt) {
+		t.Errorf("SiteInfo.ExpiresAt = %v, want %v — the dashboard cannot show a date it is not given", info.ExpiresAt, site.Meta.ExpiresAt)
+	}
 }

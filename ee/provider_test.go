@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ittrail/sitebin.io/internal/ext"
 )
@@ -43,6 +44,20 @@ func (s *fakeSites) ApplyQuota(id string, g ext.CreateGrant) error {
 		s.quotas = map[string]ext.CreateGrant{}
 	}
 	s.quotas[id] = g
+	// Mirror just enough of store.ApplyQuota for Info to reflect the restamp:
+	// an uncapped tier lifts a tier expiry, a capped one gives a site that has
+	// none the downgrade grace. Without this the fake would report pre-restamp
+	// data forever and no test could see a stale render.
+	if info, ok := s.infos[id]; ok {
+		switch {
+		case g.MaxExpiryDays <= 0:
+			info.ExpiresAt = nil
+		case info.ExpiresAt == nil:
+			grace := time.Now().Add(30 * 24 * time.Hour)
+			info.ExpiresAt = &grace
+		}
+		s.infos[id] = info
+	}
 	return nil
 }
 
