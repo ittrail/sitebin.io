@@ -139,15 +139,12 @@ func (p *provider) applyBillingUpdate(u billing.Update) error {
 		return err
 	}
 	if changed {
-		if ids, err := p.accounts.ListSiteIDs(acc); err == nil {
-			if t, ok := p.cfg.Tier(acc.Tier); ok {
-				grant := grantFromTier(acc.ID, t)
-				for _, id := range ids {
-					if err := p.host.Sites().ApplyQuota(id, grant); err != nil {
-						slog.Error("billing: could not restamp site", "account", acc.ID, "site", id, "err", err)
-					}
-				}
-			}
+		// acc.Tier is now the new value (Update refreshes it in place), so
+		// syncTier would see no difference; restamp directly.
+		if t, ok := p.cfg.Tier(acc.Tier); ok {
+			p.restampSites(acc, t)
+		} else {
+			slog.Error("billing: tier not found in config; sites not restamped", "account", acc.ID, "tier", acc.Tier)
 		}
 	}
 	return nil

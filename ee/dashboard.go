@@ -4,7 +4,6 @@ package ee
 
 import (
 	"fmt"
-	"log/slog"
 	"net/http"
 
 	"github.com/ittrail/sitebin.io/ee/account"
@@ -190,17 +189,8 @@ func (p *provider) handleSelectTier(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not change tier", http.StatusInternalServerError)
 		return
 	}
-	ids, err := p.accounts.ListSiteIDs(acc)
-	if err != nil {
-		slog.Error("tier change: could not list sites", "account", acc.ID, "err", err)
-	} else {
-		grant := grantFromTier(acc.ID, t)
-		for _, id := range ids {
-			if err := p.host.Sites().ApplyQuota(id, grant); err != nil {
-				slog.Error("tier change: could not restamp site", "account", acc.ID, "site", id, "err", err)
-			}
-		}
-	}
+	// acc.Tier is now t.ID, so syncTier would see no difference; restamp directly.
+	p.restampSites(acc, t)
 	p.redirect(w, r, "/account")
 }
 

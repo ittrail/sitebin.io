@@ -327,11 +327,12 @@ func (p *provider) checkCSRF(r *http.Request, acc *account.Account) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
-// syncTier reconciles an account's sites with its current tier. Tier changes
-// arrive through several doors — the dashboard, a billing webhook, or PayGate,
-// which has no webhook at all and is only ever polled — so rather than hooking
-// each one, every path that already resolves a tier calls this and it does
-// nothing when nothing changed.
+// syncTier reconciles an account's sites with its current tier when a tier
+// change is discovered without any dedicated notice. PayGate has no webhook
+// at all — it is only ever polled — so a dashboard render is the first
+// moment Sitebin can notice a plan change made there. The billing webhook
+// and self-select routes already know the new tier the instant they write
+// it, so they call restampSites directly instead of this.
 //
 // It logs its failures instead of returning them: it runs on request paths
 // whose primary job is something else, and a stale stamp is not worth failing
@@ -353,18 +354,31 @@ func (p *provider) syncTier(acc *account.Account) {
 		slog.Error("tier sync: could not persist tier", "account", acc.ID, "tier", t.ID, "err", err)
 		return
 	}
+	p.restampSites(acc, t)
+}
+
+// restampSites applies tier t's caps to every site acc owns, via
+// ext.SiteService.ApplyQuota, which also reconciles each site's expiry with
+// the new lifetime cap. It is the single place the three tier-change routes
+// (PayGate sync, self-select, billing webhook) do this, so none of them can
+// silently skip logging a failure.
+//
+// Like its callers, it logs failures instead of returning them: a stale
+// stamp is not worth failing the request over, and the cleanup sweep is the
+// backstop.
+func (p *provider) restampSites(acc *account.Account, t eeconfig.Tier) {
 	ids, err := p.accounts.ListSiteIDs(acc)
 	if err != nil {
-		slog.Error("tier sync: could not list sites", "account", acc.ID, "err", err)
+		slog.Error("restamp sites: could not list sites", "account", acc.ID, "tier", t.ID, "err", err)
 		return
 	}
 	grant := grantFromTier(acc.ID, t)
 	for _, id := range ids {
 		if err := p.host.Sites().ApplyQuota(id, grant); err != nil {
-			slog.Error("tier sync: could not restamp site", "account", acc.ID, "site", id, "err", err)
+			slog.Error("restamp sites: could not restamp site", "account", acc.ID, "site", id, "err", err)
 		}
 	}
-	slog.Info("tier sync: restamped owned sites", "account", acc.ID, "tier", t.ID, "sites", len(ids))
+	slog.Info("restamp sites: applied new tier caps", "account", acc.ID, "tier", t.ID, "sites", len(ids))
 }
 
 // tierForNewAccount returns the tier id a new account starts on.

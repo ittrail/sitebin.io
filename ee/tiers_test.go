@@ -127,6 +127,25 @@ func TestSelfSelectTier(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("self-select to paid tier = %d, want 403", w.Code)
 	}
+
+	// a self-select that goes through restamps the account's sites directly
+	// (handleSelectTier just wrote acc.Tier, so syncTier would be a no-op)
+	if err := p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
+		t.Fatal(err)
+	}
+	free := form(url.Values{"csrf": {p.csrf(acc)}, "tier": {"free"}})
+	free.URL.Path = "/account/tier"
+	free.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, free)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("self-select to free tier = %d, want redirect", w.Code)
+	}
+	sites := p.host.Sites().(*fakeSites)
+	g, ok := sites.quotas["abcdefghijklmnopqrstuvwxyz"]
+	if !ok || g.MaxSiteBytes != 1000 || g.MaxExpiryDays != 7 {
+		t.Fatalf("site not restamped by self-select: %+v", g)
+	}
 }
 
 // ---- PayGate as tier source ----
