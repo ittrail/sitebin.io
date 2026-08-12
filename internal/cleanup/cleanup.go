@@ -5,6 +5,7 @@ package cleanup
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"time"
@@ -29,8 +30,8 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 		if site.Meta.ExpiresAt == nil || !now.After(site.Meta.ExpiresAt.Add(grace)) {
 			continue
 		}
-		if keep, err := reconcile(st, site); err != nil {
-			slog.Error("cleanup: tier lookup failed, keeping site", "id", site.ViewID, "err", err)
+		if keep, err := reconcile(st, site, now); err != nil {
+			slog.Error("cleanup: reconcile failed, keeping site", "id", site.ViewID, "err", err)
 			continue
 		} else if keep {
 			slog.Info("cleanup: kept expired site, its owner's tier no longer expires sites", "id", site.ViewID)
@@ -63,8 +64,18 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 // upgrade would otherwise arrive too late to save the site.
 //
 // An error means the owner's tier could not be determined; the caller must keep
-// the site and retry on the next sweep.
-func reconcile(st *store.Store, site *store.Site) (keep bool, err error) {
+// the site and retry on the next sweep. The error is wrapped so the log can
+// tell a provider-side lookup failure apart from a local ApplyQuota failure
+// (a disk error, or the site being deleted concurrently) — the two call for
+// different responses from whoever reads the log.
+//
+// now is the sweep's timestamp, not a fresh read: ApplyQuota takes the site
+// lock and re-reads meta.json from disk, so by the time it returns,
+// site.Meta may reflect a concurrent write (e.g. an upload sliding the
+// expiry forward) that happened while this site waited its turn in the
+// sweep. The keep decision must re-test that fresh expiry against now,
+// not just check it for nil, or such a site would be deleted anyway.
+func reconcile(st *store.Store, site *store.Site, now time.Time) (keep bool, err error) {
 	if site.Meta.OwnerAccountID == "" {
 		return false, nil // anonymous: nothing to look up
 	}
@@ -74,7 +85,7 @@ func reconcile(st *store.Store, site *store.Site) (keep bool, err error) {
 	}
 	grant, found, err := p.QuotaFor(site.Meta.OwnerAccountID)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("quota lookup: %w", err)
 	}
 	if !found {
 		return false, nil // the account is gone; the site is orphaned
@@ -87,9 +98,9 @@ func reconcile(st *store.Store, site *store.Site) (keep bool, err error) {
 		Domains:    grant.MaxCustomDomain,
 		WebDAV:     grant.WebDAV,
 	}, 0); err != nil {
-		return false, err
+		return false, fmt.Errorf("apply quota: %w", err)
 	}
-	return site.Meta.ExpiresAt == nil, nil
+	return site.Meta.ExpiresAt == nil || !now.After(site.Meta.ExpiresAt.Add(grace)), nil
 }
 
 // Run sweeps on the given interval until ctx is cancelled.
