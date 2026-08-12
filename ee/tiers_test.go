@@ -253,3 +253,73 @@ func TestPayGateDashboardShowsManageLink(t *testing.T) {
 		t.Errorf("dashboard should show the PayGate-resolved tier; body header: %.200s", body)
 	}
 }
+
+func TestSyncTierRestampsOwnedSitesFromPayGate(t *testing.T) {
+	srv := pgStub(t, "pro", "active", 200)
+	defer srv.Close()
+	p := setupPayGate(t, srv.URL)
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-sync", "sync@example.com", "free")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
+		t.Fatal(err)
+	}
+
+	p.syncTier(acc)
+
+	if acc.Tier != "pro" {
+		t.Fatalf("stored tier = %q, want pro", acc.Tier)
+	}
+	sites := p.host.Sites().(*fakeSites)
+	g, ok := sites.quotas["abcdefghijklmnopqrstuvwxyz"]
+	if !ok {
+		t.Fatal("owned site was not restamped")
+	}
+	if g.MaxSiteBytes != 5000000 || g.MaxExpiryDays != 0 {
+		t.Fatalf("restamped with the wrong tier: %+v", g)
+	}
+}
+
+func TestSyncTierIsANoOpWhenNothingChanged(t *testing.T) {
+	srv := pgStub(t, "free", "active", 200)
+	defer srv.Close()
+	p := setupPayGate(t, srv.URL)
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-same", "same@example.com", "free")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
+		t.Fatal(err)
+	}
+
+	p.syncTier(acc)
+
+	sites := p.host.Sites().(*fakeSites)
+	if len(sites.quotas) != 0 {
+		t.Fatalf("restamped despite no tier change: %v", sites.quotas)
+	}
+}
+
+func TestSyncTierLeavesEverythingAloneOnLookupFailure(t *testing.T) {
+	srv := pgStub(t, "", "", 500)
+	defer srv.Close()
+	p := setupPayGate(t, srv.URL)
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-down", "down@example.com", "free")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
+		t.Fatal(err)
+	}
+
+	p.syncTier(acc)
+
+	if acc.Tier != "free" {
+		t.Fatalf("stored tier changed during an outage: %q", acc.Tier)
+	}
+	sites := p.host.Sites().(*fakeSites)
+	if len(sites.quotas) != 0 {
+		t.Fatalf("restamped despite a failed lookup: %v", sites.quotas)
+	}
+}

@@ -113,7 +113,8 @@ func (p *provider) applyBillingUpdate(u billing.Update) error {
 	if u.Customer != "" {
 		p.accounts.LinkBilling(acc, u.Provider, u.Customer)
 	}
-	return p.accounts.Update(acc, func(cur *account.Account) error {
+	changed := u.Canceled || u.TierID != ""
+	if err := p.accounts.Update(acc, func(cur *account.Account) error {
 		if cur.Billing == nil {
 			cur.Billing = &account.Billing{}
 		}
@@ -134,7 +135,22 @@ func (p *provider) applyBillingUpdate(u billing.Update) error {
 			cur.Tier = u.TierID
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	if changed {
+		if ids, err := p.accounts.ListSiteIDs(acc); err == nil {
+			if t, ok := p.cfg.Tier(acc.Tier); ok {
+				grant := grantFromTier(acc.ID, t)
+				for _, id := range ids {
+					if err := p.host.Sites().ApplyQuota(id, grant); err != nil {
+						slog.Error("billing: could not restamp site", "account", acc.ID, "site", id, "err", err)
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (p *provider) resolveBillingAccount(u billing.Update) *account.Account {

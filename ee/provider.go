@@ -327,6 +327,46 @@ func (p *provider) checkCSRF(r *http.Request, acc *account.Account) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
+// syncTier reconciles an account's sites with its current tier. Tier changes
+// arrive through several doors — the dashboard, a billing webhook, or PayGate,
+// which has no webhook at all and is only ever polled — so rather than hooking
+// each one, every path that already resolves a tier calls this and it does
+// nothing when nothing changed.
+//
+// It logs its failures instead of returning them: it runs on request paths
+// whose primary job is something else, and a stale stamp is not worth failing
+// a page render over. The cleanup sweep is the backstop that keeps a missed
+// sync from destroying data.
+func (p *provider) syncTier(acc *account.Account) {
+	if p.cfg.Mode != eeconfig.ModeTiers {
+		return
+	}
+	t, err := p.effectiveTierStrict(acc)
+	if err != nil {
+		slog.Warn("tier sync: could not resolve tier", "account", acc.ID, "err", err)
+		return
+	}
+	if t.ID == acc.Tier {
+		return
+	}
+	if err := p.accounts.Update(acc, func(cur *account.Account) error { cur.Tier = t.ID; return nil }); err != nil {
+		slog.Error("tier sync: could not persist tier", "account", acc.ID, "tier", t.ID, "err", err)
+		return
+	}
+	ids, err := p.accounts.ListSiteIDs(acc)
+	if err != nil {
+		slog.Error("tier sync: could not list sites", "account", acc.ID, "err", err)
+		return
+	}
+	grant := grantFromTier(acc.ID, t)
+	for _, id := range ids {
+		if err := p.host.Sites().ApplyQuota(id, grant); err != nil {
+			slog.Error("tier sync: could not restamp site", "account", acc.ID, "site", id, "err", err)
+		}
+	}
+	slog.Info("tier sync: restamped owned sites", "account", acc.ID, "tier", t.ID, "sites", len(ids))
+}
+
 // tierForNewAccount returns the tier id a new account starts on.
 func (p *provider) tierForNewAccount() string {
 	if p.cfg.DefaultTier != "" {
