@@ -1559,3 +1559,55 @@ func TestExplicitExpiryIsNotTierImposed(t *testing.T) {
 		t.Fatal("a caller-chosen expiry must not be marked as tier-imposed")
 	}
 }
+
+// TestSiteServiceApplyQuotaMapsTheGrant covers the join nothing else does. The
+// ee tests assert on the grant handed to a fake SiteService; the store tests
+// call store.ApplyQuota with a hand-built store.Quota. quotaFromGrant sits
+// between them, on the shipping path, exercised by neither — so writing
+// ExpiryDays: g.MaxFiles there would leave the whole suite green while every
+// downgrade stamped a garbage lifetime. Each cap here is a distinct value, so
+// no crossed field can pass.
+func TestSiteServiceApplyQuotaMapsTheGrant(t *testing.T) {
+	e := newEnv(t, nil) // community build: the new site has no caps and no expiry
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+
+	domains := 3
+	webdav := true
+	err := e.api.SiteService().ApplyQuota(c.ID, ext.CreateGrant{
+		OwnerAccountID:  "acct-1",
+		MaxSiteBytes:    1 << 30,
+		MaxFiles:        4242,
+		MaxExpiryDays:   7,
+		MaxCustomDomain: &domains,
+		WebDAV:          &webdav,
+	})
+	if err != nil {
+		t.Fatalf("ApplyQuota: %v", err)
+	}
+
+	site, err := e.st.ByViewID(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if site.Meta.QuotaBytes != 1<<30 || site.Meta.QuotaFiles != 4242 || site.Meta.QuotaExpiryDays != 7 {
+		t.Errorf("caps mismatched: bytes=%d files=%d expiry_days=%d", site.Meta.QuotaBytes, site.Meta.QuotaFiles, site.Meta.QuotaExpiryDays)
+	}
+	if site.Meta.QuotaDomains == nil || *site.Meta.QuotaDomains != 3 {
+		t.Errorf("QuotaDomains = %v, want 3", site.Meta.QuotaDomains)
+	}
+	if site.Meta.QuotaWebDAV == nil || !*site.Meta.QuotaWebDAV {
+		t.Errorf("QuotaWebDAV = %v, want true", site.Meta.QuotaWebDAV)
+	}
+	// The site had no expiry, so this is a downgrade: it gets the 30-day grace,
+	// NOT the tier's own 7-day cap.
+	if site.Meta.ExpiresAt == nil {
+		t.Fatal("downgrade did not stamp the grace expiry")
+	}
+	want := time.Now().Add(store.DowngradeGrace)
+	if d := site.Meta.ExpiresAt.Sub(want); d > time.Minute || d < -time.Minute {
+		t.Errorf("expiry = %v, want ~%v (the 30-day downgrade grace)", site.Meta.ExpiresAt, want)
+	}
+	if !site.Meta.ExpiryFromTier {
+		t.Error("the grace expiry must be marked as tier-imposed, or a later upgrade will never lift it")
+	}
+}
