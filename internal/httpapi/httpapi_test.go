@@ -1558,6 +1558,23 @@ func TestExplicitExpiryIsNotTierImposed(t *testing.T) {
 	if site.Meta.ExpiryFromTier {
 		t.Fatal("a caller-chosen expiry must not be marked as tier-imposed")
 	}
+
+	// The site no longer renews, and the edit page's lifetime copy is driven
+	// entirely by this flag — it has to say so.
+	get := authed(httptest.NewRequest("GET", "/api/sites/"+edit, nil), c.EditPassword)
+	w := e.public(t, get)
+	if w.Code != 200 {
+		t.Fatalf("GET: %d %s", w.Code, w.Body)
+	}
+	var payload struct {
+		ExpiryRenews bool `json:"expiry_renews"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.ExpiryRenews {
+		t.Error("expiry_renews = true after the owner chose a date, but uploads no longer move it")
+	}
 }
 
 // TestSiteServiceApplyQuotaMapsTheGrant covers the join nothing else does. The

@@ -14,9 +14,16 @@ const renewGrace = time.Minute
 // Anonymous sites are excluded deliberately: a drop must not be able to keep
 // itself alive by rewriting one file before it expires. Their lifetime is
 // fixed at creation.
+//
+// An expiry the OWNER chose is excluded too. On a capped tier such a date is
+// always inside the cap, so renewing it would push "delete this on the 20th"
+// out to the full term on the next upload AND relabel it as tier-imposed —
+// after which an upgrade would clear it entirely and the site the owner had
+// scheduled for deletion would live forever. Their date stops sliding, which is
+// what choosing a date ought to mean; the cap still clamps it.
 func (s *Store) renewExpiryLocked(site *Site) error {
 	m := site.Meta
-	if m.OwnerAccountID == "" || m.QuotaExpiryDays <= 0 || m.ExpiresAt == nil {
+	if m.OwnerAccountID == "" || m.QuotaExpiryDays <= 0 || m.ExpiresAt == nil || !m.ExpiryFromTier {
 		return nil
 	}
 	want := time.Now().Add(time.Duration(m.QuotaExpiryDays) * 24 * time.Hour).UTC()
@@ -28,7 +35,6 @@ func (s *Store) renewExpiryLocked(site *Site) error {
 		return err
 	}
 	meta.ExpiresAt = &want
-	meta.ExpiryFromTier = true
 	meta.UpdatedAt = time.Now().UTC()
 	if err := writeMeta(site.dir, meta); err != nil {
 		return err

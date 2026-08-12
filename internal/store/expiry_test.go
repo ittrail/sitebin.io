@@ -7,7 +7,9 @@ import (
 )
 
 // expiringSite returns a site stamped like a tier-capped account site: owned,
-// capped at days, and already carrying an expiry `in` from now.
+// capped at days, and already carrying a tier-imposed expiry `in` from now —
+// which is what creation stamps on such a site, and the only kind of expiry
+// that slides.
 func expiringSite(t *testing.T, s *Store, owner string, days int, in time.Duration) *Site {
 	t.Helper()
 	site, _, err := s.Create()
@@ -19,6 +21,7 @@ func expiringSite(t *testing.T, s *Store, owner string, days int, in time.Durati
 		m.OwnerAccountID = owner
 		m.QuotaExpiryDays = days
 		m.ExpiresAt = &exp
+		m.ExpiryFromTier = true
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -128,16 +131,39 @@ func TestRenewExpiryOnDelete(t *testing.T) {
 	}
 }
 
-func TestRenewMarksExpiryAsTierImposed(t *testing.T) {
+func TestRenewKeepsExpiryMarkedAsTierImposed(t *testing.T) {
 	s := newExpiryStore(t)
 	site := expiringSite(t, s, "acct-1", 7, 2*time.Hour)
-	// the helper sets the expiry directly, so the flag starts false
 	if err := s.SaveFile(site, "index.html", strings.NewReader("x")); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := s.ByViewID(site.ViewID)
 	if !got.Meta.ExpiryFromTier {
-		t.Fatal("renewal did not mark the expiry as tier-imposed")
+		t.Fatal("renewal dropped the tier-imposed mark; a later upgrade would no longer lift the date")
+	}
+}
+
+// TestNoRenewForOwnerChosenExpiry pins the one thing sliding renewal must not
+// touch. On a capped tier an owner-chosen date is always inside the cap, so
+// renewing it would push "delete this on the 20th" out to the full term on the
+// next upload and relabel it as tier-imposed — and an upgrade lifts anything
+// tier-imposed, so the site the owner scheduled for deletion would become
+// permanent instead.
+func TestNoRenewForOwnerChosenExpiry(t *testing.T) {
+	s := newExpiryStore(t)
+	site := quotaSite(t, s, 7, 2*24*time.Hour, false) // the owner picked this date
+	before := *site.Meta.ExpiresAt
+
+	if err := s.SaveFile(site, "index.html", strings.NewReader("x")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := s.ByViewID(site.ViewID)
+	if !got.Meta.ExpiresAt.Equal(before) {
+		t.Fatalf("an upload moved a date the owner chose: %v -> %v", before, got.Meta.ExpiresAt)
+	}
+	if got.Meta.ExpiryFromTier {
+		t.Fatal("an upload relabelled a date the owner chose as tier-imposed; an upgrade would then discard it")
 	}
 }
 
