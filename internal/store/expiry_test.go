@@ -143,6 +143,53 @@ func TestRenewKeepsExpiryMarkedAsTierImposed(t *testing.T) {
 	}
 }
 
+// TestRenewDoesNotCollapseTheDowngradeGrace pins the bug a whole review round
+// on this branch was spent removing through ApplyQuota: a downgrade's 30-day
+// grace has exactly the shape renewExpiryLocked looks for (owned, capped,
+// ExpiryFromTier), so without the floor a single upload during the grace
+// would "renew" it down to the 7-day cap, losing 23 of the 30 days the
+// pricing page and the dashboard promised.
+func TestRenewDoesNotCollapseTheDowngradeGrace(t *testing.T) {
+	s := newExpiryStore(t)
+	site := expiringSite(t, s, "acct-1", 7, DowngradeGrace) // 30-day grace, 7-day cap
+	before := *site.Meta.ExpiresAt
+
+	if err := s.SaveFile(site, "index.html", strings.NewReader("<h1>hi</h1>")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.ByViewID(site.ViewID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Meta.ExpiresAt.Equal(before) {
+		t.Fatalf("an upload during the grace moved it: %v -> %v (grace collapsed toward the cap)", before, got.Meta.ExpiresAt)
+	}
+}
+
+// TestRenewSlidesACloserExpiryToTheFullCap is the other half: the floor added
+// for the grace must not turn renewal into a one-way ratchet that never moves
+// again. An ordinary tier-imposed expiry sitting well inside the cap (not a
+// grace, just a site whose date has not been renewed in a while) still slides
+// out to now + cap on a content write.
+func TestRenewSlidesACloserExpiryToTheFullCap(t *testing.T) {
+	s := newExpiryStore(t)
+	site := expiringSite(t, s, "acct-1", 7, 2*time.Hour) // well inside the 7-day cap
+
+	if err := s.SaveFile(site, "index.html", strings.NewReader("<h1>hi</h1>")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.ByViewID(site.ViewID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Now().Add(7 * 24 * time.Hour)
+	if d := got.Meta.ExpiresAt.Sub(want); d > time.Minute || d < -time.Minute {
+		t.Fatalf("expiry did not slide out to the full cap: got %v, want ~%v", got.Meta.ExpiresAt, want)
+	}
+}
+
 // TestNoRenewForOwnerChosenExpiry pins the one thing sliding renewal must not
 // touch. On a capped tier an owner-chosen date is always inside the cap, so
 // renewing it would push "delete this on the 20th" out to the full term on the

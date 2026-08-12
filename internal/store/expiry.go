@@ -2,10 +2,11 @@ package store
 
 import "time"
 
-// renewGrace is how close a recomputed expiry must be to the stored one for a
-// renewal to be skipped. It keeps a multi-file upload from rewriting meta.json
-// once per file: the first file moves the expiry, the rest land inside the
-// grace window and write nothing.
+// renewGrace is how far past the stored expiry a recomputed one must land for
+// a renewal to happen at all. It keeps a multi-file upload from rewriting
+// meta.json once per file: the first file moves the expiry, the rest recompute
+// almost the same date a moment later and land inside the grace window, so
+// they write nothing.
 const renewGrace = time.Minute
 
 // renewExpiryLocked slides an owned, capped site's expiry to now + cap. The
@@ -21,13 +22,20 @@ const renewGrace = time.Minute
 // after which an upgrade would clear it entirely and the site the owner had
 // scheduled for deletion would live forever. Their date stops sliding, which is
 // what choosing a date ought to mean; the cap still clamps it.
+//
+// A stored expiry beyond now+cap is left alone rather than pulled in. A
+// downgrade's 30-day grace has exactly the shape this function looks for
+// (owned, capped, ExpiryFromTier), so without this a single upload during the
+// grace would "renew" it down to the cap — turning a promised 30 days into 7.
+// A renewal that moves the date closer is a shrink wearing a renewal's name;
+// only pushing the date out, never in, is what "renew" means here.
 func (s *Store) renewExpiryLocked(site *Site) error {
 	m := site.Meta
 	if m.OwnerAccountID == "" || m.QuotaExpiryDays <= 0 || m.ExpiresAt == nil || !m.ExpiryFromTier {
 		return nil
 	}
 	want := time.Now().Add(time.Duration(m.QuotaExpiryDays) * 24 * time.Hour).UTC()
-	if want.Sub(*m.ExpiresAt).Abs() < renewGrace {
+	if want.Sub(*m.ExpiresAt) < renewGrace {
 		return nil
 	}
 	meta, err := readMeta(site.dir)
