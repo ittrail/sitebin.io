@@ -303,6 +303,43 @@ func TestSyncTierRestampsOwnedSitesFromPayGate(t *testing.T) {
 	}
 }
 
+// TestCreateSyncsStaleTierBeforeGranting covers the population the cleanup
+// sweep cannot reach: a customer who downgrades in the billing portal and never
+// opens the dashboard again. Their old sites have no expiry, so the sweep skips
+// them before it ever asks about the tier. Creating a new site is the one
+// moment they always come back for.
+func TestCreateSyncsStaleTierBeforeGranting(t *testing.T) {
+	srv := pgStub(t, "free", "active", 200) // PayGate says they cancelled
+	defer srv.Close()
+	p := setupPayGate(t, srv.URL)
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-lapsed", "lapsed@example.com", "pro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The sync runs before the site-count cap, so the downgrade lands even when
+	// the create it arrived on is refused: Free allows one site and they have one.
+	_, err = p.grantForAccount(acc)
+	var ce *ext.CreateError
+	if !errors.As(err, &ce) || ce.Status != 403 {
+		t.Fatalf("grant = %v, want a 403 max-sites CreateError on the cancelled plan", err)
+	}
+	if acc.Tier != "free" {
+		t.Errorf("stored tier = %q, want free", acc.Tier)
+	}
+	sites := p.host.Sites().(*fakeSites)
+	g, ok := sites.quotas["abcdefghijklmnopqrstuvwxyz"]
+	if !ok {
+		t.Fatal("the stale back catalogue was not restamped: one month of Pro still buys permanent hosting")
+	}
+	if g.MaxSiteBytes != 1000 || g.MaxExpiryDays != 7 {
+		t.Fatalf("back catalogue restamped with the wrong tier: %+v", g)
+	}
+}
+
 func TestSyncTierIsANoOpWhenNothingChanged(t *testing.T) {
 	srv := pgStub(t, "free", "active", 200)
 	defer srv.Close()

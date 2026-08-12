@@ -280,6 +280,15 @@ func (p *provider) grantForAccount(acc *account.Account) (ext.CreateGrant, error
 	if p.cfg.Mode != eeconfig.ModeTiers {
 		return ext.CreateGrant{OwnerAccountID: acc.ID}, nil // accounts mode: ownership only
 	}
+	// Creation is the only moment a downgraded customer is guaranteed to come
+	// back for. Their existing sites have no expiry, so the cleanup sweep skips
+	// them entirely and never consults the tier at all — it is structurally
+	// incapable of noticing a downgrade. Without this call, someone who cancels
+	// in the billing portal and never opens /account again keeps permanent
+	// hosting for their whole back catalogue, which is the bug this branch
+	// exists to kill. syncTier no-ops on a resolve error, so a PayGate outage
+	// still cannot block creation.
+	p.syncTier(acc)
 	tier := p.effectiveTier(acc)
 	if tier.MaxSites > 0 {
 		owned, _ := p.accounts.ListSiteIDs(acc)
