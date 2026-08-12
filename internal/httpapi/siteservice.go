@@ -1,6 +1,9 @@
 package httpapi
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/ittrail/sitebin.io/internal/ext"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
@@ -56,6 +59,14 @@ func (s siteService) Delete(viewID string) error {
 func (s siteService) ApplyQuota(viewID string, g ext.CreateGrant) error {
 	site, err := s.a.st.ByViewID(viewID)
 	if err != nil {
+		// A site the extension still has an ownership marker for can have been
+		// deleted from the edit page or swept away — neither notifies it. Report
+		// that as the seam's own ErrSiteGone (not the store's ErrNotFound, which
+		// must not cross the seam) so the caller can drop the stale marker
+		// instead of retrying a restamp that can never succeed.
+		if errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("%w: %s", ext.ErrSiteGone, viewID)
+		}
 		return err
 	}
 	return s.a.st.ApplyQuota(site, quotaFromGrant(g), store.DowngradeGrace)

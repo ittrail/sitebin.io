@@ -4,6 +4,7 @@ package ee
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -40,6 +41,14 @@ func (s *fakeSites) ApplyQuota(id string, g ext.CreateGrant) error {
 	if err := s.applyErrs[id]; err != nil {
 		return err
 	}
+	info, ok := s.infos[id]
+	if !ok {
+		// The real siteService looks the site up first and reports a stale
+		// reference as ErrSiteGone. A fake that quietly succeeds for ids it has
+		// never seen hides the whole dangling-ownership-marker failure mode, so
+		// tests must register every site they link.
+		return fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
+	}
 	if s.quotas == nil {
 		s.quotas = map[string]ext.CreateGrant{}
 	}
@@ -48,17 +57,23 @@ func (s *fakeSites) ApplyQuota(id string, g ext.CreateGrant) error {
 	// an uncapped tier lifts a tier expiry, a capped one gives a site that has
 	// none the downgrade grace. Without this the fake would report pre-restamp
 	// data forever and no test could see a stale render.
-	if info, ok := s.infos[id]; ok {
-		switch {
-		case g.MaxExpiryDays <= 0:
-			info.ExpiresAt = nil
-		case info.ExpiresAt == nil:
-			grace := time.Now().Add(30 * 24 * time.Hour)
-			info.ExpiresAt = &grace
-		}
-		s.infos[id] = info
+	switch {
+	case g.MaxExpiryDays <= 0:
+		info.ExpiresAt = nil
+	case info.ExpiresAt == nil:
+		grace := time.Now().Add(30 * 24 * time.Hour)
+		info.ExpiresAt = &grace
 	}
+	s.infos[id] = info
 	return nil
+}
+
+// site registers a site the fake knows about, which every test that links an id
+// to an account must do: ApplyQuota reports an unregistered id as ext.ErrSiteGone.
+func (s *fakeSites) site(id string) {
+	if _, ok := s.infos[id]; !ok {
+		s.infos[id] = ext.SiteInfo{ViewID: id, Mode: "webserver"}
+	}
 }
 
 type fakeHost struct {

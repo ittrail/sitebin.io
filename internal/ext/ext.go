@@ -9,9 +9,21 @@
 package ext
 
 import (
+	"errors"
 	"net/http"
 	"time"
 )
+
+// ErrSiteGone reports that the site no longer exists; the caller's reference is
+// stale. It is the seam's own sentinel, so the core's store error types do not
+// cross into the extension.
+//
+// It exists because the extension keeps its own ownership markers and a site
+// can be deleted without it hearing about it (the edit page's delete and the
+// cleanup sweep both go straight to the store). A caller holding such a marker
+// has not failed at anything — it has learned the marker is stale and should
+// drop it and carry on, rather than treating the site as unreachable.
+var ErrSiteGone = errors.New("ext: site no longer exists")
 
 // Provider is implemented by the enterprise extension. Its methods are the
 // only surface the core depends on; the core has no compile-time reference to
@@ -108,7 +120,10 @@ type SiteService interface {
 	// Delete removes a site and its indexes.
 	Delete(viewID string) error
 	// ApplyQuota restamps a site's per-site caps from a grant and reconciles its
-	// expiry with the new lifetime cap.
+	// expiry with the new lifetime cap. It returns an error wrapping ErrSiteGone
+	// when viewID names a site that no longer exists, which callers holding
+	// their own ownership records must treat as "drop the record", not as a
+	// failure.
 	ApplyQuota(viewID string, g CreateGrant) error
 }
 

@@ -13,7 +13,9 @@ import (
 
 	"github.com/ittrail/sitebin.io/ee/account"
 	"github.com/ittrail/sitebin.io/internal/cleanup"
+	"github.com/ittrail/sitebin.io/internal/config"
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/httpapi"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
@@ -65,6 +67,7 @@ func TestTierMaxSitesEnforced(t *testing.T) {
 	}
 	// simulate owning one site (free tier max_sites=1)
 	p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz")
+	p.host.Sites().(*fakeSites).site("abcdefghijklmnopqrstuvwxyz")
 
 	_, err := p.grantForAccount(acc)
 	var ce *ext.CreateError
@@ -136,6 +139,7 @@ func TestSelfSelectTier(t *testing.T) {
 	if err := p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
 		t.Fatal(err)
 	}
+	p.host.Sites().(*fakeSites).site("abcdefghijklmnopqrstuvwxyz")
 	free := form(url.Values{"csrf": {p.csrf(acc)}, "tier": {"free"}})
 	free.URL.Path = "/account/tier"
 	free.AddCookie(cookie)
@@ -359,6 +363,7 @@ func TestSyncTierRestampsOwnedSitesFromPayGate(t *testing.T) {
 	if err := p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
 		t.Fatal(err)
 	}
+	p.host.Sites().(*fakeSites).site("abcdefghijklmnopqrstuvwxyz")
 
 	p.syncTier(acc)
 
@@ -391,6 +396,7 @@ func TestCreateSyncsStaleTierBeforeGranting(t *testing.T) {
 	if err := p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
 		t.Fatal(err)
 	}
+	p.host.Sites().(*fakeSites).site("abcdefghijklmnopqrstuvwxyz")
 
 	// The sync runs before the site-count cap, so the downgrade lands even when
 	// the create it arrived on is refused: Free allows one site and they have one.
@@ -423,6 +429,7 @@ func TestSyncTierIsANoOpWhenNothingChanged(t *testing.T) {
 	if err := p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
 		t.Fatal(err)
 	}
+	p.host.Sites().(*fakeSites).site("abcdefghijklmnopqrstuvwxyz")
 
 	p.syncTier(acc)
 
@@ -459,6 +466,7 @@ func TestSyncTierRefusesToActOnAnUnconfiguredTier(t *testing.T) {
 	if err := p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
 		t.Fatal(err)
 	}
+	p.host.Sites().(*fakeSites).site("abcdefghijklmnopqrstuvwxyz")
 
 	p.syncTier(acc)
 
@@ -545,12 +553,13 @@ func TestSyncTierRetriesAfterAPartialRestamp(t *testing.T) {
 		t.Fatal(err)
 	}
 	const good, bad = "abcdefghijklmnopqrstuvwxyz", "bbcdefghijklmnopqrstuvwxyz"
+	sites := p.host.Sites().(*fakeSites)
 	for _, id := range []string{good, bad} {
 		if err := p.accounts.LinkSite(acc, id); err != nil {
 			t.Fatal(err)
 		}
+		sites.site(id) // both sites exist; only the write to one of them fails
 	}
-	sites := p.host.Sites().(*fakeSites)
 	sites.applyErrs = map[string]error{bad: errors.New("disk full")}
 
 	p.syncTier(acc)
@@ -576,6 +585,222 @@ func TestSyncTierRetriesAfterAPartialRestamp(t *testing.T) {
 	}
 }
 
+// ---- against the real store, through the shipping SiteService ----
+//
+// The two questions below cannot be asked of fakeSites: one is about the
+// store's expiry transition table, the other about a site that really is gone.
+// These wire the provider to httpapi's SiteService over a real store, so the
+// whole path (restampSites → siteService.ApplyQuota → store.ApplyQuota) runs.
+
+type storeHost struct {
+	dir   string
+	sites ext.SiteService
+}
+
+func (h *storeHost) DataDir() string        { return h.dir }
+func (h *storeHost) BaseDomain() string     { return "sitebin.example" }
+func (h *storeHost) HTTPOnly() bool         { return true }
+func (h *storeHost) Secret() []byte         { return []byte("0123456789abcdef0123456789abcdef") }
+func (h *storeHost) PathViews() bool        { return false }
+func (h *storeHost) Sites() ext.SiteService { return h.sites }
+
+// setupRealSites returns a tiers provider whose SiteService is the shipping one.
+// paygateURL may be empty for a provider with no PayGate.
+func setupRealSites(t *testing.T, paygateURL string) (*provider, *store.Store) {
+	t.Helper()
+	t.Setenv("SITEBIN_ACCOUNT_MODE", "tiers")
+	t.Setenv("SITEBIN_TIERS", tiersJSON)
+	t.Setenv("SITEBIN_DEFAULT_TIER", "free")
+	if paygateURL != "" {
+		t.Setenv("SITEBIN_PAYGATE_URL", paygateURL)
+		t.Setenv("SITEBIN_PAYGATE_APP_ID", "sitebin")
+		t.Setenv("SITEBIN_PAYGATE_API_KEY", "ssk_test_k")
+		t.Setenv("SITEBIN_OAUTH_OIDC_ISSUER", "https://auth.stack.example/api/v1/sitebin")
+		t.Setenv("SITEBIN_OAUTH_OIDC_CLIENT_ID", "sitebin")
+	}
+	st, err := store.New(t.TempDir(), "sitebin.example", 1<<20, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api, err := httpapi.New(config.Config{BaseDomain: "sitebin.example", HTTPOnly: true}, st,
+		[]byte("0123456789abcdef0123456789abcdef"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := newProvider()
+	if err := p.Init(&storeHost{dir: t.TempDir(), sites: api.SiteService()}); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	return p, st
+}
+
+// paidSite creates a site stamped like one made on the Pro tier: owned,
+// uncapped lifetime, no expiry at all.
+func paidSite(t *testing.T, st *store.Store, owner string) *store.Site {
+	t.Helper()
+	site, _, err := st.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Update(site, func(m *store.Meta) error {
+		m.OwnerAccountID = owner
+		m.QuotaBytes = 5000000
+		m.QuotaFiles = 500
+		m.QuotaExpiryDays = 0
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return site
+}
+
+// TestSyncTierHealsADanglingMarkerAndKeepsTheGrace is the Critical, end to end.
+//
+// Ownership markers outlive their sites: the edit page's delete and the cleanup
+// sweep both go straight to the store and tell the extension nothing. A marker
+// left behind used to make every restamp fail, which meant the stored tier was
+// never persisted — so the account re-ran the whole restamp on every dashboard
+// render and every create, forever. And because the second pass saw the 30-day
+// grace the first one had just stamped sitting beyond the new 7-day cap, it
+// clamped it: the customer lost their sites 23 days before the date the pricing
+// page promised and their dashboard showed them.
+func TestSyncTierHealsADanglingMarkerAndKeepsTheGrace(t *testing.T) {
+	srv := pgStub(t, "free", "active", 200) // they cancelled Pro
+	defer srv.Close()
+	p, st := setupRealSites(t, srv.URL)
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-dangling", "dangling@example.com", "pro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := paidSite(t, st, acc.ID)
+	const gone = "zzzzzzzzzzzzzzzzzzzzzzzzzz" // deleted from the edit page; the marker stayed
+	for _, id := range []string{live.ViewID, gone} {
+		if err := p.accounts.LinkSite(acc, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	p.syncTier(acc)
+
+	reload, err := p.accounts.ByID(acc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reload.Tier != "free" {
+		t.Fatalf("persisted tier = %q, want free — one deleted site blocked the downgrade for good", reload.Tier)
+	}
+	if p.owns(acc, gone) {
+		t.Error("the stale ownership marker survived; the account cannot heal itself")
+	}
+	ids, _ := p.accounts.ListSiteIDs(acc)
+	if len(ids) != 1 || ids[0] != live.ViewID {
+		t.Fatalf("owned sites after the sync = %v, want just the live one", ids)
+	}
+
+	got, err := st.ByViewID(live.ViewID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Meta.QuotaBytes != 1000 || got.Meta.QuotaExpiryDays != 7 {
+		t.Fatalf("live site not restamped with the free caps: %+v", got.Meta)
+	}
+	if got.Meta.ExpiresAt == nil {
+		t.Fatal("the downgrade did not stamp the 30-day grace")
+	}
+	grace := *got.Meta.ExpiresAt
+	if want := time.Now().Add(store.DowngradeGrace); grace.Sub(want) > time.Minute || grace.Sub(want) < -time.Minute {
+		t.Fatalf("grace = %v, want ~%v", grace, want)
+	}
+
+	// A later pass — another dashboard render, another create — must be a no-op.
+	p.syncTier(acc)
+
+	after, err := st.ByViewID(live.ViewID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.Meta.ExpiresAt.Equal(grace) {
+		t.Fatalf("a second pass moved the grace: %v -> %v — the customer loses the site early", grace, after.Meta.ExpiresAt)
+	}
+}
+
+// TestRestampSitesTwiceKeepsTheDowngradeGrace covers the same destruction by its
+// other routes: re-selecting the tier already active, or a repeated
+// subscription.updated webhook, both call restampSites directly with a tier that
+// has not changed.
+func TestRestampSitesTwiceKeepsTheDowngradeGrace(t *testing.T) {
+	p, st := setupRealSites(t, "")
+	acc, err := p.local.Signup("repeat@example.com", "password123", "pro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	site := paidSite(t, st, acc.ID)
+	if err := p.accounts.LinkSite(acc, site.ViewID); err != nil {
+		t.Fatal(err)
+	}
+	free, ok := p.cfg.Tier("free")
+	if !ok {
+		t.Fatal("free tier missing from the test config")
+	}
+
+	if err := p.restampSites(acc, free); err != nil {
+		t.Fatalf("first restamp: %v", err)
+	}
+	first, err := st.ByViewID(site.ViewID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Meta.ExpiresAt == nil {
+		t.Fatal("the downgrade did not stamp the grace")
+	}
+	grace := *first.Meta.ExpiresAt
+
+	if err := p.restampSites(acc, free); err != nil {
+		t.Fatalf("second restamp: %v", err)
+	}
+	got, err := st.ByViewID(site.ViewID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Meta.ExpiresAt.Equal(grace) {
+		t.Fatalf("the repeat restamp moved the grace: %v -> %v", grace, got.Meta.ExpiresAt)
+	}
+	if want := time.Now().Add(store.DowngradeGrace); got.Meta.ExpiresAt.Sub(want) > time.Minute || got.Meta.ExpiresAt.Sub(want) < -time.Minute {
+		t.Fatalf("grace = %v, want ~%v (the 30 days the pricing page promises)", got.Meta.ExpiresAt, want)
+	}
+}
+
+// TestRestampSitesUnlinksOnlyTheVanishedSite keeps the self-heal narrow: a real
+// failure (a disk error) must still block the tier persist and must NOT drop the
+// marker, or a transient error would silently disown a live site.
+func TestRestampSitesUnlinksOnlyTheVanishedSite(t *testing.T) {
+	p := setupTiers(t)
+	acc, err := p.local.Signup("narrow@example.com", "password123", "pro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const broken, gone = "abcdefghijklmnopqrstuvwxyz", "bbcdefghijklmnopqrstuvwxyz"
+	sites := p.host.Sites().(*fakeSites)
+	for _, id := range []string{broken, gone} {
+		if err := p.accounts.LinkSite(acc, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sites.site(broken) // exists, but the write fails
+	sites.applyErrs = map[string]error{broken: errors.New("disk full")}
+
+	free, _ := p.cfg.Tier("free")
+	if err := p.restampSites(acc, free); err == nil {
+		t.Fatal("restamp reported success while a live site kept its old caps")
+	}
+	if !p.owns(acc, broken) {
+		t.Error("a site that merely failed to be written was disowned")
+	}
+	if p.owns(acc, gone) {
+		t.Error("the marker of a site that no longer exists was kept")
+	}
+}
+
 func TestSyncTierLeavesEverythingAloneOnLookupFailure(t *testing.T) {
 	srv := pgStub(t, "", "", 500)
 	defer srv.Close()
@@ -587,6 +812,7 @@ func TestSyncTierLeavesEverythingAloneOnLookupFailure(t *testing.T) {
 	if err := p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
 		t.Fatal(err)
 	}
+	p.host.Sites().(*fakeSites).site("abcdefghijklmnopqrstuvwxyz")
 
 	p.syncTier(acc)
 

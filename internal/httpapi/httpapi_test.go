@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -1634,5 +1635,36 @@ func TestSiteServiceApplyQuotaMapsTheGrant(t *testing.T) {
 	}
 	if info.ExpiresAt == nil || !info.ExpiresAt.Equal(*site.Meta.ExpiresAt) {
 		t.Errorf("SiteInfo.ExpiresAt = %v, want %v — the dashboard cannot show a date it is not given", info.ExpiresAt, site.Meta.ExpiresAt)
+	}
+}
+
+// TestSiteServiceApplyQuotaReportsAVanishedSite pins the answer this seam owes a
+// caller holding a stale reference. The extension keeps its own ownership
+// markers and nothing tells it when a site is deleted from the edit page or
+// removed by the cleanup sweep, so restamping an id that no longer exists is
+// routine, not exceptional. It has to arrive as ext.ErrSiteGone ("your
+// reference is stale, drop it"): as an ordinary error it blocks the owning
+// account's entire tier sync forever, and as the store's own ErrNotFound it
+// drags a core error type across a seam whose whole point is that it does not.
+func TestSiteServiceApplyQuotaReportsAVanishedSite(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	site, err := e.st.ByViewID(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.Delete(site); err != nil { // deleted anywhere but the dashboard
+		t.Fatal(err)
+	}
+
+	err = e.api.SiteService().ApplyQuota(c.ID, ext.CreateGrant{OwnerAccountID: "acct-1", MaxExpiryDays: 7})
+	if !errors.Is(err, ext.ErrSiteGone) {
+		t.Fatalf("ApplyQuota for a deleted site = %v, want an error wrapping ext.ErrSiteGone", err)
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		t.Error("store.ErrNotFound leaked across the ext seam")
+	}
+	if !strings.Contains(err.Error(), c.ID) {
+		t.Errorf("error does not name the site: %v", err)
 	}
 }

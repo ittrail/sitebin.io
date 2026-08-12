@@ -424,9 +424,10 @@ func (p *provider) syncTier(acc *account.Account) {
 	// caps forever. Leaving it stale costs one repeated pass and converges;
 	// writing it first makes a partial failure permanent.
 	//
-	// The restamp is not perfectly idempotent — the "no expiry → now + 30 days"
-	// row stamps a fresh grace window each pass — but that errs toward the
-	// customer and settles as soon as one full pass succeeds.
+	// The retry is safe because restamping is idempotent: once the first pass
+	// has stamped the new cap on a site, a second pass with the same tier sees
+	// an unchanged cap and leaves the expiry — including a freshly stamped
+	// 30-day downgrade grace — exactly where it is. See store.ApplyQuota.
 	if err := p.restampSites(acc, t); err != nil {
 		slog.Error("tier sync: leaving the stored tier stale so the next pass retries the restamp",
 			"account", acc.ID, "tier", t.ID, "err", err)
@@ -447,6 +448,14 @@ func (p *provider) syncTier(acc *account.Account) {
 // log may ignore the returned error; it exists for syncTier, which uses it to
 // decide whether the account's stored tier may be advanced yet. A site that
 // could not be restamped never stops the others from being tried.
+//
+// A site that no longer exists is NOT a failure. Ownership markers outlive the
+// site whenever it is deleted anywhere but the dashboard — the edit page's
+// delete and the cleanup sweep both go straight to the store — and a dangling
+// marker that counted as a failure would block this account's tier from ever
+// being persisted again, re-running the whole restamp on every dashboard render
+// and every site creation for good. The marker is dropped instead, so the
+// account heals itself on the pass that discovers it.
 func (p *provider) restampSites(acc *account.Account, t eeconfig.Tier) error {
 	ids, err := p.accounts.ListSiteIDs(acc)
 	if err != nil {
@@ -455,8 +464,24 @@ func (p *provider) restampSites(acc *account.Account, t eeconfig.Tier) error {
 	}
 	grant := grantFromTier(acc.ID, t)
 	var failed []error
+	stamped := 0
 	for _, id := range ids {
-		if err := p.host.Sites().ApplyQuota(id, grant); err != nil {
+		err := p.host.Sites().ApplyQuota(id, grant)
+		switch {
+		case err == nil:
+			stamped++
+		case errors.Is(err, ext.ErrSiteGone):
+			slog.Info("restamp sites: dropping the ownership marker of a site that no longer exists",
+				"account", acc.ID, "site", id)
+			if err := p.accounts.UnlinkSite(acc, id); err != nil {
+				// The marker survives to the next pass, which will discover it
+				// is stale again and retry the unlink. That is a nuisance, not a
+				// failure of the restamp, so it must not block the tier persist —
+				// blocking on it is exactly the deadlock this arm exists to end.
+				slog.Error("restamp sites: could not drop a stale ownership marker",
+					"account", acc.ID, "site", id, "err", err)
+			}
+		default:
 			slog.Error("restamp sites: could not restamp site", "account", acc.ID, "site", id, "err", err)
 			failed = append(failed, fmt.Errorf("site %s: %w", id, err))
 		}
@@ -464,7 +489,7 @@ func (p *provider) restampSites(acc *account.Account, t eeconfig.Tier) error {
 	if len(failed) > 0 {
 		return errors.Join(failed...)
 	}
-	slog.Info("restamp sites: applied new tier caps", "account", acc.ID, "tier", t.ID, "sites", len(ids))
+	slog.Info("restamp sites: applied new tier caps", "account", acc.ID, "tier", t.ID, "sites", stamped)
 	return nil
 }
 

@@ -32,6 +32,7 @@ func TestApplyBillingUpgradeAndCancel(t *testing.T) {
 	if err := p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
 		t.Fatal(err)
 	}
+	p.host.Sites().(*fakeSites).site("abcdefghijklmnopqrstuvwxyz")
 
 	// upgrade to pro via a completed checkout
 	err := p.applyBillingUpdate(billing.Update{
