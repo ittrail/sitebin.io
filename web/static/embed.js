@@ -724,7 +724,9 @@ input::placeholder { color: var(--ink-faint); }
           if (body.expiry_renews) {
             life.textContent = when + "; every change you publish pushes that back.";
           } else if (body.accounts_enabled) {
-            life.textContent = when + " — this one's fixed; a free account renews your next one.";
+            // expiry_renews is false for an anonymous drop AND for a signed-in
+            // owner who chose this date, so the copy has to fit both.
+            life.textContent = when + " — that date is fixed; publishing changes won't push it back. Account-owned sites renew, unless you pick the date.";
           } else {
             life.textContent = when + ".";
           }

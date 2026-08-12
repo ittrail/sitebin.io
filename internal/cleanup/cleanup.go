@@ -39,7 +39,12 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 			slog.Error("cleanup: reconcile failed, keeping site", "id", site.ViewID, "owner", site.Meta.OwnerAccountID, "err", err)
 			continue
 		} else if keep {
-			slog.Info("cleanup: kept expired site, its owner's tier no longer expires sites", "id", site.ViewID, "owner", site.Meta.OwnerAccountID)
+			// Two shapes of reprieve reach this line: the owner's current tier
+			// no longer expires sites at all (expires is nil), or it still does
+			// but its cap grew and carried the date out with it. The date says
+			// which, so the message must not claim either.
+			slog.Info("cleanup: kept expired site, its owner's current tier gives it more time",
+				"id", site.ViewID, "owner", site.Meta.OwnerAccountID, "expires", site.Meta.ExpiresAt)
 			continue
 		}
 		if err := st.Delete(site); err != nil {
