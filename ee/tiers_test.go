@@ -9,9 +9,12 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ittrail/sitebin.io/ee/account"
+	"github.com/ittrail/sitebin.io/internal/cleanup"
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 const tiersJSON = `[
@@ -317,6 +320,106 @@ func TestSyncTierIsANoOpWhenNothingChanged(t *testing.T) {
 	sites := p.host.Sites().(*fakeSites)
 	if len(sites.quotas) != 0 {
 		t.Fatalf("restamped despite no tier change: %v", sites.quotas)
+	}
+}
+
+// ---- an account on a tier id the config does not have ----
+//
+// A renamed tier id, a truncated tiers.json or a half-applied env rollout puts
+// accounts on tier ids this instance cannot resolve. The only record of what
+// they were on is acc.Tier itself, so nothing may overwrite it, and no site may
+// be judged against the guessed default cap.
+
+// unknownTierAccount returns an account whose stored tier id is not configured.
+func unknownTierAccount(t *testing.T, p *provider, email string) *account.Account {
+	t.Helper()
+	acc, err := p.local.Signup(email, "password123", p.tierForNewAccount())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the operator renamed "free" to "starter" without migrating accounts
+	if err := p.accounts.Update(acc, func(cur *account.Account) error { cur.Tier = "starter"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	return acc
+}
+
+func TestSyncTierRefusesToActOnAnUnconfiguredTier(t *testing.T) {
+	p := setupTiers(t)
+	acc := unknownTierAccount(t, p, "renamed@example.com")
+	if err := p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
+		t.Fatal(err)
+	}
+
+	p.syncTier(acc)
+
+	if acc.Tier != "starter" {
+		t.Fatalf("stored tier rewritten to a guess: %q — fixing the config can no longer restore it", acc.Tier)
+	}
+	reload, _ := p.accounts.ByID(acc.ID)
+	if reload.Tier != "starter" {
+		t.Fatalf("persisted tier rewritten to a guess: %q", reload.Tier)
+	}
+	sites := p.host.Sites().(*fakeSites)
+	if len(sites.quotas) != 0 {
+		t.Fatalf("sites restamped from a guessed tier: %v", sites.quotas)
+	}
+}
+
+func TestQuotaForRefusesToGuessAnUnconfiguredTier(t *testing.T) {
+	p := setupTiers(t)
+	acc := unknownTierAccount(t, p, "renamed2@example.com")
+
+	_, _, err := p.QuotaFor(acc.ID)
+	if err == nil {
+		t.Fatal("QuotaFor answered with the default tier's caps for an unconfigured tier; the sweep would delete against a guess")
+	}
+	if !errors.Is(err, errUnknownTier) {
+		t.Fatalf("QuotaFor error = %v, want errUnknownTier", err)
+	}
+}
+
+// TestSweepKeepsSiteOfAccountOnUnconfiguredTier runs the real cleanup sweep
+// against the real enterprise provider: the seam contract ("a non-nil error
+// means keep") is only worth anything if this provider actually produces one.
+func TestSweepKeepsSiteOfAccountOnUnconfiguredTier(t *testing.T) {
+	p := setupTiers(t)
+	acc := unknownTierAccount(t, p, "renamed3@example.com")
+
+	// the package init() registered a bare provider; swap in this configured one
+	ext.Reset()
+	ext.Register(p)
+	defer func() { ext.Reset(); ext.Register(newProvider()) }()
+
+	st, err := store.New(t.TempDir(), "sitebin.example", 1<<20, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	site, _, err := st.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	when := now.Add(-25 * time.Hour) // expired well past the deletion grace
+	if err := st.Update(site, func(m *store.Meta) error {
+		m.OwnerAccountID = acc.ID
+		m.QuotaExpiryDays = 7
+		m.ExpiresAt = &when
+		m.ExpiryFromTier = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := cleanup.Sweep(st, now)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if removed != 0 {
+		t.Fatalf("removed = %d, want 0 — a config mistake must not delete a customer's sites", removed)
+	}
+	if _, err := st.ByViewID(site.ViewID); err != nil {
+		t.Fatalf("site deleted because its owner's tier id is missing from the config: %v", err)
 	}
 }
 

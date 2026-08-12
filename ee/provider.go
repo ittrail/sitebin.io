@@ -153,51 +153,97 @@ func (p *provider) AuthorizeCreate(r *http.Request) (ext.CreateGrant, error) {
 	return ext.CreateGrant{}, &ext.CreateError{Status: 401, Msg: "sign in to create a site: " + p.baseURL() + "/account"}
 }
 
+// errUnknownTier reports that an account names a tier id the configuration does
+// not contain — a renamed id, a truncated tiers.json, a bad env rollout. It is
+// an operator mistake, never a customer state, and the only honest answer is
+// "unknown": the default tier is a guess, and acting on that guess would
+// downgrade the account and start a deletion countdown on its sites with no
+// record left of what the account was actually on.
+var errUnknownTier = errors.New("account references a tier id that is not configured")
+
+// paygateTier resolves an account's tier from PayGate, when PayGate is
+// configured and governs that account. ok=false with a nil error means PayGate
+// does not govern this account, has no subscription for it, or answered with a
+// tier id this instance does not configure — all of which mean "fall back to
+// the stored tier". Both effectiveTier and effectiveTierStrict go through here
+// so their PayGate handling cannot drift apart.
+func (p *provider) paygateTier(acc *account.Account) (eeconfig.Tier, bool, error) {
+	if p.paygate == nil || acc.Provider != account.OIDCProv || acc.OAuthSubject == "" {
+		return eeconfig.Tier{}, false, nil
+	}
+	id, ok, err := p.paygate.TierFor(context.Background(), acc.OAuthSubject)
+	if err != nil {
+		return eeconfig.Tier{}, false, fmt.Errorf("paygate tier lookup for %s: %w", acc.ID, err)
+	}
+	if !ok {
+		return eeconfig.Tier{}, false, nil
+	}
+	if t, found := p.cfg.Tier(id); found {
+		return t, true, nil
+	}
+	slog.Warn("paygate returned a tier missing from tiers config; using stored tier", "tier", id)
+	return eeconfig.Tier{}, false, nil
+}
+
+// storedTier resolves the tier recorded on the account itself. An account with
+// no tier at all (a fresh account, or one created before tiers mode was turned
+// on) legitimately starts on the configured default, so that answer is
+// authoritative.
+//
+// authoritative=false means the account NAMES a tier the configuration does not
+// have: the returned default is a guess about a plan nobody configured. Callers
+// that persist or delete must not act on it — see errUnknownTier.
+func (p *provider) storedTier(acc *account.Account) (eeconfig.Tier, bool) {
+	if acc.Tier == "" {
+		t, ok := p.cfg.Tier(p.cfg.DefaultTier)
+		return t, ok
+	}
+	if t, ok := p.cfg.Tier(acc.Tier); ok {
+		return t, true
+	}
+	t, _ := p.cfg.Tier(p.cfg.DefaultTier)
+	return t, false
+}
+
 // effectiveTier resolves the tier that governs an account's quotas. With
 // PayGate configured, accounts signed in through the generic OIDC provider
 // (their OAuth subject is the stack user id) resolve live from PayGate;
 // everything else — other providers, unknown tier ids, PayGate misses or
 // outages — falls back to the stored tier, then the default.
+//
+// It fails open, so it is the right choice for creation: a config or PayGate
+// problem must not stop a customer publishing. Callers that PERSIST the answer
+// or act destructively on it (tier sync, the cleanup sweep's quota lookup) must
+// use effectiveTierStrict instead, which reports what this one hides.
 func (p *provider) effectiveTier(acc *account.Account) eeconfig.Tier {
-	if p.paygate != nil && acc.Provider == account.OIDCProv && acc.OAuthSubject != "" {
-		id, ok, err := p.paygate.TierFor(context.Background(), acc.OAuthSubject)
-		switch {
-		case err != nil:
-			slog.Warn("paygate lookup failed; using stored tier", "account", acc.ID, "err", err)
-		case ok:
-			if t, found := p.cfg.Tier(id); found {
-				return t
-			}
-			slog.Warn("paygate returned a tier missing from tiers config; using stored tier", "tier", id)
-		}
-	}
-	if t, ok := p.cfg.Tier(acc.Tier); ok {
+	t, ok, err := p.paygateTier(acc)
+	switch {
+	case err != nil:
+		slog.Warn("paygate lookup failed; using stored tier", "account", acc.ID, "err", err)
+	case ok:
 		return t
 	}
-	t, _ := p.cfg.Tier(p.cfg.DefaultTier)
+	t, _ = p.storedTier(acc) // fail open: a guessed cap beats refusing to serve
 	return t
 }
 
 // effectiveTierStrict resolves an account's tier like effectiveTier, but
-// surfaces a PayGate failure instead of falling back to the stored tier.
-// Callers that would destroy data on a wrong answer use this one.
+// returns an error instead of guessing: a PayGate failure, or (wrapping
+// errUnknownTier) an account naming a tier this instance does not configure.
+// Callers that would destroy data or overwrite the stored tier on a wrong
+// answer use this one, and get no tier at all when the answer is not known.
 func (p *provider) effectiveTierStrict(acc *account.Account) (eeconfig.Tier, error) {
-	if p.paygate != nil && acc.Provider == account.OIDCProv && acc.OAuthSubject != "" {
-		id, ok, err := p.paygate.TierFor(context.Background(), acc.OAuthSubject)
-		if err != nil {
-			return eeconfig.Tier{}, fmt.Errorf("paygate tier lookup for %s: %w", acc.ID, err)
-		}
-		if ok {
-			if t, found := p.cfg.Tier(id); found {
-				return t, nil
-			}
-			slog.Warn("paygate returned a tier missing from tiers config; using stored tier", "tier", id)
-		}
+	t, ok, err := p.paygateTier(acc)
+	if err != nil {
+		return eeconfig.Tier{}, err
 	}
-	if t, ok := p.cfg.Tier(acc.Tier); ok {
+	if ok {
 		return t, nil
 	}
-	t, _ := p.cfg.Tier(p.cfg.DefaultTier)
+	t, authoritative := p.storedTier(acc)
+	if !authoritative {
+		return eeconfig.Tier{}, fmt.Errorf("%w: account %s is on tier %q, which is not in SITEBIN_TIERS", errUnknownTier, acc.ID, acc.Tier)
+	}
 	return t, nil
 }
 
@@ -218,6 +264,9 @@ func (p *provider) QuotaFor(ownerAccountID string) (ext.CreateGrant, bool, error
 	if p.cfg.Mode != eeconfig.ModeTiers {
 		return ext.CreateGrant{OwnerAccountID: acc.ID}, true, nil
 	}
+	// Strict: the cleanup sweep deletes on this answer. A PayGate outage or an
+	// account on a tier the config does not have both surface as an error, and
+	// the sweep keeps the site rather than deleting it against a guessed cap.
 	t, err := p.effectiveTierStrict(acc)
 	if err != nil {
 		return ext.CreateGrant{}, false, err
@@ -344,7 +393,17 @@ func (p *provider) syncTier(acc *account.Account) {
 	}
 	t, err := p.effectiveTierStrict(acc)
 	if err != nil {
-		slog.Warn("tier sync: could not resolve tier", "account", acc.ID, "err", err)
+		// An unresolvable tier is never a reason to rewrite the account: the
+		// stored tier is the only remaining record of what it is on, and the
+		// default is a guess that would downgrade it and put a deletion date on
+		// every site it owns. Leave everything as it is and say so loudly —
+		// errUnknownTier is an operator mistake that only a human can fix.
+		if errors.Is(err, errUnknownTier) {
+			slog.Error("tier sync: account tier is not in the tiers config; leaving the account and its sites untouched",
+				"account", acc.ID, "tier", acc.Tier, "err", err)
+		} else {
+			slog.Warn("tier sync: could not resolve tier", "account", acc.ID, "err", err)
+		}
 		return
 	}
 	if t.ID == acc.Tier {
