@@ -251,6 +251,74 @@ func TestApplyQuotaLeavesExpiryWithinNewCap(t *testing.T) {
 	}
 }
 
+// ---- the cap's own direction ----
+//
+// quotaSite stamps QuotaExpiryDays, so these three drive ApplyQuota with a new
+// cap above, equal to and below the one already on the site. Every shipping
+// tier is currently either 7 days or unlimited, which hides the "grew" row
+// entirely — nothing enforces that configuration.
+
+func TestApplyQuotaCapGrewMovesTierExpiryOut(t *testing.T) {
+	s := newExpiryStore(t)
+	site := quotaSite(t, s, 7, -2*time.Hour, true) // already expired under the old 7-day cap
+
+	if err := s.ApplyQuota(site, Quota{ExpiryDays: 90}, DowngradeGrace); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ByViewID(site.ViewID)
+	want := time.Now().Add(90 * 24 * time.Hour)
+	if got.Meta.ExpiresAt == nil {
+		t.Fatal("expiry cleared by a cap that is still finite")
+	}
+	if d := got.Meta.ExpiresAt.Sub(want); d > time.Minute || d < -time.Minute {
+		t.Fatalf("expiry = %v, want ~%v — a longer cap must carry the date it imposed with it", got.Meta.ExpiresAt, want)
+	}
+}
+
+func TestApplyQuotaCapGrewLeavesUserChosenExpiry(t *testing.T) {
+	s := newExpiryStore(t)
+	site := quotaSite(t, s, 7, 3*24*time.Hour, false) // the owner picked this date
+	before := *site.Meta.ExpiresAt
+
+	if err := s.ApplyQuota(site, Quota{ExpiryDays: 90}, DowngradeGrace); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ByViewID(site.ViewID)
+	if !got.Meta.ExpiresAt.Equal(before) {
+		t.Fatalf("a date the owner chose was pushed out by a bigger cap: %v -> %v", before, got.Meta.ExpiresAt)
+	}
+}
+
+func TestApplyQuotaCapUnchangedLeavesAPastExpiry(t *testing.T) {
+	s := newExpiryStore(t)
+	site := quotaSite(t, s, 7, -25*time.Hour, true)
+	before := *site.Meta.ExpiresAt
+
+	// this is the cleanup sweep's own call: restamp, then delete if the expiry
+	// survives. Moving the date here would stop expired sites being deleted.
+	if err := s.ApplyQuota(site, Quota{ExpiryDays: 7}, 0); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ByViewID(site.ViewID)
+	if !got.Meta.ExpiresAt.Equal(before) {
+		t.Fatalf("an unchanged cap moved the expiry: %v -> %v — nothing would ever be deleted", before, got.Meta.ExpiresAt)
+	}
+}
+
+func TestApplyQuotaCapShrankClampsTierExpiry(t *testing.T) {
+	s := newExpiryStore(t)
+	site := quotaSite(t, s, 90, 60*24*time.Hour, true)
+
+	if err := s.ApplyQuota(site, Quota{ExpiryDays: 7}, DowngradeGrace); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ByViewID(site.ViewID)
+	want := time.Now().Add(7 * 24 * time.Hour)
+	if d := got.Meta.ExpiresAt.Sub(want); d > time.Minute || d < -time.Minute {
+		t.Fatalf("expiry = %v, want clamped to ~%v", got.Meta.ExpiresAt, want)
+	}
+}
+
 func TestApplyQuotaWithZeroGraceDoesNotStampAnExpiry(t *testing.T) {
 	s := newExpiryStore(t)
 	site := quotaSite(t, s, 0, 0, false)

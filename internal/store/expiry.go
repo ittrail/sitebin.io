@@ -71,10 +71,23 @@ type Quota struct {
 // applies. Callers that must not create an expiry (the cleanup sweep, which is
 // only ever looking at sites that already have one) pass 0.
 //
-// An expiry the owner chose is never lifted, only clamped when it exceeds the
-// new cap.
+// The table is total in the cap's direction, which the sweep depends on:
+//
+//   - cap shrank, or the expiry is beyond it — clamped to now + cap.
+//   - cap grew and the tier imposed the expiry — moved out to now + cap. A
+//     tier-imposed date is a statement about the plan, so it has to follow the
+//     plan up as well as down; leaving it would delete the back catalogue of
+//     someone who just upgraded from a short-lifetime tier to a longer one.
+//   - cap unchanged — the expiry is left exactly as it is, including when it is
+//     already in the past. That is the row the cleanup sweep rides: it restamps
+//     a site from its owner's current tier and then deletes it if the expiry
+//     survives. Moving the date here would disable deletion outright.
+//
+// An expiry the owner chose is never lifted and never extended, only clamped
+// when it exceeds the new cap.
 func (s *Store) ApplyQuota(site *Site, q Quota, grace time.Duration) error {
 	return s.Update(site, func(m *Meta) error {
+		oldDays := m.QuotaExpiryDays // the cap this site is stamped with, before it is overwritten
 		m.QuotaBytes = q.Bytes
 		m.QuotaFiles = q.Files
 		m.QuotaExpiryDays = q.ExpiryDays
@@ -102,6 +115,11 @@ func (s *Store) ApplyQuota(site *Site, q Quota, grace time.Duration) error {
 		case m.ExpiresAt.After(limit): // an expiry exactly at the limit counts as "within" and is left alone
 			m.ExpiresAt = &limit
 			m.ExpiryFromTier = true
+		case oldDays > 0 && q.ExpiryDays > oldDays && m.ExpiryFromTier:
+			// the cap grew (oldDays == 0 is unlimited, i.e. a shrink, and is
+			// handled by the clamp above) and this date only ever existed
+			// because of the old cap, so it moves out with the new one
+			m.ExpiresAt = &limit
 		}
 		return nil
 	})
