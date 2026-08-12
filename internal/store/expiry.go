@@ -79,7 +79,11 @@ type Quota struct {
 //
 // The table is total in the cap's direction, which the sweep depends on:
 //
-//   - cap shrank, or the expiry is beyond it — clamped to now + cap.
+//   - cap SHRANK (the site's stamped cap was unlimited and the new one is not,
+//     or both are finite and the new one is smaller) and the expiry is beyond
+//     the new cap — clamped to now + cap. Whoever set the date keeps it:
+//     clamping an owner-chosen date does not relabel it as tier-imposed, or an
+//     upgrade would later lift a date the owner asked for entirely.
 //   - cap grew and the tier imposed the expiry — moved out to now + cap. A
 //     tier-imposed date is a statement about the plan, so it has to follow the
 //     plan up as well as down; leaving it would delete the back catalogue of
@@ -89,8 +93,16 @@ type Quota struct {
 //     a site from its owner's current tier and then deletes it if the expiry
 //     survives. Moving the date here would disable deletion outright.
 //
+// The cap's direction, not the date's position, is what selects the clamp. A
+// restamp that changes nothing must change nothing: the pass right after a
+// downgrade sees the 30-day grace this function just stamped sitting far beyond
+// the new 7-day cap, and clamping on that alone would cut the grace to 7 days —
+// silently deleting sites three weeks before the date the customer was shown.
+// Every route here is re-entrant (a retried tier sync, a re-selected tier, a
+// repeated subscription webhook), so that has to be a no-op.
+//
 // An expiry the owner chose is never lifted and never extended, only clamped
-// when it exceeds the new cap.
+// when the cap shrinks below it — and it stays owner-chosen even then.
 func (s *Store) ApplyQuota(site *Site, q Quota, grace time.Duration) error {
 	return s.Update(site, func(m *Meta) error {
 		oldDays := m.QuotaExpiryDays // the cap this site is stamped with, before it is overwritten
@@ -110,6 +122,8 @@ func (s *Store) ApplyQuota(site *Site, q Quota, grace time.Duration) error {
 			return nil
 		}
 		limit := now.Add(time.Duration(q.ExpiryDays) * 24 * time.Hour).UTC()
+		// oldDays <= 0 is "was unlimited", which a finite cap always shrinks.
+		shrank := oldDays <= 0 || q.ExpiryDays < oldDays
 		switch {
 		case m.ExpiresAt == nil:
 			if grace <= 0 {
@@ -118,9 +132,10 @@ func (s *Store) ApplyQuota(site *Site, q Quota, grace time.Duration) error {
 			until := now.Add(grace).UTC()
 			m.ExpiresAt = &until
 			m.ExpiryFromTier = true
-		case m.ExpiresAt.After(limit): // an expiry exactly at the limit counts as "within" and is left alone
+		case shrank && m.ExpiresAt.After(limit): // an expiry exactly at the limit counts as "within" and is left alone
+			// ExpiryFromTier is deliberately left as it is: a clamped date keeps
+			// its author, so an owner-chosen one survives a later upgrade.
 			m.ExpiresAt = &limit
-			m.ExpiryFromTier = true
 		case oldDays > 0 && q.ExpiryDays > oldDays && m.ExpiryFromTier:
 			// the cap grew (oldDays == 0 is unlimited, i.e. a shrink, and is
 			// handled by the clamp above) and this date only ever existed

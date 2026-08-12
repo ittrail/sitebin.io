@@ -258,8 +258,85 @@ func TestApplyQuotaClampsExpiryBeyondNewCap(t *testing.T) {
 	if d := got.Meta.ExpiresAt.Sub(want); d > time.Minute || d < -time.Minute {
 		t.Fatalf("expiry beyond the new cap = %v, want clamped to ~%v", got.Meta.ExpiresAt, want)
 	}
+	// The date is still the owner's — the cap only moved it closer. Relabelling
+	// it as tier-imposed here is what used to make the next upgrade discard it,
+	// contradicting the promise that an owner's date is never lifted.
+	if got.Meta.ExpiryFromTier {
+		t.Fatal("clamping relabelled a date the owner chose as tier-imposed")
+	}
+}
+
+// TestApplyQuotaClampedOwnerDateSurvivesAnUpgrade is the round trip the previous
+// test only sets up: downgrade clamps the owner's date, a later upgrade to an
+// unlimited tier must still leave it alone. This is the whole content of
+// "an expiry the owner chose is never lifted".
+func TestApplyQuotaClampedOwnerDateSurvivesAnUpgrade(t *testing.T) {
+	s := newExpiryStore(t)
+	site := quotaSite(t, s, 0, 90*24*time.Hour, false) // the owner said "delete this in 90 days"
+
+	if err := s.ApplyQuota(site, Quota{ExpiryDays: 7}, DowngradeGrace); err != nil {
+		t.Fatal(err)
+	}
+	clamped, _ := s.ByViewID(site.ViewID)
+	when := *clamped.Meta.ExpiresAt
+
+	if err := s.ApplyQuota(clamped, Quota{ExpiryDays: 0}, DowngradeGrace); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ByViewID(site.ViewID)
+	if got.Meta.ExpiresAt == nil {
+		t.Fatal("an upgrade lifted a date the owner chose, because the clamp had relabelled it as tier-imposed")
+	}
+	if !got.Meta.ExpiresAt.Equal(when) {
+		t.Fatalf("clamped owner date moved on upgrade: %v -> %v", when, got.Meta.ExpiresAt)
+	}
+}
+
+// TestApplyQuotaClampKeepsATierDateTierImposed is the other half: clamping must
+// not launder a tier-imposed date into an owner-chosen one either, or the
+// upgrade that should lift it never would.
+func TestApplyQuotaClampKeepsATierDateTierImposed(t *testing.T) {
+	s := newExpiryStore(t)
+	site := quotaSite(t, s, 90, 60*24*time.Hour, true)
+
+	if err := s.ApplyQuota(site, Quota{ExpiryDays: 7}, DowngradeGrace); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ByViewID(site.ViewID)
 	if !got.Meta.ExpiryFromTier {
-		t.Fatal("a clamped expiry must be marked as tier-imposed, or a later upgrade will never lift it")
+		t.Fatal("clamping dropped the tier-imposed mark; a later upgrade would no longer lift the date")
+	}
+}
+
+// TestApplyQuotaRepeatedDowngradeKeepsTheFullGrace is the customer-visible one.
+// Every route into a restamp can run twice with the same tier — a tier sync
+// retried after a partial failure, a re-selected tier, a repeated
+// subscription.updated webhook. The second pass sees the 30-day grace the first
+// one stamped sitting well beyond the new 7-day cap; clamping on that alone cut
+// the grace to 7 days and deleted the customer's sites 23 days before the date
+// the pricing page promised them and the dashboard showed them.
+func TestApplyQuotaRepeatedDowngradeKeepsTheFullGrace(t *testing.T) {
+	s := newExpiryStore(t)
+	site := quotaSite(t, s, 0, 0, false) // paid site: unlimited cap, no expiry
+
+	free := Quota{Bytes: 1000, Files: 10, ExpiryDays: 7}
+	if err := s.ApplyQuota(site, free, DowngradeGrace); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := s.ByViewID(site.ViewID)
+	graceUntil := *first.Meta.ExpiresAt
+
+	// the same downgrade lands a second time
+	if err := s.ApplyQuota(first, free, DowngradeGrace); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ByViewID(site.ViewID)
+	if !got.Meta.ExpiresAt.Equal(graceUntil) {
+		t.Fatalf("a repeat restamp moved the grace: %v -> %v", graceUntil, got.Meta.ExpiresAt)
+	}
+	want := time.Now().Add(DowngradeGrace)
+	if d := got.Meta.ExpiresAt.Sub(want); d > time.Minute || d < -time.Minute {
+		t.Fatalf("grace = %v, want ~%v (the 30 days the pricing page promises)", got.Meta.ExpiresAt, want)
 	}
 }
 
