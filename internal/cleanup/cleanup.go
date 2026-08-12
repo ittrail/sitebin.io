@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/ittrail/sitebin.io/internal/ext"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
@@ -25,14 +26,22 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 	}
 	removed := 0
 	for _, site := range sites {
-		if site.Meta.ExpiresAt != nil && now.After(site.Meta.ExpiresAt.Add(grace)) {
-			if err := st.Delete(site); err != nil {
-				slog.Error("cleanup: delete site", "id", site.ViewID, "err", err)
-				continue
-			}
-			slog.Info("cleanup: deleted expired site", "id", site.ViewID)
-			removed++
+		if site.Meta.ExpiresAt == nil || !now.After(site.Meta.ExpiresAt.Add(grace)) {
+			continue
 		}
+		if keep, err := reconcile(st, site); err != nil {
+			slog.Error("cleanup: tier lookup failed, keeping site", "id", site.ViewID, "err", err)
+			continue
+		} else if keep {
+			slog.Info("cleanup: kept expired site, its owner's tier no longer expires sites", "id", site.ViewID)
+			continue
+		}
+		if err := st.Delete(site); err != nil {
+			slog.Error("cleanup: delete site", "id", site.ViewID, "err", err)
+			continue
+		}
+		slog.Info("cleanup: deleted expired site", "id", site.ViewID)
+		removed++
 	}
 	dangling, err := st.DanglingIndexLinks()
 	if err != nil {
@@ -46,6 +55,41 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 		}
 	}
 	return removed, nil
+}
+
+// reconcile restamps an owned site from its owner's CURRENT tier before the
+// site is deleted, and reports whether the site should now be kept. A tier
+// change between creation and expiry is invisible in the stamped meta, so an
+// upgrade would otherwise arrive too late to save the site.
+//
+// An error means the owner's tier could not be determined; the caller must keep
+// the site and retry on the next sweep.
+func reconcile(st *store.Store, site *store.Site) (keep bool, err error) {
+	if site.Meta.OwnerAccountID == "" {
+		return false, nil // anonymous: nothing to look up
+	}
+	p, ok := ext.Get()
+	if !ok {
+		return false, nil // community build: no accounts, no tiers
+	}
+	grant, found, err := p.QuotaFor(site.Meta.OwnerAccountID)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, nil // the account is gone; the site is orphaned
+	}
+	// grace 0: this site already has an expiry, and a sweep must never invent one
+	if err := st.ApplyQuota(site, store.Quota{
+		Bytes:      grant.MaxSiteBytes,
+		Files:      grant.MaxFiles,
+		ExpiryDays: grant.MaxExpiryDays,
+		Domains:    grant.MaxCustomDomain,
+		WebDAV:     grant.WebDAV,
+	}, 0); err != nil {
+		return false, err
+	}
+	return site.Meta.ExpiresAt == nil, nil
 }
 
 // Run sweeps on the given interval until ctx is cancelled.
