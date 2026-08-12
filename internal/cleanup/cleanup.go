@@ -30,18 +30,23 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 		if site.Meta.ExpiresAt == nil || !now.After(site.Meta.ExpiresAt.Add(grace)) {
 			continue
 		}
+		// Every decision line carries the owner: the failure modes this sweep
+		// now has are per-account (one PayGate outage, one account on a tier the
+		// config does not have) and these lines are the only place an operator
+		// can see that N sites are being held for one owner. An empty owner is
+		// an anonymous site.
 		if keep, err := reconcile(st, site, now); err != nil {
-			slog.Error("cleanup: reconcile failed, keeping site", "id", site.ViewID, "err", err)
+			slog.Error("cleanup: reconcile failed, keeping site", "id", site.ViewID, "owner", site.Meta.OwnerAccountID, "err", err)
 			continue
 		} else if keep {
-			slog.Info("cleanup: kept expired site, its owner's tier no longer expires sites", "id", site.ViewID)
+			slog.Info("cleanup: kept expired site, its owner's tier no longer expires sites", "id", site.ViewID, "owner", site.Meta.OwnerAccountID)
 			continue
 		}
 		if err := st.Delete(site); err != nil {
-			slog.Error("cleanup: delete site", "id", site.ViewID, "err", err)
+			slog.Error("cleanup: delete site", "id", site.ViewID, "owner", site.Meta.OwnerAccountID, "err", err)
 			continue
 		}
-		slog.Info("cleanup: deleted expired site", "id", site.ViewID)
+		slog.Info("cleanup: deleted expired site", "id", site.ViewID, "owner", site.Meta.OwnerAccountID)
 		removed++
 	}
 	dangling, err := st.DanglingIndexLinks()
