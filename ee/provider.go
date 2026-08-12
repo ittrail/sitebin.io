@@ -418,11 +418,23 @@ func (p *provider) syncTier(acc *account.Account) {
 	if t.ID == acc.Tier {
 		return
 	}
-	if err := p.accounts.Update(acc, func(cur *account.Account) error { cur.Tier = t.ID; return nil }); err != nil {
-		slog.Error("tier sync: could not persist tier", "account", acc.ID, "tier", t.ID, "err", err)
+	// Restamp BEFORE persisting the new tier. acc.Tier is this function's only
+	// retry marker: the moment it matches the resolved tier, every later pass
+	// early-returns above, so sites that failed to restamp would keep their old
+	// caps forever. Leaving it stale costs one repeated pass and converges;
+	// writing it first makes a partial failure permanent.
+	//
+	// The restamp is not perfectly idempotent — the "no expiry → now + 30 days"
+	// row stamps a fresh grace window each pass — but that errs toward the
+	// customer and settles as soon as one full pass succeeds.
+	if err := p.restampSites(acc, t); err != nil {
+		slog.Error("tier sync: leaving the stored tier stale so the next pass retries the restamp",
+			"account", acc.ID, "tier", t.ID, "err", err)
 		return
 	}
-	p.restampSites(acc, t)
+	if err := p.accounts.Update(acc, func(cur *account.Account) error { cur.Tier = t.ID; return nil }); err != nil {
+		slog.Error("tier sync: could not persist tier", "account", acc.ID, "tier", t.ID, "err", err)
+	}
 }
 
 // restampSites applies tier t's caps to every site acc owns, via
@@ -431,22 +443,29 @@ func (p *provider) syncTier(acc *account.Account) {
 // (PayGate sync, self-select, billing webhook) do this, so none of them can
 // silently skip logging a failure.
 //
-// Like its callers, it logs failures instead of returning them: a stale
-// stamp is not worth failing the request over, and the cleanup sweep is the
-// backstop.
-func (p *provider) restampSites(acc *account.Account, t eeconfig.Tier) {
+// It logs every failure itself, so callers that have nothing better to do than
+// log may ignore the returned error; it exists for syncTier, which uses it to
+// decide whether the account's stored tier may be advanced yet. A site that
+// could not be restamped never stops the others from being tried.
+func (p *provider) restampSites(acc *account.Account, t eeconfig.Tier) error {
 	ids, err := p.accounts.ListSiteIDs(acc)
 	if err != nil {
 		slog.Error("restamp sites: could not list sites", "account", acc.ID, "tier", t.ID, "err", err)
-		return
+		return fmt.Errorf("list sites of %s: %w", acc.ID, err)
 	}
 	grant := grantFromTier(acc.ID, t)
+	var failed []error
 	for _, id := range ids {
 		if err := p.host.Sites().ApplyQuota(id, grant); err != nil {
 			slog.Error("restamp sites: could not restamp site", "account", acc.ID, "site", id, "err", err)
+			failed = append(failed, fmt.Errorf("site %s: %w", id, err))
 		}
 	}
+	if len(failed) > 0 {
+		return errors.Join(failed...)
+	}
 	slog.Info("restamp sites: applied new tier caps", "account", acc.ID, "tier", t.ID, "sites", len(ids))
+	return nil
 }
 
 // tierForNewAccount returns the tier id a new account starts on.

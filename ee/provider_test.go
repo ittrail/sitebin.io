@@ -20,6 +20,9 @@ type fakeSites struct {
 	deleted []string
 	rotated []string
 	quotas  map[string]ext.CreateGrant
+	// applyErrs fails ApplyQuota for the listed site ids, so a test can make a
+	// restamp succeed for some of an account's sites and fail for others.
+	applyErrs map[string]error
 }
 
 func (s *fakeSites) Info(id string) (ext.SiteInfo, bool) { i, ok := s.infos[id]; return i, ok }
@@ -33,6 +36,9 @@ func (s *fakeSites) Delete(id string) error {
 	return nil
 }
 func (s *fakeSites) ApplyQuota(id string, g ext.CreateGrant) error {
+	if err := s.applyErrs[id]; err != nil {
+		return err
+	}
 	if s.quotas == nil {
 		s.quotas = map[string]ext.CreateGrant{}
 	}

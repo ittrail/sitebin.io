@@ -460,6 +460,50 @@ func TestSweepKeepsSiteOfAccountOnUnconfiguredTier(t *testing.T) {
 	}
 }
 
+// TestSyncTierRetriesAfterAPartialRestamp pins the order of the two writes.
+// acc.Tier is the only retry marker there is: once it matches the resolved
+// tier, every later syncTier early-returns. Persisting it before the sites are
+// restamped would therefore freeze a half-finished downgrade in place forever.
+func TestSyncTierRetriesAfterAPartialRestamp(t *testing.T) {
+	srv := pgStub(t, "pro", "active", 200)
+	defer srv.Close()
+	p := setupPayGate(t, srv.URL)
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-partial", "partial@example.com", "free")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const good, bad = "abcdefghijklmnopqrstuvwxyz", "bbcdefghijklmnopqrstuvwxyz"
+	for _, id := range []string{good, bad} {
+		if err := p.accounts.LinkSite(acc, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sites := p.host.Sites().(*fakeSites)
+	sites.applyErrs = map[string]error{bad: errors.New("disk full")}
+
+	p.syncTier(acc)
+
+	if acc.Tier != "free" {
+		t.Fatalf("stored tier advanced to %q while a site was left on its old caps", acc.Tier)
+	}
+	if _, ok := sites.quotas[bad]; ok {
+		t.Fatal("the failing site was restamped after all; the fixture is wrong")
+	}
+
+	// the failure clears (the disk has room again) and the next pass finishes
+	sites.applyErrs = nil
+	p.syncTier(acc)
+
+	if acc.Tier != "pro" {
+		t.Fatalf("stored tier = %q after a clean pass, want pro", acc.Tier)
+	}
+	for _, id := range []string{good, bad} {
+		if g, ok := sites.quotas[id]; !ok || g.MaxSiteBytes != 5000000 {
+			t.Fatalf("site %s not restamped on the retry: %+v", id, g)
+		}
+	}
+}
+
 func TestSyncTierLeavesEverythingAloneOnLookupFailure(t *testing.T) {
 	srv := pgStub(t, "", "", 500)
 	defer srv.Close()
