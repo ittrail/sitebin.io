@@ -89,6 +89,27 @@ everything for a month, sees the date in the dashboard, and gets it removed by
 upgrading again. It is a named constant, not the tier's own cap — dropping a
 hundred permanent sites to seven days would be a deletion in all but name.
 
+> **Corrections (post-implementation).** Three rows of this table were wrong or
+> missing, each found by review after the behaviour was built:
+>
+> - **Clamping is keyed on the cap, not the date.** "Beyond the new cap →
+>   clamp" fires on a freshly stamped 30-day grace too, because 30 days is by
+>   design longer than the 7-day cap that triggered it. A second restamp with
+>   an unchanged tier therefore cut the grace to a week. The rule is now: clamp
+>   only when the cap actually *shrank* — the stamped cap was unlimited and the
+>   new one is positive, or both are positive and the new one is smaller. An
+>   unchanged cap leaves the expiry exactly as it is, which is also what the
+>   cleanup sweep depends on to delete a genuinely expired site.
+> - **A cap that grows was not covered at all.** Only downward clamping
+>   existed, so an upgrade from a capped tier to a *larger but still capped*
+>   one would have deleted the back catalogue anyway. When the new cap is
+>   strictly larger and the expiry is tier-imposed, it now moves out to
+>   `now + newCap`. Unreachable with the shipping tiers (every paid tier is
+>   uncapped) but nothing enforced that assumption.
+> - **Clamping no longer relabels an owner's date as tier-imposed.** It used
+>   to, which meant a once-clamped owner-chosen expiry was later lifted
+>   entirely by an upgrade — contradicting §4's whole purpose.
+
 ## 4. Where an expiry came from
 
 Half the table above depends on knowing whether a date was imposed by the plan
@@ -104,6 +125,22 @@ when:
 
 and cleared whenever a caller sets `expires_at` explicitly through the API or
 the edit page.
+
+> **Corrections (post-implementation).** Sliding renewal turned out to violate
+> this section twice over:
+>
+> - **It relabelled an owner's date as tier-imposed.** On a capped tier an
+>   owner-chosen expiry is always within the cap, so any upload pushed it out
+>   to the full cap *and* flipped the flag — after which an upgrade cleared it
+>   outright, discarding a date the owner deliberately set. Renewal now applies
+>   only to an expiry that is already tier-imposed; an owner-chosen date no
+>   longer slides on upload, which is what choosing a date ought to mean.
+> - **It could move an expiry closer.** A site carrying the 30-day downgrade
+>   grace has exactly renewal's trigger shape, so one uploaded file rewrote the
+>   grace to `now + 7 days` — the same 23-day loss the clamp correction above
+>   removed, by a different route. Renewal now never pulls an expiry forward,
+>   only pushes it out. The one-minute no-op window that keeps a multi-file
+>   upload to a single `meta.json` write is unchanged.
 
 ## 5. Seam changes
 
