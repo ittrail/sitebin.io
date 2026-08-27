@@ -38,7 +38,16 @@ const permissionsPolicy = `geolocation=(), camera=(), microphone=(), payment=(),
 // writeSecurityHeaders emits both layers for one content origin. It must come
 // after `root`, because the trust matcher is a file test resolved against the
 // site root.
+// Both header directives live in a `route` block. Caddy does not guarantee the
+// order of multiple header directives outside one, and unordered they lose the
+// fields the two blocks share: the baseline's Referrer-Policy wins over the
+// strict one, and the appended CSP never lands at all. `route` is the same
+// remedy writePathViewRoutes already uses to keep forward_auth ahead of the
+// URI rewrite.
 func writeSecurityHeaders(b *strings.Builder, ind string) {
+	fmt.Fprintf(b, "%s@untrusted not file /%s\n", ind, trustedMarkerName)
+	fmt.Fprintf(b, "%sroute {\n", ind)
+	ind += "\t"
 	fmt.Fprintf(b, "%sheader {\n", ind)
 	fmt.Fprintf(b, "%s\tX-Content-Type-Options nosniff\n", ind)
 	fmt.Fprintf(b, "%s\tReferrer-Policy strict-origin-when-cross-origin\n", ind)
@@ -49,11 +58,13 @@ func writeSecurityHeaders(b *strings.Builder, ind string) {
 	// Keyed on the ABSENCE of the trust marker. That polarity is the point: a
 	// marker that was never written, or was lost in a restore, leaves a site
 	// served too strictly — never unprotected.
-	fmt.Fprintf(b, "%s@untrusted not file /%s\n", ind, trustedMarkerName)
 	fmt.Fprintf(b, "%sheader @untrusted {\n", ind)
 	fmt.Fprintf(b, "%s\tReferrer-Policy no-referrer\n", ind)
 	// A leading + adds a second CSP header instead of replacing the baseline.
+	// The two then intersect, which is what makes the strict layer unable to
+	// widen anything the baseline set.
 	fmt.Fprintf(b, "%s\t+Content-Security-Policy %q\n", ind, strictCSP)
 	fmt.Fprintf(b, "%s\tReporting-Endpoints %q\n", ind, `csp="`+cspReportPath+`"`)
 	fmt.Fprintf(b, "%s}\n", ind)
+	fmt.Fprintf(b, "%s}\n", strings.TrimSuffix(ind, "\t"))
 }

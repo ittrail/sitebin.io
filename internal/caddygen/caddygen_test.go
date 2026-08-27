@@ -239,3 +239,26 @@ func TestTrustedMarkerNameMatchesStore(t *testing.T) {
 		t.Fatalf("caddygen trustedMarkerName %q != store.TrustedMarker %q", trustedMarkerName, store.TrustedMarker)
 	}
 }
+
+// Caddy does not guarantee the order of multiple header directives outside a
+// route block, and unordered the two layers lose every field they share: the
+// baseline's Referrer-Policy beats the strict one and the appended CSP never
+// lands. Verified against the live instance before this test existed.
+func TestSecurityHeadersAreOrdered(t *testing.T) {
+	out := Generate(config.Config{BaseDomain: "sitebin.example", DataDir: "/data", HTTPOnly: true, ViewAccess: "both"})
+	// the ordered sequence, per content origin
+	seq := []string{
+		"@untrusted not file /" + store.TrustedMarker,
+		"route {",
+		"header {",
+		"header @untrusted {",
+	}
+	pos := 0
+	for _, want := range seq {
+		i := strings.Index(out[pos:], want)
+		if i < 0 {
+			t.Fatalf("expected %q after position %d; the header pair must sit inside a route block:\n%s", want, pos, out)
+		}
+		pos += i + len(want)
+	}
+}
