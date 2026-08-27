@@ -240,25 +240,22 @@ func TestTrustedMarkerNameMatchesStore(t *testing.T) {
 	}
 }
 
-// Caddy does not guarantee the order of multiple header directives outside a
-// route block, and unordered the two layers lose every field they share: the
-// baseline's Referrer-Policy beats the strict one and the appended CSP never
-// lands. Verified against the live instance before this test existed.
-func TestSecurityHeadersAreOrdered(t *testing.T) {
+// The two matchers must be exact complements, so every response takes exactly
+// one complete policy. An earlier version layered two intersecting CSP headers
+// and depended on directive order; the order did not hold on the live instance
+// and sites came out half-hardened.
+func TestTrustMatchersAreComplements(t *testing.T) {
 	out := Generate(config.Config{BaseDomain: "sitebin.example", DataDir: "/data", HTTPOnly: true, ViewAccess: "both"})
-	// the ordered sequence, per content origin
-	seq := []string{
-		"@untrusted not file /" + store.TrustedMarker,
-		"route {",
-		"header {",
-		"header @untrusted {",
+	neg := strings.Count(out, "@untrusted not file /"+store.TrustedMarker)
+	pos := strings.Count(out, "@trusted file /"+store.TrustedMarker)
+	if neg == 0 || neg != pos {
+		t.Fatalf("matchers are not paired complements: %d untrusted vs %d trusted\n%s", neg, pos, out)
 	}
-	pos := 0
-	for _, want := range seq {
-		i := strings.Index(out[pos:], want)
-		if i < 0 {
-			t.Fatalf("expected %q after position %d; the header pair must sit inside a route block:\n%s", want, pos, out)
-		}
-		pos += i + len(want)
+	if strings.Contains(out, "+Content-Security-Policy") {
+		t.Error("no appended CSP: each branch must carry one complete policy")
+	}
+	// the untrusted policy must contain the baseline too, not only the extras
+	if !strings.Contains(out, "object-src 'none'; base-uri 'self'; form-action 'none'") {
+		t.Error("the untrusted policy dropped the baseline directives")
 	}
 }

@@ -36,8 +36,9 @@ Content-Security-Policy: object-src 'none'; base-uri 'self'
 outright. `'self'` still stops a `<base>` that redirects every relative URL to
 an attacker's host.
 
-**Strict — untrusted sites only.** A second CSP header, plus a tighter
-referrer policy:
+**Untrusted sites** get one complete policy instead — the baseline with the
+exfiltration blocks folded in (see the correction below on why it is not a
+second, intersecting header) — and a tighter referrer policy:
 
 ```
 Content-Security-Policy: form-action 'none'; connect-src 'self'; frame-ancestors 'none'; frame-src 'none'; report-uri /_sitebin/csp-report; report-to csp
@@ -181,6 +182,17 @@ sites that have violations.
 >   went with it, which both un-hardened every viewer site (the matcher looks in
 >   `files/`) and made `.sitebin-trusted` the site's entry document. It is now
 >   skipped by the move and stays at the serving root in every mode.
+> - **Two intersecting CSP headers did not survive contact with Caddy.** §1
+>   layered a second `Content-Security-Policy` on the baseline and relied on
+>   the spec's intersection rule. That is sound in a browser, but emitting both
+>   reliably meant depending on the order of two `header` directives, and the
+>   order did not hold: measured on the live instance, the strict layer's
+>   `Reporting-Endpoints` arrived while its `Referrer-Policy` and appended CSP
+>   did not — a site half-hardened and looking configured. Wrapping them in a
+>   `route` block, which is how `writePathViewRoutes` fixes directive order,
+>   dropped the headers entirely. The shipped design emits **one complete policy
+>   per trust state** from two complementary matchers, so no ordering between
+>   them can matter.
 > - **A replace upload stripped the marker.** `ClearFiles` empties the content
 >   directory, markers included, so every `POST /files?replace=true` un-trusted
 >   the site until the next sweep. sitebin.io deploys itself that way on every
