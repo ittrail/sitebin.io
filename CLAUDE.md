@@ -1,0 +1,112 @@
+# Sitebin — product repo
+
+Drop files, get a website. Go backend + Caddy in one container, no database, no
+Node build step. Open-core: MIT core, ELv2 `ee/`.
+
+Workspace-level context (how this repo relates to the website repo, ship order,
+shared conventions): [`../CLAUDE.md`](../CLAUDE.md).
+
+## Commands
+
+```bash
+go build ./...                       # community build
+go build -tags ee ./...              # enterprise build
+go test ./...                        # core suite
+go test -tags ee ./...               # enterprise suite — run BOTH, they differ
+go vet ./...
+go run ./cmd/sitebin caddyfile       # inspect the generated Caddyfile
+powershell -File e2e/e2e.ps1         # full E2E against the Docker image (Windows host)
+docker build -t sitebin:latest .     # runs go vet + the full suite
+```
+
+`e2e/` also has focused scripts: `accounts.ps1`, `tiers.ps1`, `spa.ps1`,
+`ftp.ps1`, `paths.ps1`.
+
+## Layout
+
+- `cmd/sitebin` — entrypoint and the supervisor that runs Caddy alongside the Go
+  server.
+- `internal/` — the MIT core: `config`, `ids`, `auth`, `store`, `viewer`,
+  `caddygen`, `httpapi`, `cleanup`, `ftp`, `supervisor`, and `ext`.
+- `ee/` — the enterprise extension (`account`, `authn`, `billing`, `eeconfig`,
+  `licensing`, `session`, `smtp`). **ELv2, not MIT.**
+- `web/` — embedded UI, vendored viewer libraries, `static/embed.js`.
+- `docs/superpowers/{specs,plans}/` — design docs and implementation plans.
+
+## The two rules that shape this codebase
+
+**1. The filesystem is the database.** One folder plus `meta.json` per site,
+symlink indexes for lookups, everything durable under the single `/data` volume.
+There is no schema, no migration step, and no second writer — a change to
+`store.Meta` is a change to on-disk data that older sites will not have. Use
+`omitempty` and treat a missing field as its zero value.
+
+**2. `internal/ext` is the only seam between core and enterprise.** The core has
+no compile-time reference to any `ee/` package; `ee` registers a `Provider` in an
+`init()` guarded by the `ee` build tag, so the community binary does not contain
+the code at all. When core needs something the extension knows (an owner's tier,
+say), the answer is a new method on `ext.Provider` or `ext.SiteService` — not an
+import.
+
+Corollaries worth stating, because they have been violated before:
+
+- **Nothing on the hot path asks the extension.** Quota caps are *stamped* into
+  `meta.json` at creation precisely so an upload, a WebDAV write or an FTP
+  transfer never has to resolve a tier. Resolving live would defeat the seam.
+- **The community build must stay whole.** Every seam addition is inert with no
+  provider registered — and the community path needs its own test.
+- **Never act destructively on an error.** `Provider.QuotaFor` returning an error
+  means the tier is *unknown*, not "unlimited" and not "expired". The cleanup
+  sweep keeps the site and retries. A site kept too long is recoverable; a
+  deleted one is not.
+
+## Tiers, quotas and lifetimes
+
+The area with the most subtlety, and where the current unmerged work sits.
+
+- A tier grants `QuotaBytes`, `QuotaFiles`, `QuotaExpiryDays`, `QuotaDomains`,
+  `QuotaWebDAV`, stamped onto the site from the `CreateGrant`. `0` means
+  unlimited / inherit the instance global.
+- `store.Meta.ExpiryFromTier` records **who chose the expiry date** — the plan or
+  the owner. Almost every rule below keys off it, so any code that sets or moves
+  `ExpiresAt` has to say where the date came from. An explicit `expires_at`
+  through the API or the edit page clears it.
+- **Sliding renewal:** a content change pushes a tier-imposed expiry out to
+  `now + cap`. It never touches an owner-chosen date, and never pulls an expiry
+  *closer* — a one-minute no-op window keeps a multi-file upload to a single
+  `meta.json` write.
+- **Restamping on tier change:** clamp only when the cap actually *shrank*; a
+  cap that grows carries a tier-imposed expiry out with it; clamping never
+  relabels an owner's date as tier-imposed. A downgrade stamps a 30-day grace —
+  a named constant, deliberately longer than the new tier's cap.
+- **The cleanup sweep is the last line of defence** for a late upgrade: before
+  deleting an expired owned site it re-checks the owner's current caps.
+
+Read `docs/superpowers/specs/2026-08-12-tier-change-quota-sync-design.md` before
+touching any of it — including its "Corrections (post-implementation)" blocks,
+which record three rules that review had to fix after the fact. Tiers themselves
+are configured per instance (`SITEBIN_TIERS` / `tiers.json`), not in this repo.
+
+## Enterprise config
+
+All caps and toggles are startup env vars (`SITEBIN_*`) — see the README's
+"Enterprise configuration" table. Two that bite:
+
+- `eeconfig` refuses to start if `SITEBIN_ANON_TIER` names a tier missing from
+  the tier file.
+- PayGate has **no webhook into Sitebin**; tiers are polled through
+  `effectiveTier`. A plan change is only ever noticed at a request that already
+  resolves the tier, so there is no "on tier change" hook to hang work on.
+
+## Working here
+
+- **Tests first**, and run both build tags — the `ee` suite covers paths the
+  core suite cannot even compile.
+- **Design doc before non-trivial code**, in `docs/superpowers/specs/`, with the
+  task-by-task plan in `docs/superpowers/plans/`.
+- **Licensing hygiene:** MIT and ELv2 code are separated by directory. Do not
+  move `ee/` logic into `internal/`, and keep `ee/LICENSE` intact.
+- `vendor-license-private-key.txt` is the Ed25519 vendor signing key. Gitignored,
+  local-only, never committed, and it needs a backup that is not this laptop.
+- This repo is **public**. Internal business material belongs in the private
+  website repo under `docs/internal/`.
