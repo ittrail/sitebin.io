@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -25,9 +26,42 @@ type fakeSites struct {
 	// applyErrs fails ApplyQuota for the listed site ids, so a test can make a
 	// restamp succeed for some of an account's sites and fail for others.
 	applyErrs map[string]error
+	// allErr fails All(), so a test can check the console reports an
+	// enumeration failure instead of rendering an empty instance.
+	allErr error
+	// expirySet records what SetExpiry was asked to write, including nil.
+	expirySet map[string]*time.Time
 }
 
 func (s *fakeSites) Info(id string) (ext.SiteInfo, bool) { i, ok := s.infos[id]; return i, ok }
+
+func (s *fakeSites) All() ([]ext.SiteInfo, error) {
+	if s.allErr != nil {
+		return nil, s.allErr
+	}
+	out := make([]ext.SiteInfo, 0, len(s.infos))
+	for _, i := range s.infos {
+		out = append(out, i)
+	}
+	// map iteration is random; the console sorts, but a stable fake keeps the
+	// tests' own expectations readable.
+	sort.Slice(out, func(a, b int) bool { return out[a].ViewID < out[b].ViewID })
+	return out, nil
+}
+
+func (s *fakeSites) SetExpiry(id string, at *time.Time) error {
+	info, ok := s.infos[id]
+	if !ok {
+		return fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
+	}
+	info.ExpiresAt = at
+	s.infos[id] = info
+	if s.expirySet == nil {
+		s.expirySet = map[string]*time.Time{}
+	}
+	s.expirySet[id] = at
+	return nil
+}
 func (s *fakeSites) RotateEditPassword(id string) (string, error) {
 	s.rotated = append(s.rotated, id)
 	return "freshEditPw123456789012", nil

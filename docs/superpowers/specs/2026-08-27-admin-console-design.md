@@ -58,9 +58,16 @@ size, file count, created, expiry, custom domains. Rows are sorted by creation
 date, newest first.
 
 **Search and filters** narrow the list: a text box matching view id, owner
-email or custom domain, and toggles for owned/anonymous and for expiring soon.
-Both run in the browser over the rows already rendered — the repository has no
-Node build step, and filtering 199 rows client-side needs none.
+email or custom domain, and a selector for owned/anonymous/expiring-soon. Both
+are query parameters on the page's own URL and are applied server-side.
+
+> **Correction (during implementation).** This section originally put the
+> filtering in the browser. It cannot be: the dashboard's pages are served with
+> `script-src 'none'`, so any script would silently never run. Server-side
+> filtering is also the smaller change — a GET form and a `switch` — and it
+> leaves the CSP untouched. The same discovery moved the delete confirmation
+> from a `confirm()` dialog to a step the server renders (§3): a confirmation
+> that never appears is worse than none.
 
 At some scale rendering every row stops being reasonable. The threshold is not
 worth guessing at now; when `All()` starts returning more than a few thousand
@@ -75,8 +82,12 @@ Two actions, both `POST`, both CSRF-protected like the rest of the dashboard:
 - **Delete a site.** Reuses the existing `SiteService.Delete`.
 - **Set or clear an expiry.** A date, or empty to remove the expiry.
 
-Deletion asks for confirmation and names the site in the prompt. Both actions
-are logged through `slog` at info level with the acting admin's account id, the
+Deletion is two steps: the Delete control links back to the list with the site
+marked for confirmation, and that row becomes a prompt naming the site, its file
+count and its domains, with a real POST form and a Cancel link. No script is
+involved, for the CSP reason in §2.
+
+Both actions are logged through `slog` at info level with the acting admin's account id, the
 target view id, and what changed — an operator acting on sites that are not
 theirs should leave a trail.
 
@@ -108,9 +119,15 @@ which registers no provider to call them.
   `ApplyQuota`.
 
 `ext.SiteInfo` gains `Owner string` — the owning account id, empty for an
-anonymous site. It describes an owner's view of their own site today, where the
-owner is a given; the instance-wide view needs it as a column. The console
-resolves the id to an email for display.
+anonymous site — and `Domains []string`, the site's custom domains, which the
+console lists and searches by. SiteInfo describes an owner's view of their own
+site today, where the owner is a given and the domains are on the edit page; the
+instance-wide view needs both as columns. The console resolves an owner id to an
+email for display, falling back to the raw id when the account is gone — an
+orphaned site is exactly what an operator opened this page to find.
+
+The dashboard shows admins one link to the console; for everyone else it is
+absent, matching the 404.
 
 ## 5. Configuration
 

@@ -105,6 +105,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
     <h1 style="margin:0">Your account</h1>
     <span class="muted">{{.Email}}{{if .Tier}} · {{.Tier}} tier{{end}}</span>
     <span class="spacer" style="flex:1"></span>
+    {{if .IsAdmin}}<a class="btn small" href="/account/admin">Instance register</a>{{end}}
     <form class="inline" method="post" action="/account/logout"><button class="btn small" type="submit">Sign out</button></form>
   </div>
 
@@ -182,4 +183,146 @@ var msgTmpl = template.Must(template.New("msg").Parse(pageHead + `
   {{if .Detail}}<div class="secretrow pass" style="margin-top:16px"><span class="k">Value</span><span class="v" style="user-select:all">{{.Detail}}</span></div>{{end}}
   <div style="margin-top:18px"><a class="btn" href="{{.Back}}">Back</a></div>
 </div></div></main>
+` + pageFoot))
+
+// adminConsoleCSS is the console's own layout. It rides on the community
+// app.css tokens like the rest of the dashboard; only the wide shell, the
+// figure stubs and the table are page-specific.
+const adminConsoleCSS = `
+<style>
+  .adm { width: min(1180px, 100%); margin: 5vh auto 8vh; padding: 0 18px; }
+  .adm h1 { font: 650 26px var(--display); letter-spacing: -.02em; margin-bottom: 2px; }
+  .adm .lede { color: var(--ink-dim); font-size: 14px; margin-bottom: 22px; }
+  .adm .lede a { color: var(--ink-dim); }
+
+  /* figures: ticket stubs, punched on the left like a torn-off counterfoil */
+  .adm .figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: 12px; margin-bottom: 26px; }
+  .adm .fig {
+    position: relative; padding: 14px 16px 13px 20px; border-radius: 10px;
+    background: linear-gradient(160deg, #151e33, #101727);
+    border: 1px dashed var(--line); overflow: hidden;
+  }
+  .adm .fig::before {
+    content: ""; position: absolute; left: -7px; top: 50%; width: 14px; height: 14px;
+    border-radius: 50%; background: var(--bg); transform: translateY(-50%);
+    border: 1px dashed rgba(245,184,77,.35);
+  }
+  .adm .fig .k { display: block; font: 600 10px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--ink-faint); }
+  .adm .fig .v { display: block; font: 650 24px var(--display); letter-spacing: -.02em; margin-top: 3px; }
+  .adm .fig.warn { border-color: rgba(245,184,77,.5); }
+  .adm .fig.warn .v { color: var(--amber); }
+  .adm .fig.warn::before { border-color: rgba(245,184,77,.55); }
+
+  /* filter bar */
+  .adm .bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+  .adm .bar input[type=search], .adm .bar select {
+    background: var(--bg-raise); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 9px; padding: 9px 12px; font: 13px var(--body);
+  }
+  .adm .bar input[type=search] { min-width: 260px; flex: 1; font-family: var(--mono); }
+  .adm .bar .count { margin-left: auto; font: 12px var(--mono); color: var(--ink-faint); }
+
+  .adm .flash { border: 1px dashed rgba(94,207,138,.5); color: var(--ok); border-radius: 9px; padding: 9px 13px; font: 12px var(--mono); margin-bottom: 14px; }
+
+  /* the register */
+  .adm .reg { border: 1px solid var(--line-soft); border-radius: var(--radius); overflow: hidden; background: var(--bg-card); }
+  .adm .rowhead, .adm .row { display: grid; grid-template-columns: minmax(196px,1.9fr) minmax(132px,1.1fr) 84px 104px 92px minmax(96px,.8fr) 232px; gap: 12px; align-items: center; padding: 10px 16px; }
+  .adm .rowhead { font: 600 10px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--ink-faint); background: var(--bg-raise); border-bottom: 1px solid var(--line); }
+  .adm .row { border-top: 1px solid var(--line-soft); font-size: 13px; }
+  .adm .row:first-of-type { border-top: 0; }
+  .adm .row:hover { background: rgba(91,140,255,.045); }
+  .adm .row .id { font: 12px var(--mono); word-break: break-all; }
+  .adm .row .id a { color: var(--ink); }
+  .adm .row .dom { display: block; font: 11px var(--mono); color: var(--amber); margin-top: 3px; word-break: break-all; }
+  .adm .row .own { font-size: 12px; color: var(--ink-dim); word-break: break-all; }
+  .adm .row .own.anon { color: var(--ink-faint); font-style: italic; }
+  .adm .row .num { font: 12px var(--mono); color: var(--ink-dim); }
+  .adm .row .exp { font: 12px var(--mono); color: var(--ink-faint); white-space: nowrap; }
+  .adm .row .exp.soon { color: var(--amber); }
+  .adm .row .exp.soon::after { content: " ⚑"; }
+  .adm .row .acts { display: flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: nowrap; }
+  .adm .row .acts form.inline { display: flex; gap: 6px; align-items: center; }
+  .adm .row .acts input[type=date] {
+    background: var(--bg-raise); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 7px; padding: 4px 6px; font: 11px var(--mono); color-scheme: dark; width: 118px;
+  }
+  .adm .row.confirm { grid-template-columns: minmax(200px,1.1fr) 1fr auto; background: rgba(242,109,109,.07); box-shadow: inset 3px 0 0 var(--danger); }
+  .adm .row.confirm .warnmsg { font-size: 12px; color: var(--ink-dim); }
+  .adm .empty { padding: 40px 16px; text-align: center; color: var(--ink-faint); font: 13px var(--mono); }
+  @media (max-width: 900px) {
+    .adm .rowhead { display: none; }
+    .adm .row { grid-template-columns: 1fr; gap: 6px; }
+    .adm .row .acts { justify-content: flex-start; }
+  }
+</style>`
+
+var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsoleCSS + `
+<main class="adm">
+  <h1>Instance register</h1>
+  <p class="lede">Every site on this instance — yours, other accounts', and anonymous drops. Signed in as {{.Email}} · <a href="/account">back to your account</a></p>
+
+  {{if eq .Flash "deleted"}}<p class="flash">Site deleted.</p>{{end}}
+  {{if eq .Flash "expiry"}}<p class="flash">Expiry updated.</p>{{end}}
+
+  <section class="figures">
+    <div class="fig"><span class="k">Sites</span><span class="v">{{.Figures.Sites}}</span></div>
+    <div class="fig"><span class="k">Account-owned</span><span class="v">{{.Figures.Owned}}</span></div>
+    <div class="fig"><span class="k">Anonymous</span><span class="v">{{.Figures.Anonymous}}</span></div>
+    <div class="fig"><span class="k">Stored</span><span class="v">{{.Figures.HumanBytes}}</span></div>
+    <div class="fig"><span class="k">Files</span><span class="v">{{.Figures.Files}}</span></div>
+    <div class="fig{{if .Figures.ExpiringSoon}} warn{{end}}"><span class="k">Due in 7 days</span><span class="v">{{.Figures.ExpiringSoon}}</span></div>
+  </section>
+
+  <form class="bar" method="get" action="/account/admin">
+    <input type="search" name="q" value="{{.Query}}" placeholder="view id, owner email or domain" aria-label="Search sites">
+    <select name="filter" aria-label="Filter sites">
+      <option value=""{{if eq .Filter ""}} selected{{end}}>All sites</option>
+      <option value="owned"{{if eq .Filter "owned"}} selected{{end}}>Account-owned</option>
+      <option value="anon"{{if eq .Filter "anon"}} selected{{end}}>Anonymous</option>
+      <option value="expiring"{{if eq .Filter "expiring"}} selected{{end}}>Expiring within 7 days</option>
+    </select>
+    <button class="btn small" type="submit">Apply</button>
+    <span class="count">{{.Shown}} shown</span>
+  </form>
+
+  <section class="reg">
+    <div class="rowhead">
+      <span>Site</span><span>Owner</span><span>Mode</span><span>Size</span><span>Created</span><span>Expiry</span><span style="text-align:right">Actions</span>
+    </div>
+    {{range .Rows}}
+    {{if .Confirming}}
+    <div class="row confirm">
+      <span class="id">{{.ViewID}}{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}</span>
+      <span class="warnmsg">Delete this site permanently? Its {{.Files}} file(s) and any custom domain go with it. This cannot be undone.</span>
+      <span class="acts">
+        <form method="post" action="/account/admin/sites/{{.ViewID}}/delete{{if $.Params}}?{{$.ParamsQ}}{{end}}" class="inline">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <button class="btn small danger" type="submit">Yes, delete {{.ViewID}}</button>
+        </form>
+        <a class="btn small" href="/account/admin?{{$.ParamsQ}}">Cancel</a>
+      </span>
+    </div>
+    {{else}}
+    <div class="row">
+      <span class="id"><a href="{{.ViewURL}}" rel="noreferrer noopener" target="_blank">{{.ViewID}}</a>{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}</span>
+      <span class="own{{if not .Owner}} anon{{end}}">{{.OwnerLabel}}</span>
+      <span class="num">{{.Mode}}</span>
+      <span class="num">{{.SizeText}} · {{.Files}}f</span>
+      <span class="num">{{.CreatedText}}</span>
+      <span class="exp{{if .ExpiringNow}} soon{{end}}">{{.ExpiryText}}</span>
+      <span class="acts">
+        <form method="post" action="/account/admin/sites/{{.ViewID}}/expiry" class="inline">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <input type="date" name="expires" value="{{.ExpiryValue}}" aria-label="Expiry for {{.ViewID}}">
+          <button class="btn small" type="submit">Set</button>
+        </form>
+        <a class="btn small danger" href="/account/admin?confirm={{.ViewID}}{{$.Params}}">Delete</a>
+      </span>
+    </div>
+    {{end}}
+    {{else}}
+    <p class="empty">No site matches.</p>
+    {{end}}
+  </section>
+</main>
 ` + pageFoot))

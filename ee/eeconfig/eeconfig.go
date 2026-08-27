@@ -37,7 +37,12 @@ type Tier struct {
 	WebDAV        bool   `json:"webdav"`
 	CustomDomains int    `json:"custom_domains"`
 	MaxExpiryDays int    `json:"max_expiry_days"`
-	Price         *Price `json:"price,omitempty"`
+	// Admin marks a tier whose holders may reach the admin console. It is only
+	// half of the gate: the account must ALSO be listed in
+	// SITEBIN_ADMIN_ACCOUNTS. A tier source (PayGate, a stored tier) can
+	// nominate an account; only the operator of the container can confirm it.
+	Admin bool   `json:"admin,omitempty"`
+	Price *Price `json:"price,omitempty"`
 }
 
 // Paid reports whether the tier requires payment to activate.
@@ -67,6 +72,10 @@ type Config struct {
 	DefaultTier string // tier assigned to a new/free account
 	AnonTier    string // tier for anonymous creation ("" = anonymous disabled in tiers mode)
 	SelfSelect  bool   // may users pick their own (free) tier
+	// AdminAccounts are the emails allowed to reach the admin console, from
+	// SITEBIN_ADMIN_ACCOUNTS. Normalized to lowercase. Empty disables the
+	// console outright, whatever the tiers say.
+	AdminAccounts []string
 	AllowAnon   bool   // in accounts mode, still allow anonymous creation
 	LocalAuth   bool   // email+password auth (default true; false = SSO only)
 
@@ -156,6 +165,7 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Co
 	}
 
 	cfg.SelfSelect = boolish(getenv("SITEBIN_TIER_SELF_SELECT"))
+	cfg.AdminAccounts = emailList(getenv("SITEBIN_ADMIN_ACCOUNTS"))
 	cfg.AllowAnon = boolish(getenv("SITEBIN_ALLOW_ANON_CREATE"))
 	cfg.LocalAuth = true
 	if v := strings.ToLower(strings.TrimSpace(getenv("SITEBIN_LOCAL_AUTH"))); v != "" {
@@ -316,4 +326,17 @@ func boolish(s string) bool {
 		return true
 	}
 	return false
+}
+
+// emailList parses a comma-separated address list, lowercasing and trimming
+// each entry and dropping empties, so a trailing comma or a stray space in the
+// container's environment cannot quietly cost an operator their access.
+func emailList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if e := strings.ToLower(strings.TrimSpace(part)); e != "" {
+			out = append(out, e)
+		}
+	}
+	return out
 }
