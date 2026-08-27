@@ -506,6 +506,23 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_PADDLE_API_KEY` / `_WEBHOOK_SECRET` / `_SANDBOX` | Paddle billing. Webhook: `POST /account/billing/paddle/webhook`. |
 | `SITEBIN_LICENSE_KEY` | Optional Ed25519 license key; if set it must be valid. |
 
+A tier may set `"trusted": true`. Sites it owns are served without the strict
+content-security headers Sitebin applies to untrusted uploads — anonymous drops
+and sites on tiers without the flag get `form-action 'none'`, `connect-src
+'self'`, `frame-ancestors 'none'` and a `no-referrer` policy on top of the
+baseline every site receives (`nosniff`, `object-src 'none'`, `base-uri 'self'`,
+a restrictive `Permissions-Policy`). Scripts and images still load from
+anywhere: the aim is to stop a phishing page from *shipping* what it captures,
+not to stop it rendering, because blocking remote scripts would equally break
+every legitimate app that loads a library from a CDN.
+
+Violations are reported to `/_sitebin/csp-report`, counted per site, and shown
+in the instance register with the destinations that were blocked. A site whose
+first visitor trips `form-action` against a foreign host is almost always
+phishing. Grant `trusted` to tiers whose holders you can hold accountable; an
+anonymous site never qualifies, whatever its tier says. **The community build is
+unaffected** — it registers no provider, so every site there is trusted.
+
 A tier may set `"admin": true`. That does not change its quotas; it marks the
 tier as one whose holders may reach the instance register, and only together
 with `SITEBIN_ADMIN_ACCOUNTS`. The register lists every site on the instance —

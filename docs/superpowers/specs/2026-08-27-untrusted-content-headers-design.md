@@ -155,8 +155,8 @@ The figures strip gains one more number: how many sites have violations.
 the strict block is emitted with a `not file` matcher; the marker name matches
 `store`'s constant (the existing SPA-marker assertion pattern).
 
-`internal/store`: the trusted marker is written and removed; `ListFiles` skips
-it; `RecordCSPViolation` caps distinct URIs at 20, counts beyond the cap, and
+`internal/store`: the trusted marker is written and removed; `ListFiles` and
+`usage` both skip it; `RecordCSPViolation` caps distinct URIs at 20, counts beyond the cap, and
 survives a missing `stats.json`.
 
 `internal/httpapi`: the report endpoint resolves a site by Host, rejects an
@@ -168,6 +168,29 @@ trusted.
 `ee`: a tier with `"trusted": true` produces a trusted grant and one without does
 not; the admin register shows the violation count and the filter selects only
 sites that have violations.
+
+> **Corrections (during implementation).** Three things the design did not
+> account for, each found by a failing test:
+>
+> - **The marker counted against the file quota.** `usage()` walks `files/` and
+>   counted every entry, so a 200-file tier effectively allowed 199. The same
+>   was already true of `.sitebin-spa` — a pre-existing bug of the same shape —
+>   and both markers are now skipped.
+> - **The viewer swept it into `_raw` and offered it as the entry file.**
+>   `viewer.Apply` moves everything in `files/` into `files/_raw/`; the marker
+>   went with it, which both un-hardened every viewer site (the matcher looks in
+>   `files/`) and made `.sitebin-trusted` the site's entry document. It is now
+>   skipped by the move and stays at the serving root in every mode.
+> - **A replace upload stripped the marker.** `ClearFiles` empties the content
+>   directory, markers included, so every `POST /files?replace=true` un-trusted
+>   the site until the next sweep. sitebin.io deploys itself that way on every
+>   push and would have broken its own cross-origin embed each time. Both
+>   markers now survive a replace — which also fixes the same latent defect for
+>   `.sitebin-spa`.
+> - **Reconciliation had to reach anonymous sites too.** §2 described the sweep
+>   as filling in missing markers. It also has to *remove* one: a site whose
+>   owning account is deleted becomes anonymous and would otherwise keep its
+>   exemption forever.
 
 ## 7. Out of scope
 

@@ -1765,3 +1765,142 @@ func TestSiteServiceSetExpiryReportsAGoneSite(t *testing.T) {
 		t.Fatalf("SetExpiry on a missing site = %v, want ErrSiteGone", err)
 	}
 }
+
+// TestCommunityBuildSitesAreTrusted is the community-edition guard. No provider
+// is registered there, so no grant exists; if the core defaulted to "untrusted"
+// every self-hosted site would silently gain a CSP it never asked for.
+func TestCommunityBuildSitesAreTrusted(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	site, err := e.st.ByViewID(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !e.st.Trusted(site) {
+		t.Fatal("a community-build site must carry the trust marker, or the open-source edition hardens itself")
+	}
+}
+
+// The marker is an internal file, not the user's. It must not appear in
+// listings, ZIP downloads, or the file manager.
+func TestTrustMarkerIsNotAUserFile(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	site, _ := e.st.ByViewID(c.ID)
+	files, err := e.st.ListFiles(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if strings.Contains(f.Path, store.TrustedMarker) {
+			t.Fatalf("the trust marker leaked into ListFiles: %v", files)
+		}
+	}
+}
+
+func TestApplyQuotaFlipsTrustBothWays(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	site, _ := e.st.ByViewID(c.ID)
+
+	if err := e.api.SiteService().ApplyQuota(c.ID, ext.CreateGrant{OwnerAccountID: "a", Trusted: false}); err != nil {
+		t.Fatal(err)
+	}
+	if e.st.Trusted(site) {
+		t.Error("a restamp onto an untrusted tier must remove the marker")
+	}
+	if err := e.api.SiteService().ApplyQuota(c.ID, ext.CreateGrant{OwnerAccountID: "a", Trusted: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !e.st.Trusted(site) {
+		t.Error("a restamp onto a trusted tier must write the marker")
+	}
+}
+
+// TestCSPReportRecordsTheDestination covers the abuse signal. The count is
+// volume; the destination is the evidence.
+func TestCSPReportRecordsTheDestination(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	site, _ := e.st.ByViewID(c.ID)
+
+	body := `{"csp-report":{"blocked-uri":"https://api.emailjs.com/api/v1.0/email/send"}}`
+	req := httptest.NewRequest("POST", "/_sitebin/csp-report", strings.NewReader(body))
+	req.Host = c.ID + ".sitebin.example"
+	if w := e.public(t, req); w.Code != http.StatusNoContent {
+		t.Fatalf("report = %d, want 204", w.Code)
+	}
+	// The aggregator batches; force the pending batch out.
+	e.api.csp.now = func() time.Time { return time.Now().Add(2 * time.Hour) }
+	req2 := httptest.NewRequest("POST", "/_sitebin/csp-report", strings.NewReader(body))
+	req2.Host = c.ID + ".sitebin.example"
+	e.public(t, req2)
+
+	st := e.st.Stats(site)
+	if st.CSPViolations == 0 {
+		t.Fatal("no violation recorded")
+	}
+	if len(st.CSPBlocked) == 0 || !strings.Contains(st.CSPBlocked[0], "emailjs.com") {
+		t.Fatalf("blocked destination not recorded: %+v", st.CSPBlocked)
+	}
+}
+
+func TestCSPReportIgnoresAnUnknownHost(t *testing.T) {
+	e := newEnv(t, nil)
+	req := httptest.NewRequest("POST", "/_sitebin/csp-report", strings.NewReader(`{"csp-report":{"blocked-uri":"https://evil"}}`))
+	req.Host = "nosuchsite.sitebin.example"
+	if w := e.public(t, req); w.Code != http.StatusNoContent {
+		t.Fatalf("report for an unknown host = %d, want a quiet 204", w.Code)
+	}
+}
+
+// The aggregator must bound what a hostile page can make it hold.
+func TestCSPAggregatorCapsDistinctDestinations(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	site, _ := e.st.ByViewID(c.ID)
+
+	agg := newCSPAggregator()
+	for i := 0; i < store.MaxBlockedURIs*3; i++ {
+		agg.add(site, fmt.Sprintf("https://evil-%d.example", i))
+	}
+	agg.now = func() time.Time { return time.Now().Add(2 * time.Hour) }
+	due := agg.add(site, "https://one-more.example")
+	if len(due) != 1 {
+		t.Fatalf("expected one due batch, got %d", len(due))
+	}
+	if len(due[0].blocked) > store.MaxBlockedURIs {
+		t.Errorf("kept %d distinct destinations, cap is %d", len(due[0].blocked), store.MaxBlockedURIs)
+	}
+	if due[0].count <= store.MaxBlockedURIs {
+		t.Errorf("count = %d; volume must keep rising after the list is full", due[0].count)
+	}
+}
+
+// A replace upload must not strip Sitebin's own markers. sitebin.io deploys
+// itself with replace=true on every push; losing the trust marker there would
+// harden the site — and break its own cross-origin embed — until the next sweep.
+func TestReplaceUploadKeepsTheTrustMarker(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "one"})
+	site, _ := e.st.ByViewID(c.ID)
+	if !e.st.Trusted(site) {
+		t.Fatal("precondition: community site should start trusted")
+	}
+	edit := editIDFrom(t, c.EditURL)
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	h := textproto.MIMEHeader{}
+	h.Set("Content-Disposition", `form-data; name="files"; filename="index.html"`)
+	part, _ := mw.CreatePart(h)
+	part.Write([]byte("two"))
+	mw.Close()
+	req := authed(httptest.NewRequest("POST", "/api/sites/"+edit+"/files?replace=true", &buf), c.EditPassword)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if w := e.public(t, req); w.Code != 200 {
+		t.Fatalf("replace upload: %d %s", w.Code, w.Body)
+	}
+	if !e.st.Trusted(site) {
+		t.Fatal("a replace upload stripped the trust marker")
+	}
+}

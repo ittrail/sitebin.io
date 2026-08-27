@@ -41,6 +41,16 @@ const (
 	// SPAMarker is an empty file in a webserver site's files/ that a Caddy
 	// file-matcher keys on to enable index.html fallback for unknown paths.
 	SPAMarker = ".sitebin-spa"
+
+	// TrustedMarker is an empty file in a site's files/ that a Caddy
+	// file-matcher keys on to SKIP the strict content-security headers.
+	//
+	// It marks trust, not hardening, and that polarity is deliberate: a marker
+	// that was never written, was lost in a restore, or was not updated on a
+	// tier change leaves the site served more strictly than intended, which is
+	// an annoyance. The opposite polarity would leave a phishing site served
+	// with no protection at all.
+	TrustedMarker = ".sitebin-trusted"
 )
 
 // WriteSPAMarker creates the SPA-fallback marker in the site's files/ dir.
@@ -57,6 +67,29 @@ func (s *Store) WriteSPAMarker(site *Site) error {
 func (s *Store) RemoveSPAMarker(site *Site) {
 	os.Remove(filepath.Join(site.FilesDir(), SPAMarker))
 	os.Remove(filepath.Join(site.FilesDir(), rawDirName, SPAMarker))
+}
+
+// SetTrusted writes or removes the trust marker, so Caddy serves the site
+// without (or with) the strict content-security headers. Removal also clears a
+// copy under _raw/, which a viewer-mode switch can have swept there.
+func (s *Store) SetTrusted(site *Site, trusted bool) error {
+	path := filepath.Join(site.FilesDir(), TrustedMarker)
+	if !trusted {
+		os.Remove(path)
+		os.Remove(filepath.Join(site.FilesDir(), rawDirName, TrustedMarker))
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// Trusted reports whether the site currently carries the trust marker.
+func (s *Store) Trusted(site *Site) bool {
+	_, err := os.Stat(filepath.Join(site.FilesDir(), TrustedMarker))
+	return err == nil
 }
 
 // Store provides all site persistence. Methods are safe for concurrent use.

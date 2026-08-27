@@ -67,6 +67,11 @@ func usage(dir string) (bytes int64, files int, err error) {
 		if d.IsDir() {
 			return nil
 		}
+		// Sitebin's own markers are not the user's files and must not eat into
+		// the quota they paid for: a 200-file tier would otherwise allow 199.
+		if d.Name() == SPAMarker || d.Name() == TrustedMarker {
+			return nil
+		}
 		fi, err := d.Info()
 		if err != nil {
 			return err
@@ -212,6 +217,14 @@ func (s *Store) ClearFiles(site *Site) error {
 		return err
 	}
 	for _, e := range entries {
+		// Sitebin's own markers survive a replace. They are not the caller's
+		// files, and dropping them would silently change how the site is served
+		// — a replace upload would strip the trust marker and harden the site
+		// until the next cleanup sweep put it back, which for a site that
+		// deploys on every push means breaking itself on every push.
+		if e.Name() == SPAMarker || e.Name() == TrustedMarker {
+			continue
+		}
 		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
 			return err
 		}
@@ -290,7 +303,7 @@ func (s *Store) ListFiles(site *Site) ([]FileInfo, error) {
 		if d.IsDir() {
 			return nil
 		}
-		if d.Name() == SPAMarker {
+		if d.Name() == SPAMarker || d.Name() == TrustedMarker {
 			return nil // internal marker, not a user file
 		}
 		fi, err := d.Info()

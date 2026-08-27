@@ -350,3 +350,87 @@ func TestDashboardLinksTheConsoleForAdminsOnly(t *testing.T) {
 		})
 	}
 }
+
+// --- trust and CSP surfacing ---
+
+// A tier's trusted flag reaches the grant, and an anonymous site never inherits
+// it: the anonymous tier is a quota bundle, not a statement about who uploaded.
+func TestTrustedTierGrantsTrustOnlyToOwnedSites(t *testing.T) {
+	const tiers = `[
+      {"id":"drop","label":"Drop","max_site_bytes":1000,"max_files":10,"max_sites":0,"webdav":false,"custom_domains":0,"max_expiry_days":1,"trusted":true},
+      {"id":"pro","label":"Pro","max_site_bytes":5000,"max_files":50,"max_sites":9,"webdav":true,"custom_domains":5,"max_expiry_days":0,"trusted":true},
+      {"id":"free","label":"Free","max_site_bytes":1000,"max_files":10,"max_sites":1,"webdav":false,"custom_domains":0,"max_expiry_days":7}
+    ]`
+	t.Setenv("SITEBIN_ACCOUNT_MODE", "tiers")
+	t.Setenv("SITEBIN_TIERS", tiers)
+	t.Setenv("SITEBIN_DEFAULT_TIER", "free")
+	t.Setenv("SITEBIN_ANON_TIER", "drop")
+	p := newProvider()
+	if err := p.Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// anonymous: the drop tier says trusted, the grant must not
+	anon, err := p.AuthorizeCreate(httptest.NewRequest("POST", "/api/sites", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if anon.Trusted {
+		t.Error("an anonymous site must never be trusted, whatever its tier says")
+	}
+
+	// owned on a trusted tier
+	acc, err := p.local.Signup("pro@example.com", "password123", "pro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, _, err := p.QuotaFor(acc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !g.Trusted {
+		t.Error("a trusted tier must grant trust to an owned site")
+	}
+
+	// owned on an untrusted tier
+	acc2, err := p.local.Signup("free@example.com", "password123", "free")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g2, _, err := p.QuotaFor(acc2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g2.Trusted {
+		t.Error("a tier without the flag must not grant trust")
+	}
+}
+
+func TestAdminRegisterShowsAndFiltersViolations(t *testing.T) {
+	p, host, mux := setupAdmin(t, "boss@example.com")
+	cookie, accID := adminUser(t, p, mux, "boss@example.com", "admin")
+	instance(t, host, accID)
+	// flag one of the anonymous sites
+	flagged := host.sites.infos["cccccccccccccccccccccccccc"]
+	flagged.Violations = 3
+	flagged.Blocked = []string{"https://api.emailjs.com/send"}
+	host.sites.infos["cccccccccccccccccccccccccc"] = flagged
+
+	body := getAs(mux, "/account/admin", cookie).Body.String()
+	if !strings.Contains(body, "api.emailjs.com") {
+		t.Error("the blocked destination is the evidence and must be shown")
+	}
+
+	only := getAs(mux, "/account/admin?filter=flagged", cookie).Body.String()
+	if !strings.Contains(only, "cccccccccccccccccccccccccc") {
+		t.Error("the flagged filter dropped the flagged site")
+	}
+	if strings.Contains(only, "aaaaaaaaaaaaaaaaaaaaaaaaaa") {
+		t.Error("the flagged filter kept a site with no violations")
+	}
+
+	stats := p.instanceStats(mustAll(t, host))
+	if stats.Flagged != 1 {
+		t.Errorf("Flagged = %d, want 1", stats.Flagged)
+	}
+}

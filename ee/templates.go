@@ -212,6 +212,10 @@ const adminConsoleCSS = `
   .adm .fig.warn { border-color: rgba(245,184,77,.5); }
   .adm .fig.warn .v { color: var(--amber); }
   .adm .fig.warn::before { border-color: rgba(245,184,77,.55); }
+  .adm .fig.alarm { border-color: rgba(242,109,109,.55); }
+  .adm .fig.alarm .v { color: var(--danger); }
+  .adm .fig.alarm::before { border-color: rgba(242,109,109,.6); }
+  .adm .row .flag { display: block; margin-top: 3px; font: 11px var(--mono); color: var(--danger); word-break: break-all; }
 
   /* filter bar */
   .adm .bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
@@ -271,6 +275,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
     <div class="fig"><span class="k">Stored</span><span class="v">{{.Figures.HumanBytes}}</span></div>
     <div class="fig"><span class="k">Files</span><span class="v">{{.Figures.Files}}</span></div>
     <div class="fig{{if .Figures.ExpiringSoon}} warn{{end}}"><span class="k">Due in 7 days</span><span class="v">{{.Figures.ExpiringSoon}}</span></div>
+    <div class="fig{{if .Figures.Flagged}} alarm{{end}}"><span class="k">CSP-blocked</span><span class="v">{{.Figures.Flagged}}</span></div>
   </section>
 
   <form class="bar" method="get" action="/account/admin">
@@ -280,6 +285,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
       <option value="owned"{{if eq .Filter "owned"}} selected{{end}}>Account-owned</option>
       <option value="anon"{{if eq .Filter "anon"}} selected{{end}}>Anonymous</option>
       <option value="expiring"{{if eq .Filter "expiring"}} selected{{end}}>Expiring within 7 days</option>
+      <option value="flagged"{{if eq .Filter "flagged"}} selected{{end}}>Blocked by CSP</option>
     </select>
     <button class="btn small" type="submit">Apply</button>
     <span class="count">{{.Shown}} shown</span>
@@ -305,7 +311,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
     {{else}}
     <div class="row">
       <span class="id"><a href="{{.ViewURL}}" rel="noreferrer noopener" target="_blank">{{.ViewID}}</a>{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}</span>
-      <span class="own{{if not .Owner}} anon{{end}}">{{.OwnerLabel}}</span>
+      <span class="own{{if not .Owner}} anon{{end}}">{{.OwnerLabel}}{{if .Violations}}<span class="flag" title="{{.BlockedText}}">&#9888; {{.Violations}} blocked</span>{{end}}</span>
       <span class="num">{{.Mode}}</span>
       <span class="num">{{.SizeText}} · {{.Files}}f</span>
       <span class="num">{{.CreatedText}}</span>

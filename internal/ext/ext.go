@@ -84,6 +84,12 @@ type CreateGrant struct {
 	MaxExpiryDays   int
 	MaxCustomDomain *int  // nil = inherit global; value (incl. 0) = explicit cap
 	WebDAV          *bool // nil = inherit global
+	// Trusted exempts the site from the strict content-security headers that
+	// untrusted uploads are served with. Only a tier marked trusted grants it;
+	// anonymous sites never are. The core's default is the opposite of this
+	// zero value only where no provider exists at all — see store.SetTrusted
+	// and the community-build note in createSite.
+	Trusted bool
 }
 
 // CreateError rejects a site creation with an HTTP status and message.
@@ -154,6 +160,12 @@ type SiteInfo struct {
 	ViewURL   string
 	EditURL   string
 	CreatedAt time.Time
+	// Violations counts content-security-policy reports the site's pages have
+	// produced, and Blocked names the distinct destinations they tried to
+	// reach. A site whose first visitor trips form-action against a foreign
+	// host is almost always phishing, so the admin console shows both.
+	Violations int
+	Blocked    []string
 	// ExpiresAt is when the site stops serving, or nil if it has no expiry. A
 	// downgrade stamps a 30-day grace here, and that date is the only warning
 	// the owner gets before the sweep deletes the site — the dashboard must

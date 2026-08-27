@@ -165,3 +165,77 @@ func TestGenerateTLSSnippet(t *testing.T) {
 		t.Error("provider block should be replaced by snippet")
 	}
 }
+
+// TestBaselineHeadersOnEveryContentOrigin: the baseline is hygiene that must
+// reach every site in both editions, so it belongs on each content origin --
+// the wildcard subdomain, the custom-domain listener, and path views.
+func TestBaselineHeadersOnEveryContentOrigin(t *testing.T) {
+	out := Generate(config.Config{
+		BaseDomain: "sitebin.example", DataDir: "/data", HTTPOnly: true,
+		ViewAccess: "both",
+	})
+	for _, want := range []string{
+		"X-Content-Type-Options nosniff",
+		"Referrer-Policy strict-origin-when-cross-origin",
+		"Permissions-Policy",
+		`Content-Security-Policy "object-src 'none'; base-uri 'self'"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("baseline header %q missing from the Caddyfile", want)
+		}
+	}
+	// base-uri must not be 'none': Angular and friends ship <base href="/">,
+	// and 'none' forbids the element outright.
+	if strings.Contains(out, "base-uri 'none'") {
+		t.Error("base-uri 'none' breaks frameworks that ship a <base> element; use 'self'")
+	}
+}
+
+// TestStrictHeadersKeyOffTheAbsenceOfTheTrustMarker is the polarity assertion.
+// A `file` matcher would harden only marked sites, leaving every unmarked one
+// -- including one whose marker was lost -- served wide open.
+func TestStrictHeadersKeyOffTheAbsenceOfTheTrustMarker(t *testing.T) {
+	out := Generate(config.Config{
+		BaseDomain: "sitebin.example", DataDir: "/data", HTTPOnly: true,
+		ViewAccess: "both",
+	})
+	if !strings.Contains(out, "not file /"+store.TrustedMarker) {
+		t.Fatalf("strict block must match on the ABSENCE of %s, so an unmarked site is hardened; got:\n%s", store.TrustedMarker, out)
+	}
+	for _, want := range []string{
+		"form-action 'none'",
+		"connect-src 'self'",
+		"frame-ancestors 'none'",
+		"/_sitebin/csp-report",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("strict policy missing %q", want)
+		}
+	}
+}
+
+// The marker must be hidden like the SPA marker, or file_server serves it and
+// the directory listing advertises it.
+func TestTrustMarkerIsHidden(t *testing.T) {
+	out := Generate(config.Config{BaseDomain: "sitebin.example", DataDir: "/data", HTTPOnly: true})
+	var hides int
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "hide ") {
+			continue
+		}
+		hides++
+		if !strings.Contains(line, store.TrustedMarker) {
+			t.Errorf("hide directive omits the trust marker, so file_server would serve it: %q", line)
+		}
+	}
+	if hides == 0 {
+		t.Fatal("no hide directives found at all")
+	}
+}
+
+func TestTrustedMarkerNameMatchesStore(t *testing.T) {
+	if trustedMarkerName != store.TrustedMarker {
+		t.Fatalf("caddygen trustedMarkerName %q != store.TrustedMarker %q", trustedMarkerName, store.TrustedMarker)
+	}
+}
