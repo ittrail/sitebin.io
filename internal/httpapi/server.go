@@ -42,6 +42,7 @@ type API struct {
 	authLimiter    *auth.Limiter // per (ip, target)
 	targetLimiter  *auth.Limiter // per target, any source
 	davLockSystems *davLocks
+	csp            *cspAggregator
 }
 
 // New wires the API. secret signs view-session cookies; webFS provides the
@@ -51,6 +52,7 @@ func New(cfg config.Config, st *store.Store, secret []byte, webFS fs.FS) (*API, 
 		return nil, fmt.Errorf("httpapi: secret too short")
 	}
 	return &API{
+		csp:            newCSPAggregator(),
 		cfg:            cfg,
 		st:             st,
 		signer:         auth.TokenSigner{Secret: secret},
@@ -91,6 +93,7 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("GET /_sitebin/assets/{path...}", a.asset)
 	mux.HandleFunc("GET /_sitebin/embed.js", a.embedScript)
 	mux.HandleFunc("POST /_sitebin/unlock", a.unlock)
+	mux.HandleFunc("POST /_sitebin/csp-report", a.handleCSPReport)
 
 	// Enterprise: mount the account dashboard + auth routes when a provider is
 	// active. Guarded so a provider can only ever add routes on the main domain.

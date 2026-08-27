@@ -317,6 +317,9 @@ func grantFromTier(owner string, t eeconfig.Tier) ext.CreateGrant {
 		MaxExpiryDays:   t.MaxExpiryDays,
 		MaxCustomDomain: &domains,
 		WebDAV:          &webdav,
+		// An anonymous site is never trusted, whatever its tier says: the
+		// anonymous tier is a quota bundle, not a statement about who uploaded.
+		Trusted: t.Trusted && owner != "",
 	}
 }
 

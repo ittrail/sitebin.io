@@ -17,6 +17,44 @@ import (
 // grace is how long an expired site is kept (serving 410) before deletion.
 const grace = 24 * time.Hour
 
+// reconcileTrust re-derives a site's trust marker from its owner's current
+// tier. The marker is written when quotas are stamped, but a site created
+// before this existed has none, and a tier can change without any restamp
+// touching it — so the sweep, which walks every site anyway, is the safety net
+// the marker's fail-safe polarity relies on.
+//
+// Only OWNED sites without a marker cost a lookup: an anonymous site is never
+// trusted and needs no question asked, and once a trusted site has its marker
+// it is never looked up again. A site owned on an untrusted tier is the one
+// case that asks every sweep, and the answer comes from the extension's own
+// per-account cache.
+func reconcileTrust(st *store.Store, site *store.Site) {
+	if site.Meta.OwnerAccountID == "" {
+		if st.Trusted(site) {
+			// An anonymous site must never carry the marker. One here means a
+			// site lost its owner (a deleted account) and kept the exemption.
+			st.SetTrusted(site, false)
+		}
+		return
+	}
+	p, ok := ext.Get()
+	if !ok {
+		return // community build: creation already marked everything trusted
+	}
+	grant, known, err := p.QuotaFor(site.Meta.OwnerAccountID)
+	if err != nil || !known {
+		// Unknown tier or a provider outage: leave the marker exactly as it is.
+		// Guessing "trusted" here would strip a phishing site's headers on the
+		// strength of a failed lookup.
+		return
+	}
+	if st.Trusted(site) != grant.Trusted {
+		if err := st.SetTrusted(site, grant.Trusted); err != nil {
+			slog.Error("cleanup: reconcile trust marker", "id", site.ViewID, "owner", site.Meta.OwnerAccountID, "err", err)
+		}
+	}
+}
+
 // Sweep removes sites expired for longer than the grace period and prunes
 // index links whose target no longer exists. It returns the number of sites
 // deleted.
@@ -27,6 +65,7 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 	}
 	removed := 0
 	for _, site := range sites {
+		reconcileTrust(st, site)
 		if site.Meta.ExpiresAt == nil || !now.After(site.Meta.ExpiresAt.Add(grace)) {
 			continue
 		}

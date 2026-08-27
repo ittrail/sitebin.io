@@ -105,6 +105,13 @@ func Apply(site *store.Site) (string, error) {
 		if e.Name() == "_raw" {
 			continue
 		}
+		// The trust marker belongs at the serving root in every mode: Caddy's
+		// root is files/ and its matcher looks for /.sitebin-trusted there.
+		// Sweeping it into _raw would silently harden every viewer site and,
+		// worse, offer it up as the entry file.
+		if e.Name() == store.TrustedMarker {
+			continue
+		}
 		src := filepath.Join(filesDir, e.Name())
 		if isGeneratedWrapper(src) {
 			if err := os.Remove(src); err != nil {

@@ -381,3 +381,56 @@ func TestSweepHandlesMultipleSitesIndependently(t *testing.T) {
 		t.Error("anonymous site survived")
 	}
 }
+
+// The sweep is the safety net the marker's fail-safe polarity relies on: a site
+// created before the marker existed, or one whose tier changed without a
+// restamp, has to converge on the right answer.
+func TestSweepReconcilesTheTrustMarker(t *testing.T) {
+	ext.Register(&trustProvider{trusted: map[string]bool{"trusted-acct": true}})
+	defer ext.Reset()
+	st, err := store.New(t.TempDir(), "sitebin.example", 1<<20, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	own := func(owner string) *store.Site {
+		site, _, _ := st.Create()
+		if owner != "" {
+			if err := st.Update(site, func(m *store.Meta) error { m.OwnerAccountID = owner; return nil }); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return site
+	}
+	trusted := own("trusted-acct")
+	untrusted := own("plain-acct")
+	anon := own("")
+	// an anonymous site wrongly carrying the marker: its account was deleted
+	// and the exemption outlived the owner
+	if err := st.SetTrusted(anon, true); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Sweep(st, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	if !st.Trusted(trusted) {
+		t.Error("a site owned on a trusted tier must gain the marker")
+	}
+	if st.Trusted(untrusted) {
+		t.Error("a site owned on an untrusted tier must not carry the marker")
+	}
+	if st.Trusted(anon) {
+		t.Error("an anonymous site must never keep the marker")
+	}
+}
+
+// trustProvider answers only QuotaFor; the sweep needs nothing else from it.
+type trustProvider struct {
+	stubProvider
+	trusted map[string]bool
+}
+
+func (p *trustProvider) QuotaFor(owner string) (ext.CreateGrant, bool, error) {
+	return ext.CreateGrant{OwnerAccountID: owner, Trusted: p.trusted[owner]}, true, nil
+}

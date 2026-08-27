@@ -483,6 +483,16 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The trust marker decides whether Caddy adds the strict content-security
+	// headers. `gated` is false exactly when no provider is registered — the
+	// community build — and there every site is trusted, because that build has
+	// no accounts, no tiers and no abuse gating at all. Where a provider does
+	// run, only a tier it marks trusted earns the exemption.
+	if err := a.st.SetTrusted(site, !gated || grant.Trusted); err != nil {
+		fail(err)
+		return
+	}
+
 	var set updateSet
 	ct := r.Header.Get("Content-Type")
 	switch {

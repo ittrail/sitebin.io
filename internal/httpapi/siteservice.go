@@ -29,17 +29,20 @@ func (s siteService) Info(viewID string) (ext.SiteInfo, bool) {
 // site looks like.
 func (s siteService) infoOf(site *store.Site) ext.SiteInfo {
 	bytes, files, _ := s.a.st.Usage(site)
+	st := s.a.st.Stats(site)
 	return ext.SiteInfo{
-		ViewID:    site.ViewID,
-		Owner:     site.Meta.OwnerAccountID,
-		Mode:      site.Meta.Mode,
-		Domains:   site.Meta.CustomDomains,
-		Bytes:     bytes,
-		Files:     files,
-		ViewURL:   s.a.cfg.ViewURL(site.ViewID),
-		EditURL:   s.a.cfg.EditURL(site.Meta.EditID),
-		CreatedAt: site.Meta.CreatedAt,
-		ExpiresAt: site.Meta.ExpiresAt,
+		Violations: st.CSPViolations,
+		Blocked:    st.CSPBlocked,
+		ViewID:     site.ViewID,
+		Owner:      site.Meta.OwnerAccountID,
+		Mode:       site.Meta.Mode,
+		Domains:    site.Meta.CustomDomains,
+		Bytes:      bytes,
+		Files:      files,
+		ViewURL:    s.a.cfg.ViewURL(site.ViewID),
+		EditURL:    s.a.cfg.EditURL(site.Meta.EditID),
+		CreatedAt:  site.Meta.CreatedAt,
+		ExpiresAt:  site.Meta.ExpiresAt,
 	}
 }
 
@@ -99,6 +102,12 @@ func (s siteService) ApplyQuota(viewID string, g ext.CreateGrant) error {
 	site, err := s.a.st.ByViewID(viewID)
 	if err != nil {
 		return mapSiteGone(err, viewID)
+	}
+	// A tier change can flip trust in either direction, so the marker is
+	// restamped with the caps. Failing here would leave the site's headers
+	// disagreeing with its tier, which for a downgrade means unprotected.
+	if err := s.a.st.SetTrusted(site, g.Trusted); err != nil {
+		return err
 	}
 	if err := s.a.st.ApplyQuota(site, quotaFromGrant(g), store.DowngradeGrace); err != nil {
 		// The site can vanish here too, not just at the lookup above: the same

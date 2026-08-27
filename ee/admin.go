@@ -66,6 +66,7 @@ type instanceFigures struct {
 	Files        int
 	Expiring     int // carrying any expiry
 	ExpiringSoon int // falling due within expiringSoon
+	Flagged      int // sites with at least one CSP violation
 }
 
 // HumanBytes renders the stored total for the figure stub.
@@ -88,6 +89,9 @@ func (p *provider) instanceStats(sites []ext.SiteInfo) instanceFigures {
 			if s.ExpiresAt.Before(cutoff) {
 				f.ExpiringSoon++
 			}
+		}
+		if s.Violations > 0 {
+			f.Flagged++
 		}
 	}
 	return f
@@ -127,6 +131,7 @@ type adminRow struct {
 	DomainsText string
 	ExpiringNow bool
 	ExpiryValue string // yyyy-mm-dd for the date input, empty when none
+	BlockedText string // the destinations the site's pages were stopped from reaching
 	// Confirming turns this row into the delete confirmation. The page's CSP
 	// is script-src 'none', so a confirm() dialog would silently never appear;
 	// the confirmation has to be a step the server renders.
@@ -200,6 +205,7 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 			CreatedText: s.CreatedAt.Local().Format("2006-01-02"),
 			ExpiryText:  "—",
 			DomainsText: strings.Join(s.Domains, ", "),
+			BlockedText: strings.Join(s.Blocked, ", "),
 			Confirming:  s.ViewID == confirm,
 		}
 		if row.OwnerLabel == "" {
@@ -221,6 +227,10 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 			}
 		case "expiring":
 			if !row.ExpiringNow {
+				continue
+			}
+		case "flagged":
+			if s.Violations == 0 {
 				continue
 			}
 		}

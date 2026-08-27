@@ -98,6 +98,7 @@ func writePathViewRoutes(b *strings.Builder, backend func(string) string, dataDi
 	fmt.Fprintf(b, "\t\t\tforward_auth %s {\n\t\t\t\turi /internal/authz\n\t\t\t\theader_up X-Sitebin-View {re.view.1}\n\t\t\t\tcopy_headers Set-Cookie\n\t\t\t}\n", backend("9000"))
 	b.WriteString("\t\t\turi strip_prefix /v/{re.view.1}\n")
 	fmt.Fprintf(b, "\t\t\troot * %s/sites/{re.view.1}/files\n", dataDir)
+	writeSecurityHeaders(b, "\t\t\t")
 	writeFileServing(b, "\t\t\t")
 	b.WriteString("\t\t}\n")
 	b.WriteString("\t}\n")
@@ -117,6 +118,7 @@ func writeContentRoutes(b *strings.Builder, backend func(string) string, root st
 	// the one whose files are served — a password-gate bypass.
 	fmt.Fprintf(b, "\t\tforward_auth %s {\n\t\t\turi /internal/authz\n\t\t\theader_up X-Forwarded-Host {host}\n\t\t\tcopy_headers Set-Cookie\n\t\t}\n", backend("9000"))
 	fmt.Fprintf(b, "\t\troot * %s\n", root)
+	writeSecurityHeaders(b, "\t\t")
 	writeFileServing(b, "\t\t")
 	b.WriteString("\t}\n")
 }
@@ -128,10 +130,10 @@ func writeFileServing(b *strings.Builder, ind string) {
 	fmt.Fprintf(b, "%s@spa file /%s\n", ind, spaMarkerName)
 	fmt.Fprintf(b, "%shandle @spa {\n", ind)
 	fmt.Fprintf(b, "%s\ttry_files {path} /index.html\n", ind)
-	fmt.Fprintf(b, "%s\tfile_server {\n%s\t\thide %s\n%s\t}\n", ind, ind, spaMarkerName, ind)
+	fmt.Fprintf(b, "%s\tfile_server {\n%s\t\thide %s %s\n%s\t}\n", ind, ind, spaMarkerName, trustedMarkerName, ind)
 	fmt.Fprintf(b, "%s}\n", ind)
 	fmt.Fprintf(b, "%shandle {\n", ind)
-	fmt.Fprintf(b, "%s\tfile_server {\n%s\t\tbrowse\n%s\t\thide %s\n%s\t}\n", ind, ind, ind, spaMarkerName, ind)
+	fmt.Fprintf(b, "%s\tfile_server {\n%s\t\tbrowse\n%s\t\thide %s %s\n%s\t}\n", ind, ind, ind, spaMarkerName, trustedMarkerName, ind)
 	fmt.Fprintf(b, "%s}\n", ind)
 }
 

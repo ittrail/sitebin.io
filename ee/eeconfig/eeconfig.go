@@ -41,8 +41,12 @@ type Tier struct {
 	// half of the gate: the account must ALSO be listed in
 	// SITEBIN_ADMIN_ACCOUNTS. A tier source (PayGate, a stored tier) can
 	// nominate an account; only the operator of the container can confirm it.
-	Admin bool   `json:"admin,omitempty"`
-	Price *Price `json:"price,omitempty"`
+	Admin bool `json:"admin,omitempty"`
+	// Trusted exempts the tier's sites from the strict content-security headers
+	// that untrusted uploads get. Grant it to tiers whose holders you can hold
+	// accountable; anonymous sites never qualify.
+	Trusted bool   `json:"trusted,omitempty"`
+	Price   *Price `json:"price,omitempty"`
 }
 
 // Paid reports whether the tier requires payment to activate.
@@ -76,8 +80,8 @@ type Config struct {
 	// SITEBIN_ADMIN_ACCOUNTS. Normalized to lowercase. Empty disables the
 	// console outright, whatever the tiers say.
 	AdminAccounts []string
-	AllowAnon   bool   // in accounts mode, still allow anonymous creation
-	LocalAuth   bool   // email+password auth (default true; false = SSO only)
+	AllowAnon     bool // in accounts mode, still allow anonymous creation
+	LocalAuth     bool // email+password auth (default true; false = SSO only)
 
 	Google    *OAuthProvider // nil = not configured
 	Microsoft *OAuthProvider
