@@ -115,6 +115,17 @@ type Host interface {
 type SiteService interface {
 	// Info returns a lightweight view of a site, or ok=false if absent.
 	Info(viewID string) (SiteInfo, bool)
+	// All returns every site on the instance, anonymous ones included, for the
+	// admin console's instance-wide view. Unreadable entries are skipped rather
+	// than failing the whole listing, exactly as the cleanup sweep's own pass
+	// does — one corrupt meta.json must not blind an operator to the other 198
+	// sites.
+	All() ([]SiteInfo, error)
+	// SetExpiry sets a site's expiry, or clears it when at is nil. It clears
+	// ExpiryFromTier: a date an operator chose is not one the plan imposed, and
+	// leaving the flag set would let the next sliding renewal overwrite it. Like
+	// ApplyQuota it reports a site that no longer exists as ErrSiteGone.
+	SetExpiry(viewID string, at *time.Time) error
 	// RotateEditPassword issues a new edit password, returning it once.
 	RotateEditPassword(viewID string) (newPassword string, err error)
 	// Delete removes a site and its indexes.
@@ -127,10 +138,17 @@ type SiteService interface {
 	ApplyQuota(viewID string, g CreateGrant) error
 }
 
-// SiteInfo is the dashboard's view of an owned site.
+// SiteInfo is the dashboard's view of a site.
 type SiteInfo struct {
-	ViewID    string
-	Mode      string
+	ViewID string
+	// Owner is the owning account's id, empty for an anonymous site. The
+	// account dashboard never reads it — there the owner is the viewer — but
+	// the admin console's instance-wide list needs it as a column.
+	Owner string
+	Mode  string
+	// Domains are the site's custom domains, if any. The admin console lists
+	// and searches by them; they are the only human-memorable handle a site has.
+	Domains   []string
 	Bytes     int64
 	Files     int
 	ViewURL   string

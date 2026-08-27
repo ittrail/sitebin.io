@@ -1668,3 +1668,100 @@ func TestSiteServiceApplyQuotaReportsAVanishedSite(t *testing.T) {
 		t.Errorf("error does not name the site: %v", err)
 	}
 }
+
+// TestSiteServiceAllEnumeratesTheInstance covers the admin console's only view
+// of the instance. Info() answers about one site the caller already names; All
+// is the only way anything on the far side of the seam learns a site exists at
+// all, so an owner it drops or an anonymous site it skips is invisible to the
+// operator rather than merely wrong.
+func TestSiteServiceAllEnumeratesTheInstance(t *testing.T) {
+	e := newEnv(t, nil)
+	a := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	b := e.createSite(t, nil, map[string]string{"index.html": "y", "b.txt": "zz"})
+
+	// give one of them an owner, the way AuthorizeCreate's grant would
+	site, err := e.st.ByViewID(b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.Update(site, func(m *store.Meta) error {
+		m.OwnerAccountID = "acct-7"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := e.api.SiteService().All()
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	byID := map[string]ext.SiteInfo{}
+	for _, s := range all {
+		byID[s.ViewID] = s
+	}
+	if len(byID) != 2 {
+		t.Fatalf("All returned %d sites, want 2: %v", len(byID), all)
+	}
+	if got := byID[a.ID].Owner; got != "" {
+		t.Errorf("anonymous site reported Owner %q, want empty", got)
+	}
+	if got := byID[b.ID].Owner; got != "acct-7" {
+		t.Errorf("owned site reported Owner %q, want acct-7", got)
+	}
+	if byID[b.ID].Files != 2 {
+		t.Errorf("Files = %d, want 2 — the console reports usage per site", byID[b.ID].Files)
+	}
+	if byID[a.ID].ViewURL == "" {
+		t.Error("ViewURL empty: the console links a site by it")
+	}
+}
+
+// TestSiteServiceSetExpiry covers the admin console's write path. The
+// ExpiryFromTier assertion is the one that matters: leaving the flag set would
+// let the next sliding renewal move a date an operator deliberately chose.
+func TestSiteServiceSetExpiry(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+
+	// start from a tier-imposed expiry, as a capped tier would stamp
+	site, err := e.st.ByViewID(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(48 * time.Hour)
+	if err := e.st.Update(site, func(m *store.Meta) error {
+		m.ExpiresAt = &old
+		m.ExpiryFromTier = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := time.Now().Add(30 * 24 * time.Hour).Truncate(time.Second)
+	if err := e.api.SiteService().SetExpiry(c.ID, &want); err != nil {
+		t.Fatalf("SetExpiry: %v", err)
+	}
+	site, _ = e.st.ByViewID(c.ID)
+	if site.Meta.ExpiresAt == nil || !site.Meta.ExpiresAt.Equal(want) {
+		t.Fatalf("ExpiresAt = %v, want %v", site.Meta.ExpiresAt, want)
+	}
+	if site.Meta.ExpiryFromTier {
+		t.Error("an operator's date must not stay marked tier-imposed, or renewal will overwrite it")
+	}
+
+	if err := e.api.SiteService().SetExpiry(c.ID, nil); err != nil {
+		t.Fatalf("SetExpiry(nil): %v", err)
+	}
+	site, _ = e.st.ByViewID(c.ID)
+	if site.Meta.ExpiresAt != nil {
+		t.Errorf("ExpiresAt = %v, want cleared", site.Meta.ExpiresAt)
+	}
+}
+
+func TestSiteServiceSetExpiryReportsAGoneSite(t *testing.T) {
+	e := newEnv(t, nil)
+	err := e.api.SiteService().SetExpiry("abcdefghijklmnopqrstuvwxyz", nil)
+	if !errors.Is(err, ext.ErrSiteGone) {
+		t.Fatalf("SetExpiry on a missing site = %v, want ErrSiteGone", err)
+	}
+}

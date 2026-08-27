@@ -19,16 +19,19 @@ func (p *provider) PublicRoutes() map[string]http.Handler {
 		return nil
 	}
 	routes := map[string]http.Handler{
-		"GET /account":                    http.HandlerFunc(p.handleRoot),
-		"GET /account/login":              http.HandlerFunc(p.handleLoginGet),
-		"POST /account/login":             http.HandlerFunc(p.handleLoginPost),
-		"GET /account/signup":             http.HandlerFunc(p.handleSignupGet),
-		"POST /account/signup":            http.HandlerFunc(p.handleSignupPost),
-		"POST /account/logout":            http.HandlerFunc(p.handleLogout),
-		"POST /account/tier":              http.HandlerFunc(p.handleSelectTier),
-		"POST /account/sites/{id}/rotate": http.HandlerFunc(p.handleRotate),
-		"POST /account/sites/{id}/delete": http.HandlerFunc(p.handleDeleteSite),
-		"POST /account/delete":            http.HandlerFunc(p.handleDeleteAccount),
+		"GET /account":                          http.HandlerFunc(p.handleRoot),
+		"GET /account/login":                    http.HandlerFunc(p.handleLoginGet),
+		"POST /account/login":                   http.HandlerFunc(p.handleLoginPost),
+		"GET /account/signup":                   http.HandlerFunc(p.handleSignupGet),
+		"POST /account/signup":                  http.HandlerFunc(p.handleSignupPost),
+		"POST /account/logout":                  http.HandlerFunc(p.handleLogout),
+		"POST /account/tier":                    http.HandlerFunc(p.handleSelectTier),
+		"POST /account/sites/{id}/rotate":       http.HandlerFunc(p.handleRotate),
+		"POST /account/sites/{id}/delete":       http.HandlerFunc(p.handleDeleteSite),
+		"POST /account/delete":                  http.HandlerFunc(p.handleDeleteAccount),
+		"GET /account/admin":                    http.HandlerFunc(p.handleAdmin),
+		"POST /account/admin/sites/{id}/delete": http.HandlerFunc(p.handleAdminDelete),
+		"POST /account/admin/sites/{id}/expiry": http.HandlerFunc(p.handleAdminExpiry),
 	}
 	p.oauthRoutes(routes)
 	p.emailRoutes(routes)
@@ -331,6 +334,10 @@ type dashView struct {
 	SelfSelect bool
 	Checkout   string // billing provider for paid upgrades ("" = none)
 	Tiers      []tierOption
+	// IsAdmin adds the one link to the instance register. Without it the
+	// console is reachable only by typing the path, which is a poor secret and
+	// a worse feature.
+	IsAdmin bool
 }
 
 func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, flash string) {
@@ -383,6 +390,7 @@ func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, 
 	dashTmpl.Execute(w, dashView{
 		Email: acc.Email, Tier: tier, Sites: rows, CSRF: token, Base: p.baseURL(),
 		SelfSelect: p.cfg.SelfSelect, Checkout: checkout, Tiers: opts, ManageURL: manageURL,
+		IsAdmin: p.isAdmin(acc),
 	})
 }
 

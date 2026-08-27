@@ -493,6 +493,7 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_DEFAULT_TIER` | Tier new/free accounts start on (required in tiers mode). |
 | `SITEBIN_ANON_TIER` | Tier for anonymous creation (empty = require an account). |
 | `SITEBIN_TIER_SELF_SELECT` | Allow users to switch among free tiers. |
+| `SITEBIN_ADMIN_ACCOUNTS` | Comma-separated emails allowed to reach the **instance register** at `/account/admin` — every site on the instance, with delete and expiry control. Gated twice: the account's tier must also carry `"admin": true` in the tier config, so neither the plan source nor the environment can grant it alone. Unset disables the console entirely. |
 | `SITEBIN_ALLOW_ANON_CREATE` | In accounts mode, still allow anonymous sites. |
 | `SITEBIN_OAUTH_GOOGLE_CLIENT_ID` / `_SECRET` | Google OIDC login. |
 | `SITEBIN_OAUTH_MICROSOFT_CLIENT_ID` / `_SECRET` / `_TENANT` | Microsoft OIDC (`_TENANT` default `common`). |
@@ -504,6 +505,19 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_STRIPE_SECRET_KEY` / `_WEBHOOK_SECRET` | Stripe billing. Webhook: `POST /account/billing/stripe/webhook`. |
 | `SITEBIN_PADDLE_API_KEY` / `_WEBHOOK_SECRET` / `_SANDBOX` | Paddle billing. Webhook: `POST /account/billing/paddle/webhook`. |
 | `SITEBIN_LICENSE_KEY` | Optional Ed25519 license key; if set it must be valid. |
+
+A tier may set `"admin": true`. That does not change its quotas; it marks the
+tier as one whose holders may reach the instance register, and only together
+with `SITEBIN_ADMIN_ACCOUNTS`. The register lists every site on the instance —
+anonymous drops included — with instance-wide figures, search and filters, and
+two actions per site: delete, and set or clear the expiry. It never exposes a
+site's edit password or edit page: an operator can clean up and look, but the
+claim ticket stays the only thing that confers ownership.
+
+Note that an unlimited tier needs explicit large caps, not zeros:
+`max_site_bytes: 0` and `max_files: 0` fall back to the instance globals, and
+`custom_domains: 0` means *no* custom domains. Only `max_sites: 0` and
+`max_expiry_days: 0` mean unlimited.
 
 A tier's `price` maps it to provider price IDs, e.g. a tier with
 `"price":{"stripe":"price_123","paddle":"pri_456","display":"€9/mo"}` becomes a
