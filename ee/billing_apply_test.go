@@ -29,6 +29,10 @@ func setupBilling(t *testing.T) *provider {
 func TestApplyBillingUpgradeAndCancel(t *testing.T) {
 	p := setupBilling(t)
 	acc, _ := p.local.Signup("pay@example.com", "password123", "free")
+	if err := p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
+		t.Fatal(err)
+	}
+	p.host.Sites().(*fakeSites).site("abcdefghijklmnopqrstuvwxyz")
 
 	// upgrade to pro via a completed checkout
 	err := p.applyBillingUpdate(billing.Update{
@@ -41,6 +45,11 @@ func TestApplyBillingUpgradeAndCancel(t *testing.T) {
 	reload, _ := p.accounts.ByID(acc.ID)
 	if reload.Tier != "pro" || reload.Billing == nil || reload.Billing.Status != "active" || reload.Billing.Customer != "cus_1" {
 		t.Fatalf("account not upgraded: %+v", reload)
+	}
+	sites := p.host.Sites().(*fakeSites)
+	g, ok := sites.quotas["abcdefghijklmnopqrstuvwxyz"]
+	if !ok || g.MaxSiteBytes != 5000000 || g.MaxExpiryDays != 0 {
+		t.Fatalf("site not restamped with pro caps: %+v", g)
 	}
 
 	// webhook by customer id alone (no account id) still resolves via index
@@ -57,6 +66,10 @@ func TestApplyBillingUpgradeAndCancel(t *testing.T) {
 	}
 	if reload.Billing.Status != "canceled" {
 		t.Errorf("billing status = %q", reload.Billing.Status)
+	}
+	g, ok = sites.quotas["abcdefghijklmnopqrstuvwxyz"]
+	if !ok || g.MaxSiteBytes != 1000 || g.MaxExpiryDays != 7 {
+		t.Fatalf("site not restamped with free caps after cancellation: %+v", g)
 	}
 }
 

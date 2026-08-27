@@ -77,7 +77,10 @@ function showTicket(body) {
       if (body.expiry_renews) {
         life.textContent = when + " — every change you publish pushes that back.";
       } else if (body.accounts_enabled) {
-        life.textContent = when + ". This one can't be renewed — create a free account and your next site will be.";
+        // Careful: expiry_renews is also false for a signed-in owner who set
+        // this date themselves, so this line must not assume the reader is an
+        // anonymous visitor with no account.
+        life.textContent = when + ". That date is fixed — publishing changes won't push it back. Sites owned by an account renew, unless you pick the date yourself.";
       } else {
         life.textContent = when + ".";
       }

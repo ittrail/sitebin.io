@@ -4,11 +4,13 @@ package ee
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ittrail/sitebin.io/internal/ext"
 )
@@ -19,6 +21,10 @@ type fakeSites struct {
 	infos   map[string]ext.SiteInfo
 	deleted []string
 	rotated []string
+	quotas  map[string]ext.CreateGrant
+	// applyErrs fails ApplyQuota for the listed site ids, so a test can make a
+	// restamp succeed for some of an account's sites and fail for others.
+	applyErrs map[string]error
 }
 
 func (s *fakeSites) Info(id string) (ext.SiteInfo, bool) { i, ok := s.infos[id]; return i, ok }
@@ -30,6 +36,44 @@ func (s *fakeSites) Delete(id string) error {
 	s.deleted = append(s.deleted, id)
 	delete(s.infos, id)
 	return nil
+}
+func (s *fakeSites) ApplyQuota(id string, g ext.CreateGrant) error {
+	if err := s.applyErrs[id]; err != nil {
+		return err
+	}
+	info, ok := s.infos[id]
+	if !ok {
+		// The real siteService looks the site up first and reports a stale
+		// reference as ErrSiteGone. A fake that quietly succeeds for ids it has
+		// never seen hides the whole dangling-ownership-marker failure mode, so
+		// tests must register every site they link.
+		return fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
+	}
+	if s.quotas == nil {
+		s.quotas = map[string]ext.CreateGrant{}
+	}
+	s.quotas[id] = g
+	// Mirror just enough of store.ApplyQuota for Info to reflect the restamp:
+	// an uncapped tier lifts a tier expiry, a capped one gives a site that has
+	// none the downgrade grace. Without this the fake would report pre-restamp
+	// data forever and no test could see a stale render.
+	switch {
+	case g.MaxExpiryDays <= 0:
+		info.ExpiresAt = nil
+	case info.ExpiresAt == nil:
+		grace := time.Now().Add(30 * 24 * time.Hour)
+		info.ExpiresAt = &grace
+	}
+	s.infos[id] = info
+	return nil
+}
+
+// site registers a site the fake knows about, which every test that links an id
+// to an account must do: ApplyQuota reports an unregistered id as ext.ErrSiteGone.
+func (s *fakeSites) site(id string) {
+	if _, ok := s.infos[id]; !ok {
+		s.infos[id] = ext.SiteInfo{ViewID: id, Mode: "webserver"}
+	}
 }
 
 type fakeHost struct {

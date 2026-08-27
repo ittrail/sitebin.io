@@ -1,7 +1,11 @@
 package httpapi
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 // SiteService returns the ext.SiteService implementation the enterprise
@@ -25,6 +29,7 @@ func (s siteService) Info(viewID string) (ext.SiteInfo, bool) {
 		ViewURL:   s.a.cfg.ViewURL(site.ViewID),
 		EditURL:   s.a.cfg.EditURL(site.Meta.EditID),
 		CreatedAt: site.Meta.CreatedAt,
+		ExpiresAt: site.Meta.ExpiresAt,
 	}, true
 }
 
@@ -49,4 +54,46 @@ func (s siteService) Delete(viewID string) error {
 	}
 	s.a.verifyCache.Drop(site.EditID + ":")
 	return s.a.st.Delete(site)
+}
+
+func (s siteService) ApplyQuota(viewID string, g ext.CreateGrant) error {
+	site, err := s.a.st.ByViewID(viewID)
+	if err != nil {
+		return mapSiteGone(err, viewID)
+	}
+	if err := s.a.st.ApplyQuota(site, quotaFromGrant(g), store.DowngradeGrace); err != nil {
+		// The site can vanish here too, not just at the lookup above: the same
+		// edit-page delete or cleanup sweep that races the lookup can just as
+		// easily land between it and this write. The store reports that the
+		// same way, with ErrNotFound, so the write needs the same mapping —
+		// otherwise this one path leaks store.ErrNotFound across the seam and
+		// the caller treats a routine "it's gone" as a real failure instead of
+		// dropping its stale marker.
+		return mapSiteGone(err, viewID)
+	}
+	return nil
+}
+
+// mapSiteGone maps the store's own not-found sentinel onto the seam's
+// ErrSiteGone, so callers on the other side of ext never see a core error
+// type. A site the extension still has an ownership marker for can have been
+// deleted from the edit page or swept away — neither notifies it — so this is
+// the caller's cue to drop the stale marker instead of retrying an operation
+// that can never succeed. Errors of any other kind pass through unchanged.
+func mapSiteGone(err error, viewID string) error {
+	if errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("%w: %s", ext.ErrSiteGone, viewID)
+	}
+	return err
+}
+
+// quotaFromGrant maps the extension's grant onto the store's cap set.
+func quotaFromGrant(g ext.CreateGrant) store.Quota {
+	return store.Quota{
+		Bytes:      g.MaxSiteBytes,
+		Files:      g.MaxFiles,
+		ExpiryDays: g.MaxExpiryDays,
+		Domains:    g.MaxCustomDomain,
+		WebDAV:     g.WebDAV,
+	}
 }

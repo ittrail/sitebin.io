@@ -171,6 +171,7 @@ func (a *API) applySettings(site *store.Site, set updateSet) error {
 		}
 		if expires != nil {
 			m.ExpiresAt = *expires
+			m.ExpiryFromTier = false
 		}
 		return nil
 	})
@@ -354,13 +355,15 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"custom_domains":          m.CustomDomains,
 		"expires_at":              m.ExpiresAt,
 		"expiry_cap_days":         a.expiryCap(site),
-		"expiry_renews":           m.OwnerAccountID != "" && m.QuotaExpiryDays > 0 && m.ExpiresAt != nil,
-		"accounts_enabled":        accountsEnabled,
-		"created_at":              m.CreatedAt,
-		"updated_at":              m.UpdatedAt,
-		"files":                   files,
-		"base_domain":             a.cfg.BaseDomain,
-		"dns_target":              a.cfg.BaseDomain,
+		// ExpiryFromTier is part of the condition because sliding renewal is:
+		// once the owner sets a date of their own, uploads stop moving it.
+		"expiry_renews":    m.OwnerAccountID != "" && m.QuotaExpiryDays > 0 && m.ExpiresAt != nil && m.ExpiryFromTier,
+		"accounts_enabled": accountsEnabled,
+		"created_at":       m.CreatedAt,
+		"updated_at":       m.UpdatedAt,
+		"files":            files,
+		"base_domain":      a.cfg.BaseDomain,
+		"dns_target":       a.cfg.BaseDomain,
 		"usage": map[string]any{
 			"bytes":     bytes,
 			"files":     count,
@@ -511,7 +514,7 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 	// expire at the cap instead of living forever.
 	if site.Meta.QuotaExpiryDays > 0 && site.Meta.ExpiresAt == nil {
 		exp := time.Now().Add(time.Duration(site.Meta.QuotaExpiryDays) * 24 * time.Hour).UTC()
-		if err := a.st.Update(site, func(m *store.Meta) error { m.ExpiresAt = &exp; return nil }); err != nil {
+		if err := a.st.Update(site, func(m *store.Meta) error { m.ExpiresAt = &exp; m.ExpiryFromTier = true; return nil }); err != nil {
 			fail(err)
 			return
 		}

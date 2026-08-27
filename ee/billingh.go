@@ -113,7 +113,8 @@ func (p *provider) applyBillingUpdate(u billing.Update) error {
 	if u.Customer != "" {
 		p.accounts.LinkBilling(acc, u.Provider, u.Customer)
 	}
-	return p.accounts.Update(acc, func(cur *account.Account) error {
+	changed := u.Canceled || u.TierID != ""
+	if err := p.accounts.Update(acc, func(cur *account.Account) error {
 		if cur.Billing == nil {
 			cur.Billing = &account.Billing{}
 		}
@@ -134,7 +135,19 @@ func (p *provider) applyBillingUpdate(u billing.Update) error {
 			cur.Tier = u.TierID
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	if changed {
+		// acc.Tier is now the new value (Update refreshes it in place), so
+		// syncTier would see no difference; restamp directly.
+		if t, ok := p.cfg.Tier(acc.Tier); ok {
+			p.restampSites(acc, t)
+		} else {
+			slog.Error("billing: tier not found in config; sites not restamped", "account", acc.ID, "tier", acc.Tier)
+		}
+	}
+	return nil
 }
 
 func (p *provider) resolveBillingAccount(u billing.Update) *account.Account {

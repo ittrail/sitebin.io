@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -1522,5 +1523,148 @@ func TestJsonCreationWithNullExpiryAppliesToCappedSites(t *testing.T) {
 	want := time.Now().Add(24 * time.Hour)
 	if d := parsedTime.Sub(want); d > time.Minute || d < -time.Minute {
 		t.Fatalf("expiry = %v, want ~%v", parsedTime, want)
+	}
+}
+
+func TestCreationStampMarksExpiryAsTierImposed(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1", grant: ext.CreateGrant{MaxExpiryDays: 7}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+
+	site, _ := e.st.ByViewID(c.ID)
+	if site.Meta.ExpiresAt == nil {
+		t.Fatal("no expiry stamped")
+	}
+	if !site.Meta.ExpiryFromTier {
+		t.Fatal("the tier's default lifetime should be marked as tier-imposed")
+	}
+}
+
+func TestExplicitExpiryIsNotTierImposed(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1", grant: ext.CreateGrant{MaxExpiryDays: 7}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	when := time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339)
+	req := authed(httptest.NewRequest("PUT", "/api/sites/"+edit, strings.NewReader(`{"expires_at":"`+when+`"}`)), c.EditPassword)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	if w := e.public(t, req); w.Code != 200 {
+		t.Fatalf("PUT: %d %s", w.Code, w.Body)
+	}
+	site, _ := e.st.ByViewID(c.ID)
+	if site.Meta.ExpiryFromTier {
+		t.Fatal("a caller-chosen expiry must not be marked as tier-imposed")
+	}
+
+	// The site no longer renews, and the edit page's lifetime copy is driven
+	// entirely by this flag — it has to say so.
+	get := authed(httptest.NewRequest("GET", "/api/sites/"+edit, nil), c.EditPassword)
+	w := e.public(t, get)
+	if w.Code != 200 {
+		t.Fatalf("GET: %d %s", w.Code, w.Body)
+	}
+	var payload struct {
+		ExpiryRenews bool `json:"expiry_renews"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.ExpiryRenews {
+		t.Error("expiry_renews = true after the owner chose a date, but uploads no longer move it")
+	}
+}
+
+// TestSiteServiceApplyQuotaMapsTheGrant covers the join nothing else does. The
+// ee tests assert on the grant handed to a fake SiteService; the store tests
+// call store.ApplyQuota with a hand-built store.Quota. quotaFromGrant sits
+// between them, on the shipping path, exercised by neither — so writing
+// ExpiryDays: g.MaxFiles there would leave the whole suite green while every
+// downgrade stamped a garbage lifetime. Each cap here is a distinct value, so
+// no crossed field can pass.
+func TestSiteServiceApplyQuotaMapsTheGrant(t *testing.T) {
+	e := newEnv(t, nil) // community build: the new site has no caps and no expiry
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+
+	domains := 3
+	webdav := true
+	err := e.api.SiteService().ApplyQuota(c.ID, ext.CreateGrant{
+		OwnerAccountID:  "acct-1",
+		MaxSiteBytes:    1 << 30,
+		MaxFiles:        4242,
+		MaxExpiryDays:   7,
+		MaxCustomDomain: &domains,
+		WebDAV:          &webdav,
+	})
+	if err != nil {
+		t.Fatalf("ApplyQuota: %v", err)
+	}
+
+	site, err := e.st.ByViewID(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if site.Meta.QuotaBytes != 1<<30 || site.Meta.QuotaFiles != 4242 || site.Meta.QuotaExpiryDays != 7 {
+		t.Errorf("caps mismatched: bytes=%d files=%d expiry_days=%d", site.Meta.QuotaBytes, site.Meta.QuotaFiles, site.Meta.QuotaExpiryDays)
+	}
+	if site.Meta.QuotaDomains == nil || *site.Meta.QuotaDomains != 3 {
+		t.Errorf("QuotaDomains = %v, want 3", site.Meta.QuotaDomains)
+	}
+	if site.Meta.QuotaWebDAV == nil || !*site.Meta.QuotaWebDAV {
+		t.Errorf("QuotaWebDAV = %v, want true", site.Meta.QuotaWebDAV)
+	}
+	// The site had no expiry, so this is a downgrade: it gets the 30-day grace,
+	// NOT the tier's own 7-day cap.
+	if site.Meta.ExpiresAt == nil {
+		t.Fatal("downgrade did not stamp the grace expiry")
+	}
+	want := time.Now().Add(store.DowngradeGrace)
+	if d := site.Meta.ExpiresAt.Sub(want); d > time.Minute || d < -time.Minute {
+		t.Errorf("expiry = %v, want ~%v (the 30-day downgrade grace)", site.Meta.ExpiresAt, want)
+	}
+	if !site.Meta.ExpiryFromTier {
+		t.Error("the grace expiry must be marked as tier-imposed, or a later upgrade will never lift it")
+	}
+	// and the dashboard can read that deadline back out of the same seam
+	info, ok := e.api.SiteService().Info(c.ID)
+	if !ok {
+		t.Fatal("Info: site not found")
+	}
+	if info.ExpiresAt == nil || !info.ExpiresAt.Equal(*site.Meta.ExpiresAt) {
+		t.Errorf("SiteInfo.ExpiresAt = %v, want %v — the dashboard cannot show a date it is not given", info.ExpiresAt, site.Meta.ExpiresAt)
+	}
+}
+
+// TestSiteServiceApplyQuotaReportsAVanishedSite pins the answer this seam owes a
+// caller holding a stale reference. The extension keeps its own ownership
+// markers and nothing tells it when a site is deleted from the edit page or
+// removed by the cleanup sweep, so restamping an id that no longer exists is
+// routine, not exceptional. It has to arrive as ext.ErrSiteGone ("your
+// reference is stale, drop it"): as an ordinary error it blocks the owning
+// account's entire tier sync forever, and as the store's own ErrNotFound it
+// drags a core error type across a seam whose whole point is that it does not.
+func TestSiteServiceApplyQuotaReportsAVanishedSite(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	site, err := e.st.ByViewID(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.Delete(site); err != nil { // deleted anywhere but the dashboard
+		t.Fatal(err)
+	}
+
+	err = e.api.SiteService().ApplyQuota(c.ID, ext.CreateGrant{OwnerAccountID: "acct-1", MaxExpiryDays: 7})
+	if !errors.Is(err, ext.ErrSiteGone) {
+		t.Fatalf("ApplyQuota for a deleted site = %v, want an error wrapping ext.ErrSiteGone", err)
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		t.Error("store.ErrNotFound leaked across the ext seam")
+	}
+	if !strings.Contains(err.Error(), c.ID) {
+		t.Errorf("error does not name the site: %v", err)
 	}
 }

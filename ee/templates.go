@@ -115,7 +115,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
     <div class="sitecard">
       <div class="grow">
         <a class="plain" href="{{.ViewURL}}" target="_blank" rel="noopener">{{.ViewURL}}</a>
-        <div class="u">{{.Mode}} · {{.SizeText}} · {{.Files}} files</div>
+        <div class="u">{{.Mode}} · {{.SizeText}} · {{.Files}} files · {{.ExpiryText}}</div>
       </div>
       <a class="btn small" href="{{.EditURL}}">Manage</a>
       <form class="inline" method="post" action="/account/sites/{{.ViewID}}/rotate">

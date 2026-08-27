@@ -9,9 +9,21 @@
 package ext
 
 import (
+	"errors"
 	"net/http"
 	"time"
 )
+
+// ErrSiteGone reports that the site no longer exists; the caller's reference is
+// stale. It is the seam's own sentinel, so the core's store error types do not
+// cross into the extension.
+//
+// It exists because the extension keeps its own ownership markers and a site
+// can be deleted without it hearing about it (the edit page's delete and the
+// cleanup sweep both go straight to the store). A caller holding such a marker
+// has not failed at anything — it has learned the marker is stale and should
+// drop it and carry on, rather than treating the site as unreachable.
+var ErrSiteGone = errors.New("ext: site no longer exists")
 
 // Provider is implemented by the enterprise extension. Its methods are the
 // only surface the core depends on; the core has no compile-time reference to
@@ -48,6 +60,14 @@ type Provider interface {
 	// reject creation. In the community build it is never called and creation
 	// stays open.
 	AuthorizeCreate(r *http.Request) (CreateGrant, error)
+
+	// QuotaFor returns the caps the owner's CURRENT tier grants, so the core can
+	// restamp a site whose stamped quotas predate a tier change. ok=false means
+	// the account is unknown (deleted, or accounts are not enabled). A non-nil
+	// error means the tier could not be determined — callers MUST NOT act
+	// destructively on an error; a site kept too long is recoverable, a deleted
+	// one is not.
+	QuotaFor(ownerAccountID string) (CreateGrant, bool, error)
 
 	// OnSiteCreated records ownership after a site is created (no-op for
 	// anonymous owners). Errors are logged, not surfaced to the client.
@@ -99,6 +119,12 @@ type SiteService interface {
 	RotateEditPassword(viewID string) (newPassword string, err error)
 	// Delete removes a site and its indexes.
 	Delete(viewID string) error
+	// ApplyQuota restamps a site's per-site caps from a grant and reconciles its
+	// expiry with the new lifetime cap. It returns an error wrapping ErrSiteGone
+	// when viewID names a site that no longer exists, which callers holding
+	// their own ownership records must treat as "drop the record", not as a
+	// failure.
+	ApplyQuota(viewID string, g CreateGrant) error
 }
 
 // SiteInfo is the dashboard's view of an owned site.
@@ -110,6 +136,11 @@ type SiteInfo struct {
 	ViewURL   string
 	EditURL   string
 	CreatedAt time.Time
+	// ExpiresAt is when the site stops serving, or nil if it has no expiry. A
+	// downgrade stamps a 30-day grace here, and that date is the only warning
+	// the owner gets before the sweep deletes the site — the dashboard must
+	// show it.
+	ExpiresAt *time.Time
 }
 
 var registered Provider
