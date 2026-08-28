@@ -73,6 +73,16 @@ type Provider interface {
 	// anonymous owners). Errors are logged, not surfaced to the client.
 	OnSiteCreated(ownerAccountID, viewID string) error
 
+	// AccountSiteIDs returns the view ids of the sites an account owns, for
+	// the MCP server's list_sites tool. ok=false means the account is unknown
+	// or accounts are not enabled.
+	//
+	// It returns ids, not sites: the extension is the side that knows which
+	// sites an account owns, and the core is the side that knows what a site
+	// is. Returning SiteInfo here would make the extension resolve state it
+	// does not own.
+	AccountSiteIDs(accountID string) ([]string, bool)
+
 	// BearerAccount resolves an Authorization: Bearer credential to the account
 	// it belongs to. ok=false means no usable token was presented — a wrong one
 	// and an absent one are the same answer.
@@ -163,7 +173,10 @@ type SiteInfo struct {
 	Mode  string
 	// Domains are the site's custom domains, if any. The admin console lists
 	// and searches by them; they are the only human-memorable handle a site has.
-	Domains   []string
+	Domains []string
+	// Origin is the surface that created the site — "mcp", or empty for the UI
+	// and the JSON API. Provenance only; nothing gates on it.
+	Origin    string
 	Bytes     int64
 	Files     int
 	ViewURL   string

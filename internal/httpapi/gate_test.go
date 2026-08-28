@@ -22,7 +22,9 @@ type fakeProvider struct {
 	quota     ext.CreateGrant
 	// bearer maps a token secret to the account it belongs to, so a test can
 	// present one the way a script would.
-	bearer   map[string]string
+	bearer map[string]string
+	// owned maps an account id to the view ids it owns, for list_sites.
+	owned    map[string][]string
 	quotaOK  bool
 	quotaErr error
 }
@@ -47,6 +49,14 @@ func (f *fakeProvider) BearerAccount(r *http.Request) (string, bool) {
 	}
 	id, ok := f.bearer[strings.TrimSpace(h[7:])]
 	return id, ok
+}
+
+func (f *fakeProvider) AccountSiteIDs(accountID string) ([]string, bool) {
+	if !f.enabled {
+		return nil, false
+	}
+	ids, ok := f.owned[accountID]
+	return ids, ok
 }
 
 func (f *fakeProvider) OnSiteCreated(owner, viewID string) error {

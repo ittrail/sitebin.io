@@ -37,6 +37,7 @@ func (s siteService) infoOf(site *store.Site) ext.SiteInfo {
 		Owner:      site.Meta.OwnerAccountID,
 		Mode:       site.Meta.Mode,
 		Domains:    site.Meta.CustomDomains,
+		Origin:     site.Meta.Origin,
 		Bytes:      bytes,
 		Files:      files,
 		ViewURL:    s.a.cfg.ViewURL(site.ViewID),

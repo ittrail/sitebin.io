@@ -353,6 +353,7 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"ftp_enabled":             m.FTPEnabled,
 		"ftp_available":           ftpAvailable,
 		"custom_domains":          m.CustomDomains,
+		"origin":                  m.Origin,
 		"expires_at":              m.ExpiresAt,
 		"expiry_cap_days":         a.expiryCap(site),
 		// ExpiryFromTier is part of the condition because sliding renewal is:

@@ -59,12 +59,25 @@ context.
 
 ### Dependency
 
-`github.com/modelcontextprotocol/go-sdk` v1.7.0 (Apache-2.0). It has **zero
-transitive dependencies** — verified by resolving it into an empty module — so
-it costs one line in `go.mod` and nothing in the build graph. Hand-rolling
-JSON-RPC framing was considered and rejected: spec conformance is the entire
-point of a server we want listed by Anthropic and OpenAI, and a hand-rolled
-transport would drift from the spec at the first revision.
+`github.com/modelcontextprotocol/go-sdk` v1.7.0 (MIT). Importing `mcp` pulls
+eight indirect modules; Sitebin already has two of them (`golang.org/x/oauth2`,
+`golang.org/x/sys`), so the real cost is **six new modules**:
+`google/jsonschema-go` (schema inference for tool arguments),
+`segmentio/encoding` + `segmentio/asm` (its JSON codec),
+`yosida95/uritemplate`, `golang.org/x/sync` and `golang.org/x/time`. All
+permissive, all compatible with the MIT core.
+
+That is not nothing for a codebase that prides itself on having no database and
+no build step, so it is worth saying why it is still the right trade. This
+server exists to be consumed by Anthropic's and OpenAI's clients. Conformance
+with a spec those clients track — and which revises on its own schedule — *is*
+the feature; a hand-rolled JSON-RPC transport would be ~300 lines today and a
+standing obligation to chase every revision afterwards. Sitebin already carries
+heavier dependencies for less (`ftpserverlib`, `afero`, `go-oidc`).
+
+An earlier draft of this document claimed the SDK had zero transitive
+dependencies. That was measured wrongly — `go get` into a module that imports
+nothing prunes the module graph — and the numbers above are the corrected ones.
 
 ### Endpoint
 

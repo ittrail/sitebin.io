@@ -37,8 +37,12 @@ type Config struct {
 	MaxFiles      int
 	MaxExpiryDays int // 0 = unlimited
 	WebDAVAllowed bool
-	TrackViews    bool
-	ReadOnly      bool
+	// MCPEnabled mounts the Model Context Protocol server on /mcp. Default
+	// true: it is a second transport onto the authorization the JSON API
+	// already grants the same caller, not a new authority.
+	MCPEnabled bool
+	TrackViews bool
+	ReadOnly   bool
 
 	PublicAddr   string // backend listener proxied by Caddy
 	InternalAddr string // authz/tls-check/health listener (never proxied)
@@ -95,6 +99,7 @@ func Load(getenv func(string) string) (Config, error) {
 		MaxSiteBytes:      104857600,
 		MaxFiles:          1000,
 		WebDAVAllowed:     true,
+		MCPEnabled:        true,
 		PublicAddr:        ":8080",
 		InternalAddr:      ":9000",
 		BackendHost:       "127.0.0.1",
@@ -166,6 +171,9 @@ func Load(getenv func(string) string) (Config, error) {
 		return cfg, err
 	}
 	if cfg.WebDAVAllowed, err = boolVar(getenv, "SITEBIN_WEBDAV_ENABLED", true); err != nil {
+		return cfg, err
+	}
+	if cfg.MCPEnabled, err = boolVar(getenv, "SITEBIN_MCP_ENABLED", true); err != nil {
 		return cfg, err
 	}
 	if cfg.TrackViews, err = boolVar(getenv, "SITEBIN_TRACK_VIEWS", true); err != nil {

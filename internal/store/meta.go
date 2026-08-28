@@ -24,6 +24,14 @@ type Meta struct {
 	SPAFallback           bool     `json:"spa_fallback"`               // webserver mode: serve index.html for unknown paths
 	OwnerAccountID        string   `json:"owner_account_id,omitempty"` // enterprise: owning account (empty = anonymous)
 
+	// Origin records which surface created the site. Empty — the value every
+	// meta.json written before this field has — means the UI or the JSON API,
+	// so no migration is needed and no existing site is mislabelled. It is
+	// provenance only: nothing in Sitebin gates on it. It exists because
+	// "was this made by an agent?" is unanswerable after the fact if it was
+	// never written down, and the admin console needs to be able to ask.
+	Origin string `json:"origin,omitempty"`
+
 	// Per-site quota caps stamped from the owner's tier (enterprise). Zero /
 	// nil means "inherit the instance global".
 	QuotaBytes      int64      `json:"quota_bytes,omitempty"`
@@ -40,6 +48,9 @@ type Meta struct {
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }
+
+// OriginMCP marks a site created through the MCP server. See Meta.Origin.
+const OriginMCP = "mcp"
 
 // Expired reports whether the site is past its expiry at time now.
 func (m Meta) Expired(now time.Time) bool {

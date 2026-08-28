@@ -373,6 +373,24 @@ func (p *provider) BearerAccount(r *http.Request) (string, bool) {
 	return acc.ID, true
 }
 
+// AccountSiteIDs returns the view ids the account owns. Like BearerAccount it
+// reports an unknown account and a disabled instance the same way — the caller
+// is asking "which sites may I list", and both answers are "none you can name".
+func (p *provider) AccountSiteIDs(accountID string) ([]string, bool) {
+	if !p.cfg.Enabled() {
+		return nil, false
+	}
+	acc, err := p.accounts.ByID(accountID)
+	if err != nil {
+		return nil, false
+	}
+	ids, err := p.accounts.ListSiteIDs(acc)
+	if err != nil {
+		return nil, false
+	}
+	return ids, true
+}
+
 // currentAccount resolves the SESSION COOKIE to an account, honoring token
 // version (revocation).
 //

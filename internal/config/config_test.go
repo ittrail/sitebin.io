@@ -36,6 +36,9 @@ func TestLoadDefaults(t *testing.T) {
 	if !cfg.WebDAVAllowed {
 		t.Error("WebDAVAllowed should default true")
 	}
+	if !cfg.MCPEnabled {
+		t.Error("MCPEnabled should default true")
+	}
 	if cfg.ReadOnly {
 		t.Error("ReadOnly should default false")
 	}
@@ -64,6 +67,7 @@ func TestLoadOverrides(t *testing.T) {
 		"SITEBIN_MAX_FILES":            "5",
 		"SITEBIN_MAX_EXPIRY_DAYS":      "30",
 		"SITEBIN_WEBDAV_ENABLED":       "false",
+		"SITEBIN_MCP_ENABLED":          "false",
 		"SITEBIN_READONLY":             "true",
 		"SITEBIN_RATE_CREATE_PER_HOUR": "60",
 		"SITEBIN_RATE_CREATE_BURST":    "20",
@@ -83,7 +87,7 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.MaxSiteBytes != 1048576 || cfg.MaxFiles != 5 || cfg.MaxExpiryDays != 30 {
 		t.Error("numeric overrides not applied")
 	}
-	if cfg.WebDAVAllowed || !cfg.ReadOnly {
+	if cfg.WebDAVAllowed || !cfg.ReadOnly || cfg.MCPEnabled {
 		t.Error("bool overrides not applied")
 	}
 	if cfg.RateCreatePerHour != 60 || cfg.RateCreateBurst != 20 || cfg.RateAuthPer5Min != 3 {
