@@ -20,6 +20,7 @@ import (
 	"github.com/ittrail/sitebin.io/internal/auth"
 	"github.com/ittrail/sitebin.io/internal/config"
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/mcp"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
@@ -27,6 +28,10 @@ const (
 	viewCookieName = "sitebin_v"
 	viewCookieTTL  = 12 * time.Hour
 )
+
+// Version is the build's version string, reported to MCP clients at
+// initialize. cmd/sitebin sets it from the same -ldflags value the CLI prints.
+var Version = "dev"
 
 // API holds the wired-up handler state.
 type API struct {
@@ -89,6 +94,13 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("DELETE /api/sites/{editID}/domains/{domain}", a.withEditAuth(a.removeDomain))
 
 	mux.Handle("/dav/", http.HandlerFunc(a.webdav))
+
+	// The Model Context Protocol endpoint. Mounted on the main domain, which
+	// Caddy already proxies wholesale, so it needs no Caddy configuration. Not
+	// mounted at all when disabled, so /mcp then 404s like any unknown path.
+	if a.cfg.MCPEnabled {
+		mux.Handle("/mcp", mcp.NewHandler(mcpOps{a}, mcp.Info{Name: "sitebin", Version: Version}))
+	}
 
 	mux.HandleFunc("GET /_sitebin/assets/{path...}", a.asset)
 	mux.HandleFunc("GET /_sitebin/embed.js", a.embedScript)

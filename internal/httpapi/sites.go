@@ -417,15 +417,35 @@ func (a *API) createPreflight(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
-func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
-	a.createCORS(w, r)
+// createOpts is what differs between the surfaces that create a site. The
+// rules that must NOT differ — the account gate, tier quota stamping, the
+// trust marker, the tier's default expiry, viewer layout, ownership recording
+// — live in createSiteWith, once.
+type createOpts struct {
+	// origin is stamped on the new site's meta as provenance ("mcp", or empty
+	// for the JSON API and the UI).
+	origin string
+	// browserOK allows the fromOwnBrowser escape hatch that lets Sitebin's own
+	// pages create anonymous sites on a gated instance. True for the JSON API,
+	// which serves those pages; false for MCP, which is never one of them.
+	browserOK bool
+	// fill writes the caller's content into the freshly created site and
+	// returns any settings that travelled with it. For a multipart POST the
+	// files and the settings arrive in the same pass, which is why this is one
+	// callback and not two.
+	fill func(*store.Site) (updateSet, error)
+}
+
+// createSiteWith creates a site and applies everything that must happen for
+// every surface. It returns the site, its one-time edit password, and any
+// non-fatal warnings (a custom domain that could not be attached does not
+// throw away a site that was otherwise created).
+//
+// On any error the half-built site is removed, so a failed creation leaves
+// nothing behind.
+func (a *API) createSiteWith(r *http.Request, opts createOpts) (*store.Site, string, []string, error) {
 	if a.cfg.ReadOnly {
-		writeError(w, 503, "this instance is read-only: new sites are disabled")
-		return
-	}
-	if !a.createLimiter.Allow(clientIP(r)) {
-		writeError(w, 429, "site creation rate limit reached, try again later")
-		return
+		return nil, "", nil, &apiError{503, "this instance is read-only: new sites are disabled"}
 	}
 
 	// Enterprise: gate creation behind accounts/tiers when a provider is active.
@@ -438,49 +458,45 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 		if grant, err = p.AuthorizeCreate(r); err != nil {
 			var ce *ext.CreateError
 			if errors.As(err, &ce) {
-				writeError(w, ce.Status, ce.Msg)
-			} else {
-				writeError(w, 403, "site creation not permitted")
+				return nil, "", nil, &apiError{ce.Status, ce.Msg}
 			}
-			return
+			return nil, "", nil, &apiError{403, "site creation not permitted"}
 		}
 	}
 	owner := grant.OwnerAccountID
 
 	// The API is an account feature: an anonymous drop is something you make
 	// on Sitebin's own pages (or an allowlisted embed), not from a script.
-	if gated && owner == "" && !a.fromOwnBrowser(r) {
-		writeError(w, 401, "sign in to create sites from the API: "+a.apiAccountHint())
-		return
+	if gated && owner == "" && !(opts.browserOK && a.fromOwnBrowser(r)) {
+		return nil, "", nil, &apiError{401, "sign in to create sites from the API: " + a.apiAccountHint()}
 	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, a.cfg.MaxSiteBytes+(10<<20))
 
 	site, editPassword, err := a.st.Create()
 	if err != nil {
 		a.log.Error("create site", "err", err)
-		writeError(w, 500, "could not create site")
-		return
+		return nil, "", nil, &apiError{500, "could not create site"}
 	}
-	fail := func(err error) {
+	fail := func(err error) (*store.Site, string, []string, error) {
 		a.st.Delete(site)
-		respondErr(w, err)
+		return nil, "", nil, err
 	}
 
 	// Stamp ownership + per-site quota caps BEFORE uploads are processed, so the
 	// tier caps are enforced on this request's files.
-	if gated {
+	if gated || opts.origin != "" {
 		if err := a.st.Update(site, func(m *store.Meta) error {
-			m.OwnerAccountID = owner
-			m.QuotaBytes = grant.MaxSiteBytes
-			m.QuotaFiles = grant.MaxFiles
-			m.QuotaExpiryDays = grant.MaxExpiryDays
-			m.QuotaDomains = grant.MaxCustomDomain
-			m.QuotaWebDAV = grant.WebDAV
+			m.Origin = opts.origin
+			if gated {
+				m.OwnerAccountID = owner
+				m.QuotaBytes = grant.MaxSiteBytes
+				m.QuotaFiles = grant.MaxFiles
+				m.QuotaExpiryDays = grant.MaxExpiryDays
+				m.QuotaDomains = grant.MaxCustomDomain
+				m.QuotaWebDAV = grant.WebDAV
+			}
 			return nil
 		}); err != nil {
-			fail(err)
-			return
+			return fail(err)
 		}
 	}
 
@@ -490,35 +506,18 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 	// no accounts, no tiers and no abuse gating at all. Where a provider does
 	// run, only a tier it marks trusted earns the exemption.
 	if err := a.st.SetTrusted(site, !gated || grant.Trusted); err != nil {
-		fail(err)
-		return
+		return fail(err)
 	}
 
-	var set updateSet
-	ct := r.Header.Get("Content-Type")
-	switch {
-	case strings.HasPrefix(ct, "multipart/"):
-		fields, err := a.consumeUploads(r, site)
-		if err != nil {
-			fail(err)
-			return
-		}
-		if set, err = settingsFromForm(fields); err != nil {
-			fail(err)
-			return
-		}
-	case strings.Contains(ct, "json"):
-		if err := json.NewDecoder(r.Body).Decode(&set); err != nil && err != io.EOF {
-			fail(&apiError{400, "invalid JSON body"})
-			return
-		}
+	set, err := opts.fill(site)
+	if err != nil {
+		return fail(err)
 	}
 
 	domains := set.Domains
 	set.Domains = nil
 	if err := a.applySettings(site, set); err != nil {
-		fail(err)
-		return
+		return fail(err)
 	}
 	// A tier expiry cap is also the default lifetime: capped sites created
 	// without an explicit expiry (e.g. anonymous drops on a hosted instance)
@@ -526,14 +525,12 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 	if site.Meta.QuotaExpiryDays > 0 && site.Meta.ExpiresAt == nil {
 		exp := time.Now().Add(time.Duration(site.Meta.QuotaExpiryDays) * 24 * time.Hour).UTC()
 		if err := a.st.Update(site, func(m *store.Meta) error { m.ExpiresAt = &exp; m.ExpiryFromTier = true; return nil }); err != nil {
-			fail(err)
-			return
+			return fail(err)
 		}
 	}
 	// entry file default: single-file viewer uploads should just work
 	if err := a.syncViewerLayout(site); err != nil {
-		fail(err)
-		return
+		return fail(err)
 	}
 	var warnings []string
 	for _, d := range domains {
@@ -550,13 +547,48 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	a.log.Info("site created", "id", site.ViewID, "ip", clientIP(r), "owner", owner, "origin", opts.origin)
+	return site, editPassword, warnings, nil
+}
+
+func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
+	a.createCORS(w, r)
+	if !a.createLimiter.Allow(clientIP(r)) {
+		writeError(w, 429, "site creation rate limit reached, try again later")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, a.cfg.MaxSiteBytes+(10<<20))
+
+	site, editPassword, warnings, err := a.createSiteWith(r, createOpts{
+		browserOK: true,
+		fill: func(site *store.Site) (updateSet, error) {
+			var set updateSet
+			ct := r.Header.Get("Content-Type")
+			switch {
+			case strings.HasPrefix(ct, "multipart/"):
+				fields, err := a.consumeUploads(r, site)
+				if err != nil {
+					return set, err
+				}
+				return settingsFromForm(fields)
+			case strings.Contains(ct, "json"):
+				if err := json.NewDecoder(r.Body).Decode(&set); err != nil && err != io.EOF {
+					return set, &apiError{400, "invalid JSON body"}
+				}
+			}
+			return set, nil
+		},
+	})
+	if err != nil {
+		respondErr(w, err)
+		return
+	}
 
 	resp := a.sitePayload(site)
 	resp["edit_password"] = editPassword
 	if len(warnings) > 0 {
 		resp["warnings"] = warnings
 	}
-	a.log.Info("site created", "id", site.ViewID, "ip", clientIP(r), "owner", owner)
 	writeJSON(w, 201, resp)
 }
 

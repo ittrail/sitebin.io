@@ -42,6 +42,17 @@ type Auth struct {
 	// AccountsEnabled reports whether the instance gates on accounts at all.
 	// False in the community build, where there is no provider.
 	AccountsEnabled bool
+	// ClientIP identifies the caller for rate limiting. It is opaque to this
+	// package, which only carries it: the adapter owns the limiters, because
+	// an agent must not be able to guess an edit password faster than curl.
+	ClientIP string
+	// Request is the HTTP request this identity was resolved from. It is
+	// carried because the extension seam resolves an account's tier from an
+	// *http.Request, so creating a site needs the original request rather than
+	// a summary of it. Tool handlers must not read it for authorization —
+	// Authenticate has already answered that question, and answering it twice
+	// is how the two answers drift apart.
+	Request *http.Request
 }
 
 // SiteRef addresses one site. EditPassword may be empty when the session's

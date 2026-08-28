@@ -111,6 +111,7 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | `SITEBIN_FTP_ADDR` / `SITEBIN_FTP_PASV_PORT_MIN` / `_MAX` | `:21` / `21000` / `21010` | FTP control port + passive data-port range (map them in `docker run`). |
 | `SITEBIN_FTP_PUBLIC_HOST` | base domain | Host advertised for FTP passive mode. |
 | `SITEBIN_FTP_TLS_CERT` / `SITEBIN_FTP_TLS_KEY` | — | Optional PEM cert/key for FTPS (encrypts credentials). |
+| `SITEBIN_MCP_ENABLED` | `true` | Serve the MCP endpoint at `/mcp` for AI agents. See [MCP server](#mcp-server-for-ai-agents). |
 | `SITEBIN_TRACK_VIEWS` | `true` | Count per-site page views (Accept: text/html) + last-seen. |
 | `SITEBIN_READONLY` | `false` | Freeze new site creation. |
 | `SITEBIN_EMBED_ORIGINS` | — | Origins allowed to embed the create flow cross-origin (comma-separated, or `*`). *(Enterprise; ignored with a warning in community.)* See [Embed the drop area](#embed-the-drop-area-on-your-own-site). |
@@ -234,6 +235,61 @@ Or use the GitHub Action ([`.github/actions/deploy`](.github/actions/deploy)):
     edit_url: ${{ secrets.SITEBIN_EDIT_URL }}
     edit_password: ${{ secrets.SITEBIN_EDIT_PASSWORD }}
 ```
+
+### MCP server (for AI agents)
+
+Sitebin speaks the [Model Context Protocol](https://modelcontextprotocol.io) at
+`/mcp`, so Claude, ChatGPT and any other MCP client can publish and manage
+sites directly. It is the JSON API's tool surface over a second transport, with
+the same authorization: what an agent may do is exactly what a script with the
+same credential may do.
+
+```bash
+# Claude Code, anonymous (a community instance, or one running open)
+claude mcp add --transport http sitebin https://sitebin.example.com/mcp
+
+# with an account API token (see "Account API tokens" below)
+claude mcp add --transport http sitebin https://sitebin.example.com/mcp   --header "Authorization: Bearer $TOKEN"
+```
+
+Other clients take the same URL; those that cannot send a header (or that
+require stdio) can bridge with `npx mcp-remote https://…/mcp --header …`.
+
+**Tools**
+
+| Tool | What it does |
+|---|---|
+| `create_site` | Publish files as a new site; returns the URL, the edit id and — once — the edit password |
+| `list_sites` | The connected account's sites *(needs a token)* |
+| `get_site` / `update_site` | Read and change settings, expiry, view password, WebDAV/FTP, SPA fallback |
+| `list_files` / `read_file` | Inspect a site's contents |
+| `write_files` | Add or overwrite files; with `replace`, the site ends up containing exactly what you pass |
+| `delete_file` / `delete_site` | Remove a file, or the whole site |
+| `add_domain` / `remove_domain` | Custom domains *(Enterprise)* |
+| `download_site` | The site as a zip, attached as a resource |
+
+**Authentication** mirrors the API exactly:
+
+- **With a token** (`Authorization: Bearer sbp_…`) new sites belong to that
+  account and get its tier's quotas, `list_sites` works, and the token stands
+  in for the edit password on every site the account owns.
+- **Without a token**, per-site tools need the site's `edit_password`, and on an
+  instance running with accounts, creating a site is refused — the same rule the
+  JSON API applies. A community instance has no accounts and stays fully open.
+- An MCP client never gets the browser escape hatch the API extends to
+  Sitebin's own pages, so an account-less site cannot be driven by an agent on
+  a gated instance.
+
+Files travel as JSON: `{"path": "index.html", "text": "…"}`, or `"base64"` for
+binary. One call carries at most 8 MiB of content — for more than that, use
+WebDAV, FTP or the API's zip upload. Sites created through MCP are recorded in
+`meta.json` as `"origin": "mcp"`; that is provenance for the admin console and
+changes nothing about how the site is served.
+
+Bearer tokens work today in every client that can set a header. OAuth 2.1 with
+dynamic client registration — what Anthropic and OpenAI require to list a
+connector in their directories — is designed but not yet built; see
+[`docs/superpowers/specs/2026-08-28-mcp-server-design.md`](docs/superpowers/specs/2026-08-28-mcp-server-design.md).
 
 ### WebDAV (mount a site as a drive)
 
@@ -522,6 +578,9 @@ curl -H "Authorization: Bearer $TOKEN" -F "files=@dist.zip"      https://app.exa
 # and update it later, no per-site secret needed
 curl -H "Authorization: Bearer $TOKEN" -F "files=@dist.zip"      "https://app.example.com/api/sites/<edit-id>/files?replace=true"
 ```
+
+The same token authenticates the [MCP server](#mcp-server-for-ai-agents), where
+it also replaces the edit password on the account's sites.
 
 A token acts on **sites, not on the account**: it is refused by the dashboard,
 so it cannot change the plan, rotate passwords or delete the account. It reaches

@@ -20,14 +20,14 @@ docker build -t sitebin:latest .     # runs go vet + the full suite
 ```
 
 `e2e/` also has focused scripts: `accounts.ps1`, `tiers.ps1`, `spa.ps1`,
-`ftp.ps1`, `paths.ps1`.
+`ftp.ps1`, `paths.ps1`, `mcp.ps1`.
 
 ## Layout
 
 - `cmd/sitebin` — entrypoint and the supervisor that runs Caddy alongside the Go
   server.
 - `internal/` — the MIT core: `config`, `ids`, `auth`, `store`, `viewer`,
-  `caddygen`, `httpapi`, `cleanup`, `ftp`, `supervisor`, and `ext`.
+  `caddygen`, `httpapi`, `mcp`, `cleanup`, `ftp`, `supervisor`, and `ext`.
 - `ee/` — the enterprise extension (`account`, `authn`, `billing`, `eeconfig`,
   `licensing`, `session`, `smtp`). **ELv2, not MIT.**
 - `web/` — embedded UI, vendored viewer libraries, `static/embed.js`.
@@ -86,6 +86,30 @@ Read `docs/superpowers/specs/2026-08-12-tier-change-quota-sync-design.md` before
 touching any of it — including its "Corrections (post-implementation)" blocks,
 which record three rules that review had to fix after the fact. Tiers themselves
 are configured per instance (`SITEBIN_TIERS` / `tiers.json`), not in this repo.
+
+## The MCP server
+
+`internal/mcp` is the protocol and the tool catalog; `internal/httpapi/mcpops.go`
+is the adapter that implements `mcp.Ops` over the JSON API's own helpers. The
+split is the point: **no authorization rule is stated twice**. If MCP and the
+API ever disagree about who may do what, the bug is in the adapter, not in a
+second copy of the rule.
+
+- MCP is **core, not `ee/`** — for the same reason the API is. Accounts are the
+  enterprise part, and they gate MCP from outside through `ext.Provider`.
+- MCP is deliberately stricter than the API in one place: it never takes the
+  `fromOwnBrowser` escape hatch, because an MCP client is never one of
+  Sitebin's own pages.
+- The SDK's DNS-rebinding guard is **off on purpose** (`DisableLocalhostProtection`).
+  It refuses any non-loopback `Host` on a loopback listener, which is every
+  deployment behind Caddy. `CrossOriginProtection` replaces it and is the
+  defence that actually applies here. Do not "fix" this by re-enabling it.
+- `store.Meta.Origin` is provenance only. Nothing gates on it, and nothing
+  should start to without saying so in the design doc.
+
+Read `docs/superpowers/specs/2026-08-28-mcp-server-design.md`, including the
+Phase 2 section — OAuth 2.1 with dynamic client registration is what the
+Anthropic and OpenAI connector directories require, and it is not built yet.
 
 ## Enterprise config
 

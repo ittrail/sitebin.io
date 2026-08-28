@@ -159,6 +159,7 @@ func serve(withCaddy bool) error {
 	if err != nil {
 		return err
 	}
+	httpapi.Version = version // reported to MCP clients at initialize
 	api, err := httpapi.New(cfg, st, secret, web.Assets)
 	if err != nil {
 		return err

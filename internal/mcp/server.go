@@ -54,6 +54,26 @@ func NewHandler(ops Ops, info Info) http.Handler {
 	}
 	return sdk.NewStreamableHTTPHandler(getServer, &sdk.StreamableHTTPOptions{
 		Stateless: true,
+
+		// The SDK's DNS-rebinding guard refuses any request whose Host is not
+		// a loopback name whenever the listener it arrived on is loopback.
+		// That describes every normal Sitebin deployment: Caddy terminates
+		// the public origin and proxies to the backend over 127.0.0.1 while
+		// preserving the real Host, so the guard would 403 every genuine
+		// request. It is aimed at a developer's localhost MCP server being
+		// reached by a browser through DNS rebinding — a threat model in
+		// which the loopback bind IS the security boundary. Here it is an
+		// implementation detail behind a proxy.
+		DisableLocalhostProtection: true,
+
+		// What that guard was really protecting against — a web page driving
+		// this endpoint from the user's browser — is handled properly instead.
+		// CrossOriginProtection rejects cross-site *browser* requests on their
+		// fetch metadata, and passes anything that sends none, which is every
+		// real MCP client. Unlike fromOwnBrowser in the JSON API, this one is
+		// a genuine boundary: it only ever refuses, and it refuses exactly the
+		// population that cannot forge the headers.
+		CrossOriginProtection: &http.CrossOriginProtection{},
 	})
 }
 
