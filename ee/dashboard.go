@@ -29,6 +29,8 @@ func (p *provider) PublicRoutes() map[string]http.Handler {
 		"POST /account/sites/{id}/rotate":       http.HandlerFunc(p.handleRotate),
 		"POST /account/sites/{id}/delete":       http.HandlerFunc(p.handleDeleteSite),
 		"POST /account/delete":                  http.HandlerFunc(p.handleDeleteAccount),
+		"POST /account/tokens":                  http.HandlerFunc(p.handleCreateToken),
+		"POST /account/tokens/{id}/delete":      http.HandlerFunc(p.handleDeleteToken),
 		"GET /account/admin":                    http.HandlerFunc(p.handleAdmin),
 		"POST /account/admin/sites/{id}/delete": http.HandlerFunc(p.handleAdminDelete),
 		"POST /account/admin/sites/{id}/expiry": http.HandlerFunc(p.handleAdminExpiry),
@@ -338,6 +340,7 @@ type dashView struct {
 	// console is reachable only by typing the path, which is a poor secret and
 	// a worse feature.
 	IsAdmin bool
+	Tokens  []tokenRow
 }
 
 func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, flash string) {

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ittrail/sitebin.io/internal/ext"
@@ -19,8 +20,11 @@ type fakeProvider struct {
 	rejErr    error
 	created   []string
 	quota     ext.CreateGrant
-	quotaOK   bool
-	quotaErr  error
+	// bearer maps a token secret to the account it belongs to, so a test can
+	// present one the way a script would.
+	bearer   map[string]string
+	quotaOK  bool
+	quotaErr error
 }
 
 func (f *fakeProvider) Name() string               { return "fake" }
@@ -36,6 +40,15 @@ func (f *fakeProvider) AuthorizeCreate(*http.Request) (ext.CreateGrant, error) {
 	}
 	return g, f.rejErr
 }
+func (f *fakeProvider) BearerAccount(r *http.Request) (string, bool) {
+	h := r.Header.Get("Authorization")
+	if len(h) < 7 || !strings.EqualFold(h[:7], "bearer ") {
+		return "", false
+	}
+	id, ok := f.bearer[strings.TrimSpace(h[7:])]
+	return id, ok
+}
+
 func (f *fakeProvider) OnSiteCreated(owner, viewID string) error {
 	f.created = append(f.created, owner+":"+viewID)
 	return nil

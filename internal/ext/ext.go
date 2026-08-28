@@ -72,6 +72,15 @@ type Provider interface {
 	// OnSiteCreated records ownership after a site is created (no-op for
 	// anonymous owners). Errors are logged, not surfaced to the client.
 	OnSiteCreated(ownerAccountID, viewID string) error
+
+	// BearerAccount resolves an Authorization: Bearer credential to the account
+	// it belongs to. ok=false means no usable token was presented — a wrong one
+	// and an absent one are the same answer.
+	//
+	// The core uses it to let a token stand in for a site's edit password on
+	// sites that account owns. It returns only the id: the ownership comparison
+	// belongs to the core, which is the side that holds the site's metadata.
+	BearerAccount(r *http.Request) (accountID string, ok bool)
 }
 
 // CreateGrant is the result of a successful AuthorizeCreate: who owns the new

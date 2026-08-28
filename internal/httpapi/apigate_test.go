@@ -191,3 +191,67 @@ func TestOwnedCreateAllowsScripts(t *testing.T) {
 		t.Fatalf("owned scripted create: %d %s", w.Code, w.Body)
 	}
 }
+
+// A token replaces the edit password for sites its account owns -- the point of
+// the feature: a script should not carry one secret per site.
+func TestTokenAuthorizesSitesItsAccountOwns(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1", bearer: map[string]string{"sbp_good": "acct-1"}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	req := httptest.NewRequest("GET", "/api/sites/"+edit, nil)
+	req.Header.Set("Authorization", "Bearer sbp_good")
+	if w := e.public(t, req); w.Code != 200 {
+		t.Fatalf("token on an owned site = %d, want 200 (%s)", w.Code, w.Body)
+	}
+}
+
+// The ownership check is the whole boundary. A valid token from another account
+// must be worth nothing here.
+func TestTokenOfAnotherAccountIsRefused(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1", bearer: map[string]string{"sbp_other": "acct-2"}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	req := httptest.NewRequest("GET", "/api/sites/"+edit, nil)
+	req.Header.Set("Authorization", "Bearer sbp_other")
+	if w := e.public(t, req); w.Code != 401 {
+		t.Fatalf("another account's token = %d, want 401", w.Code)
+	}
+}
+
+// An anonymous site belongs to no account, so no token can reach it -- and it
+// must not fall through to "no password required" either.
+func TestTokenCannotReachAnAnonymousSite(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, bearer: map[string]string{"sbp_good": "acct-1"}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	req := httptest.NewRequest("GET", "/api/sites/"+edit, nil)
+	req.Header.Set("Authorization", "Bearer sbp_good")
+	if w := e.public(t, req); w.Code != 401 {
+		t.Fatalf("token against an anonymous site = %d, want 401", w.Code)
+	}
+}
+
+// A wrong token must not be treated as "no credential" and fall back to
+// something more permissive.
+func TestUnknownTokenIsRefused(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1", bearer: map[string]string{}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	req := httptest.NewRequest("GET", "/api/sites/"+edit, nil)
+	req.Header.Set("Authorization", "Bearer sbp_nonsense")
+	if w := e.public(t, req); w.Code != 401 {
+		t.Fatalf("unknown token = %d, want 401", w.Code)
+	}
+}

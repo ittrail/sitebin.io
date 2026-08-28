@@ -213,12 +213,35 @@ func storeError(w http.ResponseWriter, err error) {
 // withEditAuth authenticates edit operations: the edit id in the path plus
 // the edit password from X-Edit-Password (or Basic auth), rate limited and
 // cached to keep Argon2 work off the hot path.
+// tokenOwns reports whether the request carries an account API token whose
+// account owns this site. The ownership check lives here, in the core, because
+// the core is the side that holds the site's metadata; the extension only says
+// which account the token belongs to.
+func (a *API) tokenOwns(r *http.Request, site *store.Site) bool {
+	if site.Meta.OwnerAccountID == "" {
+		return false // an anonymous site belongs to no account, so no token owns it
+	}
+	p, ok := ext.Get()
+	if !ok {
+		return false
+	}
+	accountID, ok := p.BearerAccount(r)
+	return ok && accountID == site.Meta.OwnerAccountID
+}
+
 func (a *API) withEditAuth(next func(http.ResponseWriter, *http.Request, *store.Site)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		editID := r.PathValue("editID")
 		site, err := a.st.ByEditID(editID)
 		if err != nil {
 			storeError(w, err)
+			return
+		}
+		// An account API token stands in for the edit password on sites that
+		// account owns. That is the whole point of tokens: a script should not
+		// have to carry one secret per site to manage the sites it created.
+		if a.tokenOwns(r, site) {
+			next(w, r, site)
 			return
 		}
 		pw := r.Header.Get("X-Edit-Password")
@@ -228,7 +251,7 @@ func (a *API) withEditAuth(next func(http.ResponseWriter, *http.Request, *store.
 			}
 		}
 		if pw == "" {
-			writeError(w, 401, "edit password required (X-Edit-Password header)")
+			writeError(w, 401, "edit password required (X-Edit-Password header), or an account API token as Authorization: Bearer")
 			return
 		}
 		switch a.verifyEdit(r, site, pw) {

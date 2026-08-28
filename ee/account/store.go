@@ -28,7 +28,7 @@ type Store struct {
 // New opens/creates the account store rooted at dataDir.
 func New(dataDir string) (*Store, error) {
 	s := &Store{root: dataDir, locks: map[string]*sync.Mutex{}}
-	for _, d := range []string{s.accountsDir(), s.indexDir("email"), s.indexDir("oauth"), s.indexDir("billing")} {
+	for _, d := range []string{s.accountsDir(), s.indexDir("email"), s.indexDir("oauth"), s.indexDir("billing"), s.indexDir("token")} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return nil, fmt.Errorf("init account store: %w", err)
 		}

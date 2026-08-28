@@ -27,6 +27,15 @@ func NewViewID() string { return New() }
 // token.
 func NewEditID() string { return New() }
 
+// NewAPIToken returns an account API token: the fixed prefix "sbp_" followed
+// by a 40-char base62 secret (~238 bits). The prefix exists so the string is
+// recognisable in logs and by secret scanners, and so a leaked token can be
+// identified as Sitebin's without trying it.
+func NewAPIToken() string { return APITokenPrefix + randomString(base62, 40) }
+
+// APITokenPrefix marks a string as a Sitebin account API token.
+const APITokenPrefix = "sbp_"
+
 // NewEditPassword returns a 22-char base62 secret (~131 bits).
 func NewEditPassword() string { return randomString(base62, 22) }
 

@@ -507,6 +507,28 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_PADDLE_API_KEY` / `_WEBHOOK_SECRET` / `_SANDBOX` | Paddle billing. Webhook: `POST /account/billing/paddle/webhook`. |
 | `SITEBIN_LICENSE_KEY` | Optional Ed25519 license key; if set it must be valid. |
 
+### Account API tokens *(Enterprise)*
+
+The dashboard at `/account` issues API tokens (`sbp_…`), optionally named, and
+revokes them. Send one as `Authorization: Bearer <token>` to
+
+- **create** sites owned by that account, without a browser session, and
+- **manage** any site the account owns, in place of that site's edit password.
+
+```bash
+TOKEN=sbp_...
+# publish a build artifact
+curl -H "Authorization: Bearer $TOKEN" -F "files=@dist.zip"      https://app.example.com/api/sites
+# and update it later, no per-site secret needed
+curl -H "Authorization: Bearer $TOKEN" -F "files=@dist.zip"      "https://app.example.com/api/sites/<edit-id>/files?replace=true"
+```
+
+A token acts on **sites, not on the account**: it is refused by the dashboard,
+so it cannot change the plan, rotate passwords or delete the account. It reaches
+only sites its own account owns — never another account's, and never an
+anonymous site. The secret is shown once and stored only as a SHA-256, so a lost
+token is replaced rather than recovered. Up to 25 per account.
+
 A tier may set `"trusted": true`. Sites it owns are served without the strict
 content-security headers Sitebin applies to untrusted uploads — anonymous drops
 and sites on tiers without the flag get `form-action 'none'`, `connect-src

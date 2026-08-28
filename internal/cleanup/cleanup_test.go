@@ -100,7 +100,8 @@ func (p *stubProvider) EmbedOriginsAllowed() bool             { return true }
 func (p *stubProvider) AuthorizeCreate(*http.Request) (ext.CreateGrant, error) {
 	return ext.CreateGrant{}, nil
 }
-func (p *stubProvider) OnSiteCreated(string, string) error { return nil }
+func (p *stubProvider) BearerAccount(*http.Request) (string, bool) { return "", false }
+func (p *stubProvider) OnSiteCreated(string, string) error         { return nil }
 func (p *stubProvider) QuotaFor(owner string) (ext.CreateGrant, bool, error) {
 	p.calls = append(p.calls, owner)
 	if p.beforeQuota != nil {

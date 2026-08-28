@@ -131,6 +131,31 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
     {{end}}
   </div>
 
+  <div class="card">
+    <h3>API tokens <span class="count">{{len .Tokens}}</span></h3>
+    <p class="muted">Send one as <code>Authorization: Bearer &lt;token&gt;</code> to create sites and manage the ones this account owns — no per-site edit password needed. A token cannot change your account.</p>
+    {{range .Tokens}}
+    <div class="sitecard">
+      <div class="grow">
+        <strong>{{if .Name}}{{.Name}}{{else}}Unnamed token{{end}}</strong>
+        <div class="u">{{.Prefix}}… · created {{.CreatedText}}</div>
+      </div>
+      <form class="inline" method="post" action="/account/tokens/{{.ID}}/delete">
+        <input type="hidden" name="csrf" value="{{.CSRF}}">
+        <button class="btn small danger" type="submit">Revoke</button>
+      </form>
+    </div>
+    {{end}}
+    <form method="post" action="/account/tokens" style="display:flex;gap:8px;align-items:flex-end;margin-top:14px;flex-wrap:wrap">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <div style="flex:1;min-width:200px">
+        <label class="f" for="tokname">Name (optional)</label>
+        <input id="tokname" type="text" name="name" maxlength="60" placeholder="e.g. build agent" style="width:100%;background:var(--bg-raise);color:var(--ink);border:1px solid var(--line);border-radius:9px;padding:9px 12px;font:14px var(--body)">
+      </div>
+      <button class="btn small primary" type="submit">Create token</button>
+    </form>
+  </div>
+
   {{if .ManageURL}}
   <div class="card">
     <h3>Plan</h3>

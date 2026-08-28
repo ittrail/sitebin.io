@@ -136,7 +136,10 @@ func (p *provider) AuthorizeCreate(r *http.Request) (ext.CreateGrant, error) {
 	if !p.cfg.Enabled() {
 		return ext.CreateGrant{}, nil
 	}
-	if acc, ok := p.currentAccount(r); ok {
+	// An API token names the account outright; the session cookie is the
+	// browser's way of doing the same. Either identifies an owner for the site
+	// about to be created.
+	if acc, ok := p.accountForAPI(r); ok {
 		return p.grantForAccount(acc)
 	}
 	switch p.cfg.Mode {
@@ -335,8 +338,48 @@ func (p *provider) OnSiteCreated(ownerAccountID, viewID string) error {
 	return p.accounts.LinkSite(acc, viewID)
 }
 
-// currentAccount resolves the session cookie to an account, honoring token
+// accountForAPI resolves an API caller: an Authorization: Bearer token, else
+// the session cookie (which is how the browser's own drop page creates sites).
+func (p *provider) accountForAPI(r *http.Request) (*account.Account, bool) {
+	if secret := bearerToken(r); secret != "" {
+		return p.accounts.ByToken(secret)
+	}
+	return p.currentAccount(r)
+}
+
+// bearerToken extracts an Authorization: Bearer credential, or "" when the
+// header is absent or shaped differently.
+func bearerToken(r *http.Request) string {
+	h := r.Header.Get("Authorization")
+	if len(h) < 7 || !strings.EqualFold(h[:7], "bearer ") {
+		return ""
+	}
+	return strings.TrimSpace(h[7:])
+}
+
+// BearerAccount resolves an API token to its account. See ext.Provider.
+func (p *provider) BearerAccount(r *http.Request) (string, bool) {
+	if !p.cfg.Enabled() {
+		return "", false
+	}
+	secret := bearerToken(r)
+	if secret == "" {
+		return "", false
+	}
+	acc, ok := p.accounts.ByToken(secret)
+	if !ok {
+		return "", false
+	}
+	return acc.ID, true
+}
+
+// currentAccount resolves the SESSION COOKIE to an account, honoring token
 // version (revocation).
+//
+// It deliberately does not accept API tokens. Those are script credentials for
+// the site API; letting one drive the dashboard would let it read a CSRF token
+// and go on to change the tier, rotate passwords or delete the account. A
+// token can act on sites, not on the account that owns them.
 func (p *provider) currentAccount(r *http.Request) (*account.Account, bool) {
 	id, ver, ok := p.sessions.Validate(r)
 	if !ok {
