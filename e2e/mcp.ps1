@@ -70,9 +70,27 @@ function ToolStruct($r) {
     if ($null -eq $r.msg -or $null -eq $r.msg.result) { return $null }
     return $r.msg.result.structuredContent
 }
+
+# ToolAnswered reports whether the call completed at the protocol level at all,
+# regardless of whether the tool then refused. Every refusal assertion has to
+# check this first: without it, a server that is completely broken — /mcp not
+# mounted, a 404, a transport error — makes every "must be refused" test pass
+# vacuously, which is exactly the false green this script exists to prevent.
+function ToolAnswered($r) {
+    return ($null -ne $r.msg -and $null -ne $r.msg.result)
+}
+
+# ToolIsError reports a tool-level refusal. It is only meaningful when
+# ToolAnswered is true; see above.
 function ToolIsError($r) {
-    if ($null -eq $r.msg -or $null -eq $r.msg.result) { return $true }
+    if (-not (ToolAnswered $r)) { return $false }
     return [bool]$r.msg.result.isError
+}
+
+# ToolRefused is what the refusal assertions should use: the call reached the
+# tool AND the tool said no.
+function ToolRefused($r) {
+    return ((ToolAnswered $r) -and (ToolIsError $r))
 }
 function ToolText($r) {
     if ($null -eq $r.msg -or $null -eq $r.msg.result -or $null -eq $r.msg.result.content) { return "" }
@@ -153,13 +171,13 @@ Assert "get_site reports the file count" ((ToolStruct $r).file_count -ge 2) (Too
 
 Write-Host "== the password gate" -ForegroundColor Cyan
 $r = CallTool "get_site" @{ edit_id = $editID; edit_password = "wrong-password" }
-Assert "wrong edit_password refused" (ToolIsError $r) (ToolText $r)
+Assert "wrong edit_password refused" (ToolRefused $r) (ToolText $r)
 
 $r = CallTool "get_site" @{ edit_id = $editID }
-Assert "missing edit_password refused" (ToolIsError $r) (ToolText $r)
+Assert "missing edit_password refused" (ToolRefused $r) (ToolText $r)
 
 $r = CallTool "get_site" @{ edit_id = "definitelynotasite"; edit_password = "x" }
-Assert "unknown edit_id refused" (ToolIsError $r) (ToolText $r)
+Assert "unknown edit_id refused" (ToolRefused $r) (ToolText $r)
 
 Write-Host "== writing" -ForegroundColor Cyan
 $r = CallTool "write_files" @{
@@ -178,7 +196,7 @@ Assert "replace emptied the site first" (-not (ToolIsError $r) -and (ToolStruct 
 
 Write-Host "== custom domains are enterprise-only here" -ForegroundColor Cyan
 $r = CallTool "add_domain" @{ edit_id = $editID; edit_password = $pw; domain = "docs.example.com" }
-Assert "add_domain refused in the community image" (ToolIsError $r) (ToolText $r)
+Assert "add_domain refused in the community image" (ToolRefused $r) (ToolText $r)
 
 Write-Host "== deleting" -ForegroundColor Cyan
 $r = CallTool "delete_site" @{ edit_id = $editID; edit_password = $pw }
