@@ -259,3 +259,47 @@ func TestTrustMatchersAreComplements(t *testing.T) {
 		t.Error("the untrusted policy dropped the baseline directives")
 	}
 }
+
+// A separate view domain is the whole point of the split: user content must
+// leave the app's registrable domain entirely, or browsers keep treating the
+// two as one site.
+func TestSeparateViewDomain(t *testing.T) {
+	cfg := mustLoad(t, map[string]string{
+		"SITEBIN_BASE_DOMAIN":  "app.sitebin.io",
+		"SITEBIN_VIEW_DOMAIN":  "sitebin.app",
+		"SITEBIN_DNS_PROVIDER": "hetzner",
+		"SITEBIN_DNS_TOKEN":    "tok",
+		"SITEBIN_ACME_EMAIL":   "ops@ittrail.at",
+	})
+	out := Generate(cfg)
+
+	if !strings.Contains(out, "*.sitebin.app {") {
+		t.Errorf("no wildcard block for the view domain:\n%s", out)
+	}
+	if strings.Contains(out, "*.app.sitebin.io {") {
+		t.Error("content must no longer be served from the app's own domain")
+	}
+	// {labels.N} counts from the right: sitebin.app has two labels, so the view
+	// id sits at labels.2 — taking it from the main domain would index the
+	// wrong label and every site would 404.
+	if !strings.Contains(out, "root * /data/sites/{labels.2}/files") {
+		t.Errorf("label index not derived from the view domain:\n%s", out)
+	}
+	if !strings.Contains(out, "app.sitebin.io {") {
+		t.Error("the app domain must still serve the UI and API")
+	}
+}
+
+func TestSingleDomainInstallIsUnchanged(t *testing.T) {
+	cfg := mustLoad(t, map[string]string{
+		"SITEBIN_BASE_DOMAIN": "sitebin.example",
+		"SITEBIN_HTTP_ONLY":   "true",
+	})
+	out := Generate(cfg)
+	if !strings.Contains(out, "http://*.sitebin.example {") {
+		t.Errorf("without SITEBIN_VIEW_DOMAIN the wildcard must stay on the base domain:\n%s", out)
+	}
+	if !strings.Contains(out, "{labels.2}") {
+		t.Errorf("label index changed for a single-domain install:\n%s", out)
+	}
+}

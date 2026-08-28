@@ -12,8 +12,17 @@ import (
 
 // Config holds all runtime configuration. See README for the full reference.
 type Config struct {
-	BaseDomain string // main domain; view subdomains are <id>.BaseDomain
-	PublicPort int    // non-standard public port for URL construction (0 = default)
+	BaseDomain string // main domain: UI, API, dashboard, WebDAV
+	// ViewDomain is the domain user sites are served from, as
+	// <id>.ViewDomain. It defaults to BaseDomain, which keeps single-domain
+	// installs unchanged. Pointing it at a SEPARATE registrable domain (and
+	// listing that domain in the Public Suffix List) is what stops uploaded
+	// content from sharing a browser "site" with the dashboard: no cookie can
+	// be written upward onto the app, SameSite stops treating navigations from
+	// a user site as same-site, and a phishing takedown against one site does
+	// not put the app's own domain at risk.
+	ViewDomain string
+	PublicPort int // non-standard public port for URL construction (0 = default)
 	DataDir    string
 
 	ViewAccess string // how view URLs are served: subdomain (default) | path | both
@@ -112,6 +121,14 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	cfg.BaseDomain = base
 
+	// Serving user content from its own registrable domain is the point of this
+	// setting, so it defaults to BaseDomain and only differs when an operator
+	// says so.
+	cfg.ViewDomain = base
+	if v := strings.ToLower(strings.TrimSpace(getenv("SITEBIN_VIEW_DOMAIN"))); v != "" {
+		cfg.ViewDomain = strings.TrimSuffix(v, ".")
+	}
+
 	if v := getenv("SITEBIN_DATA_DIR"); v != "" {
 		cfg.DataDir = v
 	}
@@ -135,6 +152,13 @@ func Load(getenv func(string) string) (Config, error) {
 		default:
 			return cfg, fmt.Errorf("SITEBIN_VIEW_ACCESS %q is invalid (want subdomain|path|both)", v)
 		}
+	}
+
+	// Path views serve content from the main domain, which would put uploaded
+	// HTML back on the app's own origin and undo the whole point of a separate
+	// view domain. Refuse the contradiction rather than half-honour it.
+	if cfg.ViewDomain != cfg.BaseDomain && cfg.PathViews() {
+		return cfg, fmt.Errorf("SITEBIN_VIEW_DOMAIN separates user content from %s, but SITEBIN_VIEW_ACCESS=%s serves it from that same domain under /v/ — pick one", cfg.BaseDomain, cfg.ViewAccess)
 	}
 
 	var err error
@@ -224,7 +248,7 @@ func Load(getenv func(string) string) (Config, error) {
 		case cfg.TLSSnippet != "":
 			// advanced escape hatch, accepted as-is
 		case cfg.DNSProvider == "":
-			return cfg, fmt.Errorf("the *.%s wildcard certificate needs a DNS challenge: set SITEBIN_DNS_PROVIDER + SITEBIN_DNS_TOKEN (or SITEBIN_TLS_SNIPPET, or SITEBIN_VIEW_ACCESS=path to serve sites as paths without a wildcard, or SITEBIN_HTTP_ONLY=true behind your own proxy)", cfg.BaseDomain)
+			return cfg, fmt.Errorf("the *.%s wildcard certificate needs a DNS challenge: set SITEBIN_DNS_PROVIDER + SITEBIN_DNS_TOKEN (or SITEBIN_TLS_SNIPPET, or SITEBIN_VIEW_ACCESS=path to serve sites as paths without a wildcard, or SITEBIN_HTTP_ONLY=true behind your own proxy)", cfg.ViewDomain)
 		case !singleTokenProviders[cfg.DNSProvider]:
 			return cfg, fmt.Errorf("SITEBIN_DNS_PROVIDER %q is not a built-in single-token provider (cloudflare, hetzner, duckdns); use SITEBIN_TLS_SNIPPET for other providers", cfg.DNSProvider)
 		case cfg.DNSToken == "":
@@ -280,7 +304,7 @@ func (c Config) SiteURL(host string) string {
 // is preferred when enabled; otherwise the path form is used.
 func (c Config) ViewURL(viewID string) string {
 	if c.SubdomainViews() {
-		return c.SiteURL(viewID + "." + c.BaseDomain)
+		return c.SiteURL(viewID + "." + c.ViewDomain)
 	}
 	return c.PathViewURL(viewID)
 }

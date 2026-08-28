@@ -129,6 +129,8 @@ func mustStore(cfg config.Config) *store.Store {
 		fmt.Fprintln(os.Stderr, "data dir error:", err)
 		os.Exit(1)
 	}
+	// Nobody may claim a custom domain under the view namespace.
+	st.ReserveDomains(cfg.ViewDomain)
 	return st
 }
 

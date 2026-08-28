@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,6 +56,18 @@ const (
 )
 
 // WriteSPAMarker creates the SPA-fallback marker in the site's files/ dir.
+// ReserveDomains adds domains that no site may claim as a custom domain. The
+// instance's own view domain belongs here: without it a site could attach
+// evil.<view domain> and take over an address the wildcard already answers for.
+func (s *Store) ReserveDomains(domains ...string) {
+	for _, d := range domains {
+		d = strings.ToLower(strings.TrimSpace(d))
+		if d != "" && !slices.Contains(s.reserved, d) {
+			s.reserved = append(s.reserved, d)
+		}
+	}
+}
+
 func (s *Store) WriteSPAMarker(site *Site) error {
 	f, err := os.OpenFile(filepath.Join(site.FilesDir(), SPAMarker), os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -94,8 +108,13 @@ func (s *Store) Trusted(site *Site) bool {
 
 // Store provides all site persistence. Methods are safe for concurrent use.
 type Store struct {
-	root         string
-	baseDomain   string
+	root       string
+	baseDomain string
+	// reserved are domains no site may claim as a custom domain, because the
+	// instance already serves something there. It starts as the base domain and
+	// grows by ReserveDomains — a separate view domain has to be in it, or a
+	// site could claim <anything>.<view domain> and shadow the view namespace.
+	reserved     []string
 	maxSiteBytes int64
 	maxFiles     int
 
@@ -128,6 +147,7 @@ func New(dataDir, baseDomain string, maxSiteBytes int64, maxFiles int) (*Store, 
 	s := &Store{
 		root:         dataDir,
 		baseDomain:   baseDomain,
+		reserved:     []string{baseDomain},
 		maxSiteBytes: maxSiteBytes,
 		maxFiles:     maxFiles,
 		locks:        make(map[string]*sync.Mutex),

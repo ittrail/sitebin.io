@@ -36,8 +36,10 @@ func (s *Store) AddDomain(site *Site, domain string) error {
 	if err != nil {
 		return err
 	}
-	if d == s.baseDomain || strings.HasSuffix(d, "."+s.baseDomain) {
-		return fmt.Errorf("%w: %s is reserved by this Sitebin instance", ErrBadDomain, d)
+	for _, r := range s.reserved {
+		if d == r || strings.HasSuffix(d, "."+r) {
+			return fmt.Errorf("%w: %s is reserved by this Sitebin instance", ErrBadDomain, d)
+		}
 	}
 	// Per-site cap: the owner's tier value if stamped, else the instance default.
 	cap := maxDomainsPerSite

@@ -15,7 +15,10 @@ import (
 func Generate(cfg config.Config) string {
 	var b strings.Builder
 	backend := func(port string) string { return cfg.BackendHost + ":" + port }
-	labelIdx := len(strings.Split(cfg.BaseDomain, "."))
+	// The wildcard block extracts the view id with {labels.N}, counted from the
+	// right, so N is the label count of the domain the sites live on — which is
+	// no longer necessarily the main domain.
+	labelIdx := len(strings.Split(cfg.ViewDomain, "."))
 
 	// ---- global options ----
 	b.WriteString("{\n\tadmin off\n")
@@ -48,7 +51,7 @@ func Generate(cfg config.Config) string {
 
 	// ---- view subdomains: wildcard cert, pure static serving ----
 	if cfg.SubdomainViews() {
-		fmt.Fprintf(&b, "%s*.%s {\n", scheme, cfg.BaseDomain)
+		fmt.Fprintf(&b, "%s*.%s {\n", scheme, cfg.ViewDomain)
 		if !cfg.HTTPOnly {
 			b.WriteString("\ttls {\n")
 			if cfg.TLSSnippet != "" {

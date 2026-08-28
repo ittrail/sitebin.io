@@ -167,7 +167,7 @@ func hostWithoutPort(h string) string {
 // siteByHost resolves a request Host (subdomain or custom domain) to a site.
 func (a *API) siteByHost(host string) (*store.Site, error) {
 	h := strings.ToLower(hostWithoutPort(host))
-	if label, ok := strings.CutSuffix(h, "."+a.cfg.BaseDomain); ok {
+	if label, ok := strings.CutSuffix(h, "."+a.cfg.ViewDomain); ok {
 		if strings.Contains(label, ".") {
 			return nil, store.ErrNotFound
 		}

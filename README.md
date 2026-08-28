@@ -493,6 +493,7 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_DEFAULT_TIER` | Tier new/free accounts start on (required in tiers mode). |
 | `SITEBIN_ANON_TIER` | Tier for anonymous creation (empty = require an account). |
 | `SITEBIN_TIER_SELF_SELECT` | Allow users to switch among free tiers. |
+| `SITEBIN_VIEW_DOMAIN` | Domain user sites are served from, as `<id>.<view-domain>` (default: the base domain). Point it at a **separate registrable domain** and list that domain in the [Public Suffix List](https://publicsuffix.org/) to stop uploaded content sharing a browser "site" with the dashboard: no cookie can be written upward onto the app, `SameSite` stops treating navigations from a user site as same-site, and a phishing takedown against one site does not endanger the app's own domain. Needs its own wildcard DNS record and DNS-challenge access. Cannot be combined with `SITEBIN_VIEW_ACCESS=path\|both`, which would serve content from the main domain again. |
 | `SITEBIN_ADMIN_ACCOUNTS` | Comma-separated emails allowed to reach the **instance register** at `/account/admin` — every site on the instance, with delete and expiry control. Gated twice: the account's tier must also carry `"admin": true` in the tier config, so neither the plan source nor the environment can grant it alone. Unset disables the console entirely. |
 | `SITEBIN_ALLOW_ANON_CREATE` | In accounts mode, still allow anonymous sites. |
 | `SITEBIN_OAUTH_GOOGLE_CLIENT_ID` / `_SECRET` | Google OIDC login. |

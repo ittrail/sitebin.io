@@ -291,3 +291,51 @@ func TestEmbedOriginsUnset(t *testing.T) {
 		t.Fatalf("EmbedOrigins = %v, want nil", cfg.EmbedOrigins)
 	}
 }
+
+func TestViewDomainDefaultsToBaseDomain(t *testing.T) {
+	cfg, err := Load(func(k string) string {
+		return map[string]string{"SITEBIN_BASE_DOMAIN": "sitebin.example", "SITEBIN_HTTP_ONLY": "true"}[k]
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ViewDomain != cfg.BaseDomain {
+		t.Fatalf("ViewDomain = %q, want it to default to BaseDomain %q", cfg.ViewDomain, cfg.BaseDomain)
+	}
+}
+
+// Path views serve from the main domain; combined with a separate view domain
+// that would put uploaded HTML straight back onto the app's origin.
+func TestViewDomainRefusesPathViews(t *testing.T) {
+	_, err := Load(func(k string) string {
+		return map[string]string{
+			"SITEBIN_BASE_DOMAIN": "app.sitebin.io",
+			"SITEBIN_VIEW_DOMAIN": "sitebin.app",
+			"SITEBIN_VIEW_ACCESS": "both",
+			"SITEBIN_HTTP_ONLY":   "true",
+		}[k]
+	})
+	if err == nil || !strings.Contains(err.Error(), "pick one") {
+		t.Fatalf("expected the contradiction to be refused, got %v", err)
+	}
+}
+
+func TestViewURLUsesTheViewDomain(t *testing.T) {
+	cfg, err := Load(func(k string) string {
+		return map[string]string{
+			"SITEBIN_BASE_DOMAIN": "app.sitebin.io",
+			"SITEBIN_VIEW_DOMAIN": "sitebin.app",
+			"SITEBIN_HTTP_ONLY":   "true",
+		}[k]
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.ViewURL("abcdefghijklmnopqrstuvwxyz")
+	if !strings.Contains(got, "abcdefghijklmnopqrstuvwxyz.sitebin.app") {
+		t.Errorf("ViewURL = %q, want it on the view domain", got)
+	}
+	if !strings.Contains(cfg.EditURL("x"), "app.sitebin.io") {
+		t.Error("the edit page is app UI and must stay on the main domain")
+	}
+}
