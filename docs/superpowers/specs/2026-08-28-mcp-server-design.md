@@ -248,3 +248,8 @@ with dynamic client registration, not bearer tokens. That is a separate design:
 Until then, MCP is reachable from Claude Code (`claude mcp add --transport http
 … --header`), Claude Desktop and ChatGPT via a bearer header, which is the
 normal way to consume a self-hosted MCP server.
+
+**Phase 2 is now designed**, and it turned out smaller than this section
+assumed: the SDK ships the resource-server half, and Sitebin stays a resource
+server rather than becoming an authorization server. See
+[`2026-08-29-mcp-oauth-resource-server-design.md`](2026-08-29-mcp-oauth-resource-server-design.md).
