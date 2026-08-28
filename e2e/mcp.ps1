@@ -22,9 +22,23 @@ $vol = "sitebin-mcp-e2e-data"
 $work = Join-Path $PSScriptRoot ".work"
 New-Item -ItemType Directory -Force $work | Out-Null
 
+# Every assertion in this script must run. If one is skipped — a throw, an
+# early return — the totals still look healthy, so the count is checked at the
+# end against this number. Update it when you add or remove an assertion.
+$ExpectedAssertions = 37
 $script:pass = 0; $script:fail = 0
-function Assert([string]$n, [bool]$c, [string]$d = "") {
-    if ($c) { $script:pass++; Write-Host "  ok   $n" -ForegroundColor Green }
+# $c is deliberately untyped. With [bool], PowerShell throws on anything it
+# cannot coerce — an array from a multi-line command substitution, say — and a
+# thrown assertion never runs, never counts, and never fails the script. That
+# silently shrinks the total while the run still reports success.
+function Assert([string]$n, $c, [string]$d = "") {
+    $ok = $false
+    if ($null -ne $c) {
+        if ($c -is [bool]) { $ok = $c }
+        elseif ($c -is [array]) { $ok = ($c.Count -gt 0) }
+        else { $ok = [bool]$c }
+    }
+    if ($ok) { $script:pass++; Write-Host "  ok   $n" -ForegroundColor Green }
     else { $script:fail++; Write-Host "  FAIL $n  $d" -ForegroundColor Red }
 }
 
@@ -156,7 +170,10 @@ $r2 = Req "GET" $viewURL
 Assert "published site serves its content" ($r2.code -eq 200 -and $r2.body -match "mcp-e2e-ok") "$($r2.code) $($r2.body)"
 
 Write-Host "== provenance" -ForegroundColor Cyan
-$meta = docker exec $name sh -c "cat /data/sites/*/meta.json | grep -l . 2>/dev/null; grep -rh '\"origin\"' /data/sites/*/meta.json"
+# Read the field straight out of the site's own meta.json. The site id is
+# known, so there is no globbing and nothing reads stdin.
+$viewID = $site.id
+$meta = (docker exec $name sh -c "cat /data/sites/$viewID/meta.json") -join "`n"
 Assert "meta.json records origin=mcp" ($meta -match '"origin":\s*"mcp"') "$meta"
 
 Write-Host "== reading back" -ForegroundColor Cyan
@@ -220,5 +237,10 @@ docker rm -f $name 2>$null | Out-Null
 docker volume rm $vol 2>$null | Out-Null
 
 Write-Host ""
+$total = $script:pass + $script:fail
+if ($total -ne $ExpectedAssertions) {
+    Write-Host ("  FAIL assertion count: ran {0}, expected {1} - an assertion was skipped or threw" -f $total, $ExpectedAssertions) -ForegroundColor Red
+    $script:fail++
+}
 Write-Host ("== MCP E2E: {0} passed, {1} failed" -f $script:pass, $script:fail) -ForegroundColor $(if ($script:fail -eq 0) { "Green" } else { "Red" })
 exit $(if ($script:fail -eq 0) { 0 } else { 1 })
