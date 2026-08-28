@@ -275,7 +275,7 @@ func (p *provider) redirect(w http.ResponseWriter, r *http.Request, path string)
 func (p *provider) securityHeaders(w http.ResponseWriter) {
 	w.Header().Set("Content-Security-Policy",
 		"default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "+
-			"script-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+			"script-src "+copyScriptCSP+"; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Referrer-Policy", "no-referrer")
@@ -394,6 +394,7 @@ func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, 
 		Email: acc.Email, Tier: tier, Sites: rows, CSRF: token, Base: p.baseURL(),
 		SelfSelect: p.cfg.SelfSelect, Checkout: checkout, Tiers: opts, ManageURL: manageURL,
 		IsAdmin: p.isAdmin(acc),
+		Tokens:  p.tokenRows(acc, token),
 	})
 }
 

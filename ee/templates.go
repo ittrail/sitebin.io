@@ -29,6 +29,14 @@ const pageHead = `<!doctype html>
   .acct .authwrap { width: min(420px, 100%); margin: 10vh auto; }
   .acct .switch-link { text-align: center; margin-top: 14px; font-size: 14px; }
   .acct label.f { display:block; font-size: 13px; color: var(--ink-dim); margin: 12px 0 6px; }
+  .acct .secretrow .v { word-break: break-all; overflow-wrap: anywhere; }
+  .acct .secretout { margin-top: 16px; }
+  .acct .secretout .val {
+    display: block; font: 13px var(--mono); color: var(--ink); user-select: all;
+    background: var(--bg-raise); border: 1px dashed var(--line); border-radius: 9px;
+    padding: 12px 14px; word-break: break-all; overflow-wrap: anywhere; line-height: 1.5;
+  }
+  .acct .secretout .row { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
 </style>
 </head><body>
 <header class="topbar">
@@ -150,7 +158,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
       <input type="hidden" name="csrf" value="{{.CSRF}}">
       <div style="flex:1;min-width:200px">
         <label class="f" for="tokname">Name (optional)</label>
-        <input id="tokname" type="text" name="name" maxlength="60" placeholder="e.g. build agent" style="width:100%;background:var(--bg-raise);color:var(--ink);border:1px solid var(--line);border-radius:9px;padding:9px 12px;font:14px var(--body)">
+        <input id="tokname" type="text" name="name" maxlength="60" placeholder="what is it for?" style="width:100%;background:var(--bg-raise);color:var(--ink);border:1px solid var(--line);border-radius:9px;padding:9px 12px;font:14px var(--body)">
       </div>
       <button class="btn small primary" type="submit">Create token</button>
     </form>
@@ -205,8 +213,18 @@ var msgTmpl = template.Must(template.New("msg").Parse(pageHead + `
 <main class="acct"><div class="authwrap"><div class="card">
   <h1>{{.Title}}</h1>
   <p class="muted">{{.Body}}</p>
-  {{if .Detail}}<div class="secretrow pass" style="margin-top:16px"><span class="k">Value</span><span class="v" style="user-select:all">{{.Detail}}</span></div>{{end}}
+  {{if .Detail}}
+  <div class="secretout">
+    <code class="val" id="secretval">{{.Detail}}</code>
+    <div class="row">
+      <button class="btn small" id="copybtn" type="button" hidden>Copy</button>
+      <a class="btn small" href="{{.Back}}">Back</a>
+    </div>
+  </div>
+  <script>` + copyScript + `</script>
+  {{else}}
   <div style="margin-top:18px"><a class="btn" href="{{.Back}}">Back</a></div>
+  {{end}}
 </div></div></main>
 ` + pageFoot))
 

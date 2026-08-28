@@ -46,8 +46,18 @@ func TestTokenSecretIsShownOnceAndNotStored(t *testing.T) {
 	if strings.Contains(w2.Body.String(), secret) {
 		t.Error("the dashboard re-displayed the secret; only its prefix may appear")
 	}
-	if !strings.Contains(w2.Body.String(), "build agent") {
+	// Assert on something only a rendered ROW can produce: its revoke form.
+	// An earlier version looked for the token's name, which also appears in the
+	// input's placeholder — so it passed while the list was never filled at all.
+	dashBody := w2.Body.String()
+	if !strings.Contains(dashBody, "/account/tokens/") || !strings.Contains(dashBody, "/delete") {
+		t.Fatalf("no token row rendered: the list is empty even though a token exists")
+	}
+	if !strings.Contains(dashBody, "build agent") {
 		t.Error("the token's name is missing from the list")
+	}
+	if !strings.Contains(dashBody, secret[:10]) {
+		t.Error("the row should show the token's prefix so tokens can be told apart")
 	}
 }
 
@@ -144,4 +154,41 @@ func signedUpUser(t *testing.T, mux http.Handler) *http.Cookie {
 		t.Fatalf("signup = %d (%s)", w.Code, w.Body)
 	}
 	return sessionCookie(t, w)
+}
+
+// The copy button is the one script the dashboard carries, and the CSP admits
+// it by hash. If the template's copy drifts from the constant the hash covers,
+// the browser silently refuses to run it — so assert they are the same text.
+func TestCopyScriptIsAdmittedByItsOwnHash(t *testing.T) {
+	p, _, mux := setupAccounts(t)
+	cookie := signedUpUser(t, mux)
+	acc, _ := p.accounts.ByEmail("user@example.com")
+
+	req := form(url.Values{"csrf": {p.csrf(acc)}})
+	req.URL.Path = "/account/tokens"
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if !strings.Contains(w.Body.String(), copyScript) {
+		t.Fatal("the page does not carry the exact script the CSP hash covers")
+	}
+	csp := w.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, copyScriptCSP) {
+		t.Fatalf("CSP %q does not admit the copy script hash %s", csp, copyScriptCSP)
+	}
+	// Only script-src matters here; style-src legitimately carries
+	// 'unsafe-inline' for the pages' own inline CSS.
+	var scriptSrc string
+	for _, d := range strings.Split(csp, ";") {
+		if d = strings.TrimSpace(d); strings.HasPrefix(d, "script-src") {
+			scriptSrc = d
+		}
+	}
+	if strings.Contains(scriptSrc, "unsafe-inline") {
+		t.Errorf("the copy button must not cost us 'unsafe-inline': %q", scriptSrc)
+	}
+	if !strings.Contains(w.Body.String(), `id="copybtn"`) {
+		t.Error("no copy button rendered")
+	}
 }
