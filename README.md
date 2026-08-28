@@ -249,7 +249,8 @@ same credential may do.
 claude mcp add --transport http sitebin https://sitebin.example.com/mcp
 
 # with an account API token (see "Account API tokens" below)
-claude mcp add --transport http sitebin https://sitebin.example.com/mcp   --header "Authorization: Bearer $TOKEN"
+claude mcp add --transport http sitebin https://sitebin.example.com/mcp \
+  --header "Authorization: Bearer $TOKEN"
 ```
 
 Other clients take the same URL; those that cannot send a header (or that
