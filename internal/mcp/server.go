@@ -55,6 +55,16 @@ func NewHandler(ops Ops, info Info) http.Handler {
 	return sdk.NewStreamableHTTPHandler(getServer, &sdk.StreamableHTTPOptions{
 		Stateless: true,
 
+		// The transport limit must sit ABOVE the content limit, or the content
+		// limit is unreachable and callers get a bare 413 instead of the
+		// message that tells them to use WebDAV, FTP or a zip upload. A
+		// request carrying MaxContentBytes of files is larger than that on the
+		// wire — base64 inflates by a third, and JSON string escaping can add
+		// more — so the transport is given twice the room and acts only as a
+		// backstop. The SDK's own default is 4 MiB, which is below our content
+		// cap and would have made this a silent trap.
+		MaxRequestBodyBytes: 2 * MaxContentBytes,
+
 		// The SDK's DNS-rebinding guard refuses any request whose Host is not
 		// a loopback name whenever the listener it arrived on is loopback.
 		// That describes every normal Sitebin deployment: Caddy terminates

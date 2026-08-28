@@ -268,6 +268,48 @@ func TestCreateSiteRejectsBadFilesBeforeCallingOps(t *testing.T) {
 	}
 }
 
+// The transport's body limit must sit above the content limit, or an
+// over-sized call is rejected by the framing with a bare 413 and the caller
+// never sees the message telling them which protocol to use instead. The SDK
+// defaults that limit BELOW our content cap, so this is a real trap and not a
+// hypothetical one.
+func TestOversizedCallGetsTheHelpfulError(t *testing.T) {
+	ops := &fakeOps{}
+	cs := connect(t, ops, nil)
+	res := mcpCallRaw(t, cs, "write_files", map[string]any{
+		"edit_id": "e1", "edit_password": "pw",
+		"files": []any{map[string]any{
+			"path": "big.txt",
+			"text": strings.Repeat("x", MaxContentBytes+1),
+		}},
+	})
+	if res == nil {
+		t.Fatal("the request was rejected by the transport, not by the content check")
+	}
+	if !res.IsError {
+		t.Fatal("expected a refusal")
+	}
+	if !strings.Contains(resultText(res), "WebDAV") {
+		t.Errorf("the caller was not told what to do instead: %s", resultText(res))
+	}
+	if len(ops.calls) != 0 {
+		t.Errorf("Ops was reached with an over-sized call: %v", ops.calls)
+	}
+}
+
+// mcpCallRaw is call() without the fatal: it returns nil when the transport
+// itself refused the request, which is exactly what the test above must be
+// able to tell apart from a tool-level refusal.
+func mcpCallRaw(t *testing.T, cs *sdk.ClientSession, name string, args map[string]any) *sdk.CallToolResult {
+	t.Helper()
+	res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: name, Arguments: args})
+	if err != nil {
+		t.Logf("transport refused the call: %v", err)
+		return nil
+	}
+	return res
+}
+
 func TestWriteFilesPassesReplace(t *testing.T) {
 	ops := &fakeOps{}
 	cs := connect(t, ops, nil)

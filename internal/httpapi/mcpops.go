@@ -25,6 +25,14 @@ type mcpOps struct{ a *API }
 // Authenticate resolves the request's credentials. It is the ONLY place MCP
 // decides who a caller is, which is what makes Phase 2 (OAuth access tokens) a
 // second branch here rather than a change to twelve tool handlers.
+//
+// It accepts a bearer token and nothing else. The extension's AuthorizeCreate
+// additionally honours a dashboard session cookie, so an exotic caller — a
+// browser-based MCP client carrying a live Sitebin session — could create an
+// owned site here while the per-site tools still ask it for edit passwords.
+// That asymmetry is deliberate and errs strict: a session cookie is a person
+// at a keyboard, and an agent should be holding a token it was given on
+// purpose, not riding someone's browser login.
 func (o mcpOps) Authenticate(r *http.Request) mcp.Auth {
 	auth := mcp.Auth{ClientIP: clientIP(r), Request: r}
 	p, ok := ext.Get()
