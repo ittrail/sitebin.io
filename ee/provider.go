@@ -104,6 +104,10 @@ func (p *provider) Init(h ext.Host) error {
 	if cfg.EmailEnabled() {
 		p.mailer = smtp.New(*cfg.SMTP)
 	}
+	// Announce this instance to the stack. Convergent and non-blocking: the
+	// declaration is made true on every start, and a stack that is down does
+	// not stop Sitebin from serving.
+	p.registerWithStack()
 	if cfg.BillingEnabled() {
 		if cfg.Billing.Stripe != nil {
 			p.stripe = billing.NewStripe(*cfg.Billing.Stripe)

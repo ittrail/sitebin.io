@@ -90,6 +90,9 @@ type Config struct {
 	SMTP    *SMTPConfig    // nil = email disabled
 	Billing *BillingConfig // nil = billing disabled
 	PayGate *PayGateConfig // nil = built-in billing / stored tiers only
+	// StackRegistration makes the instance announce itself to the SaaS Stack
+	// at startup. nil = it does not.
+	StackRegistration *StackConfig
 
 	byID map[string]Tier
 }
@@ -103,6 +106,20 @@ type PayGateConfig struct {
 	APIKey    string        // stack app API key (ssk_…)
 	CacheTTL  time.Duration // per-user tier cache (default 5m)
 	ManageURL string        // optional dashboard "manage subscription" link
+}
+
+// StackConfig makes this instance register itself with the IT-Trail SaaS
+// Stack on every start. nil = no self-registration, which is the default and
+// what every instance not run against that stack does.
+//
+// AdminKey is the stack's PLATFORM_ADMIN_KEY. It is a master credential — an
+// app holding it can act on any app in the stack — and that is the deliberate
+// trade for a deploy that needs no console visit. Keep it in a secret store,
+// never in an image.
+type StackConfig struct {
+	URL      string // platform-api base URL, no trailing slash
+	AppID    string // the app id to register as
+	AdminKey string // the stack's platform admin key
 }
 
 // BillingConfig holds payment-provider credentials. Prices per tier come from
@@ -174,6 +191,16 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Co
 	cfg.LocalAuth = true
 	if v := strings.ToLower(strings.TrimSpace(getenv("SITEBIN_LOCAL_AUTH"))); v != "" {
 		cfg.LocalAuth = boolish(v)
+	}
+	if url := strings.TrimSpace(getenv("SITEBIN_STACK_URL")); url != "" {
+		appID := strings.TrimSpace(getenv("SITEBIN_STACK_APP_ID"))
+		key := strings.TrimSpace(getenv("SITEBIN_STACK_ADMIN_KEY"))
+		if appID == "" || key == "" {
+			return cfg, fmt.Errorf("SITEBIN_STACK_URL needs SITEBIN_STACK_APP_ID and SITEBIN_STACK_ADMIN_KEY")
+		}
+		cfg.StackRegistration = &StackConfig{
+			URL: strings.TrimRight(url, "/"), AppID: appID, AdminKey: key,
+		}
 	}
 	cfg.DefaultTier = strings.TrimSpace(getenv("SITEBIN_DEFAULT_TIER"))
 	cfg.AnonTier = strings.TrimSpace(getenv("SITEBIN_ANON_TIER"))

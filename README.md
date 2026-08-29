@@ -592,6 +592,7 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_STRIPE_SECRET_KEY` / `_WEBHOOK_SECRET` | Stripe billing. Webhook: `POST /account/billing/stripe/webhook`. |
 | `SITEBIN_PADDLE_API_KEY` / `_WEBHOOK_SECRET` / `_SANDBOX` | Paddle billing. Webhook: `POST /account/billing/paddle/webhook`. |
 | `SITEBIN_LICENSE_KEY` | Optional Ed25519 license key; if set it must be valid. |
+| `SITEBIN_STACK_URL` / `_APP_ID` / `_ADMIN_KEY` | Self-registration against the IT-Trail SaaS Stack. With all three set, the instance announces itself to the stack on every start — its identity, its OIDC callback, its tier catalogue and its MCP block — so auth, billing and MCP are configured by deploying rather than by hand. `_ADMIN_KEY` is the stack's platform admin key: a master credential, so keep it in a secret store. Unset = no self-registration. |
 
 ### Account API tokens *(Enterprise)*
 
