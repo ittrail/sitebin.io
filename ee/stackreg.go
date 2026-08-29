@@ -59,6 +59,13 @@ type stackTier struct {
 	Key         string              `json:"key"`
 	DisplayName map[string]string   `json:"displayName"`
 	Features    []map[string]string `json:"features,omitempty"`
+
+	// The AMOUNT, never a provider price id. The stack creates the product in
+	// whatever processor it uses; a tier with no amount creates none, which is
+	// how free tiers and not-yet-priced plans declare themselves.
+	MonthlyPrice string `json:"monthlyPrice,omitempty"`
+	AnnualPrice  string `json:"annualPrice,omitempty"`
+	Currency     string `json:"currency,omitempty"`
 }
 
 type stackMCP struct {
@@ -119,11 +126,17 @@ func (p *provider) stackDeclaration(appID string) stackRegistration {
 
 	tiers := make([]stackTier, 0, len(p.cfg.Tiers))
 	for _, t := range p.cfg.Tiers {
-		tiers = append(tiers, stackTier{
+		st := stackTier{
 			Key:         t.ID,
 			DisplayName: map[string]string{"en": tierLabel(t)},
 			Features:    tierFeatures(t),
-		})
+		}
+		if amount, currency, ok := t.Price.Amount(); ok {
+			st.MonthlyPrice = amount
+			st.Currency = currency
+			st.AnnualPrice = t.Price.Annual
+		}
+		tiers = append(tiers, st)
 	}
 	reg.Billing = &stackBilling{
 		TierAfterRegistration: p.cfg.DefaultTier,

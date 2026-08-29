@@ -14,17 +14,40 @@ import (
 
 // billingRoutes adds checkout + webhook endpoints for configured providers.
 func (p *provider) billingRoutes(routes map[string]http.Handler) {
-	if p.stripe != nil {
-		routes["POST /account/billing/stripe/checkout"] = http.HandlerFunc(p.handleStripeCheckout)
-		routes["POST /account/billing/stripe/webhook"] = http.HandlerFunc(p.handleStripeWebhook)
+	if p.billing == nil {
+		return
 	}
-	if p.paddle != nil {
-		routes["POST /account/billing/paddle/checkout"] = http.HandlerFunc(p.handlePaddleCheckout)
-		routes["POST /account/billing/paddle/webhook"] = http.HandlerFunc(p.handlePaddleWebhook)
+	// Provider-neutral, because with PayGate the processor is the stack's
+	// business: a customer must never click a URL that names it.
+	routes["POST /account/upgrade"] = http.HandlerFunc(p.handleUpgrade)
+	routes["POST /account/billing/portal"] = http.HandlerFunc(p.handlePortal)
+
+	// The webhook path is the one place a provider's name belongs in a URL,
+	// because the provider decides where it delivers. Only a direct backend
+	// has one; PayGate takes its webhooks on the stack's side.
+	if wr, ok := p.billing.(billing.WebhookReceiver); ok {
+		routes["POST /account/billing/"+wr.WebhookPath()+"/webhook"] = p.webhookHandler(wr)
 	}
 }
 
-func (p *provider) handleStripeCheckout(w http.ResponseWriter, r *http.Request) {
+// billingCustomer is what the active backend needs to know about acc. Subject
+// is filled only for accounts the stack issued, mirroring paygateTier: a local
+// account has no identity PayGate could recognise.
+func (p *provider) billingCustomer(acc *account.Account) billing.Customer {
+	c := billing.Customer{AccountID: acc.ID, Email: acc.Email}
+	if acc.Provider == account.OIDCProv {
+		c.Subject = acc.OAuthSubject
+	}
+	if acc.Billing != nil {
+		c.Provider = acc.Billing.Provider
+		c.Customer = acc.Billing.Customer
+		c.Subscription = acc.Billing.Subscription
+	}
+	return c
+}
+
+// handleUpgrade starts a purchase with whichever backend is active.
+func (p *provider) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 	acc, ok := p.currentAccount(r)
 	if !ok {
 		p.redirect(w, r, "/account/login")
@@ -35,21 +58,23 @@ func (p *provider) handleStripeCheckout(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	tier, ok := p.cfg.Tier(r.PostFormValue("tier"))
-	if !ok || tier.Price == nil || tier.Price.Stripe == "" {
+	if !ok || !tier.Paid() {
 		http.Error(w, "that plan is not purchasable", http.StatusBadRequest)
 		return
 	}
-	url, err := p.stripe.CheckoutURL(r.Context(), tier.Price.Stripe, acc.ID, tier.ID, acc.Email,
+	url, err := p.billing.CheckoutURL(r.Context(), p.billingCustomer(acc), tier,
 		p.baseURL()+"/account?upgraded=1", p.baseURL()+"/account")
 	if err != nil {
-		slog.Error("stripe checkout", "err", err)
+		// The backend's name is for us, not for the customer.
+		slog.Error("checkout", "backend", p.billing.Name(), "tier", tier.ID, "err", err)
 		p.renderMessage(w, msgView{Title: "Checkout unavailable", Body: "Could not start checkout. Please try again.", Back: "/account"})
 		return
 	}
 	http.Redirect(w, r, url, http.StatusSeeOther)
 }
 
-func (p *provider) handlePaddleCheckout(w http.ResponseWriter, r *http.Request) {
+// handlePortal sends an existing subscriber to their backend's portal.
+func (p *provider) handlePortal(w http.ResponseWriter, r *http.Request) {
 	acc, ok := p.currentAccount(r)
 	if !ok {
 		p.redirect(w, r, "/account/login")
@@ -59,30 +84,28 @@ func (p *provider) handlePaddleCheckout(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	tier, ok := p.cfg.Tier(r.PostFormValue("tier"))
-	if !ok || tier.Price == nil || tier.Price.Paddle == "" {
-		http.Error(w, "that plan is not purchasable", http.StatusBadRequest)
+	url, err := p.billing.PortalURL(r.Context(), p.billingCustomer(acc), p.baseURL()+"/account")
+	if err != nil {
+		slog.Error("billing portal", "backend", p.billing.Name(), "err", err)
+		p.renderMessage(w, msgView{Title: "Unavailable", Body: "Could not open your billing settings. Please try again.", Back: "/account"})
 		return
 	}
-	url, err := p.paddle.CheckoutURL(r.Context(), tier.Price.Paddle, acc.ID, tier.ID, p.baseURL()+"/account?upgraded=1")
-	if err != nil {
-		slog.Error("paddle checkout", "err", err)
-		p.renderMessage(w, msgView{Title: "Checkout unavailable", Body: "Could not start checkout. Please try again.", Back: "/account"})
+	if url == "" {
+		// Never paid, so there is nothing to manage.
+		p.redirect(w, r, "/account")
 		return
 	}
 	http.Redirect(w, r, url, http.StatusSeeOther)
 }
 
-func (p *provider) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
-	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	u, err := p.stripe.VerifyWebhook(r.Header.Get("Stripe-Signature"), body, time.Now())
-	p.finishWebhook(w, u, err)
-}
-
-func (p *provider) handlePaddleWebhook(w http.ResponseWriter, r *http.Request) {
-	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	u, err := p.paddle.VerifyWebhook(r.Header.Get("Paddle-Signature"), body, time.Now())
-	p.finishWebhook(w, u, err)
+// webhookHandler verifies an event with the backend and applies it. The
+// billing package stops at verification so it never reaches into accounts.
+func (p *provider) webhookHandler(wr billing.WebhookReceiver) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		u, err := wr.VerifyWebhook(r.Header.Get(wr.SignatureHeader()), body, time.Now())
+		p.finishWebhook(w, u, err)
+	})
 }
 
 // finishWebhook applies a verified Update, translating errors to statuses.

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -33,7 +34,7 @@ func NewPaddle(cfg eeconfig.PaddleConfig) *Paddle {
 // CheckoutURL creates a Paddle transaction for the given price and returns its
 // hosted checkout URL. account + tier are stored in custom_data for the
 // webhook.
-func (p *Paddle) CheckoutURL(ctx context.Context, priceID, accountID, tierID, successURL string) (string, error) {
+func (p *Paddle) sessionURL(ctx context.Context, priceID, accountID, tierID, successURL string) (string, error) {
 	payload := map[string]any{
 		"items":       []map[string]any{{"price_id": priceID, "quantity": 1}},
 		"custom_data": map[string]string{"account": accountID, "tier": tierID},
@@ -136,4 +137,57 @@ func parsePaddleEvent(body []byte) (Update, error) {
 		return Update{}, errIgnoredEvent
 	}
 	return u, nil
+}
+
+// Name identifies the backend in logs and config.
+func (p *Paddle) Name() string { return eeconfig.BackendPaddle }
+
+func (p *Paddle) WebhookPath() string     { return eeconfig.BackendPaddle }
+func (p *Paddle) SignatureHeader() string { return "Paddle-Signature" }
+
+// CheckoutURL implements Backend. Paddle's transaction carries the return URL
+// itself, so the cancel URL has nowhere to go and is ignored.
+func (p *Paddle) CheckoutURL(ctx context.Context, c Customer, tier eeconfig.Tier, successURL, _ string) (string, error) {
+	if tier.Price == nil || tier.Price.Paddle == "" {
+		return "", fmt.Errorf("paddle checkout: tier %q has no price.paddle", tier.ID)
+	}
+	return p.sessionURL(ctx, tier.Price.Paddle, c.AccountID, tier.ID, successURL)
+}
+
+// PortalURL returns Paddle's hosted management link for the subscription.
+// Paddle has no portal-session endpoint: the URLs live on the subscription, so
+// an account without one has nothing to manage.
+func (p *Paddle) PortalURL(ctx context.Context, c Customer, _ string) (string, error) {
+	if c.Subscription == "" {
+		return "", nil
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", p.apiBase+"/subscriptions/"+url.PathEscape(c.Subscription), nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+p.cfg.APIKey)
+	resp, err := p.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("paddle portal: %w", err)
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode/100 != 2 {
+		return "", fmt.Errorf("paddle portal status %d: %s", resp.StatusCode, rb)
+	}
+	var out struct {
+		Data struct {
+			ManagementURLs struct {
+				UpdatePaymentMethod string `json:"update_payment_method"`
+				Cancel              string `json:"cancel"`
+			} `json:"management_urls"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rb, &out); err != nil {
+		return "", fmt.Errorf("paddle portal: %w", err)
+	}
+	if u := out.Data.ManagementURLs.UpdatePaymentMethod; u != "" {
+		return u, nil
+	}
+	return out.Data.ManagementURLs.Cancel, nil
 }

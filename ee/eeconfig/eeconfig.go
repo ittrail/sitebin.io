@@ -19,11 +19,40 @@ const (
 	ModeTiers    Mode = "tiers"    // tiered quotas, optional paid/anon tiers
 )
 
-// Price maps a paid tier to the provider price/product identifiers.
+// Price says what a paid tier costs, in the two forms the billing backends
+// need. They are not alternatives to each other:
+//
+//   - Monthly/Annual/Currency are AMOUNTS. PayGate is handed these and creates
+//     the product in whatever processor the stack uses, so Sitebin never learns
+//     which one that is.
+//   - Stripe/Paddle are identifiers for products an operator created in that
+//     provider themselves. Only a direct backend can use them.
+//
+// A tier may carry both; the active backend reads the fields it needs.
 type Price struct {
-	Stripe  string `json:"stripe"`
-	Paddle  string `json:"paddle"`
-	Display string `json:"display"`
+	Monthly  string `json:"monthly,omitempty"`
+	Annual   string `json:"annual,omitempty"`
+	Currency string `json:"currency,omitempty"` // ISO 4217, defaults to EUR
+
+	Stripe string `json:"stripe,omitempty"`
+	Paddle string `json:"paddle,omitempty"`
+
+	// Display is the human string the dashboard shows while no amount is set.
+	// An amount wins wherever both exist: a shown price must never be able to
+	// disagree with the charged one.
+	Display string `json:"display,omitempty"`
+}
+
+// Amount reports the monthly amount and currency, if the tier carries one.
+func (p *Price) Amount() (string, string, bool) {
+	if p == nil || strings.TrimSpace(p.Monthly) == "" {
+		return "", "", false
+	}
+	cur := strings.TrimSpace(p.Currency)
+	if cur == "" {
+		cur = "EUR"
+	}
+	return p.Monthly, cur, true
 }
 
 // Tier is a named quota bundle. Zero MaxSiteBytes/MaxFiles/MaxSites mean "fall
@@ -50,7 +79,13 @@ type Tier struct {
 }
 
 // Paid reports whether the tier requires payment to activate.
-func (t Tier) Paid() bool { return t.Price != nil && (t.Price.Stripe != "" || t.Price.Paddle != "") }
+func (t Tier) Paid() bool {
+	if t.Price == nil {
+		return false
+	}
+	return t.Price.Monthly != "" || t.Price.Annual != "" ||
+		t.Price.Stripe != "" || t.Price.Paddle != ""
+}
 
 // OAuthProvider holds one OIDC provider's credentials.
 type OAuthProvider struct {
@@ -88,8 +123,13 @@ type Config struct {
 	OIDC      *GenericOIDC // generic issuer (saas-stack, Keycloak, Okta, …)
 
 	SMTP    *SMTPConfig    // nil = email disabled
-	Billing *BillingConfig // nil = billing disabled
+	Billing *BillingConfig // nil = no direct payment provider configured
 	PayGate *PayGateConfig // nil = built-in billing / stored tiers only
+
+	// BillingBackend names the one backend that may sell a tier: "stripe",
+	// "paddle", "paygate", or "" when none is configured. Exactly one is
+	// active — see SITEBIN_BILLING.
+	BillingBackend string
 	// StackRegistration makes the instance announce itself to the SaaS Stack
 	// at startup. nil = it does not.
 	StackRegistration *StackConfig
@@ -158,10 +198,15 @@ func (c Config) OAuthEnabled() bool {
 // EmailEnabled reports whether SMTP is configured.
 func (c Config) EmailEnabled() bool { return c.SMTP != nil }
 
-// BillingEnabled reports whether any payment provider is configured.
-func (c Config) BillingEnabled() bool {
-	return c.Billing != nil && (c.Billing.Stripe != nil || c.Billing.Paddle != nil)
-}
+// BillingEnabled reports whether a backend can sell a tier.
+func (c Config) BillingEnabled() bool { return c.BillingBackend != "" }
+
+// Backend names, as accepted by SITEBIN_BILLING.
+const (
+	BackendStripe  = "stripe"
+	BackendPaddle  = "paddle"
+	BackendPayGate = "paygate"
+)
 
 // Enabled reports whether account gating is active.
 func (c Config) Enabled() bool { return c.Mode != ModeOpen }
@@ -295,6 +340,10 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Co
 		}
 	}
 
+	if err := resolveBillingBackend(&cfg, strings.TrimSpace(getenv("SITEBIN_BILLING"))); err != nil {
+		return cfg, err
+	}
+
 	raw, err := tierBytes(getenv, readFile)
 	if err != nil {
 		return cfg, err
@@ -370,4 +419,55 @@ func emailList(s string) []string {
 		}
 	}
 	return out
+}
+
+// resolveBillingBackend settles which single backend may sell a tier.
+//
+// An explicit SITEBIN_BILLING always wins and must be configured. With no
+// explicit choice the backend is inferred, but ONLY when exactly one is
+// configured: two configured backends and no choice is a startup error rather
+// than a guess, because guessing which processor charges customers is not a
+// thing to be relaxed about. It is the same instinct as refusing to start when
+// SITEBIN_ANON_TIER names a tier that does not exist.
+func resolveBillingBackend(cfg *Config, want string) error {
+	have := map[string]bool{}
+	if cfg.Billing != nil && cfg.Billing.Stripe != nil {
+		have[BackendStripe] = true
+	}
+	if cfg.Billing != nil && cfg.Billing.Paddle != nil {
+		have[BackendPaddle] = true
+	}
+	if cfg.PayGate != nil {
+		have[BackendPayGate] = true
+	}
+
+	if want != "" {
+		switch want {
+		case BackendStripe, BackendPaddle, BackendPayGate:
+		default:
+			return fmt.Errorf("SITEBIN_BILLING: %q is not one of stripe, paddle, paygate", want)
+		}
+		if !have[want] {
+			return fmt.Errorf("SITEBIN_BILLING=%s but %s is not configured", want, want)
+		}
+		cfg.BillingBackend = want
+		return nil
+	}
+
+	var configured []string
+	for _, name := range []string{BackendStripe, BackendPaddle, BackendPayGate} {
+		if have[name] {
+			configured = append(configured, name)
+		}
+	}
+	switch len(configured) {
+	case 0:
+		return nil
+	case 1:
+		cfg.BillingBackend = configured[0]
+		return nil
+	default:
+		return fmt.Errorf("%s are all configured; set SITEBIN_BILLING to the one that may charge customers",
+			strings.Join(configured, ", "))
+	}
 }

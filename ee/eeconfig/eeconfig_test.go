@@ -341,3 +341,61 @@ func TestLoadLocalAuthDisabled(t *testing.T) {
 		t.Fatalf("want lockout error, got %v", err)
 	}
 }
+
+// TestBillingBackendSelection pins the rule that decides who may charge a
+// customer. The ambiguous case is the one that matters: two configured
+// providers used to mean "prefer Stripe", a silent guess nobody stated.
+func TestBillingBackendSelection(t *testing.T) {
+	stripe := &BillingConfig{Stripe: &StripeConfig{SecretKey: "sk"}}
+	both := &BillingConfig{Stripe: &StripeConfig{SecretKey: "sk"}, Paddle: &PaddleConfig{APIKey: "pk"}}
+	pg := &PayGateConfig{URL: "https://pg.example", AppID: "sitebin", APIKey: "ssk"}
+
+	cases := []struct {
+		name    string
+		billing *BillingConfig
+		paygate *PayGateConfig
+		want    string
+		wantErr bool
+	}{
+		{name: "nothing configured", want: ""},
+		{name: "one provider is inferred", billing: stripe, want: BackendStripe},
+		{name: "paygate alone is inferred", paygate: pg, want: BackendPayGate},
+		{name: "two providers refuse to guess", billing: both, wantErr: true},
+		{name: "provider plus paygate refuses too", billing: stripe, paygate: pg, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{Billing: tc.billing, PayGate: tc.paygate}
+			err := resolveBillingBackend(&cfg, "")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("ambiguous billing config must not start")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.BillingBackend != tc.want {
+				t.Errorf("backend = %q, want %q", cfg.BillingBackend, tc.want)
+			}
+		})
+	}
+
+	t.Run("explicit choice wins over ambiguity", func(t *testing.T) {
+		cfg := Config{Billing: both, PayGate: pg}
+		if err := resolveBillingBackend(&cfg, BackendPaddle); err != nil {
+			t.Fatal(err)
+		}
+		if cfg.BillingBackend != BackendPaddle {
+			t.Errorf("backend = %q, want paddle", cfg.BillingBackend)
+		}
+	})
+
+	t.Run("explicit choice must be configured", func(t *testing.T) {
+		cfg := Config{Billing: stripe}
+		if err := resolveBillingBackend(&cfg, BackendPayGate); err == nil {
+			t.Error("selecting an unconfigured backend must fail at startup, not at a customer's click")
+		}
+	})
+}

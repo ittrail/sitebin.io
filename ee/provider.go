@@ -37,8 +37,12 @@ type provider struct {
 	local    *authn.Local
 	oidc     *authn.OIDC
 	mailer   *smtp.Mailer
-	stripe   *billing.Stripe
-	paddle   *billing.Paddle
+	// billing is the ONE active backend, chosen by SITEBIN_BILLING. Keeping a
+	// single field rather than one per provider is what stops a second
+	// processor from quietly becoming reachable.
+	billing billing.Backend
+	// paygate is the same object as billing when PayGate is the backend, kept
+	// separately because a few places need PayGate specifically.
 	paygate  *billing.PayGate
 	mcpOAuth *mcpOAuth
 	secret   []byte
@@ -108,16 +112,26 @@ func (p *provider) Init(h ext.Host) error {
 	// declaration is made true on every start, and a stack that is down does
 	// not stop Sitebin from serving.
 	p.registerWithStack()
-	if cfg.BillingEnabled() {
-		if cfg.Billing.Stripe != nil {
-			p.stripe = billing.NewStripe(*cfg.Billing.Stripe)
-		}
-		if cfg.Billing.Paddle != nil {
-			p.paddle = billing.NewPaddle(*cfg.Billing.Paddle)
-		}
+	// Exactly one backend is built, so an unselected provider is not merely
+	// unrouted but absent.
+	switch cfg.BillingBackend {
+	case eeconfig.BackendStripe:
+		p.billing = billing.NewStripe(*cfg.Billing.Stripe)
+	case eeconfig.BackendPaddle:
+		p.billing = billing.NewPaddle(*cfg.Billing.Paddle)
+	case eeconfig.BackendPayGate:
+		p.paygate = billing.NewPayGate(*cfg.PayGate)
+		p.billing = p.paygate
+	}
+	if p.billing != nil {
+		slog.Info("billing backend active", "backend", p.billing.Name())
 	}
 	if cfg.PayGate != nil {
-		p.paygate = billing.NewPayGate(*cfg.PayGate)
+		if p.paygate == nil {
+			// Configured as a tier source without being the seller: still
+			// resolves tiers, just cannot take a payment.
+			p.paygate = billing.NewPayGate(*cfg.PayGate)
+		}
 		slog.Info("paygate tier source active", "url", cfg.PayGate.URL, "app", cfg.PayGate.AppID)
 		if cfg.OIDC == nil {
 			slog.Warn("PayGate is configured but SITEBIN_OAUTH_OIDC_* is not: only accounts signed in through the generic OIDC provider resolve tiers via PayGate")

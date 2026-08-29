@@ -173,6 +173,17 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
   </div>
   {{end}}
 
+  {{if .Portal}}
+  <div class="card">
+    <h3>Billing</h3>
+    <p class="muted">Payment method, invoices and cancellation.</p>
+    <form class="inline" method="post" action="/account/billing/portal">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <button class="btn small" type="submit">Manage subscription</button>
+    </form>
+  </div>
+  {{end}}
+
   {{if .Tiers}}
   <div class="card">
     <h3>Plan</h3>
@@ -181,7 +192,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
       {{if .Current}}
         <button class="btn small primary" type="button" disabled>{{.Label}}{{if .Price}} · {{.Price}}{{end}} (current)</button>
       {{else if and .Paid $.Checkout}}
-        <form class="inline" method="post" action="/account/billing/{{$.Checkout}}/checkout">
+        <form class="inline" method="post" action="/account/upgrade">
           <input type="hidden" name="csrf" value="{{$.CSRF}}">
           <input type="hidden" name="tier" value="{{.ID}}">
           <button class="btn small" type="submit">Upgrade to {{.Label}}{{if .Price}} · {{.Price}}{{end}}</button>

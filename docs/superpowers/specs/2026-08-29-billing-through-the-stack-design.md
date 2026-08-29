@@ -115,15 +115,20 @@ So it carries both:
 }
 ```
 
-- **Amounts are always required for a paid tier.** They are what the dashboard
-  and the pricing page show, and what `stackreg` declares to PayGate.
+- **Amounts are optional for now.** They are what the dashboard shows and what
+  `stackreg` declares to PayGate, but the instance keeps its current tiers until
+  the stack is switched to Stripe; the priced tiers are then taken from the
+  website. A tier without an amount declares no payment product, which is
+  exactly what PayGate's priceless branch already does.
 - **The ids are required only by the backend that needs them** — checked at
   startup, so a Stripe instance with a tier missing `price.stripe` fails to
   start instead of failing at a customer's click.
-- `display` goes away. A shown price must not be able to disagree with the
-  charged one; it is formatted from the amount.
+- `display` stays as a fallback while amounts are absent, and is formatted from
+  the amount once one is set. A shown price must not be able to disagree with a
+  charged one, so the amount wins wherever both exist.
 
-There is nothing to migrate: no products exist in any provider yet.
+There is nothing to migrate: no products exist in any provider yet, and no tier
+carries an amount until the pricing is settled.
 
 ## Changes by file
 

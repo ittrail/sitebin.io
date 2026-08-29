@@ -5,8 +5,10 @@ package billing
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -123,5 +125,63 @@ func TestPayGateNotFoundNotHonored(t *testing.T) {
 	tier, ok, err := pg(srv.URL, time.Minute).TierFor(context.Background(), "u-1")
 	if err != nil || ok || tier != "" {
 		t.Fatalf("TierFor on 404 = (%q, %v, %v), want (\"\", false, nil)", tier, ok, err)
+	}
+}
+
+// TestPayGateCheckoutSellsByTierName is the test that guards the whole point of
+// this backend: Sitebin must never send a provider price id, because it must
+// never know one. If the stack switches processors, nothing here may change.
+func TestPayGateCheckoutSellsByTierName(t *testing.T) {
+	var gotPath, gotAuth, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"data":{"checkoutId":"chk_1","checkoutUrl":"https://pay.example/c/1"}}`)
+	}))
+	defer srv.Close()
+
+	g := NewPayGate(eeconfig.PayGateConfig{URL: srv.URL, AppID: "sitebin", APIKey: "ssk_test"})
+	tier := eeconfig.Tier{ID: "pro", Price: &eeconfig.Price{
+		Monthly: "9.00", Currency: "EUR",
+		// Present, and it must NOT be sent: these belong to an operator's own
+		// direct integration, not to the stack.
+		Stripe: "price_should_not_be_sent", Paddle: "pri_should_not_be_sent",
+	}}
+	c := Customer{AccountID: "acct-1", Email: "u@example.com", Subject: "stack-user-9"}
+
+	url, err := g.CheckoutURL(context.Background(), c, tier, "https://sitebin.example/ok", "https://sitebin.example/no")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if url != "https://pay.example/c/1" {
+		t.Errorf("checkout url = %q", url)
+	}
+	if want := "/api/v1/sitebin/users/stack-user-9/checkout"; gotPath != want {
+		t.Errorf("path = %q, want %q", gotPath, want)
+	}
+	if gotAuth != "Bearer ssk_test" {
+		t.Errorf("auth = %q: paygate is called with the app key, never a user token", gotAuth)
+	}
+	if !strings.Contains(gotBody, `"tier":"pro"`) {
+		t.Errorf("body must sell by tier name: %s", gotBody)
+	}
+	for _, leak := range []string{"price_should_not_be_sent", "pri_should_not_be_sent", "stripe", "paddle"} {
+		if strings.Contains(gotBody, leak) {
+			t.Errorf("body leaks the payment provider (%q): %s", leak, gotBody)
+		}
+	}
+}
+
+// A local account has no identity the stack knows, so there is nothing to sell
+// it — and that must be an error rather than a request PayGate cannot answer.
+func TestPayGateCheckoutRefusesAccountWithoutStackIdentity(t *testing.T) {
+	g := NewPayGate(eeconfig.PayGateConfig{URL: "https://pg.example", AppID: "sitebin", APIKey: "ssk"})
+	_, err := g.CheckoutURL(context.Background(), Customer{AccountID: "acct-1"},
+		eeconfig.Tier{ID: "pro"}, "https://s.example/ok", "")
+	if err == nil {
+		t.Fatal("expected an error for an account with no stack identity")
 	}
 }

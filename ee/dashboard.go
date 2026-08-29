@@ -41,17 +41,11 @@ func (p *provider) PublicRoutes() map[string]http.Handler {
 	return routes
 }
 
-// checkoutProvider returns the billing provider to use for upgrades ("stripe",
-// "paddle", or "" if none), preferring Stripe when both are configured.
-func (p *provider) checkoutProvider() string {
-	if p.stripe != nil {
-		return "stripe"
-	}
-	if p.paddle != nil {
-		return "paddle"
-	}
-	return ""
-}
+// canCheckout reports whether a backend is active and can sell a plan. It
+// deliberately does not say WHICH: the dashboard posts to one neutral route,
+// so the page cannot leak the processor — and there is no longer a preference
+// to express, because eeconfig refuses to start with an ambiguous choice.
+func (p *provider) canCheckout() bool { return p.billing != nil }
 
 // providerButton is one sign-in option on the login/signup page.
 type providerButton struct {
@@ -334,8 +328,14 @@ type dashView struct {
 	CSRF       string
 	Base       string
 	SelfSelect bool
-	Checkout   string // billing provider for paid upgrades ("" = none)
-	Tiers      []tierOption
+	// Checkout says a backend can sell a plan. It deliberately does not say
+	// which: the page posts to one neutral route so a customer never sees the
+	// processor's name, which is what lets the stack change providers.
+	Checkout bool
+	// Portal shows the "manage subscription" form when the active backend can
+	// produce a portal link for this account.
+	Portal bool
+	Tiers  []tierOption
 	// IsAdmin adds the one link to the instance register. Without it the
 	// console is reachable only by typing the path, which is a poor secret and
 	// a worse feature.
@@ -374,14 +374,23 @@ func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, 
 	if tier == "" {
 		tier = acc.Tier
 	}
-	checkout := p.checkoutProvider()
+	checkout := p.canCheckout()
 	var opts []tierOption
 	var manageURL string
+	// A backend that can sell can also show a portal, so an existing
+	// subscriber gets a way back to their subscription.
+	portal := p.billing != nil
 	if p.paygate != nil && acc.Provider == account.OIDCProv {
-		// PayGate owns this account's subscription: no built-in checkout or
-		// self-select — just a link to the stack's own management page.
 		manageURL = p.paygate.ManageURL()
-	} else if p.cfg.SelfSelect || checkout != "" {
+	}
+	if manageURL != "" {
+		// An operator who configured a manage URL has said where subscriptions
+		// are handled. Sitebin's own plan card and portal would be a second,
+		// competing answer, so the override replaces them rather than joining
+		// them.
+		checkout, portal = false, false
+	}
+	if manageURL == "" && (p.cfg.SelfSelect || checkout) {
 		for _, t := range p.cfg.Tiers {
 			label := t.Label
 			if label == "" {
@@ -397,7 +406,7 @@ func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, 
 	dashTmpl.Execute(w, dashView{
 		MCPEndpoint: p.host.BaseURL() + "/mcp",
 		Email:       acc.Email, Tier: tier, Sites: rows, CSRF: token, Base: p.baseURL(),
-		SelfSelect: p.cfg.SelfSelect, Checkout: checkout, Tiers: opts, ManageURL: manageURL,
+		SelfSelect: p.cfg.SelfSelect, Checkout: checkout, Portal: portal, Tiers: opts, ManageURL: manageURL,
 		IsAdmin: p.isAdmin(acc),
 		Tokens:  p.tokenRows(acc, token),
 	})

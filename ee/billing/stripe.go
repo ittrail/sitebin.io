@@ -32,7 +32,7 @@ func NewStripe(cfg eeconfig.StripeConfig) *Stripe {
 // CheckoutURL creates a subscription Checkout Session for the given price and
 // returns the hosted checkout URL to redirect the user to. accountID and
 // tierID are stored in the session metadata for the webhook.
-func (s *Stripe) CheckoutURL(ctx context.Context, priceID, accountID, tierID, email, successURL, cancelURL string) (string, error) {
+func (s *Stripe) sessionURL(ctx context.Context, priceID, accountID, tierID, email, successURL, cancelURL string) (string, error) {
 	form := url.Values{}
 	form.Set("mode", "subscription")
 	form.Set("line_items[0][price]", priceID)
@@ -190,4 +190,57 @@ func firstNonEmpty(a, b string) string {
 		return a
 	}
 	return b
+}
+
+// Name identifies the backend in logs and config.
+func (s *Stripe) Name() string { return eeconfig.BackendStripe }
+
+// WebhookPath and SignatureHeader make Stripe a WebhookReceiver: with a direct
+// provider, Sitebin owns the subscription and only learns of a change when the
+// provider tells it.
+func (s *Stripe) WebhookPath() string     { return eeconfig.BackendStripe }
+func (s *Stripe) SignatureHeader() string { return "Stripe-Signature" }
+
+// CheckoutURL implements Backend. The price id comes from the tier, which is
+// where an operator who runs their own Stripe account put it.
+func (s *Stripe) CheckoutURL(ctx context.Context, c Customer, tier eeconfig.Tier, successURL, cancelURL string) (string, error) {
+	if tier.Price == nil || tier.Price.Stripe == "" {
+		return "", fmt.Errorf("stripe checkout: tier %q has no price.stripe", tier.ID)
+	}
+	return s.sessionURL(ctx, tier.Price.Stripe, c.AccountID, tier.ID, c.Email, successURL, cancelURL)
+}
+
+// PortalURL opens Stripe's customer portal. A customer Sitebin has never seen
+// pay has nothing to manage, which is not an error.
+func (s *Stripe) PortalURL(ctx context.Context, c Customer, returnURL string) (string, error) {
+	if c.Customer == "" {
+		return "", nil
+	}
+	form := url.Values{}
+	form.Set("customer", c.Customer)
+	if returnURL != "" {
+		form.Set("return_url", returnURL)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", s.apiBase+"/v1/billing_portal/sessions", strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.cfg.SecretKey)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := s.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("stripe portal: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("stripe portal status %d: %s", resp.StatusCode, body)
+	}
+	var out struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil || out.URL == "" {
+		return "", fmt.Errorf("stripe portal: no url in response")
+	}
+	return out.URL, nil
 }

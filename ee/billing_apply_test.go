@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ittrail/sitebin.io/ee/billing"
+	"github.com/ittrail/sitebin.io/ee/eeconfig"
 	"github.com/ittrail/sitebin.io/internal/ext"
 )
 
@@ -20,8 +21,8 @@ func setupBilling(t *testing.T) *provider {
 	if err := p.Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
 		t.Fatal(err)
 	}
-	if p.stripe == nil {
-		t.Fatal("stripe not initialized")
+	if p.billing == nil || p.billing.Name() != eeconfig.BackendStripe {
+		t.Fatal("stripe backend not selected")
 	}
 	return p
 }
