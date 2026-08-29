@@ -676,9 +676,15 @@ MFA or realm registration: those are realm-wide settings shared with every other
 app on the stack, and an app that set them would overwrite an operator's choice
 on each restart.
 
-It declares a *catalogue*, never a price. Your tiers name the plans; what a
-customer is charged stays with the payment provider, where a deploy cannot
-reach it.
+It declares the tier catalogue **without amounts**, and that is a choice worth
+knowing about. Sitebin sells through its own Stripe or Paddle checkout, against
+the price identifiers you put in `tiers.json`, so the stack is asked to resolve
+which tier an account holds — not to take the payment. Declaring amounts instead
+would have PayGate create its own products and put it in the payment path.
+
+Practically: your paid tiers arrive in PayGate as catalogue entries with no
+payment product attached, and upgrades keep going through Sitebin's own
+checkout.
 
 Registration never blocks startup. A stack that is briefly unreachable makes
 the attempt fail and log; Sitebin serves sites regardless and converges again
