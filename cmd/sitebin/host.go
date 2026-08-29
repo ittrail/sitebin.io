@@ -20,4 +20,16 @@ func (h extHost) Secret() []byte         { return h.secret }
 func (h extHost) PathViews() bool        { return h.cfg.PathViews() }
 func (h extHost) Sites() ext.SiteService { return h.sites }
 
+func (h extHost) MCPOAuthIssuer() string { return h.cfg.MCPOAuthIssuer }
+
+// MCPResource falls back to the endpoint's own URL, which is what it is. An
+// operator only needs to set it when the instance is reached under a different
+// name than it generates for itself.
+func (h extHost) MCPResource() string {
+	if h.cfg.MCPResource != "" {
+		return h.cfg.MCPResource
+	}
+	return h.cfg.SiteURL(h.cfg.BaseDomain) + "/mcp"
+}
+
 var _ ext.Host = extHost{}

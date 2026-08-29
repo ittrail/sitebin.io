@@ -40,8 +40,9 @@ func (o mcpOps) Authenticate(r *http.Request) mcp.Auth {
 		return auth // community build: no accounts, no tokens, fully open
 	}
 	auth.AccountsEnabled = p.AccountsEnabled()
-	if id, ok := p.BearerAccount(r); ok {
-		auth.AccountID = id
+	if cred, ok := p.BearerCredential(r); ok {
+		auth.AccountID = cred.AccountID
+		auth.Scopes = cred.Scopes
 	}
 	return auth
 }

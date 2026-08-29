@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/mcp"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
@@ -520,5 +522,148 @@ func TestMCPAddDomainRefusedInCommunityBuild(t *testing.T) {
 	})
 	if !res.IsError || !strings.Contains(mcpText(res), "enterprise") {
 		t.Errorf("res = %v %s", res.IsError, mcpText(res))
+	}
+}
+
+// ---- OAuth: Sitebin as a protected resource ----
+//
+// These cover the wiring, not the token cryptography: verifying a real JWT
+// needs an issuer, and a test that reaches the network is a test that fails for
+// reasons unrelated to Sitebin. What matters here is that the endpoint
+// advertises itself correctly, challenges correctly, and — the regression that
+// would hurt most — keeps accepting account API tokens once OAuth is on.
+
+const testIssuer = "https://auth.example.test/realms/x"
+
+func oauthEnv() map[string]string {
+	return map[string]string{"SITEBIN_MCP_OAUTH_ISSUER": testIssuer}
+}
+
+// With no issuer configured nothing changes: no discovery routes, no
+// challenge. Every existing instance is in this state.
+func TestMCPOAuthOffByDefault(t *testing.T) {
+	e := newEnv(t, nil)
+	for _, path := range []string{
+		"/.well-known/oauth-protected-resource",
+		"/.well-known/oauth-protected-resource/mcp",
+	} {
+		rec := e.public(t, httptest.NewRequest("GET", path, nil))
+		if rec.Code != 404 {
+			t.Errorf("%s = %d with no issuer configured, want 404", path, rec.Code)
+		}
+	}
+	// And /mcp still answers without any credential at all.
+	cs := mcpClient(t, e, nil)
+	if _, err := cs.ListTools(context.Background(), nil); err != nil {
+		t.Fatalf("MCP must work with OAuth unconfigured: %v", err)
+	}
+}
+
+func TestMCPProtectedResourceMetadata(t *testing.T) {
+	e := newEnv(t, oauthEnv())
+	for _, path := range []string{
+		"/.well-known/oauth-protected-resource",
+		"/.well-known/oauth-protected-resource/mcp",
+	} {
+		rec := e.public(t, httptest.NewRequest("GET", path, nil))
+		if rec.Code != 200 {
+			t.Fatalf("%s = %d, want 200", path, rec.Code)
+		}
+		var doc struct {
+			Resource             string   `json:"resource"`
+			AuthorizationServers []string `json:"authorization_servers"`
+			ScopesSupported      []string `json:"scopes_supported"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+			t.Fatalf("%s: %v (%s)", path, err, rec.Body)
+		}
+		if doc.Resource != "http://sitebin.example/mcp" {
+			t.Errorf("%s resource = %q", path, doc.Resource)
+		}
+		if len(doc.AuthorizationServers) != 1 || doc.AuthorizationServers[0] != testIssuer {
+			t.Errorf("%s authorization_servers = %v", path, doc.AuthorizationServers)
+		}
+		// The scopes are how a client learns what to ask its authorization
+		// server for; getting them wrong means the token comes back without
+		// the audience.
+		if len(doc.ScopesSupported) != 2 {
+			t.Errorf("%s scopes_supported = %v", path, doc.ScopesSupported)
+		}
+	}
+}
+
+// The challenge is what turns a 401 into something a client can act on: it has
+// to name where the metadata lives, or discovery never starts.
+func TestMCPUnauthenticatedChallenge(t *testing.T) {
+	e := newEnv(t, oauthEnv())
+	req := httptest.NewRequest("POST", "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := e.public(t, req)
+
+	if rec.Code != 401 {
+		t.Fatalf("POST /mcp without a credential = %d, want 401", rec.Code)
+	}
+	got := rec.Header().Get("WWW-Authenticate")
+	if !strings.Contains(got, "Bearer") || !strings.Contains(got, "resource_metadata=") {
+		t.Fatalf("WWW-Authenticate = %q", got)
+	}
+	if !strings.Contains(got, "/.well-known/oauth-protected-resource") {
+		t.Errorf("challenge does not point at the metadata: %q", got)
+	}
+}
+
+// The regression that matters most: account API tokens are a shipped feature,
+// and switching OAuth on must not break the scripts already using them.
+func TestMCPAccountTokenStillWorksWithOAuthOn(t *testing.T) {
+	e := newEnv(t, oauthEnv())
+	ext.Register(&fakeProvider{
+		enabled: true,
+		owner:   "acct-1",
+		bearer:  map[string]string{"sbp_tok": "acct-1"},
+	})
+	defer ext.Reset()
+
+	cs := mcpClient(t, e, http.Header{"Authorization": {"Bearer sbp_tok"}})
+	editID, _ := mcpCreate(t, cs, "<h1>still works</h1>")
+	if editID == "" {
+		t.Fatal("an account API token must keep working with OAuth enabled")
+	}
+}
+
+// A credential the extension does not recognise is refused at the door, before
+// any tool runs.
+func TestMCPUnknownCredentialRefused(t *testing.T) {
+	e := newEnv(t, oauthEnv())
+	ext.Register(&fakeProvider{enabled: true, bearer: map[string]string{}})
+	defer ext.Reset()
+
+	req := httptest.NewRequest("POST", "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer not-a-real-token")
+	rec := e.public(t, req)
+	if rec.Code != 401 {
+		t.Errorf("unknown credential = %d, want 401", rec.Code)
+	}
+}
+
+// An OAuth credential carrying scopes reaches the tools with them, so the
+// per-tool checks in internal/mcp have something to enforce.
+func TestMCPOAuthScopesReachTheTools(t *testing.T) {
+	e := newEnv(t, oauthEnv())
+	ext.Register(&fakeProvider{
+		enabled: true,
+		owner:   "acct-1",
+		bearer:  map[string]string{"jwt-ish": "acct-1"},
+		scopes:  map[string][]string{"jwt-ish": {mcp.ScopeRead}},
+	})
+	defer ext.Reset()
+
+	cs := mcpClient(t, e, http.Header{"Authorization": {"Bearer jwt-ish"}})
+	res := mcpCall(t, cs, "create_site", map[string]any{"files": []any{}})
+	if !res.IsError {
+		t.Fatal("a read-only OAuth credential must not create sites")
+	}
+	if !strings.Contains(mcpText(res), mcp.ScopeWrite) {
+		t.Errorf("refusal does not name the missing scope: %s", mcpText(res))
 	}
 }

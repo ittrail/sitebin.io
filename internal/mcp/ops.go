@@ -42,6 +42,14 @@ type Auth struct {
 	// AccountsEnabled reports whether the instance gates on accounts at all.
 	// False in the community build, where there is no provider.
 	AccountsEnabled bool
+	// Scopes are the OAuth scopes the caller was granted.
+	//
+	// EMPTY MEANS UNRESTRICTED. An account API token grants everything its
+	// account can do and carries no scopes, which is what that credential has
+	// always meant; the community build has no scopes either. Only an OAuth
+	// access token narrows what may be called, so the check is a pure addition
+	// rather than a change to anything that worked before.
+	Scopes []string
 	// ClientIP identifies the caller for rate limiting. It is opaque to this
 	// package, which only carries it: the adapter owns the limiters, because
 	// an agent must not be able to guess an edit password faster than curl.
@@ -53,6 +61,39 @@ type Auth struct {
 	// Authenticate has already answered that question, and answering it twice
 	// is how the two answers drift apart.
 	Request *http.Request
+}
+
+// The scopes this server offers. They follow the stack-wide convention
+// <appId>:<resource>:<action>, and they are what an MCP client reads from the
+// protected-resource metadata and asks its authorization server for.
+//
+// The split is worth having on its own merits: "this agent may look at my
+// sites but may not publish" is a real thing to want when the agent is
+// publishing to the open web under your account.
+const (
+	ScopeRead  = "sitebin:sites:read"
+	ScopeWrite = "sitebin:sites:write"
+)
+
+// AllScopes is the catalog, for the protected-resource metadata document.
+var AllScopes = []string{ScopeRead, ScopeWrite}
+
+// authorize reports whether the session may call a tool needing scope.
+//
+// The error names both what was needed and what was granted, because an agent
+// that only learns "denied" will retry the same call, while one that learns it
+// holds read but needs write can say so to its user.
+func authorize(a Auth, scope string) error {
+	if len(a.Scopes) == 0 {
+		return nil
+	}
+	for _, s := range a.Scopes {
+		if s == scope {
+			return nil
+		}
+	}
+	return fmt.Errorf("this connection was not granted %s (it holds: %s) — reconnect and approve that permission",
+		scope, strings.Join(a.Scopes, " "))
 }
 
 // SiteRef addresses one site. EditPassword may be empty when the session's

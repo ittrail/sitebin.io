@@ -40,6 +40,7 @@ type provider struct {
 	stripe   *billing.Stripe
 	paddle   *billing.Paddle
 	paygate  *billing.PayGate
+	mcpOAuth *mcpOAuth
 	secret   []byte
 }
 
@@ -91,6 +92,15 @@ func (p *provider) Init(h ext.Host) error {
 	p.sessions = session.New(h.Secret(), !h.HTTPOnly(), session.DefaultTTL)
 	p.local = authn.NewLocal(store)
 	p.oidc = authn.NewOIDC(cfg, p.baseURL())
+	// MCP OAuth is inert unless an issuer is configured. Sitebin validates
+	// tokens that issuer signed; it never issues any.
+	p.mcpOAuth = newMCPOAuth(h.MCPOAuthIssuer(), h.MCPResource(), func(subject string) (string, bool) {
+		acc, err := p.accounts.ByOAuth(account.OIDCProv, subject)
+		if err != nil {
+			return "", false
+		}
+		return acc.ID, true
+	})
 	if cfg.EmailEnabled() {
 		p.mailer = smtp.New(*cfg.SMTP)
 	}
@@ -357,20 +367,31 @@ func bearerToken(r *http.Request) string {
 	return strings.TrimSpace(h[7:])
 }
 
-// BearerAccount resolves an API token to its account. See ext.Provider.
-func (p *provider) BearerAccount(r *http.Request) (string, bool) {
+// BearerCredential resolves an Authorization: Bearer credential. See
+// ext.Provider.
+//
+// Two kinds of credential arrive on the same header, and telling them apart is
+// this method's job so the core never has to. An account API token is
+// recognised by its own prefix and grants everything its account can do, which
+// is why it carries no scopes. Anything else is offered to the OAuth verifier,
+// when one is configured.
+func (p *provider) BearerCredential(r *http.Request) (ext.Credential, bool) {
 	if !p.cfg.Enabled() {
-		return "", false
+		return ext.Credential{}, false
 	}
 	secret := bearerToken(r)
 	if secret == "" {
-		return "", false
+		return ext.Credential{}, false
 	}
-	acc, ok := p.accounts.ByToken(secret)
-	if !ok {
-		return "", false
+	if acc, ok := p.accounts.ByToken(secret); ok {
+		return ext.Credential{AccountID: acc.ID}, true
 	}
-	return acc.ID, true
+	if p.mcpOAuth != nil {
+		if cred, ok := p.mcpOAuth.Verify(r.Context(), secret); ok {
+			return cred, true
+		}
+	}
+	return ext.Credential{}, false
 }
 
 // AccountSiteIDs returns the view ids the account owns. Like BearerAccount it

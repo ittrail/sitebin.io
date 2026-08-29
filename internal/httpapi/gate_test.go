@@ -24,7 +24,10 @@ type fakeProvider struct {
 	// present one the way a script would.
 	bearer map[string]string
 	// owned maps an account id to the view ids it owns, for list_sites.
-	owned    map[string][]string
+	owned map[string][]string
+	// scopes maps a token secret to the OAuth scopes it grants; absent means
+	// an account API token, which is unrestricted.
+	scopes   map[string][]string
 	quotaOK  bool
 	quotaErr error
 }
@@ -42,13 +45,19 @@ func (f *fakeProvider) AuthorizeCreate(*http.Request) (ext.CreateGrant, error) {
 	}
 	return g, f.rejErr
 }
-func (f *fakeProvider) BearerAccount(r *http.Request) (string, bool) {
+func (f *fakeProvider) BearerCredential(r *http.Request) (ext.Credential, bool) {
 	h := r.Header.Get("Authorization")
 	if len(h) < 7 || !strings.EqualFold(h[:7], "bearer ") {
-		return "", false
+		return ext.Credential{}, false
 	}
-	id, ok := f.bearer[strings.TrimSpace(h[7:])]
-	return id, ok
+	secret := strings.TrimSpace(h[7:])
+	id, ok := f.bearer[secret]
+	if !ok {
+		return ext.Credential{}, false
+	}
+	// scopes lets a test present an OAuth-shaped credential; an absent entry
+	// means an account API token, which carries none.
+	return ext.Credential{AccountID: id, Scopes: f.scopes[secret]}, true
 }
 
 func (f *fakeProvider) AccountSiteIDs(accountID string) ([]string, bool) {

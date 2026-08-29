@@ -114,6 +114,7 @@ type fakeHost struct {
 	dir       string
 	sites     *fakeSites
 	pathViews bool
+	mcpIssuer string
 }
 
 func (h *fakeHost) DataDir() string        { return h.dir }
@@ -122,6 +123,12 @@ func (h *fakeHost) HTTPOnly() bool         { return true }
 func (h *fakeHost) Secret() []byte         { return []byte("0123456789abcdef0123456789abcdef") }
 func (h *fakeHost) PathViews() bool        { return h.pathViews }
 func (h *fakeHost) Sites() ext.SiteService { return h.sites }
+
+// mcpIssuer is empty by default: the enterprise suite must keep proving that
+// everything works with MCP OAuth switched off, which is how every instance
+// starts.
+func (h *fakeHost) MCPOAuthIssuer() string { return h.mcpIssuer }
+func (h *fakeHost) MCPResource() string    { return "https://sitebin.example/mcp" }
 
 func setupAccounts(t *testing.T) (*provider, *fakeHost, http.Handler) {
 	t.Helper()

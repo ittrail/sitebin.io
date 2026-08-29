@@ -112,6 +112,8 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | `SITEBIN_FTP_PUBLIC_HOST` | base domain | Host advertised for FTP passive mode. |
 | `SITEBIN_FTP_TLS_CERT` / `SITEBIN_FTP_TLS_KEY` | — | Optional PEM cert/key for FTPS (encrypts credentials). |
 | `SITEBIN_MCP_ENABLED` | `true` | Serve the MCP endpoint at `/mcp` for AI agents. See [MCP server](#mcp-server-for-ai-agents). |
+| `SITEBIN_MCP_OAUTH_ISSUER` | = `SITEBIN_OAUTH_OIDC_ISSUER` | Authorization server whose access tokens `/mcp` accepts. Empty disables OAuth; the endpoint then authenticates with edit passwords and account tokens only. |
+| `SITEBIN_MCP_OAUTH_RESOURCE` | `<base>/mcp` | This server's OAuth resource identifier — the value a token's audience must contain. Immutable once published. |
 | `SITEBIN_TRACK_VIEWS` | `true` | Count per-site page views (Accept: text/html) + last-seen. |
 | `SITEBIN_READONLY` | `false` | Freeze new site creation. |
 | `SITEBIN_EMBED_ORIGINS` | — | Origins allowed to embed the create flow cross-origin (comma-separated, or `*`). *(Enterprise; ignored with a warning in community.)* See [Embed the drop area](#embed-the-drop-area-on-your-own-site). |
@@ -287,10 +289,37 @@ WebDAV, FTP or the API's zip upload. Sites created through MCP are recorded in
 `meta.json` as `"origin": "mcp"`; that is provenance for the admin console and
 changes nothing about how the site is served.
 
-Bearer tokens work today in every client that can set a header. OAuth 2.1 with
-dynamic client registration — what Anthropic and OpenAI require to list a
-connector in their directories — is designed but not yet built; see
-[`docs/superpowers/specs/2026-08-28-mcp-server-design.md`](docs/superpowers/specs/2026-08-28-mcp-server-design.md).
+#### OAuth 2.1 *(optional)*
+
+Bearer tokens work in every client that can set a header. For the connector
+directories at Anthropic and OpenAI, `/mcp` can also be an **OAuth 2.1 protected
+resource**: set `SITEBIN_MCP_OAUTH_ISSUER` to an authorization server and
+Sitebin will publish `/.well-known/oauth-protected-resource`, answer
+unauthenticated calls with a `WWW-Authenticate` challenge pointing at it, and
+accept access tokens that server signed.
+
+**Sitebin is a resource server and never an authorization server.** It issues
+no tokens, registers no clients and renders no consent screen — point it at
+whatever issuer you already run. A token is accepted only when its signature,
+issuer and expiry check out, its audience contains this server's resource
+identifier, and its subject matches an account that has signed in here.
+
+Two scopes carve up the tool surface, so an agent can be given read access
+without the ability to publish:
+
+| Scope | Tools |
+|---|---|
+| `sitebin:sites:read` | `list_sites`, `get_site`, `list_files`, `read_file`, `download_site` |
+| `sitebin:sites:write` | `create_site`, `update_site`, `write_files`, `delete_file`, `delete_site`, `add_domain`, `remove_domain` |
+
+Account API tokens keep working unchanged with OAuth enabled — they carry no
+scopes and grant everything their account can do, exactly as before.
+
+The authorization server has to offer dynamic client registration, PKCE `S256`,
+and tokens whose audience is this server's resource identifier. The IT-Trail
+SaaS Stack does this from an `mcp` block at app onboarding; any other compliant
+issuer works the same way. Design:
+[`docs/superpowers/specs/2026-08-29-mcp-oauth-resource-server-design.md`](docs/superpowers/specs/2026-08-29-mcp-oauth-resource-server-design.md).
 
 ### WebDAV (mount a site as a drive)
 

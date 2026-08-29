@@ -106,10 +106,20 @@ second copy of the rule.
   defence that actually applies here. Do not "fix" this by re-enabling it.
 - `store.Meta.Origin` is provenance only. Nothing gates on it, and nothing
   should start to without saying so in the design doc.
+- **OAuth is opt-in and Sitebin is only ever a resource server.** With
+  `SITEBIN_MCP_OAUTH_ISSUER` unset, none of it is mounted. Sitebin never issues
+  a token, registers a client or shows a consent screen; it points at any
+  issuer. Do not add an authorization server here — that is what keeps "one
+  container, no dependencies" true.
+- **Empty scopes mean unrestricted**, because that is what an account API token
+  has always granted. An OAuth token with no `scope` claim gets a placeholder
+  that matches nothing, so "the issuer told us nothing" never reads as
+  "everything".
+- **The audience check is not optional.** It is the only thing stopping a token
+  minted for another resource server on the same issuer from working here.
 
-Read `docs/superpowers/specs/2026-08-28-mcp-server-design.md`, including the
-Phase 2 section — OAuth 2.1 with dynamic client registration is what the
-Anthropic and OpenAI connector directories require, and it is not built yet.
+Read `docs/superpowers/specs/2026-08-28-mcp-server-design.md` and
+`2026-08-29-mcp-oauth-resource-server-design.md`.
 
 ## Enterprise config
 

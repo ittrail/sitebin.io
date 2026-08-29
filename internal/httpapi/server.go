@@ -20,7 +20,6 @@ import (
 	"github.com/ittrail/sitebin.io/internal/auth"
 	"github.com/ittrail/sitebin.io/internal/config"
 	"github.com/ittrail/sitebin.io/internal/ext"
-	"github.com/ittrail/sitebin.io/internal/mcp"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
@@ -99,7 +98,8 @@ func (a *API) Public() http.Handler {
 	// Caddy already proxies wholesale, so it needs no Caddy configuration. Not
 	// mounted at all when disabled, so /mcp then 404s like any unknown path.
 	if a.cfg.MCPEnabled {
-		mux.Handle("/mcp", mcp.NewHandler(mcpOps{a}, mcp.Info{Name: "sitebin", Version: Version}))
+		mux.Handle("/mcp", a.mcpHandler())
+		a.mcpDiscoveryRoutes(mux)
 	}
 
 	mux.HandleFunc("GET /_sitebin/assets/{path...}", a.asset)
@@ -237,8 +237,8 @@ func (a *API) tokenOwns(r *http.Request, site *store.Site) bool {
 	if !ok {
 		return false
 	}
-	accountID, ok := p.BearerAccount(r)
-	return ok && accountID == site.Meta.OwnerAccountID
+	cred, ok := p.BearerCredential(r)
+	return ok && cred.AccountID == site.Meta.OwnerAccountID
 }
 
 func (a *API) withEditAuth(next func(http.ResponseWriter, *http.Request, *store.Site)) http.HandlerFunc {

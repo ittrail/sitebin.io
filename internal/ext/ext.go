@@ -83,14 +83,31 @@ type Provider interface {
 	// does not own.
 	AccountSiteIDs(accountID string) ([]string, bool)
 
-	// BearerAccount resolves an Authorization: Bearer credential to the account
-	// it belongs to. ok=false means no usable token was presented — a wrong one
-	// and an absent one are the same answer.
+	// BearerCredential resolves an Authorization: Bearer credential to what it
+	// grants. ok=false means no usable credential was presented — a wrong one
+	// and an absent one are the same answer, deliberately.
 	//
-	// The core uses it to let a token stand in for a site's edit password on
-	// sites that account owns. It returns only the id: the ownership comparison
-	// belongs to the core, which is the side that holds the site's metadata.
-	BearerAccount(r *http.Request) (accountID string, ok bool)
+	// The extension decides WHICH kind of credential it was looking at: an
+	// account API token, or an OAuth access token from the configured issuer.
+	// The core never learns the difference, which is the same division of
+	// labour the rest of this seam draws — it is handed an account id and, for
+	// OAuth, the scopes the user consented to.
+	//
+	// The core uses it to let a credential stand in for a site's edit password
+	// on sites that account owns. The ownership comparison belongs to the core,
+	// which is the side that holds the site's metadata.
+	BearerCredential(r *http.Request) (Credential, bool)
+}
+
+// Credential is what an Authorization: Bearer header resolved to.
+type Credential struct {
+	// AccountID is the account the credential acts for.
+	AccountID string
+	// Scopes are the OAuth scopes granted. EMPTY MEANS UNRESTRICTED: an
+	// account API token grants everything its account can do and carries no
+	// scopes, which is what that credential has always meant. Only an OAuth
+	// access token narrows it.
+	Scopes []string
 }
 
 // CreateGrant is the result of a successful AuthorizeCreate: who owns the new
@@ -130,6 +147,14 @@ type Host interface {
 	// PathViews reports whether sites are served on /v/<id> main-domain paths
 	// (SITEBIN_VIEW_ACCESS=path|both), which shares an origin with the API.
 	PathViews() bool
+	// MCPOAuthIssuer is the authorization server whose access tokens the MCP
+	// endpoint accepts, or empty when OAuth is not configured. Sitebin is only
+	// ever a resource server: it validates what this issuer signed and issues
+	// nothing itself.
+	MCPOAuthIssuer() string
+	// MCPResource is this server's OAuth resource identifier — the value that
+	// must appear in a token's audience.
+	MCPResource() string
 	// Sites exposes the core site operations the dashboard needs.
 	Sites() SiteService
 }

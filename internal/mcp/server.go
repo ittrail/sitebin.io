@@ -106,6 +106,9 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 			"record it, unless this connection uses an account API token, in which " +
 			"case the token manages the site instead.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in createArgs) (*sdk.CallToolResult, *SiteResult, error) {
+		if err := authorize(auth, ScopeWrite); err != nil {
+			return nil, nil, err
+		}
 		files, err := DecodeFiles(in.Files)
 		if err != nil {
 			return nil, nil, err
@@ -122,6 +125,9 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		Description: "List the sites the connected account owns. Requires an account API token.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, _ noArgs) (*sdk.CallToolResult, *listResult, error) {
+		if err := authorize(auth, ScopeRead); err != nil {
+			return nil, nil, err
+		}
 		sites, err := ops.ListSites(ctx, auth)
 		if err != nil {
 			return nil, nil, err
@@ -134,6 +140,9 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		Description: "Read a site's settings, usage and file list.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in siteArgs) (*sdk.CallToolResult, *SiteResult, error) {
+		if err := authorize(auth, ScopeRead); err != nil {
+			return nil, nil, err
+		}
 		return out(ops.GetSite(ctx, auth, in.ref()))
 	})
 
@@ -142,6 +151,9 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		Description: "Change a site's settings. Any field you omit is left alone. " +
 			"Setting expires_at to an empty string clears the expiry, where the site's plan allows it.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in updateArgs) (*sdk.CallToolResult, *SiteResult, error) {
+		if err := authorize(auth, ScopeWrite); err != nil {
+			return nil, nil, err
+		}
 		return out(ops.UpdateSite(ctx, auth, in.ref(), in.Settings))
 	})
 
@@ -150,6 +162,9 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		Description: "List the files in a site with their sizes.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in siteArgs) (*sdk.CallToolResult, *filesResult, error) {
+		if err := authorize(auth, ScopeRead); err != nil {
+			return nil, nil, err
+		}
 		files, err := ops.ListFiles(ctx, auth, in.ref())
 		if err != nil {
 			return nil, nil, err
@@ -162,6 +177,9 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		Description: "Read one file from a site. Text files come back as text, binary files as base64.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in pathArgs) (*sdk.CallToolResult, *File, error) {
+		if err := authorize(auth, ScopeRead); err != nil {
+			return nil, nil, err
+		}
 		f, err := ops.ReadFile(ctx, auth, in.ref(), in.Path)
 		if err != nil {
 			return nil, nil, err
@@ -174,6 +192,9 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		Description: "Add or overwrite files in a site. With replace set, every existing " +
 			"file is removed first, so the site ends up containing exactly the files you pass.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in writeArgs) (*sdk.CallToolResult, *SiteResult, error) {
+		if err := authorize(auth, ScopeWrite); err != nil {
+			return nil, nil, err
+		}
 		files, err := DecodeFiles(in.Files)
 		if err != nil {
 			return nil, nil, err
@@ -189,6 +210,9 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		Description: "Delete one file from a site.",
 		Annotations: destructive,
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in pathArgs) (*sdk.CallToolResult, *SiteResult, error) {
+		if err := authorize(auth, ScopeWrite); err != nil {
+			return nil, nil, err
+		}
 		return out(ops.DeleteFile(ctx, auth, in.ref(), in.Path))
 	})
 
@@ -197,6 +221,9 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		Description: "Permanently delete a site and all its files. This cannot be undone.",
 		Annotations: destructive,
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in siteArgs) (*sdk.CallToolResult, *deleteResult, error) {
+		if err := authorize(auth, ScopeWrite); err != nil {
+			return nil, nil, err
+		}
 		if err := ops.DeleteSite(ctx, auth, in.ref()); err != nil {
 			return nil, nil, err
 		}
@@ -208,6 +235,9 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		Description: "Attach a custom domain to a site. Enterprise instances only. " +
 			"The domain's DNS must already point at this Sitebin instance.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in domainArgs) (*sdk.CallToolResult, *SiteResult, error) {
+		if err := authorize(auth, ScopeWrite); err != nil {
+			return nil, nil, err
+		}
 		return out(ops.AddDomain(ctx, auth, in.ref(), in.Domain))
 	})
 
@@ -216,6 +246,9 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		Description: "Detach a custom domain from a site.",
 		Annotations: destructive,
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in domainArgs) (*sdk.CallToolResult, *SiteResult, error) {
+		if err := authorize(auth, ScopeWrite); err != nil {
+			return nil, nil, err
+		}
 		return out(ops.RemoveDomain(ctx, auth, in.ref(), in.Domain))
 	})
 
@@ -224,6 +257,9 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		Description: "Download a site's files as a zip archive, returned as an attached resource.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in siteArgs) (*sdk.CallToolResult, any, error) {
+		if err := authorize(auth, ScopeRead); err != nil {
+			return nil, nil, err
+		}
 		zip, err := ops.DownloadSite(ctx, auth, in.ref())
 		if err != nil {
 			return nil, nil, err

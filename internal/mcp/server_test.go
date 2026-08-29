@@ -418,3 +418,115 @@ func TestListSitesReturnsRowsWithEditIDs(t *testing.T) {
 		t.Errorf("listing has no edit id: %s", resultText(res))
 	}
 }
+
+// ---- scopes ----
+
+// Empty scopes mean unrestricted. That is what an account API token has always
+// granted and what the community build has, so the scope check must be a pure
+// addition: if this breaks, every existing caller breaks with it.
+func TestNoScopesMeansUnrestricted(t *testing.T) {
+	ops := &fakeOps{auth: Auth{}}
+	cs := connect(t, ops, nil)
+	for _, tool := range []string{"get_site", "create_site", "delete_site"} {
+		res := call(t, cs, tool, map[string]any{"edit_id": "e1", "files": []any{}})
+		if res.IsError && strings.Contains(resultText(res), "was not granted") {
+			t.Errorf("%s refused a session with no scopes: %s", tool, resultText(res))
+		}
+	}
+}
+
+func TestReadScopeCannotWrite(t *testing.T) {
+	ops := &fakeOps{auth: Auth{AccountID: "a1", AccountsEnabled: true, Scopes: []string{ScopeRead}}}
+	cs := connect(t, ops, http.Header{"Authorization": {"Bearer x"}})
+
+	res := call(t, cs, "get_site", map[string]any{"edit_id": "e1"})
+	if res.IsError {
+		t.Fatalf("read scope should allow get_site: %s", resultText(res))
+	}
+
+	res = call(t, cs, "delete_site", map[string]any{"edit_id": "e1"})
+	if !res.IsError {
+		t.Fatal("read scope must not allow delete_site")
+	}
+	// The message has to name both sides, or the agent cannot tell its user
+	// which permission to approve.
+	for _, want := range []string{ScopeWrite, ScopeRead} {
+		if !strings.Contains(resultText(res), want) {
+			t.Errorf("refusal does not mention %q: %s", want, resultText(res))
+		}
+	}
+}
+
+func TestWriteScopeCannotRead(t *testing.T) {
+	ops := &fakeOps{auth: Auth{AccountID: "a1", AccountsEnabled: true, Scopes: []string{ScopeWrite}}}
+	cs := connect(t, ops, http.Header{"Authorization": {"Bearer x"}})
+
+	if res := call(t, cs, "create_site", map[string]any{"files": []any{}}); res.IsError {
+		t.Fatalf("write scope should allow create_site: %s", resultText(res))
+	}
+	if res := call(t, cs, "list_files", map[string]any{"edit_id": "e1"}); !res.IsError {
+		t.Error("write scope alone must not allow list_files")
+	}
+}
+
+// A scope check that never reaches Ops is the point: a refused call must not
+// touch the store.
+func TestRefusedToolNeverReachesOps(t *testing.T) {
+	ops := &fakeOps{auth: Auth{AccountID: "a1", AccountsEnabled: true, Scopes: []string{ScopeRead}}}
+	cs := connect(t, ops, http.Header{"Authorization": {"Bearer x"}})
+	call(t, cs, "write_files", map[string]any{
+		"edit_id": "e1", "files": []any{map[string]any{"path": "a", "text": "x"}},
+	})
+	for _, c := range ops.calls {
+		if c == "write_files" {
+			t.Fatal("Ops was reached despite the missing scope")
+		}
+	}
+}
+
+// Every tool must be covered by exactly one of the two scopes. A tool added
+// without a scope would be callable by any token, which is the failure this
+// pins down.
+func TestEveryToolIsScoped(t *testing.T) {
+	readOps := &fakeOps{auth: Auth{AccountID: "a", AccountsEnabled: true, Scopes: []string{ScopeRead}}}
+	writeOps := &fakeOps{auth: Auth{AccountID: "a", AccountsEnabled: true, Scopes: []string{ScopeWrite}}}
+	readCS := connect(t, readOps, http.Header{"Authorization": {"Bearer x"}})
+	writeCS := connect(t, writeOps, http.Header{"Authorization": {"Bearer x"}})
+
+	tools, err := readCS.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Arguments have to match each tool's schema: an unknown property is
+	// rejected by validation before the scope check ever runs, which would make
+	// this test pass for the wrong reason.
+	argsFor := map[string]map[string]any{
+		"create_site":   {"files": []any{}},
+		"list_sites":    {},
+		"get_site":      {"edit_id": "e1"},
+		"update_site":   {"edit_id": "e1", "settings": map[string]any{}},
+		"list_files":    {"edit_id": "e1"},
+		"read_file":     {"edit_id": "e1", "path": "p"},
+		"write_files":   {"edit_id": "e1", "files": []any{}, "replace": true},
+		"delete_file":   {"edit_id": "e1", "path": "p"},
+		"delete_site":   {"edit_id": "e1"},
+		"add_domain":    {"edit_id": "e1", "domain": "d.example.com"},
+		"remove_domain": {"edit_id": "e1", "domain": "d.example.com"},
+		"download_site": {"edit_id": "e1"},
+	}
+	for _, tool := range tools.Tools {
+		args, ok := argsFor[tool.Name]
+		if !ok {
+			t.Errorf("tool %q has no arguments in this test; add it", tool.Name)
+			continue
+		}
+		r := call(t, readCS, tool.Name, args)
+		w := call(t, writeCS, tool.Name, args)
+		refusedByRead := r.IsError && strings.Contains(resultText(r), "was not granted")
+		refusedByWrite := w.IsError && strings.Contains(resultText(w), "was not granted")
+		if refusedByRead == refusedByWrite {
+			t.Errorf("tool %q is not covered by exactly one scope (read refused=%v, write refused=%v)",
+				tool.Name, refusedByRead, refusedByWrite)
+		}
+	}
+}
