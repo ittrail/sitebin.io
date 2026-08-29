@@ -658,10 +658,31 @@ still work over the API with their edit password.
 ### SaaS-Stack integration
 
 Sitebin Enterprise is a first-class app of the MIT-licensed
-[IT-Trail SaaS Stack](https://github.com/ittrail/saas-stack): onboard it like
-any of your apps and it inherits single sign-on and subscription billing —
-users log in once across your whole portfolio, and their Sitebin tier follows
-the subscription they bought through the stack.
+[IT-Trail SaaS Stack](https://github.com/ittrail/saas-stack): it inherits single
+sign-on and subscription billing — users log in once across your whole
+portfolio, and their Sitebin tier follows the subscription they bought through
+the stack.
+
+**It onboards itself.** Give it `SITEBIN_STACK_URL`, `SITEBIN_STACK_APP_ID` and
+`SITEBIN_STACK_ADMIN_KEY` and it announces itself to the stack on every start,
+so auth, billing and MCP are configured by deploying rather than by hand. The
+call is convergent: run it a thousand times and the stack simply matches what
+Sitebin declared.
+
+What it declares is only what Sitebin alone knows — its identity, the OIDC
+callback it will actually use, its tier catalogue from `tiers.json`, and its
+MCP resource and scopes. It never declares identity providers, password policy,
+MFA or realm registration: those are realm-wide settings shared with every other
+app on the stack, and an app that set them would overwrite an operator's choice
+on each restart.
+
+It declares a *catalogue*, never a price. Your tiers name the plans; what a
+customer is charged stays with the payment provider, where a deploy cannot
+reach it.
+
+Registration never blocks startup. A stack that is briefly unreachable makes
+the attempt fail and log; Sitebin serves sites regardless and converges again
+on the next start.
 
 ```bash
 # 1. SSO through the stack's Auth Gateway (generic OIDC)
@@ -673,7 +694,12 @@ SITEBIN_OAUTH_OIDC_LABEL="Example SSO"
 # (recommended) SSO only — local accounts would bypass PayGate billing
 SITEBIN_LOCAL_AUTH=false
 
-# 2. Tiers from PayGate (requires SITEBIN_ACCOUNT_MODE=tiers)
+# 2. Self-registration: identity, callback, tiers and MCP, on every start
+SITEBIN_STACK_URL=https://platform.saas-stack.example.com
+SITEBIN_STACK_APP_ID=sitebin
+SITEBIN_STACK_ADMIN_KEY=…            # the stack's PLATFORM_ADMIN_KEY
+
+# 3. Tiers from PayGate (requires SITEBIN_ACCOUNT_MODE=tiers)
 SITEBIN_PAYGATE_URL=https://paygate.saas-stack.example.com
 SITEBIN_PAYGATE_APP_ID=sitebin
 SITEBIN_PAYGATE_API_KEY=ssk_live_…
