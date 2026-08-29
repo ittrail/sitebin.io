@@ -121,6 +121,66 @@ second copy of the rule.
 Read `docs/superpowers/specs/2026-08-28-mcp-server-design.md` and
 `2026-08-29-mcp-oauth-resource-server-design.md`.
 
+## Billing: three backends, one seam
+
+`ee/billing` sells a paid tier three ways — Stripe direct, Paddle direct, and
+the SaaS Stack's PayGate. `SITEBIN_BILLING` selects **exactly one**; `provider`
+holds a single `billing.Backend`, so an unselected provider is absent rather
+than merely unrouted.
+
+- **The agnostic rule, which outranks convenience:** if the stack changes
+  payment provider, *nothing in Sitebin may change* — no config, no code, no
+  redeploy. The PayGate backend therefore names no processor in code, config,
+  routes or UI, and sells by tier **name**; the stack resolves that to its own
+  price id. Do not add a "which provider is the stack using" lookup, however
+  useful it looks.
+- **Customer-facing routes are provider-neutral** (`/account/upgrade`,
+  `/account/billing/portal`). Only webhook paths carry a provider name, because
+  the provider decides where it delivers — and PayGate mounts none.
+- **`TierSource` and `WebhookReceiver` are optional interfaces on purpose.** The
+  two models genuinely differ: with a direct provider Sitebin owns the
+  subscription and hears about changes by webhook; with PayGate the stack owns
+  it and `effectiveTier` polls. Compile-time assertions in `billing.go` keep
+  PayGate out of `WebhookReceiver`. Making either universal would force one side
+  to fake it.
+- **`BillingEnabled()` means "a backend is selected", including PayGate.** It
+  does *not* mean "Stripe/Paddle are configured" — that is `cfg.Billing != nil`.
+  This already caused a false warning on every PayGate start; check the right
+  one.
+- **Ambiguity is a startup error.** Two backends configured with no explicit
+  `SITEBIN_BILLING` refuses to boot. The old code silently preferred Stripe.
+  Which processor charges customers is not a thing to infer from the
+  environment.
+- **PayGate knows people by the stack's identity** (the Keycloak user UUID,
+  which is the OIDC subject). A local account has no subscription there and
+  never will, so `SITEBIN_LOCAL_AUTH=false` is the recommendation on a stack
+  instance.
+- **Tier prices differ by backend.** Direct backends read `price.stripe` /
+  `price.paddle`; PayGate needs `price.monthly` / `annual` / `currency`
+  **amounts**, because the stack creates the product and has no field for a
+  hand-made price id. A tier with no amount creates no payment product.
+  Amounts are instance configuration — they belong in `/opt/sitebin/tiers.json`,
+  never in this repo.
+
+Read `docs/superpowers/specs/2026-08-29-billing-through-the-stack-design.md`.
+
+## Enterprise licensing
+
+`SITEBIN_LICENSE_KEY` is an **optional** env var holding an Ed25519-signed
+string (`<base64url payload>.<base64url signature>`) — not a file, not a
+certificate, and there is no license server: `ee/licensing` verifies offline
+against a vendor public key baked in at build time.
+
+Two things about it are easy to get wrong:
+
+- **No key is a supported state.** Self-hosting is permitted under ELv2, so an
+  absent key logs a warning and everything runs. A key that *is* supplied must
+  verify and must not be expired, or startup fails.
+- **The license currently gates nothing.** It is verified and logged; no feature
+  reads `lic.Plan`. Enterprise features are gated by the `ee` **build tag**, not
+  by the key. Do not describe the key as unlocking features until something
+  actually keys off it.
+
 ## Enterprise config
 
 All caps and toggles are startup env vars (`SITEBIN_*`) — see the README's
