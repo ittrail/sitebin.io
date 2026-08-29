@@ -603,6 +603,7 @@ func (h *storeHost) HTTPOnly() bool         { return true }
 func (h *storeHost) Secret() []byte         { return []byte("0123456789abcdef0123456789abcdef") }
 func (h *storeHost) PathViews() bool        { return false }
 func (h *storeHost) Sites() ext.SiteService { return h.sites }
+func (h *storeHost) BaseURL() string        { return "http://sitebin.example" }
 func (h *storeHost) MCPOAuthIssuer() string { return "" }
 func (h *storeHost) MCPResource() string    { return "https://sitebin.example/mcp" }
 

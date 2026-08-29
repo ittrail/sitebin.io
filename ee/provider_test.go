@@ -127,6 +127,7 @@ func (h *fakeHost) Sites() ext.SiteService { return h.sites }
 // mcpIssuer is empty by default: the enterprise suite must keep proving that
 // everything works with MCP OAuth switched off, which is how every instance
 // starts.
+func (h *fakeHost) BaseURL() string        { return "http://sitebin.example" }
 func (h *fakeHost) MCPOAuthIssuer() string { return h.mcpIssuer }
 func (h *fakeHost) MCPResource() string    { return "https://sitebin.example/mcp" }
 

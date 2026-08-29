@@ -350,9 +350,26 @@ func (p *provider) OnSiteCreated(ownerAccountID, viewID string) error {
 
 // accountForAPI resolves an API caller: an Authorization: Bearer token, else
 // the session cookie (which is how the browser's own drop page creates sites).
+// accountForAPI resolves the caller of an API-shaped request.
+//
+// A presented bearer is answered ONLY from that bearer: an account API token,
+// or — where MCP OAuth is configured — an access token from the issuer. It
+// deliberately does not fall back to the session cookie when a bearer was sent
+// and did not check out, because a wrong credential must fail rather than
+// quietly succeed as whoever happens to be logged in.
 func (p *provider) accountForAPI(r *http.Request) (*account.Account, bool) {
 	if secret := bearerToken(r); secret != "" {
-		return p.accounts.ByToken(secret)
+		if acc, ok := p.accounts.ByToken(secret); ok {
+			return acc, true
+		}
+		if p.mcpOAuth != nil {
+			if cred, ok := p.mcpOAuth.Verify(r.Context(), secret); ok {
+				if acc, err := p.accounts.ByID(cred.AccountID); err == nil {
+					return acc, true
+				}
+			}
+		}
+		return nil, false
 	}
 	return p.currentAccount(r)
 }
@@ -446,13 +463,7 @@ func (p *provider) owns(acc *account.Account, viewID string) bool {
 }
 
 // baseURL returns the main-domain URL for building links.
-func (p *provider) baseURL() string {
-	scheme := "https"
-	if p.host.HTTPOnly() {
-		scheme = "http"
-	}
-	return scheme + "://" + p.host.BaseDomain()
-}
+func (p *provider) baseURL() string { return p.host.BaseURL() }
 
 // ---- CSRF (stateless, derived from the session) ----
 

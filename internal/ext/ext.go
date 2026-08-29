@@ -147,6 +147,12 @@ type Host interface {
 	// PathViews reports whether sites are served on /v/<id> main-domain paths
 	// (SITEBIN_VIEW_ACCESS=path|both), which shares an origin with the API.
 	PathViews() bool
+	// BaseURL is the instance's own absolute base URL, scheme and port
+	// included. The extension must not rebuild this from BaseDomain(): the
+	// port lives in the core's config and a hand-built URL silently drops it,
+	// which breaks every absolute link the extension emits — the OAuth
+	// redirect_uri above all — on any instance not served on 80/443.
+	BaseURL() string
 	// MCPOAuthIssuer is the authorization server whose access tokens the MCP
 	// endpoint accepts, or empty when OAuth is not configured. Sitebin is only
 	// ever a resource server: it validates what this issuer signed and issues

@@ -20,6 +20,7 @@ func (h extHost) Secret() []byte         { return h.secret }
 func (h extHost) PathViews() bool        { return h.cfg.PathViews() }
 func (h extHost) Sites() ext.SiteService { return h.sites }
 
+func (h extHost) BaseURL() string        { return h.cfg.SiteURL(h.cfg.BaseDomain) }
 func (h extHost) MCPOAuthIssuer() string { return h.cfg.MCPOAuthIssuer }
 
 // MCPResource falls back to the endpoint's own URL, which is what it is. An
