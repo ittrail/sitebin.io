@@ -139,8 +139,13 @@ func (p *provider) Init(h ext.Host) error {
 		if cfg.SelfSelect {
 			slog.Warn("SITEBIN_TIER_SELF_SELECT is ignored for PayGate-resolved accounts (PayGate owns their subscription)")
 		}
-		if cfg.BillingEnabled() {
-			slog.Warn("built-in Stripe/Paddle billing and PayGate are both configured; PayGate takes precedence for SSO accounts")
+		// Credentials for a direct provider with PayGate selected are inert.
+		// Worth saying, because "configured" and "active" now mean different
+		// things, and a silently ignored provider is how someone concludes
+		// the checkout is broken. BillingEnabled() must NOT be used here: it
+		// is true for PayGate itself, so it would warn on every start.
+		if cfg.Billing != nil && cfg.BillingBackend == eeconfig.BackendPayGate {
+			slog.Warn("Stripe/Paddle credentials are configured but inert; SITEBIN_BILLING selects paygate")
 		}
 	}
 	return nil
