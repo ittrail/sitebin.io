@@ -556,7 +556,8 @@ Sitebin is **open-core**:
   with `go build` / the default `sitebin:latest` image. Fully open, no
   accounts, no feature gates.
 - **Enterprise** (`ee/`) — optional premium features (user accounts, tiers &
-  quotas, Google/Microsoft OAuth, SMTP, and Stripe/Paddle billing), compiled in
+  quotas, Google/Microsoft OAuth, SMTP, and billing through Stripe, Paddle or
+  the SaaS Stack), compiled in
   only with the `ee` build tag (`go build -tags ee`, image `sitebin:latest-ee`).
   All caps and toggles are configured at container startup. Design:
   [`docs/superpowers/specs/2026-07-14-accounts-tiers-billing-design.md`](docs/superpowers/specs/2026-07-14-accounts-tiers-billing-design.md).
@@ -586,11 +587,12 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_OAUTH_MICROSOFT_CLIENT_ID` / `_SECRET` / `_TENANT` | Microsoft OIDC (`_TENANT` default `common`). |
 | `SITEBIN_OAUTH_OIDC_ISSUER` / `_CLIENT_ID` / `_CLIENT_SECRET` / `_LABEL` | Generic OIDC sign-in against any issuer (Keycloak, Okta, Authentik, the [SaaS Stack](#saas-stack-integration)). `_LABEL` is the login-button text (default `SSO`). |
 | `SITEBIN_LOCAL_AUTH` | `true` | `false` = SSO only: no email/password form, signup/reset disabled; with a single OAuth provider, `/account/login` redirects straight to it. Requires an `SITEBIN_OAUTH_*` provider. |
-| `SITEBIN_PAYGATE_URL` / `_APP_ID` / `_API_KEY` | Resolve subscription tiers from a SaaS-Stack PayGate instead of built-in billing. See [SaaS-Stack integration](#saas-stack-integration). |
+| `SITEBIN_BILLING` | Which backend may charge customers: `stripe`, `paddle` or `paygate`. Unset = inferred when exactly one is configured; **two configured and no choice is a startup error**. See [Billing](#billing). |
+| `SITEBIN_PAYGATE_URL` / `_APP_ID` / `_API_KEY` | Sell tiers and resolve subscriptions through a SaaS-Stack PayGate. See [Billing](#billing) and [SaaS-Stack integration](#saas-stack-integration). |
 | `SITEBIN_PAYGATE_CACHE_TTL` / `_MANAGE_URL` | Per-user tier cache (default `5m`); optional dashboard "manage subscription" link. |
 | `SITEBIN_SMTP_HOST` / `_PORT` / `_USER` / `_PASS` / `_FROM` / `_TLS` | Email (verification, password reset). Port default 587; `_TLS=true` for implicit TLS (465). |
-| `SITEBIN_STRIPE_SECRET_KEY` / `_WEBHOOK_SECRET` | Stripe billing. Webhook: `POST /account/billing/stripe/webhook`. |
-| `SITEBIN_PADDLE_API_KEY` / `_WEBHOOK_SECRET` / `_SANDBOX` | Paddle billing. Webhook: `POST /account/billing/paddle/webhook`. |
+| `SITEBIN_STRIPE_SECRET_KEY` / `_WEBHOOK_SECRET` | Stripe billing, direct. Webhook: `POST /account/billing/stripe/webhook`. |
+| `SITEBIN_PADDLE_API_KEY` / `_WEBHOOK_SECRET` / `_SANDBOX` | Paddle billing, direct. Webhook: `POST /account/billing/paddle/webhook`. |
 | `SITEBIN_LICENSE_KEY` | Optional Ed25519 license key; if set it must be valid. |
 | `SITEBIN_STACK_URL` / `_APP_ID` / `_ADMIN_KEY` | Self-registration against the IT-Trail SaaS Stack. With all three set, the instance announces itself to the stack on every start — its identity, its OIDC callback, its tier catalogue and its MCP block — so auth, billing and MCP are configured by deploying rather than by hand. `_ADMIN_KEY` is the stack's platform admin key: a master credential, so keep it in a secret store. Unset = no self-registration. |
 
@@ -655,6 +657,80 @@ paid plan the dashboard sells via checkout. The dashboard lives at `/account`
 on the main domain; sites created while signed in are owned by the account and
 still work over the API with their edit password.
 
+### Billing
+
+Sitebin Enterprise can sell a paid tier three ways. **Exactly one is active**,
+chosen with `SITEBIN_BILLING`:
+
+| Backend | Who owns the subscription | You need |
+|---|---|---|
+| `stripe` | Sitebin | a Stripe account, and `price.stripe` on each paid tier |
+| `paddle` | Sitebin | a Paddle account, and `price.paddle` on each paid tier |
+| `paygate` | the [SaaS Stack](#saas-stack-integration) | the stack, and an amount on each paid tier |
+
+With no backend configured, tiers and quotas still work — an operator just sets
+them by hand, and no plan can be bought.
+
+If exactly one backend is configured, it is used. If more than one is and
+`SITEBIN_BILLING` is unset, Sitebin **refuses to start**: which processor
+charges your customers is not something to be inferred from what happens to be
+in the environment.
+
+**The routes a customer touches never name the processor.** Upgrading posts to
+`/account/upgrade`, managing a subscription to `/account/billing/portal`, and
+the active backend decides where that leads. Only webhooks carry a provider
+name (`/account/billing/stripe/webhook`), because the provider decides where it
+delivers — and a backend that receives no webhooks mounts none.
+
+#### Direct: Stripe or Paddle
+
+Sitebin owns the subscription. It creates the checkout against a price you made
+in that provider, verifies the provider's webhook signatures, and applies the
+result to the account's tier. Put the identifier on the tier:
+
+```json
+{ "id": "pro", "label": "Pro", "price": { "stripe": "price_123" } }
+```
+
+#### Through the stack: PayGate
+
+The stack owns the subscription, and **Sitebin never learns which processor is
+behind it**. It sells by tier *name*: the stack resolves that to whatever its
+provider calls the price, takes the payment, and receives the webhooks itself.
+Sitebin finds out at the next request that resolves a tier, because PayGate is
+already the tier source and outranks the stored tier.
+
+That is deliberate, and it is the reason no Stripe or Paddle identifier appears
+anywhere on this path. If the stack changes payment provider, nothing in Sitebin
+changes — no config, no code, no redeploy. So a tier here carries an amount
+rather than an identifier:
+
+```json
+{ "id": "pro", "label": "Pro", "price": { "monthly": "9.00", "currency": "EUR" } }
+```
+
+The stack creates the product from that when the instance registers itself. A
+tier with no amount creates no payment product, so free tiers cost nothing to
+declare.
+
+One limit worth knowing: PayGate identifies people by the identity the stack
+issued, so only accounts signed in through the generic OIDC provider can be
+sold to. A local account has no subscription there and never will — which is
+why `SITEBIN_LOCAL_AUTH=false` is the recommendation on a stack instance.
+
+Setting `SITEBIN_PAYGATE_MANAGE_URL` replaces Sitebin's own plan card with a
+link to that page. It is an override, not an addition: two competing answers to
+"where do I manage my subscription" is worse than either one.
+
+#### A different processor entirely
+
+`billing.Backend` in `ee/billing` is a three-method interface — `Name`,
+`CheckoutURL`, `PortalURL` — plus two optional ones for the parts that are not
+universal: `TierSource` for a backend that holds the subscription somewhere
+else, and `WebhookReceiver` for one that pushes events at Sitebin. Implementing
+it is how you sell through something Sitebin does not ship, without patching
+any of the code above.
+
 ### SaaS-Stack integration
 
 Sitebin Enterprise is a first-class app of the MIT-licensed
@@ -676,15 +752,10 @@ MFA or realm registration: those are realm-wide settings shared with every other
 app on the stack, and an app that set them would overwrite an operator's choice
 on each restart.
 
-It declares the tier catalogue **without amounts**, and that is a choice worth
-knowing about. Sitebin sells through its own Stripe or Paddle checkout, against
-the price identifiers you put in `tiers.json`, so the stack is asked to resolve
-which tier an account holds — not to take the payment. Declaring amounts instead
-would have PayGate create its own products and put it in the payment path.
-
-Practically: your paid tiers arrive in PayGate as catalogue entries with no
-payment product attached, and upgrades keep going through Sitebin's own
-checkout.
+What it declares of a tier is the **amount**, never a price identifier: the
+stack creates the product in whatever processor it uses. A tier with no amount
+declares no payment product, which is how free plans — and plans whose pricing
+is not settled yet — announce themselves.
 
 Registration never blocks startup. A stack that is briefly unreachable makes
 the attempt fail and log; Sitebin serves sites regardless and converges again
