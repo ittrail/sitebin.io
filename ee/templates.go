@@ -142,6 +142,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
   <div class="card">
     <h3>API tokens <span class="count">{{len .Tokens}}</span></h3>
     <p class="muted">Send one as <code>Authorization: Bearer &lt;token&gt;</code> to create sites and manage the ones this account owns — no per-site edit password needed. A token cannot change your account.</p>
+    <p class="muted">The same token connects an AI agent: point any MCP client at <code>{{.MCPEndpoint}}</code> with that header. See <a href="https://sitebin.io/docs/mcp/" rel="noreferrer noopener" target="_blank">the MCP docs</a>.</p>
     {{range .Tokens}}
     <div class="sitecard">
       <div class="grow">
@@ -273,7 +274,7 @@ const adminConsoleCSS = `
 
   /* the register */
   .adm .reg { border: 1px solid var(--line-soft); border-radius: var(--radius); overflow: hidden; background: var(--bg-card); }
-  .adm .rowhead, .adm .row { display: grid; grid-template-columns: minmax(196px,1.9fr) minmax(132px,1.1fr) 84px 104px 92px minmax(96px,.8fr) 232px; gap: 12px; align-items: center; padding: 10px 16px; }
+  .adm .rowhead, .adm .row { display: grid; grid-template-columns: minmax(184px,1.8fr) minmax(126px,1.05fr) 62px 78px 100px 90px minmax(92px,.75fr) 226px; gap: 12px; align-items: center; padding: 10px 16px; }
   .adm .rowhead { font: 600 10px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--ink-faint); background: var(--bg-raise); border-bottom: 1px solid var(--line); }
   .adm .row { border-top: 1px solid var(--line-soft); font-size: 13px; }
   .adm .row:first-of-type { border-top: 0; }
@@ -293,6 +294,10 @@ const adminConsoleCSS = `
     background: var(--bg-raise); color: var(--ink); border: 1px solid var(--line);
     border-radius: 7px; padding: 4px 6px; font: 11px var(--mono); color-scheme: dark; width: 118px;
   }
+  /* Provenance: "mcp" means an agent created it. Only ever a label — nothing
+     in Sitebin gates on it — but an operator investigating abuse needs to be
+     able to see and filter it. */
+  .adm .orig { text-transform: uppercase; letter-spacing: .04em; font-size: 11px; color: var(--muted); }
   .adm .row.confirm { grid-template-columns: minmax(200px,1.1fr) 1fr auto; background: rgba(242,109,109,.07); box-shadow: inset 3px 0 0 var(--danger); }
   .adm .row.confirm .warnmsg { font-size: 12px; color: var(--ink-dim); }
   .adm .empty { padding: 40px 16px; text-align: center; color: var(--ink-faint); font: 13px var(--mono); }
@@ -328,6 +333,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
       <option value="owned"{{if eq .Filter "owned"}} selected{{end}}>Account-owned</option>
       <option value="anon"{{if eq .Filter "anon"}} selected{{end}}>Anonymous</option>
       <option value="expiring"{{if eq .Filter "expiring"}} selected{{end}}>Expiring within 7 days</option>
+      <option value="mcp"{{if eq .Filter "mcp"}} selected{{end}}>Created by an agent (MCP)</option>
       <option value="flagged"{{if eq .Filter "flagged"}} selected{{end}}>Blocked by CSP</option>
     </select>
     <button class="btn small" type="submit">Apply</button>
@@ -336,7 +342,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
 
   <section class="reg">
     <div class="rowhead">
-      <span>Site</span><span>Owner</span><span>Mode</span><span>Size</span><span>Created</span><span>Expiry</span><span style="text-align:right">Actions</span>
+      <span>Site</span><span>Owner</span><span>Origin</span><span>Mode</span><span>Size</span><span>Created</span><span>Expiry</span><span style="text-align:right">Actions</span>
     </div>
     {{range .Rows}}
     {{if .Confirming}}
@@ -355,6 +361,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
     <div class="row">
       <span class="id"><a href="{{.ViewURL}}" rel="noreferrer noopener" target="_blank">{{.ViewID}}</a>{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}</span>
       <span class="own{{if not .Owner}} anon{{end}}">{{.OwnerLabel}}{{if .Violations}}<span class="flag" title="{{.BlockedText}}">&#9888; {{.Violations}} blocked</span>{{end}}</span>
+      <span class="num orig">{{if .Origin}}{{.Origin}}{{else}}&mdash;{{end}}</span>
       <span class="num">{{.Mode}}</span>
       <span class="num">{{.SizeText}} · {{.Files}}f</span>
       <span class="num">{{.CreatedText}}</span>

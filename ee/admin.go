@@ -12,6 +12,7 @@ import (
 
 	"github.com/ittrail/sitebin.io/ee/account"
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 // expiringSoon is the window the console highlights: a site falling due inside
@@ -227,6 +228,13 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 			}
 		case "expiring":
 			if !row.ExpiringNow {
+				continue
+			}
+		case "mcp":
+			// Sites an agent created. The marker is provenance only, but
+			// "what did the agents make?" is the first question an operator
+			// asks when agent-driven abuse turns up.
+			if s.Origin != store.OriginMCP {
 				continue
 			}
 		case "flagged":

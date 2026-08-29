@@ -68,8 +68,27 @@ func (a *API) tlsCheck(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 }
 
+// health answers the container healthcheck, and reports the capabilities an
+// operator would otherwise have to infer from the environment.
+//
+// MCP and its OAuth mode both change how /mcp answers, and neither was
+// visible from outside the process: an instance where OAuth is on refuses
+// every credential-less call, which looks identical to a broken endpoint.
+// This is the cheapest place to make that answerable.
 func (a *API) health(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]string{"status": "ok"})
+	payload := map[string]any{
+		"status":  "ok",
+		"version": Version,
+		"mcp":     a.cfg.MCPEnabled,
+	}
+	if a.cfg.MCPEnabled {
+		payload["mcp_oauth"] = a.mcpOAuthEnabled()
+		if a.mcpOAuthEnabled() {
+			payload["mcp_issuer"] = a.cfg.MCPOAuthIssuer
+			payload["mcp_resource"] = a.mcpResource()
+		}
+	}
+	writeJSON(w, 200, payload)
 }
 
 // countView records a page view when tracking is on and the request looks like

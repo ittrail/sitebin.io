@@ -341,6 +341,10 @@ type dashView struct {
 	// a worse feature.
 	IsAdmin bool
 	Tokens  []tokenRow
+	// MCPEndpoint is where an agent connects. Shown beside the tokens because
+	// that is the credential it needs, and a user should not have to read the
+	// README to find the URL.
+	MCPEndpoint string
 }
 
 func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, flash string) {
@@ -391,7 +395,8 @@ func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, 
 		}
 	}
 	dashTmpl.Execute(w, dashView{
-		Email: acc.Email, Tier: tier, Sites: rows, CSRF: token, Base: p.baseURL(),
+		MCPEndpoint: p.host.BaseURL() + "/mcp",
+		Email:       acc.Email, Tier: tier, Sites: rows, CSRF: token, Base: p.baseURL(),
 		SelfSelect: p.cfg.SelfSelect, Checkout: checkout, Tiers: opts, ManageURL: manageURL,
 		IsAdmin: p.isAdmin(acc),
 		Tokens:  p.tokenRows(acc, token),

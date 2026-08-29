@@ -38,11 +38,11 @@ type Config struct {
 	MaxExpiryDays int // 0 = unlimited
 	WebDAVAllowed bool
 	// MCPOAuthIssuer is the authorization server whose access tokens /mcp
-	// accepts. Empty disables OAuth entirely; the endpoint then authenticates
-	// exactly as it does today. It defaults to the sign-in issuer, because on
-	// an instance where users already sign in through an OIDC provider that
-	// provider is almost always the right authorization server too — the same
-	// subject then resolves the same account.
+	// accepts. Empty disables OAuth entirely and the endpoint authenticates
+	// exactly as it did before. It is usually the same issuer users sign in
+	// through — the same subject then resolves the same account — but it is
+	// never inherited, because switching /mcp to bearer-only is a decision an
+	// operator has to make rather than acquire.
 	MCPOAuthIssuer string
 	// MCPResource is this server's OAuth resource identifier, the value that
 	// must appear in an access token's audience. It is immutable once
@@ -188,10 +188,12 @@ func Load(getenv func(string) string) (Config, error) {
 	if cfg.MCPEnabled, err = boolVar(getenv, "SITEBIN_MCP_ENABLED", true); err != nil {
 		return cfg, err
 	}
+	// No fallback to the sign-in issuer. Inheriting it would turn /mcp into a
+	// bearer-only endpoint on every instance that merely configured SSO, and
+	// callers authenticating per-tool with an edit password would start getting
+	// 401 at the door — a shipped, documented flow broken by an upgrade nobody
+	// opted into. OAuth is opt-in, so the variable is opt-in.
 	cfg.MCPOAuthIssuer = strings.TrimSpace(getenv("SITEBIN_MCP_OAUTH_ISSUER"))
-	if cfg.MCPOAuthIssuer == "" {
-		cfg.MCPOAuthIssuer = strings.TrimSpace(getenv("SITEBIN_OAUTH_OIDC_ISSUER"))
-	}
 	cfg.MCPResource = strings.TrimSpace(getenv("SITEBIN_MCP_OAUTH_RESOURCE"))
 	if cfg.TrackViews, err = boolVar(getenv, "SITEBIN_TRACK_VIEWS", true); err != nil {
 		return cfg, err

@@ -204,6 +204,13 @@ func serve(withCaddy bool) error {
 		slog.Warn("FTP enabled", "addr", cfg.FTPAddr, "mode", scheme,
 			"passive_ports", fmt.Sprintf("%d-%d", cfg.FTPPasvMin, cfg.FTPPasvMax))
 	}
+	if cfg.MCPEnabled {
+		// Worth its own line: with an issuer set, /mcp stops accepting
+		// credential-less calls, and an operator who cannot see that from the
+		// log will read the resulting 401s as an outage.
+		slog.Info("mcp server enabled", "path", "/mcp",
+			"oauth", cfg.MCPOAuthIssuer != "", "issuer", cfg.MCPOAuthIssuer)
+	}
 	slog.Info("sitebin backend up",
 		"base_domain", cfg.BaseDomain, "public", cfg.PublicAddr,
 		"internal", cfg.InternalAddr, "data", cfg.DataDir,
