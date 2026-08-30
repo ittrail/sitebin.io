@@ -95,7 +95,7 @@ func (p *stubProvider) Version() string                       { return "0" }
 func (p *stubProvider) Init(ext.Host) error                   { return nil }
 func (p *stubProvider) PublicRoutes() map[string]http.Handler { return nil }
 func (p *stubProvider) AccountsEnabled() bool                 { return true }
-func (p *stubProvider) CustomDomainsAllowed() bool            { return true }
+func (p *stubProvider) CustomDomainsAllowed() error           { return nil }
 func (p *stubProvider) EmbedOriginsAllowed() bool             { return true }
 func (p *stubProvider) AuthorizeCreate(*http.Request) (ext.CreateGrant, error) {
 	return ext.CreateGrant{}, nil

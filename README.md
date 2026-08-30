@@ -593,7 +593,8 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_SMTP_HOST` / `_PORT` / `_USER` / `_PASS` / `_FROM` / `_TLS` | Email (verification, password reset). Port default 587; `_TLS=true` for implicit TLS (465). |
 | `SITEBIN_STRIPE_SECRET_KEY` / `_WEBHOOK_SECRET` | Stripe billing, direct. Webhook: `POST /account/billing/stripe/webhook`. |
 | `SITEBIN_PADDLE_API_KEY` / `_WEBHOOK_SECRET` / `_SANDBOX` | Paddle billing, direct. Webhook: `POST /account/billing/paddle/webhook`. |
-| `SITEBIN_LICENSE_KEY` | Optional Ed25519 license key; if set it must be valid. |
+| `SITEBIN_LICENSE_KEY` | Optional Enterprise license key (four base64url segments: a stack-signed certificate plus the license it vouches for). Verified offline; it never blocks startup. When set it WINS over any license collected from the stack, which is what makes an air-gapped install work. Without a valid key an instance behaves as licensed for 90 days from first start, then keeps serving and updating every existing site but creates no new ones. |
+| `SITEBIN_LICENSE_URL` | Optional override for where the running instance collects its current license (default: `<SITEBIN_STACK_URL>/api/v1/apps/<app id>/license`). Fetched daily, cached under the data dir and applied without a restart; a failure never restricts anything. Ignored when `SITEBIN_LICENSE_KEY` is set. |
 | `SITEBIN_STACK_URL` / `_APP_ID` / `_ADMIN_KEY` | Self-registration against the IT-Trail SaaS Stack. With all three set, the instance announces itself to the stack on every start — its identity, its OIDC callback, its tier catalogue and its MCP block — so auth, billing and MCP are configured by deploying rather than by hand. `_ADMIN_KEY` is the stack's platform admin key: a master credential, so keep it in a secret store. Unset = no self-registration. |
 
 ### Account API tokens *(Enterprise)*

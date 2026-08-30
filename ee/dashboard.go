@@ -341,6 +341,10 @@ type dashView struct {
 	// a worse feature.
 	IsAdmin bool
 	Tokens  []tokenRow
+	// License is the permanent, non-dismissable licence notice, or nil when
+	// there is nothing to say. It is shown HERE and nowhere else: nothing is
+	// ever injected into a served site.
+	License *licenseNotice
 	// MCPEndpoint is where an agent connects. Shown beside the tokens because
 	// that is the credential it needs, and a user should not have to read the
 	// README to find the URL.
@@ -409,6 +413,7 @@ func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, 
 		SelfSelect: p.cfg.SelfSelect, Checkout: checkout, Portal: portal, Tiers: opts, ManageURL: manageURL,
 		IsAdmin: p.isAdmin(acc),
 		Tokens:  p.tokenRows(acc, token),
+		License: p.licenseNotice(),
 	})
 }
 

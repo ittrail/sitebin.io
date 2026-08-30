@@ -361,8 +361,10 @@ func (o mcpOps) AddDomain(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, dom
 	if err != nil {
 		return nil, err
 	}
-	if p, ok := ext.Get(); !ok || !p.CustomDomainsAllowed() {
+	if p, ok := ext.Get(); !ok {
 		return nil, errors.New("custom domains are an enterprise feature and are not available on this instance")
+	} else if err := p.CustomDomainsAllowed(); err != nil {
+		return nil, err
 	}
 	if err := o.a.st.AddDomain(site, domain); err != nil {
 		return nil, o.mcpError(err)

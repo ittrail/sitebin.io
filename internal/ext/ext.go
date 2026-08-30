@@ -47,7 +47,15 @@ type Provider interface {
 	// CustomDomainsAllowed reports whether custom domains may be added — a
 	// premium feature. The community build has no provider, so custom domains
 	// are off there.
-	CustomDomainsAllowed() bool
+	// CustomDomainsAllowed reports whether ANOTHER custom domain may be added.
+	// A nil error means yes; a non-nil error is the reason, and it is shown to
+	// the caller — because "you have reached your licence's limit" and "this
+	// edition has no custom domains" are different answers and a paying
+	// customer must not be told the second when the first is true.
+	//
+	// The community build has no provider, so the core answers for itself and
+	// custom domains stay off there.
+	CustomDomainsAllowed() error
 
 	// EmbedOriginsAllowed reports whether SITEBIN_EMBED_ORIGINS is honored —
 	// letting foreign origins embed the create flow (<sitebin-drop>) is a

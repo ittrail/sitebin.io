@@ -685,8 +685,11 @@ func (a *API) deleteFile(w http.ResponseWriter, r *http.Request, site *store.Sit
 func (a *API) addDomain(w http.ResponseWriter, r *http.Request, site *store.Site) {
 	// Custom domains are an enterprise feature; the community build has no
 	// provider and rejects them.
-	if p, ok := ext.Get(); !ok || !p.CustomDomainsAllowed() {
+	if p, ok := ext.Get(); !ok {
 		writeError(w, 403, "custom domains are an enterprise feature; see the Enterprise edition")
+		return
+	} else if err := p.CustomDomainsAllowed(); err != nil {
+		writeError(w, 403, err.Error())
 		return
 	}
 	var body struct {

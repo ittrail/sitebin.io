@@ -37,6 +37,10 @@ const pageHead = `<!doctype html>
     padding: 12px 14px; word-break: break-all; overflow-wrap: anywhere; line-height: 1.5;
   }
   .acct .secretout .row { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  /* Permanent licence notice. No dismiss control, deliberately: it is the
+     operator's only warning and it belongs to the account UI alone. */
+  .acct .licnotice { border-left: 4px solid var(--accent, #F5B84D); }
+  .acct .licnotice.err { border-left-color: #E5534B; }
 </style>
 </head><body>
 <header class="topbar">
@@ -116,6 +120,13 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
     {{if .IsAdmin}}<a class="btn small" href="/account/admin">Instance register</a>{{end}}
     <form class="inline" method="post" action="/account/logout"><button class="btn small" type="submit">Sign out</button></form>
   </div>
+
+  {{with .License}}
+  <div class="card licnotice {{.Severity}}" role="alert">
+    <strong>Sitebin Enterprise licence</strong>
+    <p class="muted" style="margin-top:6px">{{.Text}}</p>
+  </div>
+  {{end}}
 
   <div class="card">
     <h3>Your sites <span class="count">{{len .Sites}}</span></h3>

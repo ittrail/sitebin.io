@@ -164,7 +164,7 @@ func TestPathViewsRefusedWithAccounts(t *testing.T) {
 
 func TestCustomDomainsAllowedInEnterprise(t *testing.T) {
 	p, _, _ := setupAccounts(t) // enterprise provider
-	if !p.CustomDomainsAllowed() {
+	if err := p.CustomDomainsAllowed(); err != nil {
 		t.Error("enterprise should allow custom domains")
 	}
 }

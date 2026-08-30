@@ -15,7 +15,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/ittrail/sitebin.io/ee/account"
 	"github.com/ittrail/sitebin.io/ee/authn"
@@ -45,7 +44,11 @@ type provider struct {
 	// separately because a few places need PayGate specifically.
 	paygate  *billing.PayGate
 	mcpOAuth *mcpOAuth
-	secret   []byte
+	// license holds the instance's enterprise licence and its state. It is
+	// consulted at exactly one place (AuthorizeCreate) and rendered in the
+	// account UI; nothing on the serving path asks it.
+	license *licensing.Manager
+	secret  []byte
 }
 
 func newProvider() *provider { return &provider{} }
@@ -63,22 +66,11 @@ func (p *provider) Init(h ext.Host) error {
 	}
 	p.cfg = cfg
 
-	// License check: a key is optional (self-host is permitted under the Elastic
-	// License 2.0), but if supplied it must be valid. Circumventing this check
-	// is prohibited by ee/LICENSE.
-	if key := strings.TrimSpace(os.Getenv("SITEBIN_LICENSE_KEY")); key != "" {
-		pub, err := licensing.VendorKey()
-		if err != nil {
-			return err
-		}
-		lic, err := licensing.Verify(key, pub, time.Now())
-		if err != nil {
-			return fmt.Errorf("SITEBIN_LICENSE_KEY: %w", err)
-		}
-		slog.Info("enterprise license", "holder", lic.Holder, "plan", lic.Plan, "expires", lic.ExpiresAt)
-	} else if cfg.Enabled() {
-		slog.Warn("running Sitebin Enterprise without a license key (self-host mode); see ee/LICENSE")
-	}
+	// Licensing. It NEVER fails the start: an absent, malformed, unverifiable
+	// or expired key is logged and surfaced in the account UI, and the only
+	// thing any of it can do is stop NEW sites and drops being created — see
+	// license.go. Circumventing the check is prohibited by ee/LICENSE.
+	p.initLicensing()
 
 	// Safety: serving user content on /v/<id> paths puts it on the SAME origin
 	// as the account dashboard and API. Combined with accounts, a malicious
@@ -156,7 +148,13 @@ func (p *provider) AccountsEnabled() bool { return p.cfg.Enabled() }
 // CustomDomainsAllowed makes custom domains available in the enterprise
 // edition. Per-account/per-tier limits are still enforced by the tier's
 // custom_domains cap.
-func (p *provider) CustomDomainsAllowed() bool { return true }
+//
+// It is consulted only where a domain is ADDED (the JSON API and the MCP tool),
+// which is why the licence's instance-wide custom-domain entitlement is applied
+// here: it refuses the NEXT domain once the ceiling is reached and never
+// touches the ones already configured, which keep serving. A licence with no
+// such entitlement, or none at all, is unlimited — see licenseAllowsAnotherDomain.
+func (p *provider) CustomDomainsAllowed() error { return p.licenseAllowsAnotherDomain() }
 
 // EmbedOriginsAllowed makes SITEBIN_EMBED_ORIGINS effective in the enterprise
 // edition, allowing allowlisted foreign origins to embed the create flow.
@@ -166,6 +164,13 @@ func (p *provider) EmbedOriginsAllowed() bool { return true }
 // caps. Logged-in users own their sites; anonymous creation is allowed only
 // when the mode/config permits it.
 func (p *provider) AuthorizeCreate(r *http.Request) (ext.CreateGrant, error) {
+	// The licence gate, and the only place it appears. It runs before the
+	// account mode is even considered, because it governs new anonymous drops
+	// exactly as it governs a signed-in user's new site — and it restricts
+	// nothing when the state is unknown.
+	if err := p.licenseGate(); err != nil {
+		return ext.CreateGrant{}, err
+	}
 	if !p.cfg.Enabled() {
 		return ext.CreateGrant{}, nil
 	}

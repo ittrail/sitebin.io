@@ -166,20 +166,40 @@ Read `docs/superpowers/specs/2026-08-29-billing-through-the-stack-design.md`.
 
 ## Enterprise licensing
 
-`SITEBIN_LICENSE_KEY` is an **optional** env var holding an Ed25519-signed
-string (`<base64url payload>.<base64url signature>`) — not a file, not a
-certificate, and there is no license server: `ee/licensing` verifies offline
-against a vendor public key baked in at build time.
+A license is **four** base64url segments — `<certPayload>.<certSig>.<licPayload>.<licSig>`
+— issued by the SaaS Stack, which is the certificate authority: one root per
+stack, one signing key per registered app, and the root-signed certificate
+travels inside the license string. `ee/licensing` verifies it offline; there is
+no license server and there never was.
 
-Two things about it are easy to get wrong:
+What is easy to get wrong:
 
-- **No key is a supported state.** Self-hosting is permitted under ELv2, so an
-  absent key logs a warning and everything runs. A key that *is* supplied must
-  verify and must not be expired, or startup fails.
-- **The license currently gates nothing.** It is verified and logged; no feature
-  reads `lic.Plan`. Enterprise features are gated by the `ee` **build tag**, not
-  by the key. Do not describe the key as unlocking features until something
-  actually keys off it.
+- **The trusted roots are a LIST, baked in at build time** (`-ldflags -X
+  …/ee/licensing.trustedRootsB64=`). A list, so a root can be rotated without
+  redistributing every binary. `SITEBIN_LICENSE_ROOTS_DEV` overrides them for
+  **development only** — anything that can set it can mint itself a licence.
+- **The audience check is not optional.** `licPayload.app_id` must equal the
+  certificate's *and* equal `"sitebin"`. Same reasoning as the MCP one.
+- **Startup NEVER fails on a licence problem.** Absent, malformed, unverifiable
+  and expired keys are all logged and shown in the account UI.
+- **A malformed or unverifiable key is `none`, never `expired`.** A config
+  mistake must not punish harder than having no licence.
+- **Four states** — `licensed`, `grace` (loud notice), `expired` (notice + no
+  new sites or drops), `none` (as licensed for a 90-day trial from the marker
+  written under the data dir, then as expired). Plus `unknown`, which never
+  restricts anything.
+- **Enforcement lives at exactly one place**: `AuthorizeCreate`, via
+  `licenseGate`. Never on the serving path, never on updates to an existing
+  site, and it never brings an expiry forward.
+- **`entitlements.max_custom_domains` is an instance-wide ceiling**, checked
+  where a domain is *added* (`CustomDomainsAllowed`). Zero/absent = unlimited.
+  It never removes a configured domain — it refuses only the next one — and the
+  tier's own per-site cap still applies on top.
+- **Staying current:** the instance collects its licence from the stack daily,
+  caches it under the data dir and applies it without a restart.
+  `SITEBIN_LICENSE_KEY` wins when set, for air-gapped installs.
+
+Read `docs/superpowers/specs/2026-08-30-licensing-through-the-stack-design.md`.
 
 ## Enterprise config
 
@@ -200,7 +220,8 @@ All caps and toggles are startup env vars (`SITEBIN_*`) — see the README's
   task-by-task plan in `docs/superpowers/plans/`.
 - **Licensing hygiene:** MIT and ELv2 code are separated by directory. Do not
   move `ee/` logic into `internal/`, and keep `ee/LICENSE` intact.
-- `vendor-license-private-key.txt` is the Ed25519 vendor signing key. Gitignored,
-  local-only, never committed, and it needs a backup that is not this laptop.
+- Licence signing keys live on the **stack**, not in this repo: the root is
+  generated at the stack's first bootstrap and its private half never leaves.
+  Only the root PUBLIC key comes here, through the build pipeline.
 - This repo is **public**. Internal business material belongs in the private
   website repo under `docs/internal/`.

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -32,12 +33,17 @@ type fakeProvider struct {
 	quotaErr error
 }
 
-func (f *fakeProvider) Name() string               { return "fake" }
-func (f *fakeProvider) Version() string            { return "0" }
-func (f *fakeProvider) Init(ext.Host) error        { return nil }
-func (f *fakeProvider) AccountsEnabled() bool      { return f.enabled }
-func (f *fakeProvider) CustomDomainsAllowed() bool { return f.domainsOK }
-func (f *fakeProvider) EmbedOriginsAllowed() bool  { return f.embedOK }
+func (f *fakeProvider) Name() string          { return "fake" }
+func (f *fakeProvider) Version() string       { return "0" }
+func (f *fakeProvider) Init(ext.Host) error   { return nil }
+func (f *fakeProvider) AccountsEnabled() bool { return f.enabled }
+func (f *fakeProvider) CustomDomainsAllowed() error {
+	if f.domainsOK {
+		return nil
+	}
+	return errors.New("custom domains are not available on this instance")
+}
+func (f *fakeProvider) EmbedOriginsAllowed() bool { return f.embedOK }
 func (f *fakeProvider) AuthorizeCreate(*http.Request) (ext.CreateGrant, error) {
 	g := f.grant
 	if g.OwnerAccountID == "" {
