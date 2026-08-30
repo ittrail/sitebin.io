@@ -233,6 +233,14 @@ All caps and toggles are startup env vars (`SITEBIN_*`) — see the README's
 
 ## Working here
 
+- **Keep `e2e/*.ps1` pure ASCII.** The scripts are UTF-8 with no BOM, so
+  PowerShell 5.1 decodes them as the system codepage: an em dash's third byte
+  (`0x94`) becomes a curly closing quote and silently breaks string quoting for
+  the rest of the file. The failure surfaces far from the cause — a
+  `CommandNotFoundException` naming some innocent word. This has already cost
+  two debugging sessions. Write `--`, not `—`.
+
+
 - **Tests first**, and run both build tags — the `ee` suite covers paths the
   core suite cannot even compile.
 - **Design doc before non-trivial code**, in `docs/superpowers/specs/`, with the
