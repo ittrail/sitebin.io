@@ -372,3 +372,49 @@ func TestLicenseFetcherWithoutALicenceAsksNothing(t *testing.T) {
 		t.Error("must not call the stack with no licence to present")
 	}
 }
+
+// TestLicenseFetcherReadsTheStackEnvelope is the test that was missing. PayGate
+// answers {"data":{"license":...}}, the client read only the top level, and the
+// mismatch resolved to "the stack has no licence for us" -- silently. A renewed
+// customer would have slid into grace and then expiry with nothing in the log.
+// The old test stubbed the bare shape, which is exactly why it passed.
+func TestLicenseFetcherReadsTheStackEnvelope(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"stack envelope", `{"data":{"license":"renewed.four.segment.key"}}`},
+		{"bare license", `{"license":"renewed.four.segment.key"}`},
+		{"bare key", `{"key":"renewed.four.segment.key"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				io.WriteString(w, tc.body)
+			}))
+			defer srv.Close()
+
+			f := &stackLicenseFetcher{url: srv.URL, client: srv.Client()}
+			key, ok, err := f.Fetch(context.Background(), "current.licence.four.segments")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !ok || key != "renewed.four.segment.key" {
+				t.Errorf("key = %q ok = %v, want the renewed licence", key, ok)
+			}
+		})
+	}
+}
+
+// A 200 whose shape we do not understand must not read as "no licence": that is
+// indistinguishable from a cancelled subscription and would be acted on as one.
+func TestLicenseFetcherTreatsAnUnknownShapeAsNoAnswer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"data":{"unexpected":"shape"}}`)
+	}))
+	defer srv.Close()
+
+	f := &stackLicenseFetcher{url: srv.URL, client: srv.Client()}
+	key, ok, err := f.Fetch(context.Background(), "current.licence.four.segments")
+	if err != nil || ok || key != "" {
+		t.Errorf("Fetch = (%q, %v, %v), want no key and no error", key, ok, err)
+	}
+}

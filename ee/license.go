@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/ittrail/sitebin.io/ee/licensing"
 	"github.com/ittrail/sitebin.io/internal/ext"
@@ -48,6 +49,17 @@ func (p *provider) initLicensing() {
 		slog.Warn("license: this build carries no trusted license roots; running unlicensed")
 	}
 	p.license = licensing.NewManager(p.host.DataDir(), roots, licensing.AppID, nil)
+	// SITEBIN_LICENSE_REFRESH shortens the daily collection interval. It is for
+	// testing renewal-in-place, which is otherwise a day-long experiment, and
+	// for an operator who wants a renewal picked up sooner.
+	if raw := strings.TrimSpace(os.Getenv("SITEBIN_LICENSE_REFRESH")); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+			p.license.SetRefresh(d)
+			slog.Info("license: refresh interval overridden", "every", d)
+		} else {
+			slog.Warn("SITEBIN_LICENSE_REFRESH is not a positive duration; using the default", "value", raw)
+		}
+	}
 
 	st := p.license.Load(os.Getenv("SITEBIN_LICENSE_KEY"))
 	slog.Info("enterprise license", st.LogArgs()...)
@@ -215,9 +227,17 @@ func (f *stackLicenseFetcher) Fetch(ctx context.Context, current string) (string
 	case res.StatusCode < 200 || res.StatusCode >= 300:
 		return "", false, fmt.Errorf("license endpoint returned %d: %s", res.StatusCode, strings.TrimSpace(string(respBody)))
 	}
-	var payload struct {
+	// The stack answers { "data": { "license": ... } }; the bare shape is
+	// accepted too so a simpler issuer needs no envelope. Reading only the
+	// top level meant every renewal parsed as "no licence" and was dropped in
+	// silence -- the one outcome this whole path exists to prevent.
+	type licenseBody struct {
 		License string `json:"license"`
 		Key     string `json:"key"`
+	}
+	var payload struct {
+		licenseBody
+		Data licenseBody `json:"data"`
 	}
 	if err := json.Unmarshal(respBody, &payload); err != nil {
 		return "", false, fmt.Errorf("license endpoint returned unparseable JSON: %w", err)
@@ -226,10 +246,27 @@ func (f *stackLicenseFetcher) Fetch(ctx context.Context, current string) (string
 	if key == "" {
 		key = payload.Key
 	}
+	if key == "" {
+		key = payload.Data.License
+	}
+	if key == "" {
+		key = payload.Data.Key
+	}
 	if strings.TrimSpace(key) == "" {
+		// A 200 that carries no licence is a shape we do not understand, not
+		// an answer. Saying so is what turns a silent no-op into a bug report.
+		slog.Warn("license: the stack answered the renewal with no license key; keeping the current one",
+			"url", f.url, "body", truncate(string(respBody), 300))
 		return "", false, nil
 	}
 	return key, true, nil
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }
 
 // licenseNotice is the account-UI banner. It is empty for every state before

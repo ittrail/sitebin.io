@@ -265,3 +265,14 @@ func (m *Manager) write(name string, data []byte) error {
 	}
 	return os.Rename(tmp, filepath.Join(m.dir, name))
 }
+
+// SetRefresh overrides how often the licence is re-collected. It exists so
+// renewal-in-place can actually be exercised: at a day's interval the only way
+// to test it on a real build is to wait a day or ship a modified binary, and a
+// path nobody can test is a path nobody knows is broken. Must be called before
+// Start.
+func (m *Manager) SetRefresh(d time.Duration) {
+	if d > 0 {
+		m.refresh = d
+	}
+}

@@ -1,26 +1,51 @@
 [
   {
-    "id": "free",
-    "label": "Free",
+    "id": "drop",
+    "label": "Drop",
     "max_site_bytes": 26214400,
     "max_files": 200,
-    "max_sites": 3,
+    "max_sites": 0,
     "webdav": false,
+    "custom_domains": 0,
+    "max_expiry_days": 1
+  },
+  {
+    "id": "free",
+    "label": "Free",
+    "max_site_bytes": 104857600,
+    "max_files": 500,
+    "max_sites": 10,
+    "webdav": true,
     "custom_domains": 0,
     "max_expiry_days": 7
   },
   {
     "id": "pro",
     "label": "Pro",
-    "max_site_bytes": 524288000,
+    "max_site_bytes": 1073741824,
     "max_files": 5000,
-    "max_sites": 25,
+    "max_sites": 100,
     "webdav": true,
     "custom_domains": 5,
     "max_expiry_days": 0,
     "price": {
-      "monthly": "9.00",
-      "annual": "90.00",
+      "monthly": "6.00",
+      "annual": "60.00",
+      "currency": "EUR"
+    }
+  },
+  {
+    "id": "studio",
+    "label": "Studio",
+    "max_site_bytes": 5368709120,
+    "max_files": 10000,
+    "max_sites": 500,
+    "webdav": true,
+    "custom_domains": 25,
+    "max_expiry_days": 0,
+    "price": {
+      "monthly": "19.00",
+      "annual": "190.00",
       "currency": "EUR"
     }
   }

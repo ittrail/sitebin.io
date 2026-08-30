@@ -24,6 +24,14 @@ services:
         LICENSE_ROOTS: ${LICENSE_ROOTS:?set LICENSE_ROOTS to the stack root public key}
     image: sitebin:stack-e2e
     restart: unless-stopped
+    # A *.localtest.me stack name resolves to 127.0.0.1, which INSIDE this
+    # container is this container -- so OIDC discovery fetches Sitebin's own
+    # Caddy and gets a 404 that looks like a broken issuer. Send those names to
+    # the host, where the stack's Traefik actually listens.
+    extra_hosts:
+      - "auth.saas.localtest.me:host-gateway"
+      - "platform.saas-stack.saas.localtest.me:host-gateway"
+      - "paygate.saas-stack.saas.localtest.me:host-gateway"
     ports:
       - "${SITEBIN_PORT:-8091}:80"
     volumes:

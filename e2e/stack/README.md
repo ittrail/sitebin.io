@@ -34,7 +34,7 @@ test suites run inside the build, as they do for every Sitebin image.
 |---|---|---|
 | `LICENSE_ROOTS` | stack admin portal → root public key | **Build arg, not runtime env.** Baked in with `-ldflags -X …/ee/licensing.trustedRootsB64=`. Comma-separate several while rotating a root. |
 | `SITEBIN_OAUTH_OIDC_ISSUER` | Auth Gateway realm URL | e.g. `https://auth.example/realms/stack` |
-| `SITEBIN_OAUTH_OIDC_CLIENT_ID` / `_SECRET` | the client you registered for Sitebin | redirect URI is `<base>/account/oauth/oidc/callback` |
+| `SITEBIN_OAUTH_OIDC_CLIENT_ID` / `_SECRET` | the client you registered for Sitebin | redirect URI is `<base>/account/auth/oidc/callback` |
 | `SITEBIN_PAYGATE_URL` | PayGate base URL | |
 | `SITEBIN_PAYGATE_APP_ID` | the app id Sitebin is registered under | URL, app id and key must be set **together** or PayGate refuses to start |
 | `SITEBIN_PAYGATE_API_KEY` | PayGate app key | not the stack admin key |
