@@ -64,9 +64,15 @@ env var:
 { "app_id": "sitebin", "pubkey": "<base64 ed25519>", "issued_at": "…", "expires_at": "…" }
 
 // licPayload — signed by the APP key named in the certificate
-{ "app_id": "sitebin", "holder": "ACME GmbH", "plan": "enterprise",
-  "issued_at": "…", "expires_at": "…", "grace_until": "…" }
+{ "app_id": "sitebin", "holder": "ACME GmbH", "plan": "team",
+  "issued_at": "…", "expires_at": "…", "grace_until": "…",
+  "entitlements": { "max_custom_domains": 25 } }
 ```
+
+`entitlements` is an object rather than a flat field so a later limit can be
+added without reissuing every licence in the field. An absent or zero value
+means **unlimited**, which keeps the "unknown is never restrictive" rule true
+for a licence issued before a limit existed.
 
 Verification, in order, all of it mandatory:
 
@@ -77,6 +83,27 @@ Verification, in order, all of it mandatory:
 5. `licPayload.app_id` equals `certPayload.app_id` **and** equals this
    product's own app id. A licence minted for another app on the same stack must
    not work here — the same reasoning as the MCP audience check.
+
+### The plan must carry its limits, not just its name
+
+The website sells licence tiers that *scale by custom-domain cap* — Team,
+Business, Platform. But the customer self-hosts, so the caps live in their own
+`tiers.json`: without an entitlement in the licence, a Team licence holder edits
+one number and has Platform. The tiers would be honour-based while the sales
+page implies they are not.
+
+So the licence carries the limit, and ee enforces it:
+
+- `entitlements.max_custom_domains` is the **instance-wide total** of custom
+  domains this deployment may serve — not a per-site number. That is what the
+  sales page is describing.
+- It is enforced when a custom domain is **added**, which is rare and nowhere
+  near the hot path. The tier's own per-site allowance still applies; the
+  licence is an additional ceiling, never a grant.
+- **It never removes anything.** A licence that shrinks — a downgrade, or a
+  cap introduced later — leaves already-configured domains serving and only
+  refuses the next one. Same rule as the cleanup sweep: never act destructively
+  on a limit.
 
 ## Two dates, because one cannot warn
 
@@ -98,7 +125,7 @@ Four states:
 
 | State | When | Effect |
 |---|---|---|
-| `licensed` | valid, `now <= expires_at` | nothing |
+| `licensed` | valid, `now <= expires_at` | entitlements apply |
 | `grace` | `expires_at < now <= grace_until` | loud, permanent notice in the account UI |
 | `expired` | `now > grace_until` | notice **+ no new sites and no new drops** |
 | `none` | no key at all | as `licensed` for a 90-day trial from first start, then as `expired` |
