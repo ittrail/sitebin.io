@@ -1,0 +1,27 @@
+[
+  {
+    "id": "free",
+    "label": "Free",
+    "max_site_bytes": 26214400,
+    "max_files": 200,
+    "max_sites": 3,
+    "webdav": false,
+    "custom_domains": 0,
+    "max_expiry_days": 7
+  },
+  {
+    "id": "pro",
+    "label": "Pro",
+    "max_site_bytes": 524288000,
+    "max_files": 5000,
+    "max_sites": 25,
+    "webdav": true,
+    "custom_domains": 5,
+    "max_expiry_days": 0,
+    "price": {
+      "monthly": "9.00",
+      "annual": "90.00",
+      "currency": "EUR"
+    }
+  }
+]

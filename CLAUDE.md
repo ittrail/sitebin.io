@@ -20,7 +20,13 @@ docker build -t sitebin:latest .     # runs go vet + the full suite
 ```
 
 `e2e/` also has focused scripts: `accounts.ps1`, `tiers.ps1`, `spa.ps1`,
-`ftp.ps1`, `paths.ps1`, `mcp.ps1`.
+`ftp.ps1`, `paths.ps1`, `mcp.ps1`, `license.ps1`.
+
+`e2e/license.ps1` is self-contained: `e2e/mintlicense` (a `//go:build ee` tool,
+`go run -tags ee ./e2e/mintlicense`) generates a throwaway root and mints the
+licences, and the image is built with that root through the Dockerfile's
+`LICENSE_ROOTS` build arg. No stack, no secrets. `e2e/stack/` is the compose
+file for the half that does need a running SaaS Stack.
 
 ## Layout
 

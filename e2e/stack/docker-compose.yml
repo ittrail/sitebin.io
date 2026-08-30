@@ -1,0 +1,84 @@
+# Sitebin Enterprise wired to an ALREADY RUNNING IT-Trail SaaS Stack.
+#
+#   cp .env.example .env   # fill it in first — see README.md
+#   docker compose up -d --build
+#
+# This file brings up Sitebin and nothing else. It CANNOT bring up the stack:
+# the stack is a separate product with its own repo, its own compose file and
+# its own bootstrap — and that bootstrap is where the licensing root keypair is
+# generated. Point this at a stack that is already running.
+#
+# The trusted licence root is baked into the IMAGE at build time, not read from
+# the environment: a public key an attacker can substitute proves nothing. Put
+# the stack's root public key in LICENSE_ROOTS; the stack's admin portal offers
+# it for download.
+
+services:
+  sitebin:
+    build:
+      context: ../..
+      args:
+        EDITION: enterprise
+        # Comma-separated Ed25519 root PUBLIC keys, base64. A list, so a root
+        # can be rotated by honouring two of them for a while.
+        LICENSE_ROOTS: ${LICENSE_ROOTS:?set LICENSE_ROOTS to the stack root public key}
+    image: sitebin:stack-e2e
+    restart: unless-stopped
+    ports:
+      - "${SITEBIN_PORT:-8091}:80"
+    volumes:
+      - sitebin-data:/data
+      # tiers.json is INSTANCE configuration and is not in this repo. For
+      # PayGate it must carry price.monthly / price.annual / price.currency
+      # amounts, because the stack creates the payment product itself and has
+      # no field for a hand-made price id.
+      - ./tiers.json:/cfg/tiers.json:ro
+    environment:
+      # ---- serving ----
+      SITEBIN_BASE_DOMAIN: ${SITEBIN_BASE_DOMAIN:-sitebin.localtest.me:8091}
+      SITEBIN_HTTP_ONLY: "true"
+
+      # ---- accounts: the stack's Auth Gateway is the identity provider ----
+      # Local accounts are off on a stack instance on purpose: PayGate knows
+      # people by the stack's identity (the OIDC subject, i.e. the Keycloak
+      # user UUID). A local account has no subscription there and never will.
+      SITEBIN_ACCOUNT_MODE: tiers
+      SITEBIN_LOCAL_AUTH: "false"
+      SITEBIN_TIERS_FILE: /cfg/tiers.json
+      SITEBIN_DEFAULT_TIER: ${SITEBIN_DEFAULT_TIER:-free}
+      SITEBIN_OAUTH_OIDC_ISSUER: ${SITEBIN_OAUTH_OIDC_ISSUER:?the stack Auth Gateway issuer URL}
+      SITEBIN_OAUTH_OIDC_CLIENT_ID: ${SITEBIN_OAUTH_OIDC_CLIENT_ID:?}
+      SITEBIN_OAUTH_OIDC_CLIENT_SECRET: ${SITEBIN_OAUTH_OIDC_CLIENT_SECRET:?}
+      SITEBIN_OAUTH_OIDC_LABEL: ${SITEBIN_OAUTH_OIDC_LABEL:-Sign in with IT-Trail}
+
+      # ---- self-registration with the stack (optional) ----
+      # All three are required together or none of them. The admin key acts on
+      # EVERY app on the stack, so it belongs only on an instance you operate
+      # yourself — never on a customer's self-hosted one.
+      SITEBIN_STACK_URL: ${SITEBIN_STACK_URL:-}
+      SITEBIN_STACK_APP_ID: ${SITEBIN_STACK_APP_ID:-}
+      SITEBIN_STACK_ADMIN_KEY: ${SITEBIN_STACK_ADMIN_KEY:-}
+
+      # ---- billing through PayGate ----
+      # Exactly one backend may be selected; two configured with no explicit
+      # SITEBIN_BILLING is a startup error by design. URL, app id and api key
+      # must be set together.
+      SITEBIN_BILLING: paygate
+      SITEBIN_PAYGATE_URL: ${SITEBIN_PAYGATE_URL:?}
+      SITEBIN_PAYGATE_APP_ID: ${SITEBIN_PAYGATE_APP_ID:-sitebin}
+      SITEBIN_PAYGATE_API_KEY: ${SITEBIN_PAYGATE_API_KEY:?}
+      SITEBIN_PAYGATE_MANAGE_URL: ${SITEBIN_PAYGATE_MANAGE_URL:-}
+
+      # ---- licensing ----
+      # Leave SITEBIN_LICENSE_KEY empty to exercise the real path: the instance
+      # collects its licence from PayGate daily, caches it under /data and
+      # applies it without a restart. Set it for an air-gapped install or to
+      # pin one — it wins when set, and it also turns collection off.
+      SITEBIN_LICENSE_KEY: ${SITEBIN_LICENSE_KEY:-}
+      # Overrides the URL derived from SITEBIN_PAYGATE_URL
+      # (<paygate>/api/v1/licenses/renew). The licence is its own credential on
+      # that call: no app id, no API key, and never the stack admin key.
+      SITEBIN_LICENSE_URL: ${SITEBIN_LICENSE_URL:-}
+
+volumes:
+  sitebin-data:
