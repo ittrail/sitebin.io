@@ -178,6 +178,11 @@ What is easy to get wrong:
   …/ee/licensing.trustedRootsB64=`). A list, so a root can be rotated without
   redistributing every binary. `SITEBIN_LICENSE_ROOTS_DEV` overrides them for
   **development only** — anything that can set it can mint itself a licence.
+- **Signatures cover the ENCODED segment, not the JSON it decodes to** — the
+  JWT convention. Verifying the decoded bytes instead would make the check
+  depend on both sides serialising JSON identically (key order, spacing,
+  escaping), and any disagreement looks exactly like a forgery. This was
+  already got wrong once: no stack-issued licence verified until it was fixed.
 - **The audience check is not optional.** `licPayload.app_id` must equal the
   certificate's *and* equal `"sitebin"`. Same reasoning as the MCP one.
 - **Startup NEVER fails on a licence problem.** Absent, malformed, unverifiable
@@ -198,6 +203,14 @@ What is easy to get wrong:
 - **Staying current:** the instance collects its licence from the stack daily,
   caches it under the data dir and applies it without a restart.
   `SITEBIN_LICENSE_KEY` wins when set, for air-gapped installs.
+- **The licence is its own credential on that call, and no other credential is
+  ever sent.** A customer self-hosting Sitebin is *not* a registered app on our
+  stack: no app id, no API key, and never the stack admin key, which acts on
+  every app there is. The instance posts the licence it holds and the stack —
+  which signed it — verifies it. An expired licence still authenticates, since
+  a signature does not care about expiry and expiry is exactly when a renewal
+  is wanted. With no licence at all it asks nothing: the first one arrives by
+  email.
 
 Read `docs/superpowers/specs/2026-08-30-licensing-through-the-stack-design.md`.
 
