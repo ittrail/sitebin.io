@@ -16,10 +16,14 @@ type stubFetcher struct {
 	ok   bool
 	err  error
 	hits int
+	// sawCurrent records the licence the manager offered as the credential,
+	// so a test can assert the renewal actually presents what it holds.
+	sawCurrent string
 }
 
-func (f *stubFetcher) Fetch(context.Context) (string, bool, error) {
+func (f *stubFetcher) Fetch(_ context.Context, current string) (string, bool, error) {
 	f.hits++
+	f.sawCurrent = current
 	return f.key, f.ok, f.err
 }
 

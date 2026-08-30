@@ -213,9 +213,15 @@ func Verify(key string, roots []ed25519.PublicKey, appID string, now time.Time) 
 	}
 
 	// 2. the certificate must be signed by one of the roots we shipped with.
+	//
+	// The signature covers the ENCODED segment, not the JSON it decodes to --
+	// the same convention JWT uses, and for the same reason: a verifier that
+	// re-serialised the JSON would have to agree with the issuer about key
+	// order, spacing and escaping, and any disagreement would look like a
+	// forged licence. Signing the bytes on the wire removes the question.
 	trusted := false
 	for _, root := range roots {
-		if ed25519.Verify(root, certRaw, certSig) {
+		if ed25519.Verify(root, []byte(parts[0]), certSig) {
 			trusted = true
 			break
 		}
@@ -239,7 +245,7 @@ func Verify(key string, roots []ed25519.PublicKey, appID string, now time.Time) 
 	if err != nil {
 		return License{}, fmt.Errorf("%w: certificate pubkey: %v", ErrMalformed, err)
 	}
-	if !ed25519.Verify(ed25519.PublicKey(appPub), licRaw, licSig) {
+	if !ed25519.Verify(ed25519.PublicKey(appPub), []byte(parts[2]), licSig) {
 		return License{}, ErrLicSig
 	}
 
@@ -274,14 +280,17 @@ func SignLicense(lic LicensePayload, appPriv ed25519.PrivateKey) (string, error)
 	return signSegment(lic, appPriv)
 }
 
+// signSegment encodes v and signs the ENCODED segment, matching what Verify
+// checks and what the stack's issuer produces. Signing the JSON instead would
+// make the signature depend on how each side serialises it.
 func signSegment(v any, priv ed25519.PrivateKey) (string, error) {
 	payload, err := json.Marshal(v)
 	if err != nil {
 		return "", err
 	}
-	sig := ed25519.Sign(priv, payload)
-	return base64.RawURLEncoding.EncodeToString(payload) + "." +
-		base64.RawURLEncoding.EncodeToString(sig), nil
+	encoded := base64.RawURLEncoding.EncodeToString(payload)
+	sig := ed25519.Sign(priv, []byte(encoded))
+	return encoded + "." + base64.RawURLEncoding.EncodeToString(sig), nil
 }
 
 // Key joins a signed certificate and a signed licence into the one opaque

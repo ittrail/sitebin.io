@@ -3,13 +3,17 @@
 package ee
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -314,5 +318,57 @@ func TestDomainEntitlementAllowsWhenSitesCannotBeCounted(t *testing.T) {
 	host.sites.allErr = errors.New("cannot enumerate")
 	if err := p.CustomDomainsAllowed(); err != nil {
 		t.Error("an uncountable instance was refused a domain")
+	}
+}
+
+// TestLicenseFetcherAuthenticatesWithTheLicence pins the correction that a
+// customer's instance proves who it is with the licence itself. It must never
+// send a stack credential: a self-hosted customer is not a registered app and
+// must never hold the stack's admin key, which acts on every app there is.
+func TestLicenseFetcherAuthenticatesWithTheLicence(t *testing.T) {
+	var gotMethod, gotAuth, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotAuth = r.Header.Get("Authorization")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"license":"renewed.key.goes.here"}`)
+	}))
+	defer srv.Close()
+
+	f := &stackLicenseFetcher{url: srv.URL, client: srv.Client()}
+	key, ok, err := f.Fetch(context.Background(), "current.licence.four.segments")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || key != "renewed.key.goes.here" {
+		t.Errorf("key = %q ok = %v", key, ok)
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %s, want POST", gotMethod)
+	}
+	if gotAuth != "" {
+		t.Errorf("Authorization = %q: the renewal route takes no credential, and must never carry the stack admin key", gotAuth)
+	}
+	if !strings.Contains(gotBody, "current.licence.four.segments") {
+		t.Errorf("body must present the current licence as the credential: %s", gotBody)
+	}
+}
+
+// Without a licence there is nothing to authenticate with. That is an answer,
+// not a failure: the first licence arrives by email, never from this route.
+func TestLicenseFetcherWithoutALicenceAsksNothing(t *testing.T) {
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
+	defer srv.Close()
+
+	f := &stackLicenseFetcher{url: srv.URL, client: srv.Client()}
+	key, ok, err := f.Fetch(context.Background(), "")
+	if err != nil || ok || key != "" {
+		t.Errorf("Fetch = (%q, %v, %v), want empty and no error", key, ok, err)
+	}
+	if called {
+		t.Error("must not call the stack with no licence to present")
 	}
 }

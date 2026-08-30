@@ -3,6 +3,7 @@
 package ee
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -148,49 +149,54 @@ func (p *provider) customDomainCount() (int, error) {
 // ---- collecting the licence from the stack ----
 
 // licenseFetcher builds the stack collector, or nil when this instance has no
-// stack to ask. SITEBIN_LICENSE_URL overrides the derived URL, for a stack
-// that serves licences from somewhere other than its platform API.
+// stack to ask. SITEBIN_LICENSE_URL overrides the derived URL.
 //
-// ASSUMPTION, to be confirmed against the stack: the endpoint is
-// GET <stack>/api/v1/apps/<app_id>/license with the app/admin credential as a
-// bearer, answering {"license":"<key>"} (or 404 when the app has none). The
-// call is behind licensing.Fetcher precisely so a different shape is a change
-// to this one type.
+// The endpoint is POST <paygate>/api/v1/licenses/renew and it takes NO API
+// key: the licence authenticates itself. That is the whole point — a customer
+// running Sitebin Enterprise on their own hardware is not a registered app on
+// our stack. They have no app id and no API key, and they must never be given
+// the stack's admin key, which acts on every app there is. What they do have
+// is the signed licence we issued them, which the stack can verify because it
+// signed it.
+//
+// The first licence therefore never comes from here; it arrives by email. This
+// path is for renewals, so that a customer whose subscription renewed is not
+// locked out because nobody read the mail.
 func (p *provider) licenseFetcher() licensing.Fetcher {
-	reg := p.cfg.StackRegistration
-	url := strings.TrimSpace(os.Getenv("SITEBIN_LICENSE_URL"))
-	switch {
-	case url != "":
-		token := ""
-		if reg != nil {
-			token = reg.AdminKey
-		}
-		return &stackLicenseFetcher{url: url, token: token}
-	case reg != nil:
+	if url := strings.TrimSpace(os.Getenv("SITEBIN_LICENSE_URL")); url != "" {
+		return &stackLicenseFetcher{url: url}
+	}
+	if p.cfg.PayGate != nil {
 		return &stackLicenseFetcher{
-			url:   strings.TrimRight(reg.URL, "/") + "/api/v1/apps/" + reg.AppID + "/license",
-			token: reg.AdminKey,
+			url: strings.TrimRight(p.cfg.PayGate.URL, "/") + "/api/v1/licenses/renew",
 		}
 	}
 	return nil
 }
 
 type stackLicenseFetcher struct {
-	url   string
-	token string
+	url string
 	// client is nil in production (http.DefaultClient); tests inject one.
 	client *http.Client
 }
 
-func (f *stackLicenseFetcher) Fetch(ctx context.Context) (string, bool, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.url, nil)
+func (f *stackLicenseFetcher) Fetch(ctx context.Context, current string) (string, bool, error) {
+	current = strings.TrimSpace(current)
+	if current == "" {
+		// Nothing to prove who we are with. Not an error: an instance that has
+		// never been licensed simply has no renewal to collect.
+		return "", false, nil
+	}
+	body, err := json.Marshal(map[string]string{"license": current})
+	if err != nil {
+		return "", false, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.url, bytes.NewReader(body))
 	if err != nil {
 		return "", false, err
 	}
 	req.Header.Set("Accept", "application/json")
-	if f.token != "" {
-		req.Header.Set("Authorization", "Bearer "+f.token)
-	}
+	req.Header.Set("Content-Type", "application/json")
 	c := f.client
 	if c == nil {
 		c = http.DefaultClient
@@ -200,20 +206,20 @@ func (f *stackLicenseFetcher) Fetch(ctx context.Context) (string, bool, error) {
 		return "", false, err
 	}
 	defer res.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<16))
+	respBody, _ := io.ReadAll(io.LimitReader(res.Body, 1<<16))
 	switch {
 	case res.StatusCode == http.StatusNotFound || res.StatusCode == http.StatusNoContent:
 		// The stack has no licence for this instance. That is an answer, not a
 		// failure — and it is emphatically not "expired".
 		return "", false, nil
 	case res.StatusCode < 200 || res.StatusCode >= 300:
-		return "", false, fmt.Errorf("license endpoint returned %d: %s", res.StatusCode, strings.TrimSpace(string(body)))
+		return "", false, fmt.Errorf("license endpoint returned %d: %s", res.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	var payload struct {
 		License string `json:"license"`
 		Key     string `json:"key"`
 	}
-	if err := json.Unmarshal(body, &payload); err != nil {
+	if err := json.Unmarshal(respBody, &payload); err != nil {
 		return "", false, fmt.Errorf("license endpoint returned unparseable JSON: %w", err)
 	}
 	key := payload.License

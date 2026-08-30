@@ -27,7 +27,14 @@ const DefaultRefresh = 24 * time.Hour
 type Fetcher interface {
 	// Fetch returns the current licence key, or ok=false when the stack has
 	// none for this instance. An error means "we do not know", never "expired".
-	Fetch(ctx context.Context) (key string, ok bool, err error)
+	//
+	// current is the licence this instance already holds, empty if it has
+	// none. It is passed because the licence IS the credential: a customer's
+	// self-hosted instance is not a registered app and has no API key, so it
+	// proves who it is by presenting the signed licence it was issued. An
+	// expired one still proves it — a signature does not care about expiry,
+	// and expiry is exactly when a renewal needs collecting.
+	Fetch(ctx context.Context, current string) (key string, ok bool, err error)
 }
 
 // Manager holds the instance's licence: it loads the key, keeps the trial
@@ -166,7 +173,11 @@ func (m *Manager) refreshOnce(f Fetcher) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	key, ok, err := f.Fetch(ctx)
+	m.mu.RLock()
+	current := m.snap.raw
+	m.mu.RUnlock()
+
+	key, ok, err := f.Fetch(ctx, current)
 	if err != nil {
 		slog.Warn("license: could not collect the license from the stack; keeping the current one", "err", err)
 		return
