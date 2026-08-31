@@ -120,12 +120,27 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | `SITEBIN_RATE_CREATE_PER_HOUR` / `SITEBIN_RATE_CREATE_BURST` | `30` / `10` | Anonymous creation limit per IP. |
 | `SITEBIN_RATE_AUTH_PER_5MIN` | `10` | Password-attempt limit per (IP, site) — edit, view, and WebDAV auth. |
 | `SITEBIN_CLEANUP_INTERVAL` | `10m` | Expiry sweep interval. |
+| `SITEBIN_PUBLIC_ADDR` | `:8080` | Address of the Go backend listener that Caddy proxies. Change it only if `8080` is taken inside the container. |
+| `SITEBIN_INTERNAL_ADDR` | `:9000` | Address of the authz / `tls-check` / health listener. It is **never proxied publicly**; do not expose it. |
+| `SITEBIN_BACKEND_HOST` | `127.0.0.1` | Host Caddy dials to reach the backend. Only differs from loopback if you run Caddy and the Go server in separate containers, which is not a supported layout. |
 
 A tier's `max_expiry_days` works the same way per site and adds one rule:
 while a site **owned by an account** stays under a cap, every content change
-(upload, delete, replace, zip extraction, WebDAV write) slides its expiry to `now + cap`. An
-anonymous site keeps the expiry stamped at creation — a drop cannot renew
-itself. FTP writes do not slide the expiry.
+(upload, delete, replace, zip extraction, WebDAV write) slides its expiry to
+`now + cap`. An anonymous site keeps the expiry stamped at creation — a drop
+cannot renew itself. FTP writes do not slide the expiry.
+
+Sliding renewal is deliberately narrow, and both limits are load-bearing:
+
+- **An expiry the owner chose never slides.** Sitebin records who picked the
+  date. Setting `expires_at` through the API or the edit page makes it yours,
+  and from then on uploads leave it alone — "delete this on the 20th" means the
+  20th. Only a date the *plan* imposed is renewed. The cap still clamps an
+  owner-chosen date; it just never moves it.
+- **A renewal never pulls a date closer.** If the stored expiry is already
+  further out than `now + cap`, it stays. That is what keeps the 30-day grace a
+  downgrade stamps from being cut back to the new tier's cap by a single
+  upload, and it is why "renew" here only ever means *later*.
 
 ---
 
@@ -444,9 +459,26 @@ edition, add a domain in the edit UI (or API), then point DNS at your server
 (`A <domain> → server IP`, or `CNAME → sitebin.example.com`). The certificate
 is issued automatically on the first HTTPS request, and the internal
 `tls-check` endpoint ensures certificates are only issued for domains that
-actually belong to a site (prevents issuance-DoS). Per-account limits follow
-the tier's `custom_domains` cap. In the community edition the domain API
-returns `403`.
+actually belong to a site (prevents issuance-DoS). In the community edition the
+domain API returns `403`.
+
+Two independent limits apply, and neither is per account:
+
+- **Per site**, the tier's `custom_domains` cap. It is stamped onto the site
+  when the site is created, so a site keeps the cap its owner's plan granted at
+  the time — changing plans restamps it, it is not resolved per request.
+  Ten sites on a tier with `"custom_domains": 5` may carry five domains *each*.
+- **Per instance**, the Enterprise licence's `entitlements.max_custom_domains`
+  ceiling — the total across every site on the deployment, anonymous ones
+  included. Absent or zero means unlimited, which is also what having no
+  licence means. It is checked only where a domain is *added*, so a licence
+  that shrinks refuses the next domain and never removes one already serving:
+
+  > this instance's license covers 25 custom domains and 25 are configured;
+  > remove one or upgrade the license
+
+  If the instance cannot count its domains, the domain is allowed: an
+  unreadable `meta.json` must not cost a customer a domain they paid for.
 
 ### Expiry
 
@@ -539,10 +571,60 @@ but not implemented.
 ## Development
 
 ```bash
-go test ./...                        # unit + handler tests
+go test ./...                        # unit + handler tests (community)
+go test -tags ee ./...               # enterprise suite -- run BOTH, they differ
+go vet ./... && go vet -tags ee ./...
 go run ./cmd/sitebin caddyfile       # inspect generated Caddyfile
-powershell -File e2e/e2e.ps1         # full E2E against the Docker image (Windows host)
+docker build -t sitebin:latest .                                   # community image
+docker build --build-arg EDITION=enterprise -t sitebin:latest-ee .  # enterprise image
 ```
+
+Either `docker build` runs `go vet` and both test suites inside the builder, so
+a green build is a green suite.
+
+### End-to-end tests *(Windows host, Docker required)*
+
+`e2e/` holds **eight independent scripts**. There is no "run everything" entry
+point: `e2e.ps1` is the core suite and calls none of the others, so a full pass
+means running them all.
+
+| Script | Covers | Default `-Image` |
+|---|---|---|
+| `e2e.ps1` | core HTTP: create, view, edit, quotas, rate limits | `sitebin:dev` |
+| `spa.ps1` | per-site `index.html` fallback | `sitebin:dev` |
+| `paths.ps1` | `SITEBIN_VIEW_ACCESS=path` | `sitebin:dev` |
+| `ftp.ps1` | FTP/FTPS access | `sitebin:dev` |
+| `mcp.ps1` | the `/mcp` endpoint | `sitebin:dev` |
+| `accounts.ps1` | accounts mode *(enterprise)* | `sitebin:dev-ee` |
+| `tiers.ps1` | tiers and quotas *(enterprise)* | `sitebin:dev-ee` |
+| `license.ps1` | licensing *(enterprise)* — builds its own image | `sitebin:e2e-license` |
+
+The defaults are tags the scripts do **not** build; tag them yourself first, and
+note that the enterprise ones need `--build-arg EDITION=enterprise` or they will
+silently exercise a community binary that has no accounts at all:
+
+```bash
+docker build -t sitebin:dev .
+docker build --build-arg EDITION=enterprise -t sitebin:dev-ee .
+```
+
+```powershell
+powershell -File e2e\e2e.ps1
+powershell -File e2e\spa.ps1
+powershell -File e2e\paths.ps1
+powershell -File e2e\ftp.ps1
+powershell -File e2e\mcp.ps1
+powershell -File e2e\accounts.ps1
+powershell -File e2e\tiers.ps1
+powershell -File e2e\license.ps1   # self-contained: mints a throwaway root and builds its own image
+```
+
+`e2e/stack/` is the compose file for the part that needs a running SaaS Stack;
+see its own README.
+
+**Keep these scripts pure ASCII.** They are UTF-8 with no BOM, so PowerShell
+5.1 decodes them in the system codepage and an em dash silently breaks string
+parsing for the rest of the file. Write `--`, not an em dash.
 
 Layout: `cmd/sitebin` (entrypoint + supervisor), `internal/*` (config, ids,
 auth, store, viewer, caddygen, httpapi, cleanup), `web/` (embedded UI +
@@ -559,8 +641,19 @@ Sitebin is **open-core**:
   quotas, Google/Microsoft OAuth, SMTP, and billing through Stripe, Paddle or
   the SaaS Stack), compiled in
   only with the `ee` build tag (`go build -tags ee`, image `sitebin:latest-ee`).
-  All caps and toggles are configured at container startup. Design:
-  [`docs/superpowers/specs/2026-07-14-accounts-tiers-billing-design.md`](docs/superpowers/specs/2026-07-14-accounts-tiers-billing-design.md).
+  All caps and toggles are configured at container startup.
+
+  For how tiers, quotas and site lifetimes actually behave, read
+  [`2026-08-11-tier-lifetimes-and-api-gating-design.md`](docs/superpowers/specs/2026-08-11-tier-lifetimes-and-api-gating-design.md)
+  and
+  [`2026-08-12-tier-change-quota-sync-design.md`](docs/superpowers/specs/2026-08-12-tier-change-quota-sync-design.md)
+  — including the latter's "Corrections (post-implementation)" blocks, which
+  are the rules, not footnotes. The original
+  [`2026-07-14-accounts-tiers-billing-design.md`](docs/superpowers/specs/2026-07-14-accounts-tiers-billing-design.md)
+  is kept for the shape of the accounts/billing design only; **its tier table
+  is obsolete** (it proposes Free = 3 sites / 30-day and a €9 Pro) and no
+  shipped instance has ever run those numbers. Tiers are per-instance
+  configuration, never a table in this repo.
 
 The `ee/` tree is **source-available**, not hidden: the full premium source
 lives in this repo for you to read, audit, self-host, and modify. It is simply
@@ -587,14 +680,16 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_OAUTH_MICROSOFT_CLIENT_ID` / `_SECRET` / `_TENANT` | Microsoft OIDC (`_TENANT` default `common`). |
 | `SITEBIN_OAUTH_OIDC_ISSUER` / `_CLIENT_ID` / `_CLIENT_SECRET` / `_LABEL` | Generic OIDC sign-in against any issuer (Keycloak, Okta, Authentik, the [SaaS Stack](#saas-stack-integration)). `_LABEL` is the login-button text (default `SSO`). |
 | `SITEBIN_LOCAL_AUTH` | `true` | `false` = SSO only: no email/password form, signup/reset disabled; with a single OAuth provider, `/account/login` redirects straight to it. Requires an `SITEBIN_OAUTH_*` provider. |
-| `SITEBIN_BILLING` | Which backend may charge customers: `stripe`, `paddle` or `paygate`. Unset = inferred when exactly one is configured; **two configured and no choice is a startup error**. See [Billing](#billing). |
+| `SITEBIN_BILLING` | Which backend may charge customers: `stripe`, `paddle` or `paygate` (case-insensitive). Unset = inferred when exactly one is configured; **two configured and no choice is a startup error**. Exactly one backend is ever active: with `paygate` selected, configured Stripe/Paddle credentials are inert *and their webhook routes are not mounted*, so provider deliveries get a silent `404` — remove the webhook from the provider's dashboard, or you will be debugging retries. Startup also refuses a catalogue the selected direct backend cannot sell: every tier with a `price` must carry the matching `price.stripe` / `price.paddle`. See [Billing](#billing). |
 | `SITEBIN_PAYGATE_URL` / `_APP_ID` / `_API_KEY` | Sell tiers and resolve subscriptions through a SaaS-Stack PayGate. See [Billing](#billing) and [SaaS-Stack integration](#saas-stack-integration). |
 | `SITEBIN_PAYGATE_CACHE_TTL` / `_MANAGE_URL` | Per-user tier cache (default `5m`); optional dashboard "manage subscription" link. |
 | `SITEBIN_SMTP_HOST` / `_PORT` / `_USER` / `_PASS` / `_FROM` / `_TLS` | Email (verification, password reset). Port default 587; `_TLS=true` for implicit TLS (465). |
 | `SITEBIN_STRIPE_SECRET_KEY` / `_WEBHOOK_SECRET` | Stripe billing, direct. Webhook: `POST /account/billing/stripe/webhook`. |
 | `SITEBIN_PADDLE_API_KEY` / `_WEBHOOK_SECRET` / `_SANDBOX` | Paddle billing, direct. Webhook: `POST /account/billing/paddle/webhook`. |
 | `SITEBIN_LICENSE_KEY` | Optional Enterprise license key (four base64url segments: a stack-signed certificate plus the license it vouches for). Verified offline; it never blocks startup. When set it WINS over any license collected from the stack, which is what makes an air-gapped install work. Without a valid key an instance behaves as licensed for 90 days from first start, then keeps serving and updating every existing site but creates no new ones. |
+| `SITEBIN_LICENSE_REFRESH` | How often the instance collects its license from the stack. Default **24h**; any positive Go duration (`5m`, `1h`). Shorten it to watch a renewal apply without a restart, which is otherwise a day-long experiment. A value that is not a positive duration is warned about and ignored. Ignored entirely when `SITEBIN_LICENSE_KEY` is set. |
 | `SITEBIN_LICENSE_URL` | Optional override for where the running instance collects a renewed license (default: `<SITEBIN_PAYGATE_URL>/api/v1/licenses/renew`). The request carries **no credential**: the instance presents the license it already holds, and the stack — which signed it — verifies it. Fetched daily, cached under the data dir and applied without a restart; a failure never restricts anything. Ignored when `SITEBIN_LICENSE_KEY` is set. |
+| `SITEBIN_STACK_LICENSING` | JSON `licensing` block sent with the self-registration above, declaring what a Sitebin **Enterprise license** is worth and how long a lapsed one stays usable: `{"graceMonths":3,"plans":{"team":{"max_custom_domains":25},"platform":{}}}`. The stack mints licenses, so it has to be told; a plan absent from `plans` carries no entitlements, which means **unlimited**. Only meaningful alongside `SITEBIN_STACK_URL`, and only the vendor's own deployment (the one holding the platform admin key) ever sets it. Absent = declare nothing, and the stack keeps whatever it already holds — registration merges, so an empty block would erase the entitlements rather than leave them. |
 | `SITEBIN_STACK_URL` / `_APP_ID` / `_ADMIN_KEY` | Self-registration against the IT-Trail SaaS Stack. With all three set, the instance announces itself to the stack on every start — its identity, its OIDC callback, its tier catalogue and its MCP block — so auth, billing and MCP are configured by deploying rather than by hand. `_ADMIN_KEY` is the stack's platform admin key: a master credential, so keep it in a secret store. Unset = no self-registration. |
 
 ### Account API tokens *(Enterprise)*
@@ -758,6 +853,17 @@ stack creates the product in whatever processor it uses. A tier with no amount
 declares no payment product, which is how free plans — and plans whose pricing
 is not settled yet — announce themselves.
 
+It also declares how the catalogue should *read* on the stack's hosted plan
+page. The stack has no sort field — the order of the declaration is the order —
+so the order of `tiers.json` is the order customers see, and `"featured": true`
+on a tier marks the plan the page leads with. Neither is guessed: a catalogue
+that says nothing renders unemphasised, in whatever order it happens to be in.
+
+And, when `SITEBIN_STACK_LICENSING` is set, it declares what a **Sitebin
+Enterprise license** is worth — see [Enterprise licensing](#enterprise-licensing).
+Registration merges rather than replaces, so a block that is absent leaves what
+the stack already holds untouched.
+
 Registration never blocks startup. A stack that is briefly unreachable makes
 the attempt fail and log; Sitebin serves sites regardless and converges again
 on the next start.
@@ -794,6 +900,110 @@ provider (their subject *is* the stack user id); `active`, `trialing` and
 `past_due` subscriptions are honored. For those accounts the dashboard links
 to the stack's subscription management instead of built-in checkout, and
 `SITEBIN_TIER_SELF_SELECT` is ignored.
+
+### Enterprise licensing
+
+The enterprise edition is license-gated. This section is what an operator
+building or running their own Enterprise image needs; none of it applies to the
+community build.
+
+**What a license is.** Four base64url segments —
+`<certPayload>.<certSig>.<licPayload>.<licSig>` — a certificate signed by a
+root, plus the license that certificate's key signed. Verification is two
+Ed25519 checks and needs **no network**: there is no license server.
+
+**Startup never fails on a license problem.** Absent, malformed, unverifiable
+and expired keys are all logged and shown in the account UI. Serving is never
+touched, and neither are existing sites.
+
+| State | When | Effect |
+|---|---|---|
+| `licensed` | valid | entitlements apply |
+| `grace` | past `expires_at`, within `grace_until` | loud notice in the account UI, nothing restricted |
+| `expired` | past `grace_until` | notice, **and no new sites or drops** |
+| `none` | no key, or a key that did not verify | as `licensed` for a 90-day trial from first start, then as `expired` |
+| `unknown` | the state could not be determined | **nothing is restricted** |
+
+A malformed or unverifiable key is `none`, never `expired`: a configuration
+mistake must not punish harder than having no license at all. Nothing is ever
+restricted except the *creation* of a new site or drop — updating and serving an
+existing site keep working in every state.
+
+#### Building your own Enterprise image
+
+Three build inputs, all easy to miss, and missing them produces a binary that
+looks fine and then stops creating sites after 90 days with no explanation:
+
+```bash
+docker build \
+  --build-arg EDITION=enterprise \
+  --build-arg LICENSE_ROOTS="<base64url ed25519 root public key>[,<another>]" \
+  -t sitebin:latest-ee .
+```
+
+- **`EDITION=enterprise`** compiles the `ee/` tree in (`-tags ee`). Without it
+  you get a community binary: no accounts, no tiers, no licensing at all.
+- **`LICENSE_ROOTS`** is the comma-separated list of trusted Ed25519 **root
+  public keys**, baked in with
+  `-ldflags -X github.com/ittrail/sitebin.io/ee/licensing.trustedRootsB64=…`. A
+  *list*, so a root can be rotated without redistributing every binary. **A
+  build with no roots trusts nothing**, so no license can ever verify and the
+  instance runs its 90-day trial and then restricts creation. It says so at
+  startup — `this build carries no trusted license roots; running unlicensed` —
+  and that line is the only warning you get.
+- The root **public** key is all that is ever distributed. The private half is
+  generated at the issuing stack's first bootstrap and never leaves it.
+- `SITEBIN_LICENSE_ROOTS_DEV` overrides the baked roots **for development
+  only**. Anything that can set it can mint itself a license; never set it on
+  an instance you care about.
+
+#### Getting and keeping a license
+
+**The first license arrives by email**, when the subscription is bought. It
+cannot come over the wire: the renewal endpoint authenticates with the license
+itself, so an instance holding none has nothing to present and asks for nothing.
+Paste it into `SITEBIN_LICENSE_KEY`, or let the instance collect it — see below.
+
+**Renewals arrive on their own.** An instance that already holds a license posts
+it to `<SITEBIN_PAYGATE_URL>/api/v1/licenses/renew` (override with
+`SITEBIN_LICENSE_URL`) every `SITEBIN_LICENSE_REFRESH` (default 24h), caches the
+result under the data dir and **applies it without a restart**. The request
+carries no API key and never the stack admin key: the license is its own
+credential, and an expired one still authenticates, since a signature does not
+care about expiry and expiry is exactly when a renewal is wanted. A failed
+collection never restricts anything.
+
+> **The one trap worth knowing.** `SITEBIN_LICENSE_KEY` wins over anything
+> collected — that is what makes an air-gapped install work — and it wins
+> *before* the key is verified. So a key with a typo in it costs you twice: the
+> instance falls back to the unlicensed trial arm **and** stops collecting
+> renewals for as long as the variable is set. This is the likeliest way a
+> paying customer ends up restricted. Sitebin logs it at `ERROR` on every start
+> —
+>
+> ```
+> license: SITEBIN_LICENSE_KEY DID NOT VERIFY, so this instance is running
+> UNLICENSED ... and because the key is set, it will NOT collect a licence from
+> the stack either. Fix or unset SITEBIN_LICENSE_KEY.
+> ```
+>
+> — and the account UI shows the license as absent. If you are on a stack,
+> unsetting `SITEBIN_LICENSE_KEY` is usually the fix: collection then works.
+
+#### Entitlements
+
+A license carries the limits its **plan** bought. The one Sitebin enforces today
+is `entitlements.max_custom_domains`: an **instance-wide ceiling** on custom
+domains across every site, checked where a domain is added. Absent or zero means
+unlimited, which is also what no license means. It never removes a domain
+already configured — it refuses only the next one — and a tier's own per-site
+`custom_domains` cap still applies on top. See
+[Custom domains](#custom-domains-enterprise).
+
+Entitlements are set by the issuer, not by the instance: on the IT-Trail SaaS
+Stack they come from the `licensing` block of the app registration
+(`SITEBIN_STACK_LICENSING`), and a plan listed with no entitlements is
+unlimited rather than zero.
 
 ## License
 

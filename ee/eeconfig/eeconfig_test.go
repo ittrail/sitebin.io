@@ -399,3 +399,194 @@ func TestBillingBackendSelection(t *testing.T) {
 		}
 	})
 }
+
+// A PayGate catalogue carries amounts and no display string. Printing
+// Price.Display then showed a blank price on every paid plan's Upgrade button.
+func TestPriceLabelPrefersTheAmount(t *testing.T) {
+	cases := []struct {
+		name  string
+		price *Price
+		want  string
+	}{
+		{name: "nil price sells nothing", price: nil, want: ""},
+		{name: "amount alone", price: &Price{Monthly: "6.00", Currency: "EUR"}, want: "€6.00/mo"},
+		{name: "amount defaults to euro", price: &Price{Monthly: "6.00"}, want: "€6.00/mo"},
+		{name: "dollars", price: &Price{Monthly: "7.00", Currency: "usd"}, want: "$7.00/mo"},
+		{name: "pounds", price: &Price{Monthly: "5.00", Currency: "GBP"}, want: "£5.00/mo"},
+		{name: "an unsold currency keeps its code", price: &Price{Monthly: "9.00", Currency: "CHF"}, want: "9.00 CHF/mo"},
+		// The rule the design doc states: a shown price must never be able to
+		// disagree with the charged one.
+		{name: "the amount wins over a stale display string", price: &Price{Monthly: "6.00", Currency: "EUR", Display: "€9/mo"}, want: "€6.00/mo"},
+		{name: "display is the fallback with no amount", price: &Price{Stripe: "price_1", Display: "€9/mo"}, want: "€9/mo"},
+		{name: "a price id is not money", price: &Price{Stripe: "price_1"}, want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.price.Label(); got != tc.want {
+				t.Errorf("Label() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// Every tier in the shipped PayGate catalogue that is Paid() must show a price.
+func TestPayGateCatalogueTiersAllPriced(t *testing.T) {
+	const catalogue = `[
+  {"id":"free","label":"Free","max_sites":10},
+  {"id":"pro","label":"Pro","max_sites":100,"featured":true,"price":{"monthly":"6.00","annual":"60.00","currency":"EUR"}},
+  {"id":"studio","label":"Studio","max_sites":500,"price":{"monthly":"19.00","annual":"190.00","currency":"EUR"}}
+]`
+	cfg, err := Load(env(map[string]string{
+		"SITEBIN_ACCOUNT_MODE": "tiers",
+		"SITEBIN_TIERS":        catalogue,
+		"SITEBIN_DEFAULT_TIER": "free",
+	}), noFile)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, tr := range cfg.Tiers {
+		if tr.Paid() && tr.Price.Label() == "" {
+			t.Errorf("tier %q is sellable but shows no price", tr.ID)
+		}
+	}
+	pro, _ := cfg.Tier("pro")
+	if !pro.Featured {
+		t.Error("featured must survive the tier catalogue")
+	}
+	if free, _ := cfg.Tier("free"); free.Featured {
+		t.Error("featured must not be invented for a tier that did not declare it")
+	}
+}
+
+func TestBillingBackendIsCaseInsensitive(t *testing.T) {
+	// SITEBIN_ACCOUNT_MODE and SITEBIN_VIEW_ACCESS both lower-case their input;
+	// this one used to compare as typed, so "Stripe" was a hard boot failure.
+	for _, v := range []string{"stripe", "Stripe", "STRIPE", " stripe "} {
+		cfg, err := Load(env(map[string]string{
+			"SITEBIN_ACCOUNT_MODE":      "tiers",
+			"SITEBIN_TIERS":             twoTiers,
+			"SITEBIN_DEFAULT_TIER":      "free",
+			"SITEBIN_BILLING":           v,
+			"SITEBIN_STRIPE_SECRET_KEY": "sk_test",
+		}), noFile)
+		if err != nil {
+			t.Fatalf("SITEBIN_BILLING=%q: %v", v, err)
+		}
+		if cfg.BillingBackend != BackendStripe {
+			t.Errorf("SITEBIN_BILLING=%q gave backend %q", v, cfg.BillingBackend)
+		}
+	}
+}
+
+// The design doc promised this check at startup so it cannot land at a
+// customer's click on Upgrade, where the only honest answer is "unavailable".
+func TestSellableTierMustCarryTheActiveBackendsPriceID(t *testing.T) {
+	const noStripeID = `[
+  {"id":"free","label":"Free","max_sites":3},
+  {"id":"pro","label":"Pro","max_sites":100,"price":{"monthly":"9.00","currency":"EUR"}}
+]`
+	base := map[string]string{
+		"SITEBIN_ACCOUNT_MODE": "tiers",
+		"SITEBIN_DEFAULT_TIER": "free",
+	}
+	with := func(extra map[string]string) map[string]string {
+		m := map[string]string{}
+		for k, v := range base {
+			m[k] = v
+		}
+		for k, v := range extra {
+			m[k] = v
+		}
+		return m
+	}
+
+	_, err := Load(env(with(map[string]string{
+		"SITEBIN_TIERS":             noStripeID,
+		"SITEBIN_STRIPE_SECRET_KEY": "sk_test",
+	})), noFile)
+	if err == nil || !strings.Contains(err.Error(), "price.stripe") {
+		t.Fatalf("a stripe instance with an unsellable paid tier must refuse to start, got %v", err)
+	}
+
+	_, err = Load(env(with(map[string]string{
+		"SITEBIN_TIERS":          noStripeID,
+		"SITEBIN_PADDLE_API_KEY": "pk_test",
+	})), noFile)
+	if err == nil || !strings.Contains(err.Error(), "price.paddle") {
+		t.Fatalf("a paddle instance with an unsellable paid tier must refuse to start, got %v", err)
+	}
+
+	// PayGate is handed the AMOUNT and creates the product itself, so the same
+	// catalogue is perfectly sellable there.
+	if _, err := Load(env(with(map[string]string{
+		"SITEBIN_TIERS":           noStripeID,
+		"SITEBIN_PAYGATE_URL":     "https://pg.example",
+		"SITEBIN_PAYGATE_APP_ID":  "sitebin",
+		"SITEBIN_PAYGATE_API_KEY": "ssk_test",
+	})), noFile); err != nil {
+		t.Fatalf("paygate needs no provider price id: %v", err)
+	}
+
+	// And the ids that ARE there still start.
+	if _, err := Load(env(with(map[string]string{
+		"SITEBIN_TIERS":             twoTiers,
+		"SITEBIN_STRIPE_SECRET_KEY": "sk_test",
+	})), noFile); err != nil {
+		t.Fatalf("a fully priced catalogue must start: %v", err)
+	}
+}
+
+func TestLoadStackLicensing(t *testing.T) {
+	stack := map[string]string{
+		"SITEBIN_STACK_URL":       "https://platform.example/",
+		"SITEBIN_STACK_APP_ID":    "sitebin",
+		"SITEBIN_STACK_ADMIN_KEY": "padm_test",
+	}
+	with := func(v string) func(string) string {
+		m := map[string]string{}
+		for k, vv := range stack {
+			m[k] = vv
+		}
+		if v != "" {
+			m["SITEBIN_STACK_LICENSING"] = v
+		}
+		return env(m)
+	}
+
+	t.Run("absent declares nothing", func(t *testing.T) {
+		cfg, err := Load(with(""), noFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.StackRegistration.Licensing != nil {
+			t.Error("an undeclared block must stay nil: the stack merges, and an empty one erases")
+		}
+	})
+
+	t.Run("parsed in the stack's own shape", func(t *testing.T) {
+		cfg, err := Load(with(`{"graceMonths":3,"plans":{"team":{"max_custom_domains":25},"platform":{}}}`), noFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lic := cfg.StackRegistration.Licensing
+		if lic == nil || lic.GraceMonths != 3 {
+			t.Fatalf("licensing = %+v", lic)
+		}
+		if got := lic.Plans["team"]["max_custom_domains"]; got != 25 {
+			t.Errorf("team max_custom_domains = %d, want 25", got)
+		}
+		// An empty plan is not zero entitlements, it is unlimited; it must
+		// survive as an empty map rather than be dropped.
+		if _, ok := lic.Plans["platform"]; !ok {
+			t.Error("a plan declared with no entitlements must still be declared")
+		}
+	})
+
+	t.Run("rejects garbage and empty declarations", func(t *testing.T) {
+		for _, bad := range []string{`{`, `{}`, `{"plans":{}}`, `{"graceMonths":-1}`} {
+			if _, err := Load(with(bad), noFile); err == nil {
+				t.Errorf("SITEBIN_STACK_LICENSING=%q must not start", bad)
+			}
+		}
+	})
+}

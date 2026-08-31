@@ -55,6 +55,38 @@ func (p *Price) Amount() (string, string, bool) {
 	return p.Monthly, cur, true
 }
 
+// Label is the price the dashboard shows on a tier's card.
+//
+// The AMOUNT wins wherever both exist, which is the whole reason this is not
+// a plain read of Display: a shown price must never be able to disagree with
+// the charged one, and a PayGate catalogue carries amounts and no display
+// string at all. Display is the fallback for a tier that has only ever had a
+// hand-written price (a direct backend's price id says nothing about money).
+func (p *Price) Label() string {
+	if p == nil {
+		return ""
+	}
+	if amount, currency, ok := p.Amount(); ok {
+		return formatAmount(amount, currency) + "/mo"
+	}
+	return strings.TrimSpace(p.Display)
+}
+
+// formatAmount renders an amount in its currency. Only the currencies Sitebin
+// is actually sold in get a symbol; anything else is shown as "12.00 CHF",
+// which is unambiguous and never wrong.
+func formatAmount(amount, currency string) string {
+	switch strings.ToUpper(currency) {
+	case "EUR":
+		return "€" + amount
+	case "USD":
+		return "$" + amount
+	case "GBP":
+		return "£" + amount
+	}
+	return amount + " " + strings.ToUpper(currency)
+}
+
 // Tier is a named quota bundle. Zero MaxSiteBytes/MaxFiles/MaxSites mean "fall
 // back to the global SITEBIN_MAX_* / unlimited"; the enforcing code decides.
 type Tier struct {
@@ -74,8 +106,13 @@ type Tier struct {
 	// Trusted exempts the tier's sites from the strict content-security headers
 	// that untrusted uploads get. Grant it to tiers whose holders you can hold
 	// accountable; anonymous sites never qualify.
-	Trusted bool   `json:"trusted,omitempty"`
-	Price   *Price `json:"price,omitempty"`
+	Trusted bool `json:"trusted,omitempty"`
+	// Featured marks the plan a pricing page should lead with. The stack takes
+	// it per tier in the registration declaration; only the app knows which of
+	// its plans it wants to sell, and the stack will not guess. The tier ORDER
+	// needs no field: it is the order of the tier catalogue itself.
+	Featured bool   `json:"featured,omitempty"`
+	Price    *Price `json:"price,omitempty"`
 }
 
 // Paid reports whether the tier requires payment to activate.
@@ -160,6 +197,38 @@ type StackConfig struct {
 	URL      string // platform-api base URL, no trailing slash
 	AppID    string // the app id to register as
 	AdminKey string // the stack's platform admin key
+	// Licensing is what a Sitebin Enterprise licence is worth, declared to the
+	// stack so it can mint licences with the right entitlements. nil = declare
+	// nothing, and the stack keeps whatever it already holds.
+	Licensing *StackLicensing
+}
+
+// StackLicensing is the registration payload's `licensing` block: the
+// entitlements each licence PLAN carries and how long a lapsed licence stays
+// usable. The stack is the issuer, so it has to be told; Sitebin itself only
+// ever verifies what comes back.
+//
+// It comes from SITEBIN_STACK_LICENSING rather than from a table in this
+// repo, for the same reason tier amounts do (CLAUDE.md, "Tier prices differ by
+// backend"): these numbers are the commercial terms of the Enterprise price
+// list on sitebin.io, they change when that page changes, and this repo is
+// public and released on its own schedule. Baking them in would mean a
+// tagged release every time a plan's domain cap moves, and would publish the
+// vendor's price list as source. Only the instance holding the stack's
+// platform admin key can register at all, so only the vendor's own deployment
+// ever sets this.
+//
+// The shape is the stack's, verbatim, so an operator can paste the block the
+// stack's README documents:
+//
+//	{"graceMonths":3,"plans":{"team":{"max_custom_domains":25},"platform":{}}}
+//
+// A plan absent from `plans` carries no entitlements, which means UNLIMITED,
+// not zero — the same rule ee/licensing applies to a licence that arrives
+// without them. Never write a number nobody configured.
+type StackLicensing struct {
+	GraceMonths int                       `json:"graceMonths,omitempty"`
+	Plans       map[string]map[string]int `json:"plans,omitempty"`
 }
 
 // BillingConfig holds payment-provider credentials. Prices per tier come from
@@ -245,6 +314,23 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Co
 		}
 		cfg.StackRegistration = &StackConfig{
 			URL: strings.TrimRight(url, "/"), AppID: appID, AdminKey: key,
+		}
+		if raw := strings.TrimSpace(getenv("SITEBIN_STACK_LICENSING")); raw != "" {
+			var lic StackLicensing
+			if err := json.Unmarshal([]byte(raw), &lic); err != nil {
+				return cfg, fmt.Errorf("SITEBIN_STACK_LICENSING: %w", err)
+			}
+			// A block that decodes to nothing is an operator mistake worth
+			// catching here: declaring it empty would be indistinguishable from
+			// not declaring it, and the stack MERGES, so the silent outcome is
+			// "the entitlements you thought you just set are the old ones".
+			if lic.GraceMonths == 0 && len(lic.Plans) == 0 {
+				return cfg, fmt.Errorf("SITEBIN_STACK_LICENSING declares neither graceMonths nor plans")
+			}
+			if lic.GraceMonths < 0 {
+				return cfg, fmt.Errorf("SITEBIN_STACK_LICENSING: graceMonths must not be negative")
+			}
+			cfg.StackRegistration.Licensing = &lic
 		}
 	}
 	cfg.DefaultTier = strings.TrimSpace(getenv("SITEBIN_DEFAULT_TIER"))
@@ -340,7 +426,10 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Co
 		}
 	}
 
-	if err := resolveBillingBackend(&cfg, strings.TrimSpace(getenv("SITEBIN_BILLING"))); err != nil {
+	// Lower-cased like SITEBIN_ACCOUNT_MODE and SITEBIN_VIEW_ACCESS. It used to
+	// be compared as typed, so SITEBIN_BILLING=Stripe was a hard boot failure
+	// on an otherwise correct configuration.
+	if err := resolveBillingBackend(&cfg, strings.ToLower(strings.TrimSpace(getenv("SITEBIN_BILLING")))); err != nil {
 		return cfg, err
 	}
 
@@ -361,6 +450,10 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Co
 			return cfg, fmt.Errorf("tiers config: duplicate tier id %q", t.ID)
 		}
 		cfg.byID[t.ID] = t
+	}
+
+	if err := validateBackendPrices(&cfg); err != nil {
+		return cfg, err
 	}
 
 	if !cfg.LocalAuth && !cfg.OAuthEnabled() {
@@ -470,4 +563,40 @@ func resolveBillingBackend(cfg *Config, want string) error {
 		return fmt.Errorf("%s are all configured; set SITEBIN_BILLING to the one that may charge customers",
 			strings.Join(configured, ", "))
 	}
+}
+
+// validateBackendPrices refuses to start when a sellable tier is missing the
+// price identifier the ACTIVE direct backend needs to sell it.
+//
+// The failure it removes is a customer clicking "Upgrade to Pro" and getting
+// "Checkout unavailable": a direct backend's CheckoutURL can only fail there,
+// at the click, because the price id lives in tiers.json and nothing looked at
+// it until then. An operator can fix a boot error; a customer cannot.
+//
+// Only Stripe and Paddle are checked. PayGate needs no id — it is handed the
+// amount and creates the product itself — and an unsellable tier there is a
+// deliberate state (a free tier, a plan not yet priced), not a mistake.
+func validateBackendPrices(cfg *Config) error {
+	var field string
+	var get func(*Price) string
+	switch cfg.BillingBackend {
+	case BackendStripe:
+		field, get = "price.stripe", func(p *Price) string { return p.Stripe }
+	case BackendPaddle:
+		field, get = "price.paddle", func(p *Price) string { return p.Paddle }
+	default:
+		return nil
+	}
+	for _, t := range cfg.Tiers {
+		// Paid() is what puts an Upgrade button on the dashboard, so it is
+		// exactly the set that has to be sellable.
+		if !t.Paid() {
+			continue
+		}
+		if strings.TrimSpace(get(t.Price)) == "" {
+			return fmt.Errorf("tiers config: tier %q is sellable but has no %s, and SITEBIN_BILLING=%s cannot sell it; add the id or remove the tier's price",
+				t.ID, field, cfg.BillingBackend)
+		}
+	}
+	return nil
 }

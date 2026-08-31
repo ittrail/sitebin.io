@@ -32,8 +32,15 @@ import (
 //   - **Unknown is not expired.** If the state cannot be determined, nothing is
 //     restricted.
 //
-// Enforcement lives at exactly one place: licenseGate, called from
-// AuthorizeCreate. Never on the serving path.
+// Enforcement lives at exactly TWO places, and they enforce different things:
+//
+//   - the licence STATE (expired, or no licence and the trial elapsed) in
+//     licenseGate, called only from AuthorizeCreate;
+//   - the licence's ENTITLEMENTS in licenseAllowsAnotherDomain, called only
+//     from CustomDomainsAllowed, where a domain is added.
+//
+// Neither is on the serving path, and neither runs on an update to an existing
+// site. Do not add a third: new enforcement goes inside one of these two.
 
 // initLicensing resolves the licence and starts collecting renewals. It
 // returns no error on purpose — there is no licence problem that is worth

@@ -3,10 +3,13 @@
 package licensing
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -185,5 +188,47 @@ func TestEnvKeySuppressesFetching(t *testing.T) {
 	}
 	if f.hits != 0 {
 		t.Errorf("fetcher was called %d times", f.hits)
+	}
+}
+
+// A key with a typo in it costs the instance twice: it falls to the unlicensed
+// trial arm AND stops collecting renewals forever, because Source is stamped
+// "env" before the key is verified. That combination is the likeliest way a
+// paying customer ends up restricted, so it has to be loud.
+func TestUnverifiableEnvKeySaysItAlsoStopsCollecting(t *testing.T) {
+	c := newChain(t)
+	m, _ := newTestManager(t, c, refTime)
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	st := m.Load("not.a.license.key")
+	if st.State != StateNone {
+		t.Fatalf("an unverifiable key must be %q, not %q", StateNone, st.State)
+	}
+
+	f := &stubFetcher{key: c.key(t), ok: true}
+	m.Start(f)
+	select {
+	case <-m.Waitc():
+		t.Fatal("a fetch ran while SITEBIN_LICENSE_KEY was set")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if f.hits != 0 {
+		t.Errorf("fetcher was called %d times", f.hits)
+	}
+
+	log := buf.String()
+	if !strings.Contains(log, "level=ERROR") {
+		t.Errorf("a bad key that also disables collection must be logged at ERROR, got:\n%s", log)
+	}
+	// Both halves of the trap have to be in the one message; either alone reads
+	// as a smaller problem than it is.
+	for _, want := range []string{"SITEBIN_LICENSE_KEY", "UNLICENSED", "NOT collect"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("the startup log never mentions %q:\n%s", want, log)
+		}
 	}
 }

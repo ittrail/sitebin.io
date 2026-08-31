@@ -15,12 +15,21 @@ go test ./...                        # core suite
 go test -tags ee ./...               # enterprise suite — run BOTH, they differ
 go vet ./...
 go run ./cmd/sitebin caddyfile       # inspect the generated Caddyfile
-powershell -File e2e/e2e.ps1         # full E2E against the Docker image (Windows host)
-docker build -t sitebin:latest .     # runs go vet + the full suite
+powershell -File e2e/e2e.ps1         # the CORE E2E only -- see below (Windows host)
+docker build -t sitebin:latest .     # community image; runs go vet + the full suite
+docker build --build-arg EDITION=enterprise -t sitebin:latest-ee .   # enterprise image
 ```
 
-`e2e/` also has focused scripts: `accounts.ps1`, `tiers.ps1`, `spa.ps1`,
-`ftp.ps1`, `paths.ps1`, `mcp.ps1`, `license.ps1`.
+**`e2e.ps1` is not the full E2E.** It is the core HTTP suite and references no
+other script; there is no aggregate entry point. A full pass is all eight run
+by hand: `e2e.ps1`, `spa.ps1`, `paths.ps1`, `ftp.ps1`, `mcp.ps1` (community
+image), `accounts.ps1`, `tiers.ps1` (enterprise image), `license.ps1`.
+
+They default to `-Image sitebin:dev` (`sitebin:dev-ee` for `accounts.ps1` and
+`tiers.ps1`), tags nothing in this repo builds. Tag them yourself, and build the
+enterprise one with `--build-arg EDITION=enterprise` -- without it the tag holds
+a community binary with no accounts, and the enterprise scripts fail in ways
+that look like product bugs.
 
 `e2e/license.ps1` is self-contained: `e2e/mintlicense` (a `//go:build ee` tool,
 `go run -tags ee ./e2e/mintlicense`) generates a throwaway root and mints the
@@ -199,9 +208,13 @@ What is easy to get wrong:
   new sites or drops), `none` (as licensed for a 90-day trial from the marker
   written under the data dir, then as expired). Plus `unknown`, which never
   restricts anything.
-- **Enforcement lives at exactly one place**: `AuthorizeCreate`, via
-  `licenseGate`. Never on the serving path, never on updates to an existing
-  site, and it never brings an expiry forward.
+- **Enforcement lives at exactly TWO places, and they enforce different
+  things.** The *state* — expired, or trial elapsed — is enforced only in
+  `AuthorizeCreate`, via `licenseGate` (`ee/provider.go` → `ee/license.go`).
+  The *entitlements* are enforced only in `CustomDomainsAllowed`, via
+  `licenseAllowsAnotherDomain`. Neither is ever on the serving path, neither
+  runs on updates to an existing site, and neither brings an expiry forward.
+  Do not add a third: any new enforcement belongs inside one of these two.
 - **`entitlements.max_custom_domains` is an instance-wide ceiling**, checked
   where a domain is *added* (`CustomDomainsAllowed`). Zero/absent = unlimited.
   It never removes a configured domain — it refuses only the next one — and the

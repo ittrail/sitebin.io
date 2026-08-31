@@ -1,6 +1,6 @@
 # Licensing through the stack — design
 
-*2026-08-30. Proposed.*
+*2026-08-30. **Shipped.** See the corrections at the end of this file.*
 
 Sitebin Enterprise licences are today an Ed25519 string signed by a private key
 that lives in one gitignored file on one laptop, with no backup and no way to
@@ -121,7 +121,8 @@ the dashboard says loudly, from `expires_at` onward, what is happening.
 not with a malformed one. A licence problem is logged and surfaced in the
 dashboard; it never takes the instance down, and it never touches serving.
 
-Four states:
+Five states. Four of them describe a licence; the fifth says the question could
+not be answered, and is the one that must never restrict anything:
 
 | State | When | Effect |
 |---|---|---|
@@ -129,6 +130,13 @@ Four states:
 | `grace` | `expires_at < now <= grace_until` | loud, permanent notice in the account UI |
 | `expired` | `now > grace_until` | notice **+ no new sites and no new drops** |
 | `none` | no key at all | as `licensed` for a 90-day trial from first start, then as `expired` |
+| `unknown` | nothing has loaded yet, or the trial marker could not be read | **nothing is restricted** |
+
+`unknown` is reachable on two paths, both in `Snapshot.StatusAt`: a snapshot
+that has not loaded, and a snapshot with no usable licence whose trial start
+could not be determined. It is not a rounding error in the state machine — it
+is the state machine's safety valve, and it is why "unknown is not expired"
+below is a rule rather than an aspiration.
 
 A malformed or unverifiable key counts as `none`, never as `expired`: a
 configuration mistake must not be more punishing than no licence at all.
@@ -143,9 +151,12 @@ Three rules the implementation must not soften:
   unreachable, the cached key has not loaded — nothing is restricted. Same
   instinct as the cleanup sweep: a site not created is an annoyance, a customer
   wrongly blocked is a broken product.
-- **Enforcement lives at exactly one place**, `ext.Provider.AuthorizeCreate`,
-  which already resolves tier and quota. Never on the serving path — "nothing on
-  the hot path asks the extension" still holds.
+- **Enforcement lives at exactly two places, and they enforce different
+  things.** The licence STATE is enforced in `ext.Provider.AuthorizeCreate`,
+  which already resolves tier and quota; the licence's ENTITLEMENTS are
+  enforced in `ext.Provider.CustomDomainsAllowed`, where a domain is added.
+  Neither is on the serving path — "nothing on the hot path asks the
+  extension" still holds — and no third place may be added.
 
 ### Staying current without a restart
 
@@ -188,3 +199,32 @@ actual win.
 **ee never calls a licence server to run.** Verification is offline and always
 was; the fetch endpoint is a convenience for staying current, never a
 precondition for starting or serving.
+
+
+---
+
+> **Corrections (post-implementation).** Three things this document states did
+> not survive contact with the built code:
+>
+> - **"Four states" was one short.** The implementation has five; `unknown` is
+>   a real, reachable state and not a footnote. The table above now lists it,
+>   because a reader who counts four states has no name for the case the whole
+>   design leans on ("unknown is not expired").
+> - **"Exactly one place" became two, deliberately.** The state gate is in
+>   `AuthorizeCreate`; the entitlement ceiling could not go there, because it
+>   is checked when a *domain* is added and there is no site creation to hang
+>   it on. `CustomDomainsAllowed` is the second place, and it is a place, not a
+>   sprinkling: the count is two and both are named in `CLAUDE.md`,
+>   `ee/license.go` and `ee/licensing/doc.go`. Anything further is a
+>   regression.
+> - **The entitlements were verified but never declared.** Sitebin verifies
+>   `entitlements.max_custom_domains` on a licence it receives, but its stack
+>   self-registration declared no `licensing` block, so the stack minted every
+>   licence with no entitlements — and absent entitlements mean *unlimited*.
+>   The Enterprise pricing axis (licence tiers that scale by custom-domain cap)
+>   was therefore unenforced end to end while every part of the mechanism
+>   worked. The stack's own onboarding code records this happening to sitebin.
+>   `ee/stackreg.go` now declares the block, sourced from
+>   `SITEBIN_STACK_LICENSING` rather than a table in this repo: the numbers are
+>   the commercial terms on sitebin.io's pricing page, and this repo is public
+>   and released on its own schedule.

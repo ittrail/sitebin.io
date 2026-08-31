@@ -400,11 +400,11 @@ func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, 
 			if label == "" {
 				label = t.ID
 			}
-			price := ""
-			if t.Price != nil {
-				price = t.Price.Display
-			}
-			opts = append(opts, tierOption{ID: t.ID, Label: label, Current: t.ID == current.ID, Paid: t.Paid(), Price: price})
+			// Label formats the amount when there is one and falls back to the
+			// display string only when there is not. Reading Display outright
+			// printed nothing for every PayGate tier, which carries amounts and
+			// no display string: paid plans were offered at a blank price.
+			opts = append(opts, tierOption{ID: t.ID, Label: label, Current: t.ID == current.ID, Paid: t.Paid(), Price: t.Price.Label()})
 		}
 	}
 	dashTmpl.Execute(w, dashView{

@@ -1,4 +1,4 @@
-# Sitebin — FTP access E2E (SITEBIN_FTP_ENABLED=true).
+# Sitebin -- FTP access E2E (SITEBIN_FTP_ENABLED=true).
 # Login je Site: user = edit-UUID, pass = edit-password. Test via curl (FTP).
 #   powershell -File e2e\ftp.ps1 [-Image sitebin:dev]
 param([string]$Image = "sitebin:dev", [int]$Port = 8092, [int]$FtpPort = 2121)

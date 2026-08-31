@@ -1,4 +1,4 @@
-# Sitebin end-to-end suite — exercises the real Docker image over HTTP.
+# Sitebin end-to-end suite -- exercises the real Docker image over HTTP.
 #
 #   powershell -File e2e\e2e.ps1 [-Image sitebin:dev] [-KeepUp]
 #
@@ -328,27 +328,30 @@ if ($wsite) {
 
 # ---------- rate limits (separate container with tiny limits) ----------
 
-Write-Host "== rate-limit container" -ForegroundColor Cyan
+# Derived from -Port rather than hardcoded, so a busy 8086 on the host is
+# something you can move off with -Port instead of a mystery "did not start".
+$rlPort = $Port + 1
+Write-Host "== rate-limit container on port $rlPort" -ForegroundColor Cyan
 docker rm -f sitebin-e2e-rl 2>$null | Out-Null
-docker run -d --name sitebin-e2e-rl -p "8086:80" `
-    -e "SITEBIN_BASE_DOMAIN=${base}:8086" -e "SITEBIN_HTTP_ONLY=true" `
+docker run -d --name sitebin-e2e-rl -p "${rlPort}:80" `
+    -e "SITEBIN_BASE_DOMAIN=${base}:$rlPort" -e "SITEBIN_HTTP_ONLY=true" `
     -e "SITEBIN_RATE_CREATE_PER_HOUR=2" -e "SITEBIN_RATE_CREATE_BURST=2" `
     -e "SITEBIN_RATE_AUTH_PER_5MIN=2" $Image | Out-Null
 $rlUp = $false
 for ($i = 0; $i -lt 30; $i++) {
     Start-Sleep -Milliseconds 700
-    if ((Req "GET" "http://${base}:8086/").code -eq 200) { $rlUp = $true; break }
+    if ((Req "GET" "http://${base}:$rlPort/").code -eq 200) { $rlUp = $true; break }
 }
 if ($rlUp) {
-    $rl1 = Req "POST" "http://${base}:8086/api/sites"
-    $rl2 = Req "POST" "http://${base}:8086/api/sites"
-    $rl3 = Req "POST" "http://${base}:8086/api/sites"
+    $rl1 = Req "POST" "http://${base}:$rlPort/api/sites"
+    $rl2 = Req "POST" "http://${base}:$rlPort/api/sites"
+    $rl3 = Req "POST" "http://${base}:$rlPort/api/sites"
     Assert "create rate limit kicks in" ($rl1.code -eq 201 -and $rl2.code -eq 201 -and $rl3.code -eq 429) "codes: $($rl1.code) $($rl2.code) $($rl3.code)"
     $rlSite = $rl1.body | ConvertFrom-Json
     $rlEdit = EditId $rlSite
-    $a1 = Req "GET" "http://${base}:8086/api/sites/$rlEdit" @("-H", "X-Edit-Password: bad1")
-    $a2 = Req "GET" "http://${base}:8086/api/sites/$rlEdit" @("-H", "X-Edit-Password: bad2")
-    $a3 = Req "GET" "http://${base}:8086/api/sites/$rlEdit" @("-H", "X-Edit-Password: bad3")
+    $a1 = Req "GET" "http://${base}:$rlPort/api/sites/$rlEdit" @("-H", "X-Edit-Password: bad1")
+    $a2 = Req "GET" "http://${base}:$rlPort/api/sites/$rlEdit" @("-H", "X-Edit-Password: bad2")
+    $a3 = Req "GET" "http://${base}:$rlPort/api/sites/$rlEdit" @("-H", "X-Edit-Password: bad3")
     Assert "password attempts throttled (429)" ($a3.code -eq 429) "codes: $($a1.code) $($a2.code) $($a3.code)"
 } else {
     Assert "rate-limit container up" $false "did not start"

@@ -1,4 +1,4 @@
-# Sitebin Enterprise — tiers/quota E2E against the real enterprise image.
+# Sitebin Enterprise -- tiers/quota E2E against the real enterprise image.
 #   powershell -File e2e\tiers.ps1 [-Image sitebin:dev-ee]
 param([string]$Image = "sitebin:dev-ee", [int]$Port = 8088)
 
@@ -46,7 +46,7 @@ if (-not $up) { docker logs $name; docker rm -f $name | Out-Null; exit 1 }
 $jar = Join-Path $work "tiers-cookies.txt"; Remove-Item $jar -ErrorAction SilentlyContinue
 Req "POST" "$origin/account/signup" @("-c", $jar, "--data-urlencode", "email=t@example.com", "--data-urlencode", "password=password12345") | Out-Null
 
-# small file within cap → ok
+# small file within cap -> ok
 $small = Join-Path $work "small.txt"; [IO.File]::WriteAllText($small, "hello")
 $r = Req "POST" "$origin/api/sites" @("-b", $jar, "-F", "files=@$small;filename=index.html")
 Assert "first site within tier allowed" ($r.code -eq 201) "got $($r.code): $($r.body)"
@@ -68,11 +68,11 @@ if ($site) {
     Assert "custom domain blocked on free tier" ($r.code -ge 400) "got $($r.code)"
 }
 
-# second site → blocked by max_sites=1
+# second site -> blocked by max_sites=1
 $r = Req "POST" "$origin/api/sites" @("-b", $jar, "-F", "files=@$small;filename=index.html")
 Assert "second site blocked (max_sites, 403)" ($r.code -eq 403) "got $($r.code): $($r.body)"
 
-# oversized upload → 413 (exceeds 200-byte tier cap)
+# oversized upload -> 413 (exceeds 200-byte tier cap)
 $big = Join-Path $work "big.txt"; [IO.File]::WriteAllText($big, ("A" * 500))
 $jar2 = Join-Path $work "tiers2.txt"; Remove-Item $jar2 -ErrorAction SilentlyContinue
 Req "POST" "$origin/account/signup" @("-c", $jar2, "--data-urlencode", "email=t2@example.com", "--data-urlencode", "password=password12345") | Out-Null

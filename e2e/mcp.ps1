@@ -1,4 +1,4 @@
-# Sitebin — MCP endpoint E2E against the real image.
+# Sitebin -- MCP endpoint E2E against the real image.
 #
 #   powershell -File e2e\mcp.ps1 [-Image sitebin:latest]
 #
@@ -6,7 +6,7 @@
 # handshake, the tool catalog, publishing a site with create_site, that the
 # published site actually serves, that meta.json records origin=mcp, and that
 # the tools honour the edit password. Runs the community image, where MCP is
-# open — the gated paths are covered by the Go suite, which can register a
+# open -- the gated paths are covered by the Go suite, which can register a
 # provider without standing up an accounts instance.
 param(
     [string]$Image = "sitebin:latest",
@@ -22,13 +22,13 @@ $vol = "sitebin-mcp-e2e-data"
 $work = Join-Path $PSScriptRoot ".work"
 New-Item -ItemType Directory -Force $work | Out-Null
 
-# Every assertion in this script must run. If one is skipped — a throw, an
-# early return — the totals still look healthy, so the count is checked at the
+# Every assertion in this script must run. If one is skipped -- a throw, an
+# early return -- the totals still look healthy, so the count is checked at the
 # end against this number. Update it when you add or remove an assertion.
 $ExpectedAssertions = 37
 $script:pass = 0; $script:fail = 0
 # $c is deliberately untyped. With [bool], PowerShell throws on anything it
-# cannot coerce — an array from a multi-line command substitution, say — and a
+# cannot coerce -- an array from a multi-line command substitution, say -- and a
 # thrown assertion never runs, never counts, and never fails the script. That
 # silently shrinks the total while the run still reports success.
 function Assert([string]$n, $c, [string]$d = "") {
@@ -51,7 +51,7 @@ function Req([string]$method, [string]$url, [string[]]$extra = @()) {
 }
 
 # Rpc posts one JSON-RPC message and returns the parsed result. The server is
-# stateless, so every call stands alone — there is no session id to carry.
+# stateless, so every call stands alone -- there is no session id to carry.
 # Responses are SSE-framed ("data: {...}"), which is normal for streamable HTTP.
 $script:rpcID = 0
 function Rpc([string]$method, $params) {
@@ -87,8 +87,8 @@ function ToolStruct($r) {
 
 # ToolAnswered reports whether the call completed at the protocol level at all,
 # regardless of whether the tool then refused. Every refusal assertion has to
-# check this first: without it, a server that is completely broken — /mcp not
-# mounted, a 404, a transport error — makes every "must be refused" test pass
+# check this first: without it, a server that is completely broken -- /mcp not
+# mounted, a 404, a transport error -- makes every "must be refused" test pass
 # vacuously, which is exactly the false green this script exists to prevent.
 function ToolAnswered($r) {
     return ($null -ne $r.msg -and $null -ne $r.msg.result)
@@ -162,7 +162,7 @@ Assert "returned the one-time edit password" ($null -ne $site -and $site.edit_pa
 $editID = $site.edit_id
 $pw = $site.edit_password
 
-# The site must actually be on the web — a tool result that says "published"
+# The site must actually be on the web -- a tool result that says "published"
 # while nothing serves is the failure this whole script exists to catch.
 $viewURL = $site.view_url
 if ($viewURL -notmatch ":$Port") { $viewURL = $viewURL -replace "//([^/]+)", "//`$1:$Port" }

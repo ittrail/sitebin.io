@@ -1,4 +1,4 @@
-# Sitebin — SPA fallback E2E. Verifies per-site index.html fallback for unknown paths.
+# Sitebin -- SPA fallback E2E. Verifies per-site index.html fallback for unknown paths.
 #   powershell -File e2e\spa.ps1 [-Image sitebin:dev]
 param([string]$Image = "sitebin:dev", [int]$Port = 8094)
 

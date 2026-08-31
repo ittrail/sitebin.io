@@ -1,4 +1,4 @@
-# Sitebin — path-mode view access E2E (SITEBIN_VIEW_ACCESS=path).
+# Sitebin -- path-mode view access E2E (SITEBIN_VIEW_ACCESS=path).
 # Serves sites at <base>/v/<view-id>/ instead of subdomains (no wildcard needed).
 #   powershell -File e2e\paths.ps1 [-Image sitebin:dev]
 param([string]$Image = "sitebin:dev", [int]$Port = 8089)

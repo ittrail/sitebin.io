@@ -137,9 +137,23 @@ func (m *Manager) Start(f Fetcher) {
 		return
 	}
 	m.mu.RLock()
-	fromEnv := m.snap.Source == "env"
+	fromEnv, envErr := m.snap.Source == "env", m.snap.Err
 	m.mu.RUnlock()
 	if fromEnv {
+		// Source is set BEFORE the key is verified, on purpose: an operator who
+		// pasted a key has said which one to use, and collecting a different
+		// one behind their back would be worse than honouring a bad one.
+		//
+		// But it means a key with a typo in it costs the instance twice over --
+		// it falls to the unlicensed trial arm AND stops collecting renewals
+		// forever -- so the two together are said loudly and in one line. This
+		// is the likeliest way a paying customer ends up restricted, and the
+		// only signal they get is in this log.
+		if envErr != nil {
+			slog.Error("license: SITEBIN_LICENSE_KEY DID NOT VERIFY, so this instance is running UNLICENSED (a 90-day trial, then no new sites) -- and because the key is set, it will NOT collect a licence from the stack either. Fix or unset SITEBIN_LICENSE_KEY.",
+				"err", envErr)
+			return
+		}
 		slog.Info("license: SITEBIN_LICENSE_KEY is set; not collecting from the stack")
 		return
 	}

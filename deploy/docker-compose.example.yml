@@ -1,171 +1,226 @@
 # =============================================================================
-# Sitebin — vollständig kommentierte Beispiel-Compose (All-in-one Image)
+# Sitebin — fully commented example compose (all-in-one image)
 # =============================================================================
 #
-# Diese Datei dient zum Ausprobieren aller Einstellungen. Sie ist für den
-# LOKALEN Test vorkonfiguriert:
+# This file exists to show every setting in one place. It is preconfigured for
+# a LOCAL test:
 #
 #     docker compose -f deploy/docker-compose.example.yml up -d
-#     # Browser:  http://sitebin.localtest.me:8080/
+#     # browser:  http://sitebin.localtest.me:8080/
 #
-# (localtest.me löst inkl. aller Subdomains auf 127.0.0.1 auf.)
+# (localtest.me and all its subdomains resolve to 127.0.0.1.)
 #
-# Aufräumen:
-#     docker compose -f deploy/docker-compose.example.yml down          # Container weg, Daten bleiben
-#     docker compose -f deploy/docker-compose.example.yml down -v       # auch Daten löschen
+# Clean up:
+#     docker compose -f deploy/docker-compose.example.yml down      # keep data
+#     docker compose -f deploy/docker-compose.example.yml down -v   # drop data too
 #
 # -----------------------------------------------------------------------------
-# SCHNELL-VARIANTEN (jeweils die passenden Zeilen unten ein-/auskommentieren):
+# QUICK VARIANTS (comment/uncomment the matching lines below):
 #
-#   A) Lokal, Subdomains (Standard)   → so wie unten vorkonfiguriert
-#   B) Lokal, Pfad-Modus              → SITEBIN_VIEW_ACCESS: "path"
-#   C) Enterprise + Accounts          → image: sitebin:dev-ee  +  SITEBIN_ACCOUNT_MODE: "accounts"
-#                                       (Achtung: path/both + accounts wird bewusst abgelehnt)
-#   D) Enterprise + Tiers + Bezahlung → siehe Enterprise-Block unten
-#   E) Produktion mit echten Certs    → SITEBIN_HTTP_ONLY entfernen, DNS-Provider setzen,
-#                                       Ports auf 80/443, Basisdomain ohne Port
+#   A) Local, subdomains (default)   -> as preconfigured below
+#   B) Local, path mode              -> SITEBIN_VIEW_ACCESS: "path"
+#   C) Enterprise + accounts         -> an -ee image  +  SITEBIN_ACCOUNT_MODE: "accounts"
+#                                       (note: path/both + accounts is refused on purpose)
+#   D) Enterprise + tiers + payment  -> see the enterprise block below
+#   E) Production with real certs    -> drop SITEBIN_HTTP_ONLY, set a DNS provider,
+#                                       publish 80/443, base domain without a port
+#
+# The enterprise image is NOT the default build. Build it yourself with
+#   docker build --build-arg EDITION=enterprise -t sitebin:latest-ee .
+# or pull ghcr.io/ittrail/sitebin:latest-ee. A community image silently ignores
+# every SITEBIN_ACCOUNT_MODE / tier / billing / license setting below.
 # =============================================================================
 
 services:
   sitebin:
-    # Community-Image (rein MIT). Für die Enterprise-Features (Accounts, Tiers,
-    # OAuth, SMTP, Billing) stattdessen das -ee Image verwenden:
-    #   image: sitebin:dev-ee
-    # In Produktion aus der Registry:
-    #   image: ghcr.io/ittrail/sitebin:latest        # bzw. :latest-ee
+    # Community image (pure MIT). For the enterprise features (accounts, tiers,
+    # OAuth, SMTP, billing, licensing) use the -ee image instead:
+    #   image: sitebin:latest-ee
+    # In production, from the registry:
+    #   image: ghcr.io/ittrail/sitebin:latest        # or :latest-ee
     image: sitebin:latest
 
     container_name: sitebin
 
-    # Lokal: Host-Port 8080 → Container-Port 80.
-    # In PRODUKTION stattdessen die echten Ports freigeben:
+    # Local: host port 8080 -> container port 80.
+    # In PRODUCTION publish the real ports instead:
     #   - "80:80"
     #   - "443:443"
     #   - "443:443/udp"     # HTTP/3
     ports:
       - "8080:80"
-      # FTP (nur bei SITEBIN_FTP_ENABLED=true) — WICHTIG, sonst hängt FTP:
-      # Der Steuerport UND der komplette Passiv-Portbereich müssen 1:1 gemappt
-      # werden (Bereich 21000-21010:21000-21010, NICHT ein einzelner Port),
-      # damit der Passiv-Modus durch Docker funktioniert. Zusätzlich muss unten
-      # SITEBIN_FTP_PUBLIC_HOST auf die Adresse zeigen, die der CLIENT erreicht
-      # (lokal 127.0.0.1, in Produktion deine Server-IP/Domain — NICHT die
-      # interne Container-IP). Falsch gesetzt = Login klappt, LIST/Transfer hängt.
+      # FTP (only with SITEBIN_FTP_ENABLED=true) -- IMPORTANT, or FTP hangs:
+      # the control port AND the whole passive port range must be mapped 1:1
+      # (range 21000-21010:21000-21010, NOT a single port) for passive mode to
+      # work through Docker. SITEBIN_FTP_PUBLIC_HOST below must also point at
+      # the address the CLIENT reaches (127.0.0.1 locally, your server IP or
+      # domain in production -- NOT the internal container IP). Get it wrong
+      # and login succeeds while LIST/transfer hangs.
       # - "21:21"
       # - "21000-21010:21000-21010"
 
-    # Alle dauerhaften Daten (Sites, Indizes, Metafiles UND Caddys Zertifikate)
-    # liegen unter /data. Ein Volume sichern = alles gesichert.
+    # All durable data (sites, indexes, meta files AND Caddy's certificates)
+    # lives under /data. Back up the volume and you have backed up everything.
     volumes:
       - sitebin-data:/data
-      # Für Tiers per Datei (siehe SITEBIN_TIERS_FILE) eine tiers.json mounten:
+      # For tiers from a file (see SITEBIN_TIERS_FILE), mount a tiers.json:
       # - ./tiers.json:/cfg/tiers.json:ro
 
     restart: unless-stopped
 
     environment:
       # =======================================================================
-      # KERN (Community) — gilt für beide Editionen
+      # CORE (community) -- applies to both editions
       # =======================================================================
 
-      # PFLICHT. Hauptdomain. View-Subdomains, Edit-UI, API und WebDAV leben hier.
-      # Lokal MIT Port, damit die generierten URLs stimmen; in Produktion OHNE Port.
+      # REQUIRED. The main domain. View subdomains, the edit UI, the API and
+      # WebDAV all live here. Locally WITH the port so generated URLs are
+      # correct; in production WITHOUT a port.
       SITEBIN_BASE_DOMAIN: "sitebin.localtest.me:8080"
 
-      # TLS komplett aus — reines HTTP. Für lokalen Test oder wenn ein externer
-      # Proxy das TLS übernimmt. In Produktion diese Zeile ENTFERNEN.
+      # TLS off entirely -- plain HTTP. For a local test, or when an external
+      # proxy terminates TLS. REMOVE this line in production.
       SITEBIN_HTTP_ONLY: "true"
 
-      # Wie werden Site-Inhalte ausgeliefert?
-      #   subdomain (Standard) → <id>.base           (braucht Wildcard-Zertifikat)
-      #   path                 → base/v/<id>/         (KEIN Wildcard nötig)
-      #   both                 → auf beiden Wegen
-      # Sicherheitshinweis: path/both teilen sich den Origin mit Dashboard/API;
-      # in Kombination mit Accounts verweigert die Enterprise-Edition den Start.
+      # How is site content served?
+      #   subdomain (default) -> <id>.base          (needs a wildcard certificate)
+      #   path                -> base/v/<id>/       (no wildcard needed)
+      #   both                -> both ways
+      # Security note: path/both share an origin with the dashboard and API; in
+      # combination with accounts the enterprise edition refuses to start.
       SITEBIN_VIEW_ACCESS: "subdomain"
 
-      # --- TLS in Produktion (nur bei entferntem SITEBIN_HTTP_ONLY relevant) ---
-      # Wildcard-Zertifikat für *.base via DNS-Challenge. Nur für subdomain/both.
-      # Eingebaute Ein-Token-Provider: cloudflare | hetzner | duckdns.
+      # Serve user sites from a SEPARATE registrable domain, as <id>.<view-domain>.
+      # Strongly recommended once strangers can upload: it stops uploaded content
+      # sharing a browser "site" with the dashboard. Needs its own wildcard DNS
+      # record and DNS-challenge access, and cannot be combined with
+      # SITEBIN_VIEW_ACCESS=path|both.
+      # SITEBIN_VIEW_DOMAIN: "sitebin.app"
+
+      # --- TLS in production (only relevant once SITEBIN_HTTP_ONLY is gone) ---
+      # Wildcard certificate for *.base via DNS challenge. subdomain/both only.
+      # Built-in single-token providers: cloudflare | hetzner | duckdns.
       # SITEBIN_DNS_PROVIDER: "cloudflare"
-      # SITEBIN_DNS_TOKEN:    "dein-dns-api-token"
-      # E-Mail für das ACME/Let's-Encrypt-Konto:
+      # SITEBIN_DNS_TOKEN:    "your-dns-api-token"
+      # Email for the ACME / Let's Encrypt account:
       # SITEBIN_ACME_EMAIL:   "ops@example.com"
-      # Für Provider mit mehreren Zugangsdaten (netcup, porkbun): rohe Zeilen für
-      # den tls-Block statt Provider/Token:
+      # For providers needing several credentials (netcup, porkbun): raw lines
+      # for the tls block instead of provider/token:
       # SITEBIN_TLS_SNIPPET:  "dns netcup { customer_number 1 api_key ... }"
 
-      # --- Limits & Betrieb ---
-      # SITEBIN_DATA_DIR:              "/data"          # Datenwurzel
-      # SITEBIN_MAX_SITE_BYTES:        "104857600"      # 100 MiB pro Site
-      # SITEBIN_MAX_FILES:             "1000"           # Dateien pro Site
-      # SITEBIN_MAX_EXPIRY_DAYS:       "0"              # 0 = kein Maximum
-      # SITEBIN_WEBDAV_ENABLED:        "true"           # WebDAV instanzweit erlauben
+      # --- Limits & operations ---
+      # SITEBIN_DATA_DIR:              "/data"          # data root
+      # SITEBIN_MAX_SITE_BYTES:        "104857600"      # 100 MiB per site
+      # SITEBIN_MAX_FILES:             "1000"           # files per site
+      # SITEBIN_MAX_EXPIRY_DAYS:       "0"              # 0 = no maximum
+      # SITEBIN_WEBDAV_ENABLED:        "true"           # allow WebDAV instance-wide
 
-      # --- FTP (optional, standardmäßig AUS) ---
-      # Login je Site: Benutzername = Edit-UUID, Passwort = Edit-Passwort.
-      # ACHTUNG: reines FTP überträgt das Passwort im Klartext — nur in
-      # vertrauenswürdigen Netzen oder mit FTPS (Zertifikat unten) nutzen.
-      # Zusätzlich muss FTP pro Site aktiviert werden (Edit-Seite/API).
-      # Ports oben mappen (21 + Passiv-Bereich)!
+      # --- FTP (optional, OFF by default) ---
+      # Per-site login: username = edit UUID, password = edit password.
+      # WARNING: plain FTP sends the password in the clear -- use it only on
+      # trusted networks, or with FTPS (certificate below). FTP must also be
+      # enabled per site (edit page / API). Map the ports above (21 + passive)!
       # SITEBIN_FTP_ENABLED:        "true"
-      # SITEBIN_FTP_ADDR:           ":21"                # Steuerport
-      # SITEBIN_FTP_PASV_PORT_MIN:  "21000"              # Passiv-Datenports (Bereich)
+      # SITEBIN_FTP_ADDR:           ":21"                # control port
+      # SITEBIN_FTP_PASV_PORT_MIN:  "21000"              # passive data ports (range)
       # SITEBIN_FTP_PASV_PORT_MAX:  "21010"
-      # SITEBIN_FTP_PUBLIC_HOST: "127.0.0.1"   # PASV: Adresse, die der CLIENT erreicht!
-      #                                        # lokal 127.0.0.1, in Prod deine Server-IP/Domain.
-      # Optional FTPS (explizites AUTH TLS) — dann werden Zugangsdaten verschlüsselt:
+      # SITEBIN_FTP_PUBLIC_HOST: "127.0.0.1"   # PASV: the address the CLIENT reaches!
+      #                                        # 127.0.0.1 locally, your server IP/domain in prod.
+      # Optional FTPS (explicit AUTH TLS) -- then credentials are encrypted:
       # SITEBIN_FTP_TLS_CERT:       "/certs/ftp.crt"
       # SITEBIN_FTP_TLS_KEY:        "/certs/ftp.key"
-      # SITEBIN_TRACK_VIEWS:           "true"           # Seitenaufrufe pro Site zählen
-      # SITEBIN_READONLY:              "false"          # true = keine neuen Sites
-      # Fremde Origins, die den <sitebin-drop>-Embed gegen diese Instanz
-      # nutzen dürfen (Komma-Liste oder "*"). Enterprise-Feature — die
-      # Community-Edition ignoriert die Variable mit einer Warnung.
+
+      # --- MCP endpoint for AI agents (/mcp) ---
+      # On by default. It authenticates with per-site edit passwords and, in the
+      # enterprise edition, account API tokens. OAuth is opt-in and Sitebin is
+      # only ever a RESOURCE server: with no issuer set, none of it is mounted.
+      # SITEBIN_MCP_ENABLED:        "true"
+      # Authorization server whose access tokens /mcp accepts. Defaults to
+      # SITEBIN_OAUTH_OIDC_ISSUER when that is set; empty disables OAuth.
+      # SITEBIN_MCP_OAUTH_ISSUER:   "https://auth.saas-stack.example.com/api/v1/sitebin"
+      # This server's OAuth resource identifier -- the value a token's audience
+      # must contain. Defaults to <base>/mcp. IMMUTABLE once published: changing
+      # it invalidates every token already minted for this instance.
+      # SITEBIN_MCP_OAUTH_RESOURCE: "https://sitebin.example.com/mcp"
+
+      # SITEBIN_TRACK_VIEWS:           "true"           # count page views per site
+      # SITEBIN_READONLY:              "false"          # true = no new sites
+      # Foreign origins allowed to use the <sitebin-drop> embed against this
+      # instance (comma-separated, or "*"). Enterprise feature -- the community
+      # edition ignores the variable with a warning.
       # SITEBIN_EMBED_ORIGINS:         "https://example.com,https://www.example.com"
-      # SITEBIN_RATE_CREATE_PER_HOUR:  "30"             # Sites/Stunde/IP
+      # SITEBIN_RATE_CREATE_PER_HOUR:  "30"             # sites/hour/IP
       # SITEBIN_RATE_CREATE_BURST:     "10"
-      # SITEBIN_RATE_AUTH_PER_5MIN:    "10"             # Passwort-Versuche/5min/(IP,Ziel)
-      # SITEBIN_CLEANUP_INTERVAL:      "10m"            # Aufräum-Intervall für Abläufe
-      # SITEBIN_BACKEND_HOST:          "127.0.0.1"      # nur für die Compose-Split-Variante nötig
-      # SITEBIN_PUBLIC_ADDR:           ":8080"          # interner Backend-Listener
-      # SITEBIN_INTERNAL_ADDR:         ":9000"          # authz/tls-check/health (nie öffentlich)
+      # SITEBIN_RATE_AUTH_PER_5MIN:    "10"             # password attempts/5min/(IP,target)
+      # SITEBIN_CLEANUP_INTERVAL:      "10m"            # expiry sweep interval
+      # SITEBIN_BACKEND_HOST:          "127.0.0.1"      # only needed for the split-compose variant
+      # SITEBIN_PUBLIC_ADDR:           ":8080"          # internal backend listener
+      # SITEBIN_INTERNAL_ADDR:         ":9000"          # authz/tls-check/health (never public)
 
       # =======================================================================
-      # ENTERPRISE (nur mit dem -ee Image wirksam)
-      # Dazu oben image: sitebin:dev-ee setzen.
+      # ENTERPRISE (only effective with an -ee image)
+      # Set image: sitebin:latest-ee above.
       # =======================================================================
 
-      # Zugriffsmodell für das Anlegen von Sites:
-      #   open (Standard) → wie Community, keine Konten
-      #   accounts        → Login nötig; Sites gehören dem Konto
-      #   tiers           → Kontingente je Tarif, optional bezahlt
-      # SITEBIN_ACCOUNT_MODE: "accounts"
+      # Access model for creating sites:
+      #   open (default) -> like community, no accounts
+      #   accounts       -> login required; sites belong to the account
+      #   tiers          -> per-plan quotas, optionally paid
+      # SITEBIN_ACCOUNT_MODE: "tiers"
 
-      # Tarif für neue/kostenlose Konten (Pflicht im tiers-Modus):
+      # Plan for new/free accounts (REQUIRED in tiers mode):
       # SITEBIN_DEFAULT_TIER: "free"
-      # Tarif für anonymes Anlegen (leer = Konto erforderlich):
-      # SITEBIN_ANON_TIER: ""
-      # Dürfen Nutzer selbst zwischen (kostenlosen) Tarifen wechseln?
+      # Plan for anonymous creation (empty = an account is required):
+      # SITEBIN_ANON_TIER: "drop"
+      # May users switch between (free) plans themselves?
       # SITEBIN_TIER_SELF_SELECT: "false"
-      # Im accounts-Modus trotzdem anonymes Anlegen erlauben?
+      # In accounts mode, still allow anonymous creation?
       # SITEBIN_ALLOW_ANON_CREATE: "false"
+      # Emails allowed to reach the instance register at /account/admin. Gated
+      # twice: the account's plan must ALSO carry "admin": true, so neither the
+      # plan source nor the environment can grant it alone. Unset = no console.
+      # SITEBIN_ADMIN_ACCOUNTS: "ops@example.com"
+      # false = SSO only: no email/password form, signup and reset disabled.
+      # Recommended on a SaaS-Stack instance, where a local account has no
+      # subscription in PayGate and never will.
+      # SITEBIN_LOCAL_AUTH: "true"
 
-      # Tarif-Definitionen. Entweder inline als JSON (YAML-Single-Quotes außen,
-      # JSON-Double-Quotes innen) ...
+      # Plan definitions. Either inline as JSON (YAML single quotes outside,
+      # JSON double quotes inside) ...
+      #
+      # A plan is SELLABLE only if it carries a "price". Which fields it needs
+      # depends on the active backend (see SITEBIN_BILLING below):
+      #   paygate         -> "monthly"/"annual"/"currency" AMOUNTS. The stack
+      #                      creates the product; Sitebin never learns which
+      #                      processor is used.
+      #   stripe / paddle -> "stripe"/"paddle" price IDENTIFIERS of products you
+      #                      created in that provider yourself. Startup REFUSES
+      #                      if a priced plan is missing the id the selected
+      #                      backend needs, rather than failing at a customer's
+      #                      click on Upgrade.
+      # A plan may carry both; the active backend reads what it needs. A plan
+      # with no price at all is a free plan, and cannot be bought.
+      #
+      # The ORDER of this array is the order the plans are shown in (on the
+      # dashboard, and on the stack's hosted pricing page); "featured": true
+      # marks the one a pricing page leads with.
+      #
       # SITEBIN_TIERS: '[
       #   {"id":"drop","label":"Drop","max_sites":0,"max_site_bytes":26214400,"max_files":200,"webdav":false,"custom_domains":0,"max_expiry_days":1},
       #   {"id":"free","label":"Free","max_sites":10,"max_site_bytes":104857600,"max_files":500,"webdav":true,"custom_domains":0,"max_expiry_days":7},
-      #   {"id":"pro","label":"Pro","max_sites":100,"max_site_bytes":1073741824,"max_files":5000,"webdav":true,"custom_domains":5,"max_expiry_days":0},
-      #   {"id":"studio","label":"Studio","max_sites":500,"max_site_bytes":5368709120,"max_files":10000,"webdav":true,"custom_domains":25,"max_expiry_days":0}
+      #   {"id":"pro","label":"Pro","max_sites":100,"max_site_bytes":1073741824,"max_files":5000,"webdav":true,"custom_domains":5,"max_expiry_days":0,
+      #    "trusted":true,"featured":true,
+      #    "price":{"monthly":"6.00","annual":"60.00","currency":"EUR","stripe":"price_...","paddle":"pri_..."}},
+      #   {"id":"studio","label":"Studio","max_sites":500,"max_site_bytes":5368709120,"max_files":10000,"webdav":true,"custom_domains":25,"max_expiry_days":0,
+      #    "trusted":true,
+      #    "price":{"monthly":"19.00","annual":"190.00","currency":"EUR","stripe":"price_...","paddle":"pri_..."}}
       # ]'
-      # SITEBIN_ANON_TIER: "drop"   # anonymous drops: 24 h, no API
-      # SITEBIN_DEFAULT_TIER: "free"
-      # ... oder sauberer per gemounteter Datei (siehe volumes oben):
+      #
+      # ... or, more cleanly, from a mounted file (see volumes above):
       # SITEBIN_TIERS_FILE: "/cfg/tiers.json"
 
-      # --- OAuth (Google / Microsoft OIDC) — braucht echte HTTPS-Domain ---
-      # Redirect-URIs beim Provider registrieren:
+      # --- OAuth (Google / Microsoft OIDC) -- needs a real HTTPS domain ---
+      # Register the redirect URIs with the provider:
       #   https://<base>/account/auth/google/callback
       #   https://<base>/account/auth/microsoft/callback
       # SITEBIN_OAUTH_GOOGLE_CLIENT_ID:     "..."
@@ -173,42 +228,102 @@ services:
       # SITEBIN_OAUTH_MICROSOFT_CLIENT_ID:     "..."
       # SITEBIN_OAUTH_MICROSOFT_CLIENT_SECRET: "..."
       # SITEBIN_OAUTH_MICROSOFT_TENANT:        "common"
-      # Generisches OIDC — beliebiger Issuer (Keycloak, Okta, Authentik, oder
-      # das Auth Gateway des IT-Trail SaaS Stack). Redirect-URI:
+      # Generic OIDC -- any issuer (Keycloak, Okta, Authentik, or the IT-Trail
+      # SaaS Stack's Auth Gateway). Redirect URI:
       #   https://<base>/account/auth/oidc/callback
       # SITEBIN_OAUTH_OIDC_ISSUER:        "https://auth.saas-stack.example.com/api/v1/sitebin"
       # SITEBIN_OAUTH_OIDC_CLIENT_ID:     "sitebin"
       # SITEBIN_OAUTH_OIDC_CLIENT_SECRET: "..."
-      # SITEBIN_OAUTH_OIDC_LABEL:         "Example SSO"   # Text des Login-Buttons
+      # SITEBIN_OAUTH_OIDC_LABEL:         "Example SSO"   # login button text
 
-      # --- SaaS-Stack PayGate als Abo-Quelle (statt Stripe/Paddle direkt) ---
-      # Tarife kommen dann aus PayGate (Tier-IDs = tiers.json-IDs); nur für
-      # Konten, die über das generische OIDC angemeldet sind. Erfordert
-      # SITEBIN_ACCOUNT_MODE=tiers. Siehe README → "SaaS-Stack integration".
+      # --- Which backend may charge customers ---
+      # Exactly ONE is ever active: stripe | paddle | paygate (case-insensitive).
+      # Unset = inferred when exactly one is configured. Configure two and leave
+      # this unset and Sitebin REFUSES TO START -- which processor charges your
+      # customers is not something to infer from the environment.
+      #
+      # Note: the unselected backends are inert AND their webhook routes are not
+      # mounted, so a provider that is still configured to deliver webhooks here
+      # gets a silent 404. Remove the webhook at the provider too.
+      # SITEBIN_BILLING: "paygate"
+
+      # --- SaaS-Stack PayGate as the subscription source (instead of direct) ---
+      # Plans then come from PayGate (stack tier ids = tiers.json ids); only for
+      # accounts signed in through the generic OIDC provider. Requires
+      # SITEBIN_ACCOUNT_MODE=tiers. See README -> "SaaS-Stack integration".
       # SITEBIN_PAYGATE_URL:        "https://paygate.saas-stack.example.com"
       # SITEBIN_PAYGATE_APP_ID:     "sitebin"
       # SITEBIN_PAYGATE_API_KEY:    "ssk_live_..."
       # SITEBIN_PAYGATE_CACHE_TTL:  "5m"
       # SITEBIN_PAYGATE_MANAGE_URL: "https://account.example.com"
 
-      # --- SMTP (E-Mail-Verifizierung & Passwort-Reset) ---
+      # --- Self-registration against the SaaS Stack ---
+      # With all three set, the instance announces itself on every start -- its
+      # identity, its OIDC callback, its plan catalogue and its MCP block -- so
+      # auth, billing and MCP are configured by deploying rather than by hand.
+      # The call is convergent and never blocks startup.
+      # _ADMIN_KEY is the stack's PLATFORM_ADMIN_KEY: a MASTER credential that
+      # can act on every app in the stack. Keep it in a secret store, never in
+      # an image, and do not set it on an instance you do not own.
+      # SITEBIN_STACK_URL:       "https://platform.saas-stack.example.com"
+      # SITEBIN_STACK_APP_ID:    "sitebin"
+      # SITEBIN_STACK_ADMIN_KEY: "..."
+      #
+      # What a Sitebin ENTERPRISE LICENSE issued by this stack is worth, and how
+      # long a lapsed one stays usable. The stack mints licenses, so it has to be
+      # told; a plan absent from "plans" carries no entitlements, which means
+      # UNLIMITED, not zero. Only the vendor of the licensed product sets this.
+      # Registration MERGES: leaving it out keeps whatever the stack already
+      # holds, so declare it or omit it -- never declare it empty.
+      # SITEBIN_STACK_LICENSING: '{"graceMonths":3,"plans":{"team":{"max_custom_domains":25},"business":{"max_custom_domains":100},"platform":{}}}'
+
+      # --- SMTP (email verification & password reset) ---
       # SITEBIN_SMTP_HOST: "smtp.example.com"
-      # SITEBIN_SMTP_PORT: "587"                 # 587 = STARTTLS; 465 = implizites TLS
+      # SITEBIN_SMTP_PORT: "587"                 # 587 = STARTTLS; 465 = implicit TLS
       # SITEBIN_SMTP_USER: "postmaster@example.com"
       # SITEBIN_SMTP_PASS: "..."
       # SITEBIN_SMTP_FROM: "Sitebin <no-reply@example.com>"
-      # SITEBIN_SMTP_TLS:  "false"               # true für Port 465
+      # SITEBIN_SMTP_TLS:  "false"               # true for port 465
 
-      # --- Bezahlung (Stripe und/oder Paddle); Preise kommen aus den Tarifen ---
-      # Webhook-Ziel: https://<base>/account/billing/stripe/webhook  bzw. .../paddle/webhook
+      # --- Direct payment (Stripe or Paddle); prices come from the plans ---
+      # Webhook target: https://<base>/account/billing/stripe/webhook
+      #             or  https://<base>/account/billing/paddle/webhook
       # SITEBIN_STRIPE_SECRET_KEY:     "sk_live_..."
       # SITEBIN_STRIPE_WEBHOOK_SECRET: "whsec_..."
       # SITEBIN_PADDLE_API_KEY:        "..."
       # SITEBIN_PADDLE_WEBHOOK_SECRET: "..."
       # SITEBIN_PADDLE_SANDBOX:        "false"
 
-      # --- Lizenz (optional; wenn gesetzt, muss sie gültig sein) ---
-      # SITEBIN_LICENSE_KEY: "<ed25519-signierter-key>"
+      # --- Enterprise license ---
+      # A license NEVER blocks startup. Absent, malformed, unverifiable and
+      # expired keys are all logged and shown in the account UI; serving and
+      # existing sites are never touched. Without a valid license the instance
+      # behaves as licensed for 90 days from first start, then keeps serving and
+      # updating every existing site but creates no new ones.
+      #
+      # The FIRST license arrives by EMAIL when the subscription is bought: the
+      # renewal endpoint authenticates with the license itself, so an instance
+      # holding none has nothing to present and asks for nothing.
+      #
+      # WARNING: this variable wins over anything collected from the stack, and
+      # it wins BEFORE the key is verified. A key with a typo in it therefore
+      # costs you twice -- the instance falls back to the unlicensed trial arm
+      # AND stops collecting renewals. It is logged at ERROR on every start. If
+      # you are on a stack, unsetting this is usually the fix.
+      # SITEBIN_LICENSE_KEY: "<certPayload>.<certSig>.<licPayload>.<licSig>"
+      #
+      # Where a renewed license is collected from. Default:
+      # <SITEBIN_PAYGATE_URL>/api/v1/licenses/renew. The request carries no API
+      # key -- the license is its own credential.
+      # SITEBIN_LICENSE_URL: "https://paygate.saas-stack.example.com/api/v1/licenses/renew"
+      # How often to collect. Default 24h; shorten it to watch a renewal apply
+      # without a restart. Ignored when SITEBIN_LICENSE_KEY is set.
+      # SITEBIN_LICENSE_REFRESH: "24h"
+      #
+      # NOTE: a license can only verify against the trusted ROOT public keys
+      # baked into the binary at build time (--build-arg LICENSE_ROOTS=...).
+      # An -ee image built without them trusts nothing, says so at startup, and
+      # runs its 90-day trial. See README -> "Enterprise licensing".
 
 volumes:
   sitebin-data:

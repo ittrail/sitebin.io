@@ -19,8 +19,12 @@
 //
 // Nothing here ever fails startup. An absent, malformed or unverifiable key
 // resolves to the unlicensed state, which behaves as licensed for a 90-day
-// trial and thereafter blocks only the CREATION of new sites and drops —
-// enforced in exactly one place, ee.provider.AuthorizeCreate.
+// trial and thereafter blocks only the CREATION of new sites and drops.
+//
+// This package decides nothing and enforces nothing: it verifies a key and
+// derives a Status, and the ee package acts on it in exactly two places —
+// ee.provider.AuthorizeCreate for the state, and ee.provider.CustomDomainsAllowed
+// for the entitlements. Neither is on the serving path.
 //
 // (Directory is "licensing" rather than "license" to avoid colliding with the
 // ee/LICENSE file on case-insensitive filesystems.)

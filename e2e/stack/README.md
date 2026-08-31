@@ -56,7 +56,10 @@ a hand-made price id. A tier with no amount creates no payment product.
   it already holds and **no other credential**. With no licence at all it asks
   nothing: the first licence arrives by email. So to exercise collection, start
   once with a licence, let it cache under `/data/license/license.key`, then
-  renew it on the stack and watch it apply without a restart.
+  renew it on the stack and watch it apply without a restart. **Set
+  `SITEBIN_LICENSE_REFRESH` first** (`5m`, or `30s` if you are impatient) --
+  collection runs once a day by default, so without it "watch it apply" is a
+  day-long experiment. It is ignored while `SITEBIN_LICENSE_KEY` is set.
 - Sign-in goes to the Auth Gateway; `SITEBIN_LOCAL_AUTH=false` is deliberate.
   PayGate knows people by the stack's identity (the OIDC subject), so a local
   account has no subscription there and never will.

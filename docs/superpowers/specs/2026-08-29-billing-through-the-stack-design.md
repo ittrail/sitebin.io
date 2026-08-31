@@ -1,7 +1,8 @@
 # Three billing backends behind one seam — design
 
-*2026-08-29. Proposed. Supersedes the first draft of this file, which proposed
-deleting the payment providers outright.*
+*2026-08-29. **Shipped.** Supersedes the first draft of this file, which
+proposed deleting the payment providers outright. See the corrections at the
+end of this file: several signatures below are the proposal, not the code.*
 
 Sitebin Enterprise ships Stripe and Paddle integrations, and separately talks to
 the stack's PayGate to read a tier. The two grew side by side and never met.
@@ -157,3 +158,49 @@ to be what we run.
 **This is a ship-order change** (workspace `CLAUDE.md`): `tiers.json` lives at
 `/opt/sitebin/` and the pricing page states the amounts. Product first, then the
 instance's `tiers.json` plus a verified live upgrade, then the website.
+
+
+---
+
+> **Corrections (post-implementation).** The design held; four details of it
+> did not, and one promise took a second pass to keep.
+>
+> - **The upgrade route takes the tier as a form value, not a path segment.**
+>   The route is `POST /account/upgrade`, with `tier` posted in the form —
+>   not `POST /account/upgrade/{tier}` as sketched above. It has to be: the
+>   request already carries a CSRF token in the same form, and a tier in the
+>   path would have been a second place to state which plan is being bought.
+>   The route stays provider-neutral either way, which was the actual rule.
+> - **`Backend.CheckoutURL` takes a `Customer` and a whole `eeconfig.Tier`.**
+>   The real signature is
+>   `CheckoutURL(ctx, c Customer, tier eeconfig.Tier, successURL, cancelURL string)`.
+>   There is **no `Account` type in `ee/billing`** and there must not be: the
+>   billing package would then reach into accounts, which is exactly what the
+>   `WebhookReceiver` split exists to prevent. `billing.Customer` is the
+>   narrow projection the provider builds instead. And a backend needs the
+>   tier itself, not its id, because the price identifier it must sell with
+>   lives on the tier.
+> - **`WebhookReceiver` has three methods, not one.** `WebhookRoutes()
+>   map[string]http.Handler` would have put route mounting inside the billing
+>   package. It is instead `WebhookPath()`, `SignatureHeader()` and
+>   `VerifyWebhook(...) (Update, error)` — the backend says where it is
+>   delivered to and how to verify, and `ee/billingh.go` mounts the route and
+>   applies the `Update`. Same reason as above: `ee/billing` never touches
+>   accounts.
+> - **The startup validation of provider price ids was not implemented with
+>   the rest, and has now been added.** For a year of this file's life
+>   "checked at startup, so a Stripe instance with a tier missing
+>   `price.stripe` fails to start instead of failing at a customer's click"
+>   was untrue: nothing looked at the id until `CheckoutURL` did, and the
+>   failure landed exactly where the doc said it would not — as "Checkout
+>   unavailable" on the customer's screen. `eeconfig.validateBackendPrices`
+>   now refuses to start when the ACTIVE direct backend cannot sell a
+>   `Paid()` tier. Only Stripe and Paddle are checked; PayGate is handed the
+>   amount and creates the product itself, and a price-less tier there is a
+>   deliberate state.
+> - **The dashboard printed `Price.Display` rather than formatting the
+>   amount.** "The amount wins wherever both exist" was stated here, in the
+>   file list below, and in the `Price` doc comment, and implemented in none
+>   of them. Since a PayGate catalogue carries amounts and no display string,
+>   every paid plan was offered at a **blank price**. `Price.Label()` now
+>   formats the amount and falls back to `display` only when there is none.

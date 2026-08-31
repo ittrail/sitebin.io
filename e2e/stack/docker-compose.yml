@@ -87,6 +87,15 @@ services:
       # (<paygate>/api/v1/licenses/renew). The licence is its own credential on
       # that call: no app id, no API key, and never the stack admin key.
       SITEBIN_LICENSE_URL: ${SITEBIN_LICENSE_URL:-}
+      # How often the licence is collected. Default 24h, which makes
+      # "watch a renewal apply without a restart" a day-long experiment; set
+      # something like 5m to see it in one sitting. Ignored when
+      # SITEBIN_LICENSE_KEY is set.
+      SITEBIN_LICENSE_REFRESH: ${SITEBIN_LICENSE_REFRESH:-}
+      # What a licence issued by this stack is worth, declared with the
+      # self-registration. Absent entitlements mean UNLIMITED, so without this
+      # the stack mints licences that cap nothing.
+      SITEBIN_STACK_LICENSING: ${SITEBIN_STACK_LICENSING:-}
 
 volumes:
   sitebin-data:

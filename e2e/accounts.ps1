@@ -1,4 +1,4 @@
-# Sitebin Enterprise — accounts-mode E2E against the real enterprise image.
+# Sitebin Enterprise -- accounts-mode E2E against the real enterprise image.
 #
 #   powershell -File e2e\accounts.ps1 [-Image sitebin:dev-ee]
 #
@@ -79,7 +79,7 @@ $r = Req "GET" "$origin/account" @("-b", $jar)
 Assert "dashboard shows account" ($r.code -eq 200 -and $r.body -match "e2e@example.com")
 Assert "dashboard has no sites yet" ($r.body -match "No sites yet")
 
-# create a site while logged in — becomes owned
+# create a site while logged in -- becomes owned
 $idxFile = Join-Path $work "acct-index.html"
 [IO.File]::WriteAllText($idxFile, "<h1>owned-site-ok</h1>")
 $r = Req "POST" "$origin/api/sites" @("-b", $jar, "-F", "files=@$idxFile;filename=index.html")

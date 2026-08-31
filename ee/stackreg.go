@@ -31,10 +31,14 @@ import (
 // that declared them would overwrite an operator's choice on each restart, and
 // every other app's with it.
 //
-// **It declares a catalogue, never a price.** Sitebin's tiers carry provider
-// price identifiers an operator wrote into tiers.json, but no amounts, so the
-// declaration names the plans and leaves the money to the payment provider. A
-// deploy must not be able to change what a customer is charged.
+// **It declares a catalogue, and the money in it is configuration, never
+// code.** The declaration carries the tier AMOUNTS, because PayGate's contract
+// is that the app states the amount and the stack creates the product in
+// whatever processor it uses — there is no field for a price id an operator
+// made by hand. What the amounts are is never decided here: they come from the
+// instance's tiers.json (`/opt/sitebin/tiers.json` on the hosted instance), so
+// changing a price is an instance-configuration change, not a release. The
+// same holds for the licence entitlements below.
 
 // stackRegistration is the subset of the stack's onboarding contract Sitebin
 // fills in. Fields the stack owns are absent by design, not by omission.
@@ -48,6 +52,16 @@ type stackRegistration struct {
 	} `json:"auth"`
 	Billing *stackBilling `json:"billing,omitempty"`
 	MCP     *stackMCP     `json:"mcp,omitempty"`
+	// Licensing tells the stack what a Sitebin Enterprise licence is WORTH:
+	// the entitlements each plan carries and how long a lapsed one stays
+	// usable. Sitebin only ever verifies a licence; the stack mints it, so
+	// without this block it mints one with no entitlements — and absent
+	// entitlements mean UNLIMITED (ee/licensing), which is how the pricing
+	// axis the website sells by (custom-domain cap per licence tier) went
+	// unenforced. Omitted when unconfigured rather than sent empty, because
+	// the stack's convergence MERGES: a block that is absent keeps what the
+	// app already had, and an empty one would wipe it.
+	Licensing *eeconfig.StackLicensing `json:"licensing,omitempty"`
 }
 
 type stackBilling struct {
@@ -66,6 +80,12 @@ type stackTier struct {
 	MonthlyPrice string `json:"monthlyPrice,omitempty"`
 	AnnualPrice  string `json:"annualPrice,omitempty"`
 	Currency     string `json:"currency,omitempty"`
+
+	// Featured is the plan the stack's hosted pricing page leads with. The
+	// stack takes it per tier and has no field for a sort order: the order of
+	// the tiers array IS the order, so declaring the catalogue in tiers.json
+	// order is what makes the page's order deliberate rather than accidental.
+	Featured bool `json:"featured,omitempty"`
 }
 
 type stackMCP struct {
@@ -124,12 +144,16 @@ func (p *provider) stackDeclaration(appID string) stackRegistration {
 	reg.Auth.RedirectURIs = []string{base + "/account/auth/oidc/callback"}
 	reg.Auth.WebOrigins = []string{base}
 
+	// Declared in catalogue order, because that IS the order the stack renders
+	// them in — it derives the sort from the array and takes no sortOrder
+	// field. tiers.json is written cheapest-first for exactly this reason.
 	tiers := make([]stackTier, 0, len(p.cfg.Tiers))
 	for _, t := range p.cfg.Tiers {
 		st := stackTier{
 			Key:         t.ID,
 			DisplayName: map[string]string{"en": tierLabel(t)},
 			Features:    tierFeatures(t),
+			Featured:    t.Featured,
 		}
 		if amount, currency, ok := t.Price.Amount(); ok {
 			st.MonthlyPrice = amount
@@ -141,6 +165,12 @@ func (p *provider) stackDeclaration(appID string) stackRegistration {
 	reg.Billing = &stackBilling{
 		TierAfterRegistration: p.cfg.DefaultTier,
 		Tiers:                 tiers,
+	}
+
+	// Only when configured. See stackRegistration.Licensing: an empty block is
+	// worse than no block, because the stack merges.
+	if p.cfg.StackRegistration != nil {
+		reg.Licensing = p.cfg.StackRegistration.Licensing
 	}
 
 	// MCP is declared only where it is actually served, and the resource comes
