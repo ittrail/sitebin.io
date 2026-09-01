@@ -62,6 +62,18 @@ type stackRegistration struct {
 	// the stack's convergence MERGES: a block that is absent keeps what the
 	// app already had, and an empty one would wipe it.
 	Licensing *eeconfig.StackLicensing `json:"licensing,omitempty"`
+	// Terms is this deployment's own terms of service. The stack's consent
+	// gate collects two documents inside the sign-in — the platform's, once
+	// per user, and the app's, once per app — and this block is the whole of
+	// Sitebin's side of it: no page, no endpoint, no callback. Sitebin must
+	// never render a terms screen of its own; if it does, this declaration is
+	// what is wrong.
+	//
+	// Omitted when unconfigured rather than sent empty, for the same reason
+	// Licensing is: the stack's convergence MERGES, so an absent block keeps
+	// what the app already declared, and an empty one would be a version and
+	// a URL of nothing.
+	Terms *eeconfig.StackTerms `json:"terms,omitempty"`
 }
 
 type stackBilling struct {
@@ -125,8 +137,12 @@ func (p *provider) registerWithStack() {
 				"url", reg.URL, "app", reg.AppID, "err", err)
 			return
 		}
+		terms := ""
+		if body.Terms != nil {
+			terms = body.Terms.Version
+		}
 		slog.Info("registered with the saas stack", "app", reg.AppID, "url", reg.URL,
-			"tiers", len(body.Billing.Tiers), "mcp", body.MCP != nil)
+			"tiers", len(body.Billing.Tiers), "mcp", body.MCP != nil, "terms", terms)
 	}()
 }
 
@@ -171,6 +187,7 @@ func (p *provider) stackDeclaration(appID string) stackRegistration {
 	// worse than no block, because the stack merges.
 	if p.cfg.StackRegistration != nil {
 		reg.Licensing = p.cfg.StackRegistration.Licensing
+		reg.Terms = p.cfg.StackRegistration.Terms
 	}
 
 	// MCP is declared only where it is actually served, and the resource comes

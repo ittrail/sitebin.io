@@ -21,9 +21,12 @@ docker build --build-arg EDITION=enterprise -t sitebin:latest-ee .   # enterpris
 ```
 
 **`e2e.ps1` is not the full E2E.** It is the core HTTP suite and references no
-other script; there is no aggregate entry point. A full pass is all eight run
+other script; there is no aggregate entry point. A full pass is all nine run
 by hand: `e2e.ps1`, `spa.ps1`, `paths.ps1`, `ftp.ps1`, `mcp.ps1` (community
-image), `accounts.ps1`, `tiers.ps1` (enterprise image), `license.ps1`.
+image), `accounts.ps1`, `tiers.ps1` (enterprise image), `license.ps1`, and
+`consent.ps1` -- the last of which is the only one that needs a **running SaaS
+Stack** (the stack's consent gate, the OIDC issuer/discovery split, and the
+`terms` declaration; see `docs/superpowers/specs/2026-09-01-consent-gate-through-the-stack-design.md`).
 
 They default to `-Image sitebin:dev` (`sitebin:dev-ee` for `accounts.ps1` and
 `tiers.ps1`), tags nothing in this repo builds. Tag them yourself, and build the

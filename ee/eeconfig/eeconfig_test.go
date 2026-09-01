@@ -590,3 +590,125 @@ func TestLoadStackLicensing(t *testing.T) {
 		}
 	})
 }
+
+// The discovery URL is where the document is FETCHED; the issuer stays the
+// value that must appear in `iss`. Pointing an app at the SaaS Stack's Auth
+// Gateway is exactly this split, and it is what puts the app behind the
+// stack's consent gate.
+func TestLoadGenericOIDCDiscoveryURL(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"SITEBIN_OAUTH_OIDC_ISSUER":        "https://auth.stack.example/realms/saas-stack",
+		"SITEBIN_OAUTH_OIDC_DISCOVERY_URL": "https://auth-gw.saas-stack.example/api/v1/sitebin",
+		"SITEBIN_OAUTH_OIDC_CLIENT_ID":     "sitebin-app",
+	}), noFile)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.OIDC.Issuer != "https://auth.stack.example/realms/saas-stack" {
+		t.Errorf("the discovery URL must not change what the issuer means: %q", cfg.OIDC.Issuer)
+	}
+	if cfg.OIDC.DiscoveryURL != "https://auth-gw.saas-stack.example/api/v1/sitebin" {
+		t.Errorf("DiscoveryURL = %q", cfg.OIDC.DiscoveryURL)
+	}
+}
+
+// Either form is accepted, because both are what people copy: the base, and
+// the full well-known URL a browser was just pointed at.
+func TestLoadGenericOIDCDiscoveryURLTrimsWellKnown(t *testing.T) {
+	for _, in := range []string{
+		"https://gw.example/api/v1/sitebin/.well-known/openid-configuration",
+		"https://gw.example/api/v1/sitebin/",
+	} {
+		cfg, err := Load(env(map[string]string{
+			"SITEBIN_OAUTH_OIDC_ISSUER":        "https://idp.example",
+			"SITEBIN_OAUTH_OIDC_DISCOVERY_URL": in,
+			"SITEBIN_OAUTH_OIDC_CLIENT_ID":     "cid",
+		}), noFile)
+		if err != nil {
+			t.Fatalf("Load(%q): %v", in, err)
+		}
+		if cfg.OIDC.DiscoveryURL != "https://gw.example/api/v1/sitebin" {
+			t.Errorf("Load(%q) -> %q", in, cfg.OIDC.DiscoveryURL)
+		}
+	}
+}
+
+func TestLoadGenericOIDCDiscoveryURLInvalid(t *testing.T) {
+	_, err := Load(env(map[string]string{
+		"SITEBIN_OAUTH_OIDC_ISSUER":        "https://idp.example",
+		"SITEBIN_OAUTH_OIDC_DISCOVERY_URL": "gw.example",
+		"SITEBIN_OAUTH_OIDC_CLIENT_ID":     "cid",
+	}), noFile)
+	if err == nil || !strings.Contains(err.Error(), "SITEBIN_OAUTH_OIDC_DISCOVERY_URL") {
+		t.Fatalf("want discovery-url error, got %v", err)
+	}
+}
+
+// Unset, nothing changes: discovery comes from the issuer, which is what every
+// plain OIDC provider wants and what every existing deployment already does.
+func TestLoadGenericOIDCDiscoveryURLDefaultsToEmpty(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"SITEBIN_OAUTH_OIDC_ISSUER":    "https://idp.example",
+		"SITEBIN_OAUTH_OIDC_CLIENT_ID": "cid",
+	}), noFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OIDC.DiscoveryURL != "" {
+		t.Errorf("DiscoveryURL = %q, want empty", cfg.OIDC.DiscoveryURL)
+	}
+}
+
+func TestLoadStackTerms(t *testing.T) {
+	base := func(extra map[string]string) map[string]string {
+		m := map[string]string{
+			"SITEBIN_STACK_URL":       "https://platform.example/",
+			"SITEBIN_STACK_APP_ID":    "sitebin",
+			"SITEBIN_STACK_ADMIN_KEY": "padm_test",
+		}
+		for k, v := range extra {
+			m[k] = v
+		}
+		return m
+	}
+
+	t.Run("parsed", func(t *testing.T) {
+		cfg, err := Load(env(base(map[string]string{
+			"SITEBIN_STACK_TERMS": `{"version":"2026-09-01","url":"https://sitebin.io/terms","title":{"en":"Sitebin Terms of Service"}}`,
+		})), noFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := cfg.StackRegistration.Terms
+		if got == nil || got.Version != "2026-09-01" || got.URL != "https://sitebin.io/terms" ||
+			got.Title["en"] != "Sitebin Terms of Service" {
+			t.Fatalf("terms = %+v", got)
+		}
+	})
+
+	t.Run("absent means declare nothing", func(t *testing.T) {
+		cfg, err := Load(env(base(nil)), noFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.StackRegistration.Terms != nil {
+			t.Fatalf("terms = %+v, want nil", cfg.StackRegistration.Terms)
+		}
+	})
+
+	// A half-filled block would register terms the gate cannot show, and the
+	// failure would happen in a background goroutine at boot.
+	for name, bad := range map[string]string{
+		"no version": `{"url":"https://sitebin.io/terms"}`,
+		"no url":     `{"version":"2026-09-01"}`,
+		"blank url":  `{"version":"2026-09-01","url":"   "}`,
+		"not a url":  `{"version":"2026-09-01","url":"sitebin.io/terms"}`,
+		"not json":   `{`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(env(base(map[string]string{"SITEBIN_STACK_TERMS": bad})), noFile); err == nil {
+				t.Fatalf("SITEBIN_STACK_TERMS=%q must not start", bad)
+			}
+		})
+	}
+}

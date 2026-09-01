@@ -27,11 +27,15 @@ type Identity struct {
 // discovery fetch happens on first use, so an instance without OAuth traffic
 // never makes the network call, and startup does not depend on the IdP.
 type oidcProvider struct {
-	name        account.Provider
-	issuer      string
-	clientID    string
-	secret      string
-	redirectURL string
+	name account.Provider
+	// issuer is the value every token's `iss` must equal.
+	issuer string
+	// discoveryURL is where the document is fetched, when that is not the
+	// issuer. Empty = fetch it from issuer.
+	discoveryURL string
+	clientID     string
+	secret       string
+	redirectURL  string
 
 	once     sync.Once
 	initErr  error
@@ -39,11 +43,52 @@ type oidcProvider struct {
 	verifier *oidc.IDTokenVerifier
 }
 
+// discoveryBase is where go-oidc should fetch discovery from. go-oidc appends
+// the well-known path itself.
+func (p *oidcProvider) discoveryBase() string {
+	if p.discoveryURL == "" {
+		return p.issuer
+	}
+	return p.discoveryURL
+}
+
 func (p *oidcProvider) init(ctx context.Context) error {
 	p.once.Do(func() {
-		prov, err := oidc.NewProvider(ctx, p.issuer)
+		base := p.discoveryBase()
+		if base != p.issuer {
+			// The issuer split, in one call: fetch the document from `base`,
+			// but require and record the issuer as p.issuer.
+			//
+			// go-oidc refuses a document whose `issuer` is not the URL it was
+			// fetched from, and calls the escape hatch "insecure". The rule it
+			// disables is the URL-equality one, which the SaaS Stack's Auth
+			// Gateway deliberately breaks: it serves Keycloak's document —
+			// Keycloak's `issuer`, Keycloak's token and JWKS endpoints — with
+			// `authorization_endpoint` pointed at itself, because that is
+			// where the consent gate lives.
+			//
+			// So the check is TIGHTENED rather than skipped: the document's
+			// issuer is re-checked against the configured one below, and the
+			// verifier built from it still enforces `iss` on every ID token.
+			// What is given up is only "the document lived at the issuer's
+			// URL", which was never the thing protecting anything here.
+			ctx = oidc.InsecureIssuerURLContext(ctx, p.issuer)
+		}
+		prov, err := oidc.NewProvider(ctx, base)
 		if err != nil {
-			p.initErr = fmt.Errorf("oidc discovery for %s: %w", p.name, err)
+			p.initErr = fmt.Errorf("oidc discovery for %s at %s: %w", p.name, base, err)
+			return
+		}
+		var doc struct {
+			Issuer string `json:"issuer"`
+		}
+		if err := prov.Claims(&doc); err != nil {
+			p.initErr = fmt.Errorf("oidc discovery for %s at %s: unusable document: %w", p.name, base, err)
+			return
+		}
+		if doc.Issuer != p.issuer {
+			p.initErr = fmt.Errorf("oidc discovery for %s at %s advertises issuer %q, but this instance is configured for %q",
+				p.name, base, doc.Issuer, p.issuer)
 			return
 		}
 		p.verifier = prov.Verifier(&oidc.Config{ClientID: p.clientID})
@@ -84,7 +129,7 @@ func NewOIDC(cfg eeconfig.Config, redirectBase string) *OIDC {
 	}
 	if g := cfg.OIDC; g != nil {
 		m.providers[account.OIDCProv] = &oidcProvider{
-			name: account.OIDCProv, issuer: g.Issuer,
+			name: account.OIDCProv, issuer: g.Issuer, discoveryURL: g.DiscoveryURL,
 			clientID: g.ClientID, secret: g.ClientSecret,
 			redirectURL: redirectBase + "/account/auth/oidc/callback",
 		}

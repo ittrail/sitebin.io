@@ -172,3 +172,63 @@ func TestDashboardShowsThePriceOfAPayGateTier(t *testing.T) {
 		}
 	}
 }
+
+// The stack gates sign-in on two documents — the platform's and the app's —
+// and an app that declares no `terms` block contributes nothing to the second.
+// Sitebin renders no terms screen of its own, so this declaration is the only
+// place its terms of service exist as far as the sign-in is concerned.
+func TestStackDeclarationCarriesTerms(t *testing.T) {
+	t.Run("declared when configured", func(t *testing.T) {
+		t.Setenv("SITEBIN_STACK_TERMS",
+			`{"version":"2026-09-01","url":"https://sitebin.io/terms","title":{"en":"Sitebin Terms of Service","de":"Nutzungsbedingungen"}}`)
+		reg := stackProvider(t, "").stackDeclaration("sitebin")
+		if reg.Terms == nil {
+			t.Fatal("configured terms were not declared")
+		}
+		if reg.Terms.Version != "2026-09-01" || reg.Terms.URL != "https://sitebin.io/terms" {
+			t.Errorf("terms = %+v", reg.Terms)
+		}
+
+		// The wire shape is the stack's, verbatim.
+		b, err := json.Marshal(reg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wire struct {
+			Terms *struct {
+				Version string            `json:"version"`
+				URL     string            `json:"url"`
+				Title   map[string]string `json:"title"`
+			} `json:"terms"`
+		}
+		if err := json.Unmarshal(b, &wire); err != nil {
+			t.Fatal(err)
+		}
+		if wire.Terms == nil || wire.Terms.Version != "2026-09-01" ||
+			wire.Terms.URL != "https://sitebin.io/terms" ||
+			wire.Terms.Title["de"] != "Nutzungsbedingungen" {
+			t.Fatalf("terms did not survive the wire: %s", b)
+		}
+	})
+
+	// Same rule as licensing: the stack MERGES, so an absent block keeps what
+	// the app already declared and an empty one would replace real terms with
+	// a version and a URL of nothing.
+	t.Run("omitted entirely when unconfigured", func(t *testing.T) {
+		reg := stackProvider(t, "").stackDeclaration("sitebin")
+		if reg.Terms != nil {
+			t.Fatal("unconfigured terms must not be declared")
+		}
+		b, err := json.Marshal(reg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wire map[string]json.RawMessage
+		if err := json.Unmarshal(b, &wire); err != nil {
+			t.Fatal(err)
+		}
+		if _, present := wire["terms"]; present {
+			t.Errorf("terms must be absent from the payload, not empty: %s", b)
+		}
+	})
+}

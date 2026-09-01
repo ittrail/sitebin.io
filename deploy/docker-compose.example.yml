@@ -231,10 +231,24 @@ services:
       # Generic OIDC -- any issuer (Keycloak, Okta, Authentik, or the IT-Trail
       # SaaS Stack's Auth Gateway). Redirect URI:
       #   https://<base>/account/auth/oidc/callback
-      # SITEBIN_OAUTH_OIDC_ISSUER:        "https://auth.saas-stack.example.com/api/v1/sitebin"
-      # SITEBIN_OAUTH_OIDC_CLIENT_ID:     "sitebin"
+      # _ISSUER is what every token's `iss` must say.
+      # SITEBIN_OAUTH_OIDC_ISSUER:        "https://auth.example.com/realms/saas-stack"
+      # SITEBIN_OAUTH_OIDC_CLIENT_ID:     "sitebin-app"
       # SITEBIN_OAUTH_OIDC_CLIENT_SECRET: "..."
       # SITEBIN_OAUTH_OIDC_LABEL:         "Example SSO"   # login button text
+      #
+      # _DISCOVERY_URL is where the discovery document is FETCHED, when that is
+      # not the issuer's own URL. Leave it unset for a plain OIDC provider.
+      #
+      # On the IT-Trail SaaS Stack, SET IT TO THE AUTH GATEWAY. The gateway
+      # serves the realm's document with `authorization_endpoint` pointed at
+      # itself, which is where the stack's CONSENT GATE lives -- the page that
+      # asks a user to accept the platform's terms and Sitebin's own. Point
+      # Sitebin straight at the identity provider instead and the gate is
+      # skipped silently: sign-in works and nobody is ever asked anything.
+      # The document's `issuer` must still equal _ISSUER, so this cannot be
+      # used to trust another realm by accident.
+      # SITEBIN_OAUTH_OIDC_DISCOVERY_URL: "https://auth-gw.saas-stack.example.com/api/v1/sitebin"
 
       # --- Which backend may charge customers ---
       # Exactly ONE is ever active: stripe | paddle | paygate (case-insensitive).
@@ -276,6 +290,16 @@ services:
       # Registration MERGES: leaving it out keeps whatever the stack already
       # holds, so declare it or omit it -- never declare it empty.
       # SITEBIN_STACK_LICENSING: '{"graceMonths":3,"plans":{"team":{"max_custom_domains":25},"business":{"max_custom_domains":100},"platform":{}}}'
+      #
+      # THIS DEPLOYMENT'S OWN TERMS OF SERVICE. The stack's consent gate asks
+      # for two documents inside the sign-in -- the platform's, once per user,
+      # and the app's, once per app -- and this block is the whole of Sitebin's
+      # side of it: no page, no endpoint, no callback. It is only ever shown if
+      # SITEBIN_OAUTH_OIDC_DISCOVERY_URL points at the Auth Gateway.
+      # "version" is opaque; RAISING IT ASKS EVERY USER AGAIN, and re-declaring
+      # a version the stack already recorded with different content is refused.
+      # Registration MERGES, so leaving it out keeps what the stack holds.
+      # SITEBIN_STACK_TERMS: '{"version":"2026-09-01","url":"https://sitebin.io/terms","title":{"en":"Sitebin Terms of Service"}}'
 
       # --- SMTP (email verification & password reset) ---
       # SITEBIN_SMTP_HOST: "smtp.example.com"

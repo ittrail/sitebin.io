@@ -30,10 +30,19 @@ services:
     # the host, where the stack's Traefik actually listens.
     extra_hosts:
       - "auth.saas.localtest.me:host-gateway"
+      - "auth-gw.saas-stack.saas.localtest.me:host-gateway"
       - "platform.saas-stack.saas.localtest.me:host-gateway"
       - "paygate.saas-stack.saas.localtest.me:host-gateway"
     ports:
       - "${SITEBIN_PORT:-8091}:80"
+    # Discovery through the Auth Gateway returns Keycloak's own BACK-channel
+    # URLs on the origin the gateway asked over -- an internal one, e.g.
+    # http://keycloak:8080. So the token and JWKS calls only resolve from
+    # inside the stack's own docker network, and this container has to join it.
+    # extra_hosts above covers the FRONT-channel names only.
+    networks:
+      - default
+      - stack
     volumes:
       - sitebin-data:/data
       # tiers.json is INSTANCE configuration and is not in this repo. For
@@ -54,7 +63,15 @@ services:
       SITEBIN_LOCAL_AUTH: "false"
       SITEBIN_TIERS_FILE: /cfg/tiers.json
       SITEBIN_DEFAULT_TIER: ${SITEBIN_DEFAULT_TIER:-free}
-      SITEBIN_OAUTH_OIDC_ISSUER: ${SITEBIN_OAUTH_OIDC_ISSUER:?the stack Auth Gateway issuer URL}
+      # The ISSUER is the realm -- the value every token's `iss` carries.
+      SITEBIN_OAUTH_OIDC_ISSUER: ${SITEBIN_OAUTH_OIDC_ISSUER:?the realm URL that appears in `iss`}
+      # The DISCOVERY URL is the Auth Gateway, and it is what puts this
+      # instance behind the stack's CONSENT GATE. The gateway serves the
+      # realm's document with `authorization_endpoint` pointed at itself,
+      # which is the page that asks a user to accept the platform's terms and
+      # Sitebin's own. Point discovery at Keycloak instead and the gate is
+      # bypassed silently -- sign-in still works, nobody is ever asked.
+      SITEBIN_OAUTH_OIDC_DISCOVERY_URL: ${SITEBIN_OAUTH_OIDC_DISCOVERY_URL:?the Auth Gateway discovery base, or the gate is bypassed}
       SITEBIN_OAUTH_OIDC_CLIENT_ID: ${SITEBIN_OAUTH_OIDC_CLIENT_ID:?}
       SITEBIN_OAUTH_OIDC_CLIENT_SECRET: ${SITEBIN_OAUTH_OIDC_CLIENT_SECRET:?}
       SITEBIN_OAUTH_OIDC_LABEL: ${SITEBIN_OAUTH_OIDC_LABEL:-Sign in with IT-Trail}
@@ -66,6 +83,10 @@ services:
       SITEBIN_STACK_URL: ${SITEBIN_STACK_URL:-}
       SITEBIN_STACK_APP_ID: ${SITEBIN_STACK_APP_ID:-}
       SITEBIN_STACK_ADMIN_KEY: ${SITEBIN_STACK_ADMIN_KEY:-}
+      # This deployment's own terms of service, declared so the consent gate
+      # has a second document to ask for. Registration MERGES, so an empty
+      # value declares nothing rather than erasing what the stack holds.
+      SITEBIN_STACK_TERMS: ${SITEBIN_STACK_TERMS:-}
 
       # ---- billing through PayGate ----
       # Exactly one backend may be selected; two configured with no explicit
@@ -96,6 +117,15 @@ services:
       # self-registration. Absent entitlements mean UNLIMITED, so without this
       # the stack mints licences that cap nothing.
       SITEBIN_STACK_LICENSING: ${SITEBIN_STACK_LICENSING:-}
+
+networks:
+  default:
+  # The network the running stack's containers are on. `docker network ls` on
+  # the stack host; for the stack's dev compose it is
+  # docker_compose_pkg_dev_default.
+  stack:
+    external: true
+    name: ${STACK_NETWORK:?the docker network the SaaS Stack runs on -- see docker network ls}
 
 volumes:
   sitebin-data:

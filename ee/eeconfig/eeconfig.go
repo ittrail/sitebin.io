@@ -132,10 +132,31 @@ type OAuthProvider struct {
 }
 
 // GenericOIDC configures sign-in against any spec-compliant OIDC issuer —
-// Keycloak, Okta, Authentik, or the IT-Trail SaaS Stack's Auth Gateway
-// (issuer https://auth.<stack-domain>/api/v1/<app-id>).
+// Keycloak, Okta, Authentik, or the IT-Trail SaaS Stack's Auth Gateway.
 type GenericOIDC struct {
-	Issuer       string
+	// Issuer is the value that must appear in every token's `iss`, and — when
+	// DiscoveryURL is empty — also where the discovery document is fetched.
+	// On the SaaS Stack this is the realm's own URL,
+	// https://auth.<stack-domain>/realms/<realm>.
+	Issuer string
+
+	// DiscoveryURL is where the discovery document is FETCHED, when that is
+	// not the issuer's own origin. Empty = fetch it from Issuer, which is
+	// what a plain OIDC provider wants.
+	//
+	// This exists for one deployment shape, and it is the SaaS Stack's: the
+	// stack's Auth Gateway serves Keycloak's document with
+	// `authorization_endpoint` pointed at the gateway, because that is where
+	// the consent gate lives. An app that discovers from Keycloak directly
+	// never passes the gate and its users are never asked to accept any
+	// terms. `issuer` in that document is still Keycloak's, so the document's
+	// URL and its issuer deliberately disagree — see ee/authn.oidcProvider.init
+	// for how that is handled without loosening the check that matters.
+	//
+	// Either the realm/app base or the full .well-known URL; the suffix is
+	// trimmed either way.
+	DiscoveryURL string
+
 	ClientID     string
 	ClientSecret string
 	Label        string // login-button text (default "SSO")
@@ -201,6 +222,38 @@ type StackConfig struct {
 	// stack so it can mint licences with the right entitlements. nil = declare
 	// nothing, and the stack keeps whatever it already holds.
 	Licensing *StackLicensing
+	// Terms is this deployment's own terms of service, declared to the stack
+	// so its consent gate can ask for them. nil = declare nothing, and the
+	// stack keeps whatever it already holds.
+	Terms *StackTerms
+}
+
+// StackTerms is the registration payload's `terms` block: the deployment's own
+// terms of service, which the stack's consent gate shows inside the sign-in
+// (the second of the two documents — the first is the platform's, which no app
+// may declare). Sitebin renders nothing and stores nothing; declaring this is
+// the whole integration.
+//
+// It comes from SITEBIN_STACK_TERMS rather than from a constant in this repo
+// for exactly the reason SITEBIN_STACK_LICENSING does: these are one
+// deployment's commercial and legal terms — sitebin.io's, on the hosted
+// instance — they change when that page changes, and this repo is public and
+// released on its own schedule. A self-hosted Sitebin has its own terms or
+// none, and neither is ours to write.
+//
+// The shape is the stack's, verbatim, so an operator can paste the block the
+// stack's README documents:
+//
+//	{"version":"2026-09-01","url":"https://sitebin.io/terms","title":{"en":"Sitebin Terms of Service"}}
+//
+// Version is opaque and RAISING IT ASKS EVERY USER AGAIN. It is also
+// immutable: re-declaring a version the stack has already recorded with
+// different content is refused outright, because registration runs on every
+// boot and a warning would scroll past.
+type StackTerms struct {
+	Version string            `json:"version"`
+	URL     string            `json:"url"`
+	Title   map[string]string `json:"title,omitempty"`
 }
 
 // StackLicensing is the registration payload's `licensing` block: the
@@ -332,6 +385,24 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Co
 			}
 			cfg.StackRegistration.Licensing = &lic
 		}
+		if raw := strings.TrimSpace(getenv("SITEBIN_STACK_TERMS")); raw != "" {
+			var terms StackTerms
+			if err := json.Unmarshal([]byte(raw), &terms); err != nil {
+				return cfg, fmt.Errorf("SITEBIN_STACK_TERMS: %w", err)
+			}
+			terms.Version = strings.TrimSpace(terms.Version)
+			terms.URL = strings.TrimSpace(terms.URL)
+			// Both are required by the stack, and a half-filled block is the
+			// operator mistake worth catching here rather than in a
+			// registration that fails in a background goroutine at boot.
+			if terms.Version == "" || terms.URL == "" {
+				return cfg, fmt.Errorf("SITEBIN_STACK_TERMS: both version and url are required")
+			}
+			if !strings.HasPrefix(terms.URL, "https://") && !strings.HasPrefix(terms.URL, "http://") {
+				return cfg, fmt.Errorf("SITEBIN_STACK_TERMS: url %q is not an http(s) URL", terms.URL)
+			}
+			cfg.StackRegistration.Terms = &terms
+		}
 	}
 	cfg.DefaultTier = strings.TrimSpace(getenv("SITEBIN_DEFAULT_TIER"))
 	cfg.AnonTier = strings.TrimSpace(getenv("SITEBIN_ANON_TIER"))
@@ -359,8 +430,17 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Co
 		if label == "" {
 			label = "SSO"
 		}
+		discovery := strings.TrimSpace(getenv("SITEBIN_OAUTH_OIDC_DISCOVERY_URL"))
+		if discovery != "" {
+			if !strings.HasPrefix(discovery, "https://") && !strings.HasPrefix(discovery, "http://") {
+				return cfg, fmt.Errorf("SITEBIN_OAUTH_OIDC_DISCOVERY_URL: %q is not an http(s) URL", discovery)
+			}
+			discovery = strings.TrimRight(discovery, "/")
+			discovery = strings.TrimSuffix(discovery, "/.well-known/openid-configuration")
+			discovery = strings.TrimRight(discovery, "/")
+		}
 		cfg.OIDC = &GenericOIDC{
-			Issuer: strings.TrimRight(issuer, "/"), ClientID: clientID,
+			Issuer: strings.TrimRight(issuer, "/"), DiscoveryURL: discovery, ClientID: clientID,
 			ClientSecret: getenv("SITEBIN_OAUTH_OIDC_CLIENT_SECRET"), Label: label,
 		}
 	}

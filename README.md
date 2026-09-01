@@ -678,7 +678,8 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_ALLOW_ANON_CREATE` | In accounts mode, still allow anonymous sites. |
 | `SITEBIN_OAUTH_GOOGLE_CLIENT_ID` / `_SECRET` | Google OIDC login. |
 | `SITEBIN_OAUTH_MICROSOFT_CLIENT_ID` / `_SECRET` / `_TENANT` | Microsoft OIDC (`_TENANT` default `common`). |
-| `SITEBIN_OAUTH_OIDC_ISSUER` / `_CLIENT_ID` / `_CLIENT_SECRET` / `_LABEL` | Generic OIDC sign-in against any issuer (Keycloak, Okta, Authentik, the [SaaS Stack](#saas-stack-integration)). `_LABEL` is the login-button text (default `SSO`). |
+| `SITEBIN_OAUTH_OIDC_ISSUER` / `_CLIENT_ID` / `_CLIENT_SECRET` / `_LABEL` | Generic OIDC sign-in against any issuer (Keycloak, Okta, Authentik, the [SaaS Stack](#saas-stack-integration)). `_ISSUER` is the value that must appear in every token's `iss`. `_LABEL` is the login-button text (default `SSO`). |
+| `SITEBIN_OAUTH_OIDC_DISCOVERY_URL` | Where the discovery document is **fetched**, when that is not the issuer's own URL. Unset = fetch it from `_ISSUER`, which is what a plain provider wants. Set it to put Sitebin behind the [SaaS Stack](#saas-stack-integration)'s **consent gate**: the stack's Auth Gateway serves the realm's document with `authorization_endpoint` pointed at itself, and an app that discovers straight from the identity provider never reaches the gate and its users are never asked to accept any terms. The document's own `issuer` is still required to equal `_ISSUER`, so this cannot be used to trust another realm by accident. Either the base URL or the full `/.well-known/openid-configuration` is accepted. |
 | `SITEBIN_LOCAL_AUTH` | `true` | `false` = SSO only: no email/password form, signup/reset disabled; with a single OAuth provider, `/account/login` redirects straight to it. Requires an `SITEBIN_OAUTH_*` provider. |
 | `SITEBIN_BILLING` | Which backend may charge customers: `stripe`, `paddle` or `paygate` (case-insensitive). Unset = inferred when exactly one is configured; **two configured and no choice is a startup error**. Exactly one backend is ever active: with `paygate` selected, configured Stripe/Paddle credentials are inert *and their webhook routes are not mounted*, so provider deliveries get a silent `404` — remove the webhook from the provider's dashboard, or you will be debugging retries. Startup also refuses a catalogue the selected direct backend cannot sell: every tier with a `price` must carry the matching `price.stripe` / `price.paddle`. See [Billing](#billing). |
 | `SITEBIN_PAYGATE_URL` / `_APP_ID` / `_API_KEY` | Sell tiers and resolve subscriptions through a SaaS-Stack PayGate. See [Billing](#billing) and [SaaS-Stack integration](#saas-stack-integration). |
@@ -690,6 +691,7 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_LICENSE_REFRESH` | How often the instance collects its license from the stack. Default **24h**; any positive Go duration (`5m`, `1h`). Shorten it to watch a renewal apply without a restart, which is otherwise a day-long experiment. A value that is not a positive duration is warned about and ignored. Ignored entirely when `SITEBIN_LICENSE_KEY` is set. |
 | `SITEBIN_LICENSE_URL` | Optional override for where the running instance collects a renewed license (default: `<SITEBIN_PAYGATE_URL>/api/v1/licenses/renew`). The request carries **no credential**: the instance presents the license it already holds, and the stack — which signed it — verifies it. Fetched daily, cached under the data dir and applied without a restart; a failure never restricts anything. Ignored when `SITEBIN_LICENSE_KEY` is set. |
 | `SITEBIN_STACK_LICENSING` | JSON `licensing` block sent with the self-registration above, declaring what a Sitebin **Enterprise license** is worth and how long a lapsed one stays usable: `{"graceMonths":3,"plans":{"team":{"max_custom_domains":25},"platform":{}}}`. The stack mints licenses, so it has to be told; a plan absent from `plans` carries no entitlements, which means **unlimited**. Only meaningful alongside `SITEBIN_STACK_URL`, and only the vendor's own deployment (the one holding the platform admin key) ever sets it. Absent = declare nothing, and the stack keeps whatever it already holds — registration merges, so an empty block would erase the entitlements rather than leave them. |
+| `SITEBIN_STACK_TERMS` | JSON `terms` block sent with the self-registration below, declaring **this deployment's own terms of service** so the stack's consent gate can ask for them inside the sign-in: `{"version":"2026-09-01","url":"https://sitebin.io/terms","title":{"en":"Sitebin Terms of Service"}}`. `version` and `url` are required; `title` is an optional `locale → heading` map. Sitebin renders no terms screen of its own — declaring this block is the whole integration. `version` is opaque and **raising it asks every user again**; it is also immutable, so re-declaring one the stack already recorded with different content is refused. Not hardcoded for the same reason `SITEBIN_STACK_LICENSING` is not: these are one deployment's legal terms and this repo is public. Absent = declare nothing, and the stack keeps whatever it already holds. |
 | `SITEBIN_STACK_URL` / `_APP_ID` / `_ADMIN_KEY` | Self-registration against the IT-Trail SaaS Stack. With all three set, the instance announces itself to the stack on every start — its identity, its OIDC callback, its tier catalogue and its MCP block — so auth, billing and MCP are configured by deploying rather than by hand. `_ADMIN_KEY` is the stack's platform admin key: a master credential, so keep it in a secret store. Unset = no self-registration. |
 
 ### Account API tokens *(Enterprise)*
@@ -864,14 +866,35 @@ Enterprise license** is worth — see [Enterprise licensing](#enterprise-licensi
 Registration merges rather than replaces, so a block that is absent leaves what
 the stack already holds untouched.
 
+**Terms acceptance is the stack's, not Sitebin's.** The stack gates sign-in on
+two documents — the platform's terms, once per user, and the app's own terms,
+once per app — on a page it hosts inside the sign-in flow, themed and
+localized. Sitebin's whole side of it is `SITEBIN_STACK_TERMS`: a version, a
+URL and an optional heading, declared with the registration. There is no page
+to render, no endpoint to expose and no callback to implement, and if Sitebin
+ever finds itself showing a terms screen of its own, that is the bug.
+
+Two things have to be true for a user to actually see it:
+
+- `SITEBIN_STACK_TERMS` is set, or the stack has nothing of Sitebin's to show
+  and asks for the platform document alone.
+- `SITEBIN_OAUTH_OIDC_DISCOVERY_URL` points at the **Auth Gateway**. The gate
+  lives on the gateway's authorization endpoint, and the gateway's discovery
+  document is the only thing that names it. An instance configured with the
+  identity provider's own endpoints skips the gate entirely, and does so
+  silently — sign-in works, nobody is ever asked anything.
+
 Registration never blocks startup. A stack that is briefly unreachable makes
 the attempt fail and log; Sitebin serves sites regardless and converges again
 on the next start.
 
 ```bash
 # 1. SSO through the stack's Auth Gateway (generic OIDC)
-SITEBIN_OAUTH_OIDC_ISSUER=https://auth.saas-stack.example.com/api/v1/sitebin
-SITEBIN_OAUTH_OIDC_CLIENT_ID=sitebin
+#    The ISSUER is the realm — it is what `iss` says. The DISCOVERY URL is the
+#    gateway, and it is what puts sign-in behind the stack's consent gate.
+SITEBIN_OAUTH_OIDC_ISSUER=https://auth.example.com/realms/saas-stack
+SITEBIN_OAUTH_OIDC_DISCOVERY_URL=https://auth-gw.saas-stack.example.com/api/v1/sitebin
+SITEBIN_OAUTH_OIDC_CLIENT_ID=sitebin-app
 SITEBIN_OAUTH_OIDC_CLIENT_SECRET=…
 SITEBIN_OAUTH_OIDC_LABEL="Example SSO"
 
@@ -882,6 +905,7 @@ SITEBIN_LOCAL_AUTH=false
 SITEBIN_STACK_URL=https://platform.saas-stack.example.com
 SITEBIN_STACK_APP_ID=sitebin
 SITEBIN_STACK_ADMIN_KEY=…            # the stack's PLATFORM_ADMIN_KEY
+SITEBIN_STACK_TERMS='{"version":"2026-09-01","url":"https://sitebin.io/terms","title":{"en":"Sitebin Terms of Service"}}'
 
 # 3. Tiers from PayGate (requires SITEBIN_ACCOUNT_MODE=tiers)
 SITEBIN_PAYGATE_URL=https://paygate.saas-stack.example.com
