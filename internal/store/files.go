@@ -122,53 +122,61 @@ func (s *Store) SaveFile(site *Site, relPath string, r io.Reader) error {
 }
 
 func (s *Store) saveFileLocked(site *Site, rel string, r io.Reader) error {
-	dir := site.ContentDir()
-	used, count, err := usage(dir)
+	used, count, err := usage(site.ContentDir())
 	if err != nil {
 		return err
 	}
-	maxBytes, maxFiles := s.EffMaxBytes(site), s.EffMaxFiles(site)
-	dst := filepath.Join(dir, filepath.FromSlash(rel))
-	var existing int64
+	if _, _, err := s.writeFileLocked(site, rel, r, used, count, s.EffMaxBytes(site), s.EffMaxFiles(site)); err != nil {
+		return err
+	}
+	return s.renewExpiryLocked(site)
+}
+
+// writeFileLocked writes one file against a budget the CALLER has measured:
+// used and count are the site's current totals, maxBytes and maxFiles its
+// caps. It returns the bytes written and the size of the file it replaced
+// (0 for a new one), so a caller writing many files can keep the totals
+// current without walking the site again. The caller holds the site lock.
+func (s *Store) writeFileLocked(site *Site, rel string, r io.Reader, used int64, count int, maxBytes int64, maxFiles int) (written, existing int64, err error) {
+	dst := filepath.Join(site.ContentDir(), filepath.FromSlash(rel))
 	if fi, err := os.Lstat(dst); err == nil {
 		if fi.IsDir() {
-			return ErrBadPath
+			return 0, 0, ErrBadPath
 		}
 		existing = fi.Size()
 	} else if count+1 > maxFiles {
-		return ErrTooManyFiles
+		return 0, 0, ErrTooManyFiles
 	}
 	budget := maxBytes - (used - existing)
 	if budget < 0 {
-		return ErrTooLarge
+		return 0, existing, ErrTooLarge
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return fmt.Errorf("create dirs: %w", err)
+		return 0, existing, fmt.Errorf("create dirs: %w", err)
 	}
 	tmp := dst + ".sbtmp"
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
-		return fmt.Errorf("create file: %w", err)
+		return 0, existing, fmt.Errorf("create file: %w", err)
 	}
-	_, err = io.Copy(f, io.LimitReader(r, budget+1))
-	if err == nil {
-		// detect budget overrun: LimitReader stops silently at budget+1
-		if fi, serr := f.Stat(); serr == nil && fi.Size() > budget {
-			err = ErrTooLarge
-		}
+	written, err = io.Copy(f, io.LimitReader(r, budget+1))
+	if err == nil && written > budget {
+		// LimitReader stops silently at budget+1: past the budget by one is
+		// past the budget.
+		err = ErrTooLarge
 	}
 	if cerr := f.Close(); err == nil && cerr != nil {
 		err = cerr
 	}
 	if err != nil {
 		os.Remove(tmp)
-		return err
+		return 0, existing, err
 	}
 	if err := os.Rename(tmp, dst); err != nil {
 		os.Remove(tmp)
-		return fmt.Errorf("commit file: %w", err)
+		return 0, existing, fmt.Errorf("commit file: %w", err)
 	}
-	return s.renewExpiryLocked(site)
+	return written, existing, nil
 }
 
 // DeleteFile removes one file and prunes now-empty parent directories.

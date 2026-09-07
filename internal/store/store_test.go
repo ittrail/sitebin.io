@@ -416,3 +416,56 @@ func TestUpdateConcurrent(t *testing.T) {
 		t.Error("updated_at not bumped")
 	}
 }
+
+// A zip is bounded up front and accounted with a running counter, not a
+// full walk of the site per entry. Before this a 1 MB archive of 5,000
+// entries decompressing to 100 MB each meant 500 GB of zeros through the
+// budget check and 5,000 directory walks, all inside the site lock.
+func TestExtractZipRefusesMoreEntriesThanTheFileCap(t *testing.T) {
+	s, _ := New(t.TempDir(), "sitebin.example", 1<<20, 3)
+	s.SetDomainVerifier(TrustingVerifier{}, "sitebin.example")
+	site, _, _ := s.Create()
+	entries := map[string]string{}
+	for i := 0; i < 4; i++ {
+		entries[fmt.Sprintf("f%d.txt", i)] = "x"
+	}
+	data := makeZip(t, entries, false)
+	if err := s.ExtractZip(site, bytes.NewReader(data), int64(len(data))); !errors.Is(err, ErrTooManyFiles) {
+		t.Fatalf("four entries against a cap of three = %v, want ErrTooManyFiles", err)
+	}
+	files, _ := s.ListFiles(site)
+	if len(files) != 0 {
+		t.Errorf("entries were written before the refusal: %v", files)
+	}
+}
+
+func TestExtractZipRefusesDuplicateEntries(t *testing.T) {
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	for i := 0; i < 2; i++ {
+		f, _ := w.Create("same.txt")
+		f.Write([]byte("x"))
+	}
+	w.Close()
+	if err := s.ExtractZip(site, bytes.NewReader(buf.Bytes()), int64(buf.Len())); !errors.Is(err, ErrBadPath) {
+		t.Fatalf("duplicate entry names = %v, want ErrBadPath", err)
+	}
+}
+
+// The byte budget is enforced ACROSS entries: many small-looking entries that
+// together exceed the cap are stopped, and by the counter, not by re-walking.
+func TestExtractZipBudgetAcrossEntries(t *testing.T) {
+	s, _ := New(t.TempDir(), "sitebin.example", 1000, 100)
+	s.SetDomainVerifier(TrustingVerifier{}, "sitebin.example")
+	site, _, _ := s.Create()
+	entries := map[string]string{}
+	for i := 0; i < 5; i++ {
+		entries[fmt.Sprintf("part%d.bin", i)] = strings.Repeat("A", 300) // 1500 total > 1000
+	}
+	data := makeZip(t, entries, false)
+	if err := s.ExtractZip(site, bytes.NewReader(data), int64(len(data))); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("1500 bytes across entries against a 1000-byte cap = %v, want ErrTooLarge", err)
+	}
+}
