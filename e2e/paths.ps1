@@ -80,6 +80,7 @@ if ($psite) {
     $r = Req "GET" $psite.view_url
     Assert "protected path site gates (401)" ($r.code -eq 401) "got $($r.code)"
     Assert "gate carries the site id (path mode)" ($r.body -match 'name="site"')
+    Assert "gate page CSP allows the unlock form to submit (path mode)" ($r.headers -notmatch "form-action 'none'") "gate response carries the untrusted CSP"
 
     $vid = ($psite.view_url -replace ".*/v/", "" -replace "/$", "")
     $jar = Join-Path $work "path-cookies.txt"; Remove-Item $jar -ErrorAction SilentlyContinue

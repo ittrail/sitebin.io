@@ -260,6 +260,12 @@ if ($psite) {
     $r = Req "GET" "$($psite.view_url)/"
     Assert "protected site gates with 401" ($r.code -eq 401) "got $($r.code)"
     Assert "gate page includes form" ($r.body -match "_sitebin/unlock")
+    # The gate page is relayed by forward_auth BEFORE the untrusted content
+    # headers are applied. If it carried form-action 'none', a browser would
+    # silently refuse to submit the unlock form: curl does not enforce CSP,
+    # so this is the header check that stands in for the browser.
+    Assert "gate page CSP allows the unlock form to submit" ($r.headers -notmatch "form-action 'none'") "gate response carries the untrusted CSP"
+    Assert "gate page is not double-headed by Caddy" (([regex]::Matches($r.headers, "(?im)^Referrer-Policy:")).Count -le 1) "Referrer-Policy sent more than once"
 
     $r = Req "POST" "$($psite.view_url)/_sitebin/unlock" @("--data", "password=wrong&redirect=/")
     Assert "unlock rejects wrong password" ($r.code -eq 401)

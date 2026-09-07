@@ -110,20 +110,30 @@ func writePathViewRoutes(b *strings.Builder, backend func(string) string, dataDi
 // writeContentRoutes emits the shared routing shape of every content origin:
 // /_sitebin/* goes to the backend (unlock endpoint + shared viewer assets),
 // everything else passes the authz gate then hits the file server.
+//
+// The chain is wrapped in a `route` block, exactly like the path views, and
+// that is load-bearing: a plain `handle` block is sorted by Caddy's global
+// directive order, in which `header` runs BEFORE `forward_auth`. The header
+// handler sets its headers the moment it runs, so the 401 gate page that
+// forward_auth relays went out carrying the untrusted policy — including
+// `form-action 'none'` — and the browser refused to submit the unlock form on
+// every site without the trust marker. Inside `route` the written order
+// holds: the gate answers first, and only a request that passed it reaches
+// the header directives.
 func writeContentRoutes(b *strings.Builder, backend func(string) string, root string) {
 	b.WriteString("\tencode zstd gzip\n")
 	b.WriteString("\t@backend path /_sitebin/*\n")
 	fmt.Fprintf(b, "\thandle @backend {\n\t\treverse_proxy %s\n\t}\n", backend("8080"))
-	b.WriteString("\thandle {\n")
+	b.WriteString("\thandle {\n\t\troute {\n")
 	// Pin X-Forwarded-Host to Caddy's own {host} placeholder so authz resolves
 	// the SAME site that file_server will serve. Without this, a client-supplied
 	// X-Forwarded-Host could make the gate evaluate a different (open) site than
 	// the one whose files are served — a password-gate bypass.
-	fmt.Fprintf(b, "\t\tforward_auth %s {\n\t\t\turi /internal/authz\n\t\t\theader_up X-Forwarded-Host {host}\n\t\t\tcopy_headers Set-Cookie\n\t\t}\n", backend("9000"))
-	fmt.Fprintf(b, "\t\troot * %s\n", root)
-	writeSecurityHeaders(b, "\t\t")
-	writeFileServing(b, "\t\t")
-	b.WriteString("\t}\n")
+	fmt.Fprintf(b, "\t\t\tforward_auth %s {\n\t\t\t\turi /internal/authz\n\t\t\t\theader_up X-Forwarded-Host {host}\n\t\t\t\tcopy_headers Set-Cookie\n\t\t\t}\n", backend("9000"))
+	fmt.Fprintf(b, "\t\t\troot * %s\n", root)
+	writeSecurityHeaders(b, "\t\t\t")
+	writeFileServing(b, "\t\t\t")
+	b.WriteString("\t\t}\n\t}\n")
 }
 
 // writeFileServing emits SPA-aware static serving: when the site opted into SPA

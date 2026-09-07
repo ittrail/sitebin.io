@@ -303,3 +303,35 @@ func TestSingleDomainInstallIsUnchanged(t *testing.T) {
 		t.Errorf("label index changed for a single-domain install:\n%s", out)
 	}
 }
+
+// The gate page is the one response that MUST NOT carry the untrusted policy.
+// Caddy sorts a plain `handle` block's directives by its global order, in which
+// `header` runs before `forward_auth`; the header handler sets its headers
+// immediately, so the 401 page forward_auth relays arrived with
+// `form-action 'none'` on it and the browser refused to submit the unlock
+// form. Only a `route` block keeps the written order, and in that order the
+// headers are set after the gate has passed.
+func TestContentChainRunsInsideARouteBlock(t *testing.T) {
+	out := Generate(config.Config{BaseDomain: "sitebin.example", DataDir: "/data", HTTPOnly: true, ViewAccess: "both"})
+	blocks := strings.Split(out, "\n\n")
+	contentBlocks := 0
+	for _, block := range blocks {
+		if !strings.Contains(block, "forward_auth") {
+			continue
+		}
+		contentBlocks++
+		fa := strings.Index(block, "forward_auth")
+		hdr := strings.Index(block, "header @untrusted")
+		route := strings.Index(block, "route {")
+		if route < 0 || route > fa {
+			t.Errorf("forward_auth is not inside a route block, so Caddy reorders it after header:\n%s", block)
+		}
+		if hdr < 0 || hdr < fa {
+			t.Errorf("header @untrusted must be written after forward_auth:\n%s", block)
+		}
+	}
+	// the wildcard block, the custom-domain catch-all, and the path views
+	if contentBlocks != 3 {
+		t.Fatalf("expected 3 content blocks with forward_auth, found %d:\n%s", contentBlocks, out)
+	}
+}
