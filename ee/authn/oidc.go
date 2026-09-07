@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 	"sync"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -28,8 +30,17 @@ type Identity struct {
 // never makes the network call, and startup does not depend on the IdP.
 type oidcProvider struct {
 	name account.Provider
-	// issuer is the value every token's `iss` must equal.
+	// issuer is the value every token's `iss` must equal — unless
+	// issuerPattern is set, in which case it is what DISCOVERY must
+	// advertise, and tokens are matched against the pattern instead.
 	issuer string
+	// issuerPattern, when set, is what a token's `iss` must match. It exists
+	// for exactly one provider shape: Microsoft's multi-tenant endpoints,
+	// whose discovery document advertises the literal template
+	// https://login.microsoftonline.com/{tenantid}/v2.0 while every ID token
+	// carries the signing tenant's GUID in its place. An exact match rejected
+	// every token, so Microsoft sign-in with the default tenant never worked.
+	issuerPattern *regexp.Regexp
 	// discoveryURL is where the document is fetched, when that is not the
 	// issuer. Empty = fetch it from issuer.
 	discoveryURL string
@@ -91,7 +102,13 @@ func (p *oidcProvider) init(ctx context.Context) error {
 				p.name, base, doc.Issuer, p.issuer)
 			return
 		}
-		p.verifier = prov.Verifier(&oidc.Config{ClientID: p.clientID})
+		vcfg := &oidc.Config{ClientID: p.clientID}
+		if p.issuerPattern != nil {
+			// go-oidc can only compare `iss` for equality. The check is not
+			// dropped but moved: Exchange matches it against the pattern.
+			vcfg.SkipIssuerCheck = true
+		}
+		p.verifier = prov.Verifier(vcfg)
 		p.oauthCfg = &oauth2.Config{
 			ClientID:     p.clientID,
 			ClientSecret: p.secret,
@@ -101,6 +118,48 @@ func (p *oidcProvider) init(ctx context.Context) error {
 		}
 	})
 	return p.initErr
+}
+
+// issuerAccepted reports whether iss is an issuer this provider trusts: the
+// configured one exactly, or — for a multi-tenant provider — one matching the
+// pattern. The verifier already checked the signature against the keys the
+// (single) discovery document named, so this decides only which tenants may
+// sign in, never who signed.
+func (p *oidcProvider) issuerAccepted(iss string) bool {
+	if p.issuerPattern != nil {
+		return p.issuerPattern.MatchString(iss)
+	}
+	return iss == p.issuer
+}
+
+// microsoftMultiTenant are the Microsoft endpoint aliases that serve every
+// tenant: their tokens' `iss` names the actual tenant.
+var microsoftMultiTenant = map[string]bool{"common": true, "organizations": true, "consumers": true}
+
+// microsoftTenantIssuer matches the issuer of any Azure AD / Microsoft
+// account tenant on the v2.0 endpoint.
+var microsoftTenantIssuer = regexp.MustCompile(`^https://login\.microsoftonline\.com/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/v2\.0$`)
+
+// microsoftProvider configures Microsoft sign-in for tenant. An explicit
+// tenant (a GUID or a verified domain) is matched exactly; the multi-tenant
+// aliases discover at their own URL, expect the {tenantid} template there,
+// and accept any tenant's tokens.
+func microsoftProvider(ms *eeconfig.OAuthProvider, redirectBase string) *oidcProvider {
+	tenant := strings.ToLower(strings.TrimSpace(ms.Tenant))
+	p := &oidcProvider{
+		name:        account.Microsoft,
+		clientID:    ms.ClientID,
+		secret:      ms.ClientSecret,
+		redirectURL: redirectBase + "/account/auth/microsoft/callback",
+	}
+	if microsoftMultiTenant[tenant] {
+		p.issuer = "https://login.microsoftonline.com/{tenantid}/v2.0"
+		p.discoveryURL = "https://login.microsoftonline.com/" + tenant + "/v2.0"
+		p.issuerPattern = microsoftTenantIssuer
+		return p
+	}
+	p.issuer = "https://login.microsoftonline.com/" + tenant + "/v2.0"
+	return p
 }
 
 // OIDC manages the configured OAuth providers.
@@ -121,11 +180,7 @@ func NewOIDC(cfg eeconfig.Config, redirectBase string) *OIDC {
 		}
 	}
 	if ms := cfg.Microsoft; ms != nil {
-		m.providers[account.Microsoft] = &oidcProvider{
-			name: account.Microsoft, issuer: "https://login.microsoftonline.com/" + ms.Tenant + "/v2.0",
-			clientID: ms.ClientID, secret: ms.ClientSecret,
-			redirectURL: redirectBase + "/account/auth/microsoft/callback",
-		}
+		m.providers[account.Microsoft] = microsoftProvider(ms, redirectBase)
 	}
 	if g := cfg.OIDC; g != nil {
 		m.providers[account.OIDCProv] = &oidcProvider{
@@ -185,6 +240,9 @@ func (m *OIDC) Exchange(ctx context.Context, provider account.Provider, code, no
 	idTok, err := p.verifier.Verify(ctx, rawID)
 	if err != nil {
 		return Identity{}, fmt.Errorf("verify id_token: %w", err)
+	}
+	if !p.issuerAccepted(idTok.Issuer) {
+		return Identity{}, fmt.Errorf("verify id_token: issuer %q is not one this provider accepts", idTok.Issuer)
 	}
 	if idTok.Nonce != nonce {
 		return Identity{}, errors.New("nonce mismatch")
