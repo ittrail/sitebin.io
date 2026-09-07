@@ -27,7 +27,7 @@ func TestIssueAndValidate(t *testing.T) {
 	m.Now = fixedNow(now)
 
 	c := m.Cookie("acct-1", 3)
-	if c.Name != CookieName || !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteLaxMode {
+	if c.Name != m.Name() || !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("cookie attrs wrong: %+v", c)
 	}
 	id, ver, ok := m.Validate(reqWithCookie(c))
@@ -86,5 +86,28 @@ func TestVersionRevocationSignal(t *testing.T) {
 	_, ver, _ := m.Validate(reqWithCookie(c))
 	if ver != 5 {
 		t.Fatalf("version = %d", ver)
+	}
+}
+
+// On a TLS instance the cookie carries the __Host- prefix, which a browser
+// only accepts with Secure, Path=/ and no Domain: a sibling origin can no
+// longer plant a session cookie for the app domain. HTTP-only local instances
+// cannot use the prefix (browsers refuse it without Secure), so they keep the
+// bare name.
+func TestSessionCookieHostPrefixOnTLS(t *testing.T) {
+	secure := New(secret, true, time.Hour)
+	c := secure.Cookie("acct-1", 0)
+	if c.Name != "__Host-"+CookieName || c.Path != "/" || c.Domain != "" || !c.Secure {
+		t.Fatalf("TLS session cookie = %+v, want __Host- prefix with Path=/ and no Domain", c)
+	}
+	if id, _, ok := secure.Validate(reqWithCookie(c)); !ok || id != "acct-1" {
+		t.Fatal("the prefixed cookie does not validate")
+	}
+	if secure.Clear().Name != c.Name {
+		t.Error("Clear() names a different cookie than Cookie()")
+	}
+	plain := New(secret, false, time.Hour)
+	if plain.Cookie("acct-1", 0).Name != CookieName {
+		t.Error("an HTTP-only instance must keep the bare name; browsers refuse __Host- without Secure")
 	}
 }

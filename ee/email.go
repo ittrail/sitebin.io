@@ -28,26 +28,27 @@ func (p *provider) emailRoutes(routes map[string]http.Handler) {
 	routes["POST /account/reset/confirm"] = http.HandlerFunc(p.handleResetConfirmPost)
 }
 
-// makeToken signs a purpose-scoped, time-limited token bound to an account +
-// version. parseToken reverses it.
+// makeToken signs a time-limited token bound to an account + version, under
+// a signer keyed by purpose ("verify", "reset"), so one can never be
+// presented as the other. parseToken reverses it.
 func (p *provider) makeToken(purpose, accountID string, ver int, ttl time.Duration) string {
-	return p.oauthSigner().Sign(purpose+"|"+accountID+"|"+strconv.Itoa(ver), time.Now(), ttl)
+	return p.signer("email:"+purpose).Sign(accountID+"|"+strconv.Itoa(ver), time.Now(), ttl)
 }
 
 func (p *provider) parseToken(purpose, token string) (accountID string, ver int, ok bool) {
-	subj, ok := p.oauthSigner().Parse(token, time.Now())
+	subj, ok := p.signer("email:"+purpose).Parse(token, time.Now())
 	if !ok {
 		return "", 0, false
 	}
-	parts := strings.SplitN(subj, "|", 3)
-	if len(parts) != 3 || parts[0] != purpose {
+	parts := strings.SplitN(subj, "|", 2)
+	if len(parts) != 2 {
 		return "", 0, false
 	}
-	v, err := strconv.Atoi(parts[2])
+	v, err := strconv.Atoi(parts[1])
 	if err != nil {
 		return "", 0, false
 	}
-	return parts[1], v, true
+	return parts[0], v, true
 }
 
 // sendVerification emails a verification link (best-effort; logs on failure).

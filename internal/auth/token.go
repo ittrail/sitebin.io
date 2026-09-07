@@ -13,10 +13,17 @@ import (
 )
 
 // LoadOrCreateSecret returns the 32-byte instance secret stored at path,
-// creating it (0600) on first use.
+// creating it (0600) on first use. A file that exists but is not 32 bytes is
+// refused, never replaced: replacing it would silently invalidate every
+// cookie and token the instance ever issued and hide whatever corrupted it.
 func LoadOrCreateSecret(path string) ([]byte, error) {
-	if b, err := os.ReadFile(path); err == nil && len(b) == 32 {
+	if b, err := os.ReadFile(path); err == nil {
+		if len(b) != 32 {
+			return nil, fmt.Errorf("%s holds %d bytes, not the 32 of an instance secret; refusing to start rather than replace it (restore it from a backup, or delete it to start over with every cookie and token invalidated)", path, len(b))
+		}
 		return b, nil
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read secret: %w", err)
 	}
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -28,10 +35,14 @@ func LoadOrCreateSecret(path string) ([]byte, error) {
 	return b, nil
 }
 
-// TokenSigner mints and validates the view-session cookie values that let a
-// visitor pass the password gate of one specific site.
+// TokenSigner mints and validates signed, expiring tokens: view cookies,
+// account sessions, OAuth state, e-mail links. One instance secret serves
+// all of them, so Purpose is part of the MAC — a token minted for one
+// purpose is not a valid signature for any other parser, whatever its
+// subject happens to look like.
 type TokenSigner struct {
-	Secret []byte
+	Secret  []byte
+	Purpose string
 }
 
 // Sign returns a token valid for siteID until now+ttl.
@@ -83,6 +94,8 @@ func (s TokenSigner) Parse(token string, now time.Time) (subject string, ok bool
 
 func (s TokenSigner) mac(payload string) []byte {
 	m := hmac.New(sha256.New, s.Secret)
+	m.Write([]byte(s.Purpose))
+	m.Write([]byte{0})
 	m.Write([]byte(payload))
 	return m.Sum(nil)
 }

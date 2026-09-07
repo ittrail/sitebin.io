@@ -11,7 +11,8 @@ import (
 	"github.com/ittrail/sitebin.io/internal/auth"
 )
 
-// CookieName is the account-session cookie on the main domain.
+// CookieName is the account-session cookie on the main domain. Over TLS it
+// carries the __Host- prefix (see Manager.Name).
 const CookieName = "sitebin_s"
 
 // DefaultTTL is the session lifetime. The dashboard re-issues the cookie on
@@ -37,10 +38,23 @@ func New(secret []byte, secure bool, ttl time.Duration) *Manager {
 	}
 	return &Manager{
 		Now:    time.Now,
-		signer: auth.TokenSigner{Secret: secret},
+		signer: auth.TokenSigner{Secret: secret, Purpose: "session"},
 		ttl:    ttl,
 		secure: secure,
 	}
+}
+
+// Name is the cookie's name on this instance. With TLS it is
+// __Host-sitebin_s: a browser accepts the prefix only with Secure, Path=/
+// and no Domain, and then refuses to let any other host — a sibling site on
+// the same registrable domain, say — set a cookie by that name for the app.
+// An HTTP-only instance cannot use it (browsers refuse the prefix without
+// Secure), so there the name is bare.
+func (m *Manager) Name() string {
+	if m.secure {
+		return "__Host-" + CookieName
+	}
+	return CookieName
 }
 
 func subject(accountID string, version int) string {
@@ -52,7 +66,7 @@ func subject(accountID string, version int) string {
 func (m *Manager) Cookie(accountID string, version int) *http.Cookie {
 	token := m.signer.Sign(subject(accountID, version), m.Now(), m.ttl)
 	return &http.Cookie{
-		Name:     CookieName,
+		Name:     m.Name(),
 		Value:    token,
 		Path:     "/",
 		MaxAge:   int(m.ttl.Seconds()),
@@ -65,7 +79,7 @@ func (m *Manager) Cookie(accountID string, version int) *http.Cookie {
 // Clear returns a Set-Cookie that deletes the session.
 func (m *Manager) Clear() *http.Cookie {
 	return &http.Cookie{
-		Name:     CookieName,
+		Name:     m.Name(),
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
@@ -79,7 +93,7 @@ func (m *Manager) Clear() *http.Cookie {
 // the token version the cookie was issued at. The caller must load the account
 // and confirm its current token_version matches (revocation check).
 func (m *Manager) Validate(r *http.Request) (accountID string, version int, ok bool) {
-	c, err := r.Cookie(CookieName)
+	c, err := r.Cookie(m.Name())
 	if err != nil {
 		return "", 0, false
 	}

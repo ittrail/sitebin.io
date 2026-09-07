@@ -26,7 +26,14 @@ func (p *provider) oauthRoutes(routes map[string]http.Handler) {
 	routes["GET /account/auth/{provider}/callback"] = http.HandlerFunc(p.handleOAuthCallback)
 }
 
-func (p *provider) oauthSigner() auth.TokenSigner { return auth.TokenSigner{Secret: p.secret} }
+// signer returns the instance signer for one purpose. The purpose is part of
+// the MAC, so the OAuth state cookie, the e-mail links and the sessions can
+// never stand in for one another.
+func (p *provider) signer(purpose string) auth.TokenSigner {
+	return auth.TokenSigner{Secret: p.secret, Purpose: purpose}
+}
+
+func (p *provider) oauthSigner() auth.TokenSigner { return p.signer("oauth") }
 
 func (p *provider) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 	prov := account.Provider(r.PathValue("provider"))
