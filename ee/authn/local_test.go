@@ -68,7 +68,7 @@ func TestLoginUnknownEmail(t *testing.T) {
 
 func TestLoginOAuthOnlyAccountHasNoPassword(t *testing.T) {
 	l := newLocal(t)
-	if _, err := l.store.CreateOAuth(account.Google, "sub-9", "erin@example.com", "free"); err != nil {
+	if _, err := l.store.CreateOAuth(account.Google, "sub-9", "erin@example.com", true, "free"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := l.Login("erin@example.com", "anything"); !errors.Is(err, ErrBadCredentials) {

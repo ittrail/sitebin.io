@@ -100,7 +100,7 @@ func (p *provider) linkOrCreateOAuth(id authn.Identity) (*account.Account, error
 	if acc, err := p.accounts.ByOAuth(id.Provider, id.Subject); err == nil {
 		return acc, nil
 	}
-	acc, err := p.accounts.CreateOAuth(id.Provider, id.Subject, id.Email, p.tierForNewAccount())
+	acc, err := p.accounts.CreateOAuth(id.Provider, id.Subject, id.Email, id.EmailVerified, p.tierForNewAccount())
 	if err == account.ErrEmailTaken {
 		return nil, fmt.Errorf("an account with %s already exists — sign in with your password instead", id.Email)
 	}

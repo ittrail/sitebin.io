@@ -63,7 +63,7 @@ func TestCreateLocalBadEmail(t *testing.T) {
 
 func TestCreateOAuth(t *testing.T) {
 	s := newStore(t)
-	a, err := s.CreateOAuth(Google, "sub-123", "carol@example.com", "free")
+	a, err := s.CreateOAuth(Google, "sub-123", "carol@example.com", true, "free")
 	if err != nil {
 		t.Fatalf("CreateOAuth: %v", err)
 	}
@@ -75,14 +75,14 @@ func TestCreateOAuth(t *testing.T) {
 		t.Fatalf("ByOAuth: %v", err)
 	}
 	// same subject again → taken
-	if _, err := s.CreateOAuth(Google, "sub-123", "carol@example.com", "free"); !errors.Is(err, ErrEmailTaken) {
+	if _, err := s.CreateOAuth(Google, "sub-123", "carol@example.com", true, "free"); !errors.Is(err, ErrEmailTaken) {
 		// email is claimed first on the retry path; either taken error is fine
 		if !errors.Is(err, ErrOAuthTaken) {
 			t.Fatalf("expected taken error, got %v", err)
 		}
 	}
 	// different provider, same subject string → distinct identity
-	if _, err := s.CreateOAuth(Microsoft, "sub-123", "dora@example.com", "free"); err != nil {
+	if _, err := s.CreateOAuth(Microsoft, "sub-123", "dora@example.com", true, "free"); err != nil {
 		t.Fatalf("cross-provider subject collision: %v", err)
 	}
 }

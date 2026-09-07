@@ -17,7 +17,7 @@ func TestDeleteRemovesTheTokenIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	acc, err := s.CreateOAuth(OIDCProv, "11111111-1111-4111-8111-111111111111", "gone@example.com", "free")
+	acc, err := s.CreateOAuth(OIDCProv, "11111111-1111-4111-8111-111111111111", "gone@example.com", true, "free")
 	if err != nil {
 		t.Fatal(err)
 	}

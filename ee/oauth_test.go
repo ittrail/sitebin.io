@@ -74,7 +74,7 @@ func TestLinkOrCreateOAuth(t *testing.T) {
 	if _, err := p.local.Signup("taken@example.com", "password123", ""); err != nil {
 		t.Fatal(err)
 	}
-	collide := authn.Identity{Provider: account.Google, Subject: "sub-2", Email: "taken@example.com"}
+	collide := authn.Identity{Provider: account.Google, Subject: "sub-2", Email: "taken@example.com", EmailVerified: true}
 	if _, err := p.linkOrCreateOAuth(collide); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("email collision should error, got %v", err)
 	}

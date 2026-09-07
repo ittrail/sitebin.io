@@ -101,9 +101,13 @@ func (s *Store) CreateLocal(email, passwordHash, tier string) (*Account, error) 
 	return a, nil
 }
 
-// CreateOAuth registers an OAuth (Google/Microsoft) account. The email index is
-// claimed too when an email is present, linking future logins.
-func (s *Store) CreateOAuth(provider Provider, subject, email, tier string) (*Account, error) {
+// CreateOAuth registers an account for an identity an OAuth/OIDC provider
+// asserted. The email index — what makes an address resolvable and exclusive —
+// is claimed ONLY when the provider says the address is verified. An
+// unverified address is stored for display and nothing more: an IdP that does
+// not verify emails (Keycloak, unless the realm insists) would otherwise let
+// anyone register someone else's address first and lock the real owner out.
+func (s *Store) CreateOAuth(provider Provider, subject, email string, emailVerified bool, tier string) (*Account, error) {
 	norm := ""
 	if email != "" {
 		var err error
@@ -113,13 +117,14 @@ func (s *Store) CreateOAuth(provider Provider, subject, email, tier string) (*Ac
 	}
 	a := s.newAccount(provider, norm, tier)
 	a.OAuthSubject = subject
-	a.EmailVerified = norm != "" // provider-asserted
+	a.EmailVerified = norm != "" && emailVerified
+	claimEmail := a.EmailVerified
 
 	oauthKey := hashKey(string(provider) + ":" + subject)
 	if err := s.claimIndex("oauth", oauthKey, a.ID, ErrOAuthTaken); err != nil {
 		return nil, err
 	}
-	if norm != "" {
+	if claimEmail {
 		if err := s.claimIndex("email", hashKey(norm), a.ID, ErrEmailTaken); err != nil {
 			os.Remove(filepath.Join(s.indexDir("oauth"), oauthKey))
 			return nil, err
@@ -127,7 +132,7 @@ func (s *Store) CreateOAuth(provider Provider, subject, email, tier string) (*Ac
 	}
 	if err := s.persist(a); err != nil {
 		os.Remove(filepath.Join(s.indexDir("oauth"), oauthKey))
-		if norm != "" {
+		if claimEmail {
 			os.Remove(filepath.Join(s.indexDir("email"), hashKey(norm)))
 		}
 		return nil, err
@@ -305,8 +310,14 @@ func (s *Store) Delete(a *Account, deleteSite func(viewID string) error) error {
 			}
 		}
 	}
-	// remove indexes
-	os.Remove(filepath.Join(s.indexDir("email"), hashKey(a.Email)))
+	// remove indexes. The email entry, if this account holds it: an
+	// unverified OAuth address never claimed one, and the entry that exists
+	// for that address may belong to the person who actually owns it.
+	if a.Email != "" {
+		if id, err := s.resolveIndex("email", hashKey(a.Email)); err == nil && id == a.ID {
+			os.Remove(filepath.Join(s.indexDir("email"), hashKey(a.Email)))
+		}
+	}
 	if a.OAuthSubject != "" {
 		os.Remove(filepath.Join(s.indexDir("oauth"), hashKey(string(a.Provider)+":"+a.OAuthSubject)))
 	}

@@ -49,7 +49,7 @@ func setupStackInstance(t *testing.T, secret string) (*provider, *fakeHost, http
 // to find.
 func stackUser(t *testing.T, p *provider, host *fakeHost, subject, email string) (*account.Account, string) {
 	t.Helper()
-	acc, err := p.accounts.CreateOAuth(account.OIDCProv, subject, email, "free")
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, subject, email, true, "free")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestGDPRDeleteErasesEverythingAndIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Somebody else's account must be untouched by all of it.
-	other, err := p.accounts.CreateOAuth(account.OIDCProv, "22222222-2222-4222-8222-222222222222", "other@example.com", "free")
+	other, err := p.accounts.CreateOAuth(account.OIDCProv, "22222222-2222-4222-8222-222222222222", "other@example.com", true, "free")
 	if err != nil {
 		t.Fatal(err)
 	}

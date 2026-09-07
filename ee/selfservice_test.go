@@ -44,7 +44,7 @@ func setupSelfService(t *testing.T, gdprSecret string) (*provider, *fakeHost, ht
 
 func oidcUser(t *testing.T, p *provider, subject, email string) (*account.Account, *http.Cookie) {
 	t.Helper()
-	acc, err := p.accounts.CreateOAuth(account.OIDCProv, subject, email, "free")
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, subject, email, true, "free")
 	if err != nil {
 		t.Fatal(err)
 	}

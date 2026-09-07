@@ -190,7 +190,7 @@ func TestPayGateTierGovernsOIDCAccount(t *testing.T) {
 	srv := pgStub(t, "pro", "active", 200)
 	defer srv.Close()
 	p := setupPayGate(t, srv.URL)
-	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-1", "u@example.com", "free")
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-1", "u@example.com", true, "free")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestPayGateFallsBackToStoredTier(t *testing.T) {
 	srv := pgStub(t, "", "", 500)
 	defer srv.Close()
 	p := setupPayGate(t, srv.URL)
-	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-2", "u2@example.com", "free")
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-2", "u2@example.com", true, "free")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestPayGateUnknownTierFallsBack(t *testing.T) {
 	srv := pgStub(t, "mega", "active", 200)
 	defer srv.Close()
 	p := setupPayGate(t, srv.URL)
-	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-3", "u3@example.com", "free")
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-3", "u3@example.com", true, "free")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestPayGateDashboardOffersTheHostedPlanPage(t *testing.T) {
 	srv := pgStub(t, "pro", "active", 200)
 	defer srv.Close()
 	p := setupPayGate(t, srv.URL)
-	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-9", "u9@example.com", "free")
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-9", "u9@example.com", true, "free")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +339,7 @@ func TestDashboardRendersSitesAfterTheTierSync(t *testing.T) {
 	srv := pgStub(t, "pro", "active", 200) // upgraded: Pro sites never expire
 	defer srv.Close()
 	p := setupPayGate(t, srv.URL)
-	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-fresh", "fresh@example.com", "free")
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-fresh", "fresh@example.com", true, "free")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +370,7 @@ func TestSyncTierRestampsOwnedSitesFromPayGate(t *testing.T) {
 	srv := pgStub(t, "pro", "active", 200)
 	defer srv.Close()
 	p := setupPayGate(t, srv.URL)
-	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-sync", "sync@example.com", "free")
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-sync", "sync@example.com", true, "free")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,7 +403,7 @@ func TestCreateSyncsStaleTierBeforeGranting(t *testing.T) {
 	srv := pgStub(t, "free", "active", 200) // PayGate says they cancelled
 	defer srv.Close()
 	p := setupPayGate(t, srv.URL)
-	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-lapsed", "lapsed@example.com", "pro")
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-lapsed", "lapsed@example.com", true, "pro")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,7 +436,7 @@ func TestSyncTierIsANoOpWhenNothingChanged(t *testing.T) {
 	srv := pgStub(t, "free", "active", 200)
 	defer srv.Close()
 	p := setupPayGate(t, srv.URL)
-	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-same", "same@example.com", "free")
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-same", "same@example.com", true, "free")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -562,7 +562,7 @@ func TestSyncTierRetriesAfterAPartialRestamp(t *testing.T) {
 	srv := pgStub(t, "pro", "active", 200)
 	defer srv.Close()
 	p := setupPayGate(t, srv.URL)
-	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-partial", "partial@example.com", "free")
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-partial", "partial@example.com", true, "free")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -685,7 +685,7 @@ func TestSyncTierHealsADanglingMarkerAndKeepsTheGrace(t *testing.T) {
 	srv := pgStub(t, "free", "active", 200) // they cancelled Pro
 	defer srv.Close()
 	p, st := setupRealSites(t, srv.URL)
-	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-dangling", "dangling@example.com", "pro")
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-dangling", "dangling@example.com", true, "pro")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -822,7 +822,7 @@ func TestSyncTierLeavesEverythingAloneOnLookupFailure(t *testing.T) {
 	srv := pgStub(t, "", "", 500)
 	defer srv.Close()
 	p := setupPayGate(t, srv.URL)
-	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-down", "down@example.com", "free")
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-down", "down@example.com", true, "free")
 	if err != nil {
 		t.Fatal(err)
 	}
