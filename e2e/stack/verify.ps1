@@ -233,7 +233,11 @@ Assert "which offers the platform's document plus every one Sitebin declared" ($
 $gwOrigin = ""
 try { $u = [uri]$p.url; $gwOrigin = $u.GetLeftPart([System.UriPartial]::Authority) } catch {}
 $flow = Match1 $p.html 'name="flow" value="([^"]+)"'
-$form = @("flow=$flow")
+# The gate binds the flow to the browser that started it: the cookie the
+# gateway set at /auth rides in the jar, and the page carries a token the post
+# has to return. Without both the gateway answers 400, whoever holds the flow id.
+$gateCsrf = Match1 $p.html 'name="csrf" value="([^"]+)"'
+$form = @("flow=$flow", "csrf=$gateCsrf", "decision=accept")
 foreach ($a in $accepts) { $form += "accept=$a" }
 $p = Browse "$gwOrigin/api/v1/_consent" $form
 Assert "accepting them lands the user in Sitebin, signed in" ($p.url -eq "$origin/account" -and $p.html -match [regex]::Escape($email)) "got $($p.url)"

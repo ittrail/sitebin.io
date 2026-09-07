@@ -423,7 +423,11 @@ Assert "the platform's comes first, then Sitebin's in the declared order" ($acce
 Assert "and the page shows the DPA under the heading Sitebin declared" ($p.html -match "Data Processing Agreement") ""
 
 $flow = Match1 $p.html 'name="flow" value="([^"]+)"'
-$form = @("flow=$flow")
+# The gate binds the flow to the browser that started it: the cookie the
+# gateway set at /auth rides in the jar, and the page carries a token the post
+# has to return. Without both the gateway answers 400, whoever holds the flow id.
+$csrf = Match1 $p.html 'name="csrf" value="([^"]+)"'
+$form = @("flow=$flow", "csrf=$csrf", "decision=accept")
 foreach ($a in $accepts) { $form += "accept=$a" }
 $p = Browse "$gwOrigin/api/v1/_consent" $form
 
