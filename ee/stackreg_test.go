@@ -310,3 +310,30 @@ func TestStackDeclarationCarriesGDPR(t *testing.T) {
 		}
 	})
 }
+
+// The stack's hosted surfaces -- the consent gate, the account console and
+// the plan page -- paint themselves from the app's declared theme. An
+// instance that declares none is rendered in the stack's stock grey, which
+// a customer reads as somebody else's product asking for their card.
+func TestStackDeclarationCarriesSitebinsOwnBrand(t *testing.T) {
+	p := stackProvider(t, "")
+	reg := p.stackDeclaration("sitebin")
+	if reg.Theme == nil {
+		t.Fatal("the declaration carries no theme; the plan page would not be branded as Sitebin")
+	}
+	if reg.Theme.DisplayName != "Sitebin" {
+		t.Errorf("displayName = %q, want Sitebin", reg.Theme.DisplayName)
+	}
+	if reg.Theme.PrimaryColor != "#f5b84d" || reg.Theme.BackgroundColor != "#0a0e18" {
+		t.Errorf("colours = %q on %q, want the amber claim-ticket accent #f5b84d on #0a0e18",
+			reg.Theme.PrimaryColor, reg.Theme.BackgroundColor)
+	}
+	wantIcon := p.baseURL() + "/_sitebin/assets/static/favicon.svg"
+	if reg.Theme.FaviconURL != wantIcon {
+		t.Errorf("faviconUrl = %q, want %q (the icon the instance itself serves)", reg.Theme.FaviconURL, wantIcon)
+	}
+	body, _ := json.Marshal(reg)
+	if !strings.Contains(string(body), `"theme":{`) {
+		t.Errorf("the theme is not serialised into the registration: %s", body)
+	}
+}

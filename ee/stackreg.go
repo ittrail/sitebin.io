@@ -53,6 +53,14 @@ type stackRegistration struct {
 	} `json:"auth"`
 	Billing *stackBilling `json:"billing,omitempty"`
 	MCP     *stackMCP     `json:"mcp,omitempty"`
+	// The look of every surface the stack hosts on Sitebin's behalf: the
+	// consent gate, the account console when it is opened from the dashboard,
+	// and the plan page where the card is taken. The stack paints all three
+	// from this block and renders its own stock grey for an app that declares
+	// none -- which a customer reads as somebody else's product asking for
+	// their money. It is Sitebin's own palette (web/static/app.css), not a
+	// setting: the instance knows what it looks like.
+	Theme *stackTheme `json:"theme,omitempty"`
 	// Licensing tells the stack what a Sitebin Enterprise licence is WORTH:
 	// the entitlements each plan carries and how long a lapsed one stays
 	// usable. Sitebin only ever verifies a licence; the stack mints it, so
@@ -89,6 +97,14 @@ type stackRegistration struct {
 	// which case the endpoints are not mounted either — a URL the stack can
 	// call but nothing can verify would be worse than none.
 	GDPR *stackGDPR `json:"gdpr,omitempty"`
+}
+
+type stackTheme struct {
+	DisplayName     string `json:"displayName"`
+	PrimaryColor    string `json:"primaryColor"`
+	SecondaryColor  string `json:"secondaryColor,omitempty"`
+	BackgroundColor string `json:"backgroundColor"`
+	FaviconURL      string `json:"faviconUrl,omitempty"`
 }
 
 type stackGDPR struct {
@@ -181,6 +197,7 @@ func (p *provider) stackDeclaration(appID string) stackRegistration {
 	// so a declared URI and a used URI cannot disagree.
 	reg.Auth.RedirectURIs = []string{base + "/account/auth/oidc/callback"}
 	reg.Auth.WebOrigins = []string{base}
+	reg.Theme = sitebinTheme(base)
 
 	// Declared in catalogue order, because that IS the order the stack renders
 	// them in — it derives the sort from the array and takes no sortOrder
@@ -313,3 +330,18 @@ func postRegistration(ctx context.Context, reg *eeconfig.StackConfig, body stack
 // above the context: a stack that accepts the connection and never answers
 // must not hold the goroutine, and an error body is read to a limit.
 var registrationClient = &http.Client{Timeout: 30 * time.Second}
+
+// sitebinTheme is the claim-ticket look -- deep-space ink with the amber
+// accent -- as the stack's theme declaration. The values are app.css's
+// tokens (--bg, --amber, --amber-deep); the favicon is the one the instance
+// serves on its own base host, so the browser tab on the plan page shows the
+// same icon as the dashboard the customer came from.
+func sitebinTheme(base string) *stackTheme {
+	return &stackTheme{
+		DisplayName:     "Sitebin",
+		PrimaryColor:    "#f5b84d",
+		SecondaryColor:  "#d99a26",
+		BackgroundColor: "#0a0e18",
+		FaviconURL:      base + "/_sitebin/assets/static/favicon.svg",
+	}
+}
