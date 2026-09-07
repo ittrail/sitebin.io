@@ -52,6 +52,17 @@ func (s *fakeSites) All() ([]ext.SiteInfo, error) {
 	return out, nil
 }
 
+func (s *fakeSites) CustomDomainCount() (int, error) {
+	if s.allErr != nil {
+		return 0, s.allErr
+	}
+	n := 0
+	for _, i := range s.infos {
+		n += len(i.Domains)
+	}
+	return n, nil
+}
+
 func (s *fakeSites) SetExpiry(id string, at *time.Time) error {
 	info, ok := s.infos[id]
 	if !ok {

@@ -362,3 +362,22 @@ type dnsNotFound struct{}
 
 func (*dnsNotFound) Error() string  { return "no such host" }
 func (*dnsNotFound) NotFound() bool { return true }
+
+// CountDomains is what the licence ceiling reads: one ReadDir of the index,
+// not a walk of every site.
+func TestCountDomains(t *testing.T) {
+	s := newTestStore(t)
+	a, _, _ := s.Create()
+	b, _, _ := s.Create()
+	s.AddDomain(a, "one.example.org")
+	s.AddDomain(a, "two.example.org")
+	s.AddDomain(b, "three.example.org")
+	if n, err := s.CountDomains(); err != nil || n != 3 {
+		t.Fatalf("CountDomains = %d, %v", n, err)
+	}
+	// a dangling link (site deleted behind the index) is not a domain
+	os.RemoveAll(b.Dir())
+	if n, _ := s.CountDomains(); n != 2 {
+		t.Errorf("a dangling index link was counted: %d", n)
+	}
+}

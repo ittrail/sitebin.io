@@ -7,6 +7,8 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -175,6 +177,24 @@ func isNotFound(err error) bool {
 	}
 	var nf interface{ NotFound() bool }
 	return errors.As(err, &nf) && nf.NotFound()
+}
+
+// CountDomains is the number of custom domains attached across the whole
+// instance: one ReadDir of the index, with dangling links (a site deleted
+// behind them) left out. It is what the licence ceiling reads on every domain
+// add, which is why it must not walk the sites.
+func (s *Store) CountDomains() (int, error) {
+	entries, err := os.ReadDir(s.domainIndexDir())
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, e := range entries {
+		if !linkDangling(filepath.Join(s.domainIndexDir(), e.Name())) {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // SetDomainVerifier installs the verifier and tells the store the view domain,

@@ -154,22 +154,16 @@ func (p *provider) licenseAllowsAnotherDomain() error {
 		st.Entitlements.MaxCustomDomains, n)
 }
 
-// customDomainCount totals the custom domains configured across the whole
-// instance, anonymous sites included. Sites().All() is the same enumeration the
-// admin console does; it is a rare path and nowhere near the hot one.
+// customDomainCount totals the custom domains attached across the whole
+// instance, anonymous sites included. It reads the domain index — one
+// directory listing — rather than enumerating sites, because it runs on
+// every domain add and a customer adding domains in a loop must not be able
+// to make the instance walk every site's files each time.
 func (p *provider) customDomainCount() (int, error) {
 	if p.host == nil {
 		return 0, fmt.Errorf("no host")
 	}
-	sites, err := p.host.Sites().All()
-	if err != nil {
-		return 0, err
-	}
-	n := 0
-	for _, s := range sites {
-		n += len(s.Domains)
-	}
-	return n, nil
+	return p.host.Sites().CustomDomainCount()
 }
 
 // ---- collecting the licence from the stack ----

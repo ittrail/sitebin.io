@@ -203,6 +203,12 @@ type SiteService interface {
 	// their own ownership records must treat as "drop the record", not as a
 	// failure.
 	ApplyQuota(viewID string, g CreateGrant) error
+	// CustomDomainCount is the number of custom domains attached across the
+	// instance, anonymous sites included. It exists because the licence
+	// ceiling asks on EVERY domain add, and answering that through All() —
+	// which walks every site's files for its size — was a multi-second,
+	// disk-thrashing operation any customer could trigger in a loop.
+	CustomDomainCount() (int, error)
 }
 
 // SiteInfo is the dashboard's view of a site.

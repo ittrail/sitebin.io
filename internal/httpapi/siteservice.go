@@ -59,6 +59,8 @@ func (s siteService) All() ([]ext.SiteInfo, error) {
 	return out, nil
 }
 
+func (s siteService) CustomDomainCount() (int, error) { return s.a.st.CountDomains() }
+
 func (s siteService) SetExpiry(viewID string, at *time.Time) error {
 	site, err := s.a.st.ByViewID(viewID)
 	if err != nil {
