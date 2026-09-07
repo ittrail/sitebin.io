@@ -624,9 +624,10 @@ a green build is a green suite.
 
 ### End-to-end tests *(Windows host, Docker required)*
 
-`e2e/` holds **eight independent scripts**. There is no "run everything" entry
-point: `e2e.ps1` is the core suite and calls none of the others, so a full pass
-means running them all.
+`e2e/` holds **nine independent scripts**, plus `e2e/stack/verify.ps1` for the
+compose container that runs against a live SaaS Stack. There is no "run
+everything" entry point: `e2e.ps1` is the core suite and calls none of the
+others, so a full pass means running them all.
 
 | Script | Covers | Default `-Image` |
 |---|---|---|
@@ -638,6 +639,8 @@ means running them all.
 | `accounts.ps1` | accounts mode *(enterprise)* | `sitebin:dev-ee` |
 | `tiers.ps1` | tiers and quotas *(enterprise)* | `sitebin:dev-ee` |
 | `license.ps1` | licensing *(enterprise)* — builds its own image | `sitebin:e2e-license` |
+| `consent.ps1` | the stack's consent gate: three documents asked once *(enterprise, needs a running SaaS Stack)* | `sitebin:dev-ee` |
+| `stack/verify.ps1` | the compose container against a live stack: registration, sign-in, GDPR endpoints, self-service links | `sitebin:stack-e2e` |
 
 The defaults are tags the scripts do **not** build; tag them yourself first, and
 note that the enterprise ones need `--build-arg EDITION=enterprise` or they will
@@ -720,7 +723,7 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_OAUTH_MICROSOFT_CLIENT_ID` / `_SECRET` / `_TENANT` | Microsoft OIDC. `_TENANT` is a tenant id or verified domain for single-tenant sign-in (issuer matched exactly), or one of the multi-tenant aliases `common` (default), `organizations`, `consumers`, whose tokens name the signing tenant in `iss` and are accepted from any Microsoft tenant. |
 | `SITEBIN_OAUTH_OIDC_ISSUER` / `_CLIENT_ID` / `_CLIENT_SECRET` / `_LABEL` | Generic OIDC sign-in against any issuer (Keycloak, Okta, Authentik, the [SaaS Stack](#saas-stack-integration)). `_ISSUER` is the value that must appear in every token's `iss`. `_LABEL` is the login-button text (default `SSO`). |
 | `SITEBIN_OAUTH_OIDC_DISCOVERY_URL` | Where the discovery document is **fetched**, when that is not the issuer's own URL. Unset = fetch it from `_ISSUER`, which is what a plain provider wants. Set it to put Sitebin behind the [SaaS Stack](#saas-stack-integration)'s **consent gate**: the stack's Auth Gateway serves the realm's document with `authorization_endpoint` pointed at itself, and an app that discovers straight from the identity provider never reaches the gate and its users are never asked to accept any terms. The document's own `issuer` is still required to equal `_ISSUER`, so this cannot be used to trust another realm by accident. Either the base URL or the full `/.well-known/openid-configuration` is accepted. |
-| `SITEBIN_LOCAL_AUTH` | `true` | `false` = SSO only: no email/password form, signup/reset disabled; with a single OAuth provider, `/account/login` redirects straight to it. Requires an `SITEBIN_OAUTH_*` provider. |
+| `SITEBIN_LOCAL_AUTH` | `true` (default) or `false` = SSO only: no email/password form, signup/reset disabled; with a single OAuth provider, `/account/login` redirects straight to it. Requires an `SITEBIN_OAUTH_*` provider. |
 | `SITEBIN_BILLING` | Which backend may charge customers: `stripe`, `paddle` or `paygate` (case-insensitive). Unset = inferred when exactly one is configured; **two configured and no choice is a startup error**. Exactly one backend is ever active: with `paygate` selected, configured Stripe/Paddle credentials are inert *and their webhook routes are not mounted*, so provider deliveries get a silent `404` — remove the webhook from the provider's dashboard, or you will be debugging retries. Startup also refuses a catalogue the selected direct backend cannot sell: every tier with a `price` must carry the matching `price.stripe` / `price.paddle`. See [Billing](#billing). |
 | `SITEBIN_PAYGATE_URL` / `_APP_ID` / `_API_KEY` | Sell tiers and resolve subscriptions through a SaaS-Stack PayGate. See [Billing](#billing) and [SaaS-Stack integration](#saas-stack-integration). |
 | `SITEBIN_PAYGATE_CACHE_TTL` | Per-user tier cache (default `5m`). "Manage subscription" needs no setting: with PayGate and `SITEBIN_OAUTH_OIDC_ISSUER` set it goes to the stack's hosted plan page, `<issuer origin>/apps/<SITEBIN_PAYGATE_APP_ID>/plan`, derived exactly as the stack's own `planUrl()` derives it. |
@@ -882,8 +885,9 @@ sign-on and subscription billing — users log in once across your whole
 portfolio, and their Sitebin tier follows the subscription they bought through
 the stack.
 
-**It onboards itself.** Give it `SITEBIN_STACK_URL`, `SITEBIN_STACK_APP_ID` and
-`SITEBIN_STACK_ADMIN_KEY` and it announces itself to the stack on every start,
+**It onboards itself.** Give it `SITEBIN_STACK_URL`, `SITEBIN_STACK_APP_ID`,
+`SITEBIN_STACK_ADMIN_KEY` (or `_ADMIN_KEY_FILE`) and `SITEBIN_STACK_GDPR_SECRET`
+and it announces itself to the stack on every start,
 so auth, billing and MCP are configured by deploying rather than by hand. The
 call is convergent: run it a thousand times and the stack simply matches what
 Sitebin declared.
