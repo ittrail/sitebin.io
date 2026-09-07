@@ -74,3 +74,28 @@ func TestQuotaAllowsNormalUse(t *testing.T) {
 		t.Errorf("read back = %q", buf[:n])
 	}
 }
+
+// Appending must not credit the existing size back: only a truncating open
+// replaces the file, so only then is its old size free budget again.
+func TestQuotaAppendDoesNotCreditTheExistingSize(t *testing.T) {
+	q := newQuotaFs(t.TempDir(), 10, 100)
+	f, err := q.OpenFile("a.txt", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte("12345678")); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	f, err = q.OpenFile("a.txt", os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.Write([]byte("123")); err == nil {
+		t.Fatal("append past the cap succeeded: the existing size was credited back")
+	}
+	if _, err := f.Write([]byte("12")); err != nil {
+		t.Fatalf("append within the cap refused: %v", err)
+	}
+}

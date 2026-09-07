@@ -75,7 +75,11 @@ func (q *quotaFs) OpenFile(name string, flag int, perm os.FileMode) (afero.File,
 	used, count := q.usage()
 	var existing int64
 	if fi, err := q.Fs.Stat(name); err == nil {
-		existing = fi.Size()
+		// Only a truncating open replaces the file; an append keeps every
+		// byte, so nothing comes back to the budget.
+		if flag&os.O_TRUNC != 0 {
+			existing = fi.Size()
+		}
 	} else if count+1 > q.maxFiles {
 		return nil, errQuota
 	}

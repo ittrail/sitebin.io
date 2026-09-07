@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -297,10 +298,22 @@ func (a *API) consumeUploads(r *http.Request, site *store.Site) (url.Values, err
 	}
 }
 
+// zipSpoolSlots bounds how many archives are spooled at once: each is up to a
+// site's byte cap on disk, and the spool lives on the data volume, so a burst
+// of uploads must queue rather than fill it.
+var zipSpoolSlots = make(chan struct{}, 4)
+
 // extractZipPart spools a zip part to a temp file (zip needs random access)
-// and extracts it into the site.
+// under the data volume — never the container's /tmp, which is unbounded and
+// not what the operator sized — and extracts it into the site.
 func (a *API) extractZipPart(site *store.Site, part io.Reader) error {
-	tmp, err := os.CreateTemp("", "sitebin-zip-*")
+	zipSpoolSlots <- struct{}{}
+	defer func() { <-zipSpoolSlots }()
+	spool := filepath.Join(a.cfg.DataDir, "tmp")
+	if err := os.MkdirAll(spool, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(spool, "sitebin-zip-*")
 	if err != nil {
 		return err
 	}
