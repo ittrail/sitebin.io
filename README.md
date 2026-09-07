@@ -589,6 +589,9 @@ but not implemented.
   rejected; per-site size/count quotas are enforced during streaming.
 - The authz/tls-check/health endpoints live on a separate listener that is
   never proxied publicly.
+- Every TLS origin sends `Strict-Transport-Security` (one year). The main
+  domain and the view wildcard carry `includeSubDomains`; a customer's custom
+  domain does not, because that zone is theirs.
 - Open, no-login file hosting attracts phishing and malware. As the operator
   **you are responsible** for what your instance serves: keep the takedown
   command handy, consider tight `SITEBIN_MAX_*` limits and

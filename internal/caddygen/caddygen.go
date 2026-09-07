@@ -41,6 +41,7 @@ func Generate(cfg config.Config) string {
 	// ---- main domain: UI + API + WebDAV (+ optional /v/<id> path views) ----
 	fmt.Fprintf(&b, "%s%s {\n", scheme, cfg.BaseDomain)
 	b.WriteString("\tencode zstd gzip\n")
+	writeHSTS(&b, cfg, true)
 	if cfg.PathViews() {
 		writePathViewRoutes(&b, backend, cfg.DataDir)
 		fmt.Fprintf(&b, "\thandle {\n\t\treverse_proxy %s\n\t}\n", backend("8080"))
@@ -67,6 +68,7 @@ func Generate(cfg config.Config) string {
 			}
 			b.WriteString("\t}\n")
 		}
+		writeHSTS(&b, cfg, true)
 		writeContentRoutes(&b, backend, fmt.Sprintf("%s/sites/{labels.%d}/files", cfg.DataDir, labelIdx))
 		b.WriteString("}\n\n")
 	}
@@ -77,6 +79,7 @@ func Generate(cfg config.Config) string {
 	} else {
 		b.WriteString("https:// {\n\ttls {\n\t\ton_demand\n\t}\n")
 	}
+	writeHSTS(&b, cfg, false)
 	writeContentRoutes(&b, backend, cfg.DataDir+"/domain-index/{host}/files")
 	b.WriteString("}\n")
 
@@ -86,6 +89,33 @@ func Generate(cfg config.Config) string {
 		b.WriteString("\nhttp:// {\n\tredir https://{host}{uri} permanent\n}\n")
 	}
 	return b.String()
+}
+
+// hstsMaxAge is one year, the value preload lists and every hardening guide
+// ask for.
+const hstsMaxAge = "max-age=31536000"
+
+// writeHSTS emits Strict-Transport-Security for a TLS site block. A plain
+// `header` directive at site level, so the gate page, the 404 relay and the
+// backend-proxied /_sitebin/* routes all carry it — the `header` directive
+// sorts before every handler in Caddy's directive order, and upstream headers
+// are merged into the response, not substituted for it.
+//
+// includeSubDomains goes on the domains Sitebin itself owns — the main
+// domain and the view wildcard, where everything below is this Caddy over
+// TLS — and NOT on the custom-domain catch-all: docs.customer.example is the
+// customer's zone, and pinning *.docs.customer.example for a year is not
+// Sitebin's decision to make. Nothing is emitted in HTTP-only mode, where a
+// browser that once saw the header over TLS would refuse the plain instance.
+func writeHSTS(b *strings.Builder, cfg config.Config, subdomains bool) {
+	if cfg.HTTPOnly {
+		return
+	}
+	v := hstsMaxAge
+	if subdomains {
+		v += "; includeSubDomains"
+	}
+	fmt.Fprintf(b, "\theader Strict-Transport-Security %q\n", v)
 }
 
 // writePathViewRoutes emits main-domain routing for /v/<view-id> path views.

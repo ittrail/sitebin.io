@@ -335,3 +335,50 @@ func TestContentChainRunsInsideARouteBlock(t *testing.T) {
 		t.Fatalf("expected 3 content blocks with forward_auth, found %d:\n%s", contentBlocks, out)
 	}
 }
+
+// HSTS on every TLS origin. The main domain and the view wildcard carry
+// includeSubDomains: both are Sitebin's own registrable domains (or the same
+// one), and everything under them is served by this Caddy over TLS. The
+// custom-domain catch-all does NOT: docs.customer.example is the customer's
+// zone, and pinning *.docs.customer.example for a year is not Sitebin's call.
+func TestHSTSOnEveryTLSOrigin(t *testing.T) {
+	cfg := mustLoad(t, map[string]string{
+		"SITEBIN_BASE_DOMAIN":  "app.sitebin.io",
+		"SITEBIN_VIEW_DOMAIN":  "sitebin.app",
+		"SITEBIN_DNS_PROVIDER": "hetzner",
+		"SITEBIN_DNS_TOKEN":    "tok",
+	})
+	out := Generate(cfg)
+	blocks := strings.Split(out, "\n\n")
+	find := func(prefix string) string {
+		for _, b := range blocks {
+			if strings.HasPrefix(b, prefix) {
+				return b
+			}
+		}
+		t.Fatalf("no block starting with %q:\n%s", prefix, out)
+		return ""
+	}
+	full := `Strict-Transport-Security "max-age=31536000; includeSubDomains"`
+	bare := `Strict-Transport-Security "max-age=31536000"`
+	if b := find("app.sitebin.io {"); !strings.Contains(b, full) {
+		t.Errorf("main domain lacks HSTS with includeSubDomains:\n%s", b)
+	}
+	if b := find("*.sitebin.app {"); !strings.Contains(b, full) {
+		t.Errorf("view wildcard lacks HSTS with includeSubDomains:\n%s", b)
+	}
+	if b := find("https:// {"); !strings.Contains(b, bare) || strings.Contains(b, "includeSubDomains") {
+		t.Errorf("custom-domain catch-all must carry HSTS WITHOUT includeSubDomains:\n%s", b)
+	}
+	// and never on the plain-HTTP redirect block
+	if b := find("http:// {"); strings.Contains(b, "Strict-Transport-Security") {
+		t.Error("HSTS on the http:// redirect block is meaningless and ignored by browsers")
+	}
+}
+
+func TestNoHSTSInHTTPOnlyMode(t *testing.T) {
+	out := Generate(mustLoad(t, map[string]string{"SITEBIN_BASE_DOMAIN": "sitebin.localtest.me", "SITEBIN_HTTP_ONLY": "true"}))
+	if strings.Contains(out, "Strict-Transport-Security") {
+		t.Error("HSTS emitted in HTTP-only mode: a browser that ever saw it over TLS would refuse the plain instance")
+	}
+}
