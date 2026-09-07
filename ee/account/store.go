@@ -316,8 +316,41 @@ func (s *Store) Delete(a *Account, deleteSite func(viewID string) error) error {
 	if err := os.RemoveAll(s.accountDir(a.ID)); err != nil {
 		return err
 	}
+	// The token index. Its entries are keyed by a hash nobody can reverse and
+	// point at "<account>:<token>", and every one of this account's is dead
+	// already — ByToken stats the record, and the records went with the
+	// directory above. They are removed anyway: an erased account must leave
+	// no row naming it, dead or not, and DeleteToken's reason for leaving one
+	// behind (it holds no secret and revokes on its own) is not a reason to
+	// keep it after the account itself is gone.
+	s.dropTokenIndex(a.ID)
 	s.mu.Lock()
 	delete(s.locks, a.ID)
 	s.mu.Unlock()
 	return nil
+}
+
+// dropTokenIndex removes every token-index entry that points at accountID.
+// Best effort: a stale entry authenticates nothing, so a failure here is not
+// worth failing the deletion that already happened.
+func (s *Store) dropTokenIndex(accountID string) {
+	dir := s.indexDir("token")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	prefix := accountID + ":"
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		if len(b) > len(prefix) && string(b[:len(prefix)]) == prefix {
+			os.Remove(p)
+		}
+	}
 }
