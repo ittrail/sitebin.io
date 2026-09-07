@@ -34,25 +34,42 @@ type cspPending struct {
 	site    *store.Site
 	count   int
 	blocked []string
+	// sources are the distinct reporting networks this window, bounded: a
+	// reporter with many addresses gets counted many times up to the cap and
+	// then not at all, which is the failure mode that costs nothing.
+	sources map[string]struct{}
 }
+
+// cspBurst is how many reports one source may send in quick succession;
+// cspPerHour the sustained rate. A page reports once per blocked fetch, so a
+// real visitor produces a handful — a script produces thousands.
+const (
+	cspBurst      = 20
+	cspPerHour    = 60
+	maxCSPSources = 100
+)
 
 func newCSPAggregator() *cspAggregator {
 	return &cspAggregator{pending: map[string]*cspPending{}, now: time.Now}
 }
 
-// add records one report and returns the batches that are due to be written.
-// Flushing is driven by arriving reports rather than a goroutine: an instance
-// with no abuse does no work, and a burst still writes at most once per window.
-func (c *cspAggregator) add(site *store.Site, blockedURI string) []*cspPending {
+// add records one report from source and returns the batches that are due to
+// be written. Flushing is driven by arriving reports rather than a goroutine:
+// an instance with no abuse does no work, and a burst still writes at most
+// once per window.
+func (c *cspAggregator) add(site *store.Site, blockedURI, source string) []*cspPending {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	p := c.pending[site.ViewID]
 	if p == nil {
-		p = &cspPending{site: site}
+		p = &cspPending{site: site, sources: map[string]struct{}{}}
 		c.pending[site.ViewID] = p
 	}
 	p.count++
+	if source != "" && len(p.sources) < maxCSPSources {
+		p.sources[source] = struct{}{}
+	}
 	if blockedURI != "" && len(p.blocked) < store.MaxBlockedURIs {
 		seen := false
 		for _, u := range p.blocked {
@@ -105,6 +122,11 @@ type reportingAPIEntry struct {
 // anything — so it does the minimum: resolve the site from the Host, extract the
 // blocked destination, and hand it to the aggregator.
 func (a *API) handleCSPReport(w http.ResponseWriter, r *http.Request) {
+	source := store.AnonymizeIP(clientIP(r))
+	if !a.cspLimiter.Allow(source) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		return
+	}
 	// Answer before any work: a report is fire-and-forget and the browser does
 	// not read the response.
 	defer w.WriteHeader(http.StatusNoContent)
@@ -122,8 +144,8 @@ func (a *API) handleCSPReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	blocked := blockedURIFrom(body)
-	for _, p := range a.csp.add(site, blocked) {
-		a.st.RecordCSPViolation(p.site, p.count, p.blocked)
+	for _, p := range a.csp.add(site, blocked, source) {
+		a.st.RecordCSPViolation(p.site, p.count, p.blocked, len(p.sources))
 	}
 }
 

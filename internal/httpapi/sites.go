@@ -572,7 +572,7 @@ func (a *API) createSiteWith(r *http.Request, opts createOpts) (*store.Site, str
 			}
 		}
 	}
-	a.log.Info("site created", "id", site.ViewID, "ip", clientIP(r), "owner", owner, "origin", opts.origin)
+	a.log.Info("site created", "id", site.ViewID, "owner", owner, "origin", opts.origin)
 	return site, editPassword, warnings, nil
 }
 
@@ -671,7 +671,7 @@ func (a *API) deleteSite(w http.ResponseWriter, r *http.Request, site *store.Sit
 		return
 	}
 	a.verifyCache.Drop(site.EditID + ":")
-	a.log.Info("site deleted", "id", site.ViewID, "ip", clientIP(r))
+	a.log.Info("site deleted", "id", site.ViewID)
 	writeJSON(w, 200, map[string]string{"status": "deleted"})
 }
 

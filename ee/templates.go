@@ -399,7 +399,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
     {{else}}
     <div class="row">
       <span class="id"><a href="{{.ViewURL}}" rel="noreferrer noopener" target="_blank">{{.ViewID}}</a>{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}</span>
-      <span class="own{{if not .Owner}} anon{{end}}">{{.OwnerLabel}}{{if .Violations}}<span class="flag" title="{{.BlockedText}}">&#9888; {{.Violations}} blocked</span>{{end}}</span>
+      <span class="own{{if not .Owner}} anon{{end}}">{{.OwnerLabel}}{{if .Violations}}<span class="flag" title="{{.BlockedText}}">&#9888; {{.Violations}} blocked{{if .Reporters}} &middot; {{.Reporters}} source{{if ne .Reporters 1}}s{{end}}{{end}}</span>{{end}}</span>
       <span class="num orig">{{if .Origin}}{{.Origin}}{{else}}&mdash;{{end}}</span>
       <span class="num">{{.Mode}}</span>
       <span class="num">{{.SizeText}} · {{.Files}}f</span>

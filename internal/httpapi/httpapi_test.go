@@ -1866,10 +1866,10 @@ func TestCSPAggregatorCapsDistinctDestinations(t *testing.T) {
 
 	agg := newCSPAggregator()
 	for i := 0; i < store.MaxBlockedURIs*3; i++ {
-		agg.add(site, fmt.Sprintf("https://evil-%d.example", i))
+		agg.add(site, fmt.Sprintf("https://evil-%d.example", i), "")
 	}
 	agg.now = func() time.Time { return time.Now().Add(2 * time.Hour) }
-	due := agg.add(site, "https://one-more.example")
+	due := agg.add(site, "https://one-more.example", "")
 	if len(due) != 1 {
 		t.Fatalf("expected one due batch, got %d", len(due))
 	}
@@ -2058,5 +2058,128 @@ func TestAddDomainPendingUntilDNSProvesControl(t *testing.T) {
 	gw := e.public(t, authed(httptest.NewRequest("GET", "/api/sites/"+edit, nil), c.EditPassword))
 	if strings.Contains(gw.Body.String(), `"pending_domains":[{`) {
 		t.Errorf("a verified domain is still listed as pending: %s", gw.Body)
+	}
+}
+
+// ---- abuse reports: what is kept, for how long, and how many ----
+
+// A report keeps only a truncated source address (/24, /48) and the
+// cleanup sweep purges reports after 14 days: the reporter's IP is personal
+// data, and the privacy page promises a fortnight.
+func TestAbuseReportKeepsOnlyATruncatedSource(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	req := httptest.NewRequest("POST", "/api/report", strings.NewReader(`{"target":"`+c.ViewURL+`","reason":"spam"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "203.0.113.77:4242"
+	if w := e.public(t, req); w.Code != 202 {
+		t.Fatalf("report: %d %s", w.Code, w.Body)
+	}
+	reports, _ := e.st.ListReports()
+	if len(reports) != 1 {
+		t.Fatalf("reports = %d", len(reports))
+	}
+	if reports[0].Source != "203.0.113.0/24" {
+		t.Errorf("source = %q, want the /24, never the address", reports[0].Source)
+	}
+	raw, _ := os.ReadFile(e.reportFile(t))
+	if strings.Contains(string(raw), "203.0.113.77") {
+		t.Errorf("the full address is on disk: %s", raw)
+	}
+}
+
+func (e *env) reportFile(t *testing.T) string {
+	t.Helper()
+	entries, err := os.ReadDir(e.cfg.DataDir + "/reports")
+	if err != nil || len(entries) == 0 {
+		t.Fatal("no report file")
+	}
+	return e.cfg.DataDir + "/reports/" + entries[0].Name()
+}
+
+// The same source reporting the same target twice in a day is one report.
+func TestAbuseReportDeduplicatesPerSourceAndTarget(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest("POST", "/api/report", strings.NewReader(`{"target":"`+c.ViewURL+`","reason":"spam again"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = "203.0.113.5:1"
+		if w := e.public(t, req); w.Code != 202 {
+			t.Fatalf("report %d: %d", i, w.Code)
+		}
+	}
+	if reports, _ := e.st.ListReports(); len(reports) != 1 {
+		t.Fatalf("three identical reports were kept as %d", len(reports))
+	}
+}
+
+// Beyond the global cap the oldest reports are evicted, so a distributed
+// sender cannot fill the data volume one file at a time.
+func TestAbuseReportsAreCapped(t *testing.T) {
+	e := newEnv(t, nil)
+	prev := store.MaxReports
+	store.MaxReports = 200
+	t.Cleanup(func() { store.MaxReports = prev })
+	base := time.Now().Add(-time.Hour)
+	for i := 0; i < store.MaxReports+5; i++ {
+		e.st.AddReport(store.Report{Target: fmt.Sprintf("t%d", i), Reason: "x", Time: base.Add(time.Duration(i) * time.Second)})
+	}
+	reports, _ := e.st.ListReports()
+	// eviction runs in 1% batches once the cap is reached
+	if len(reports) > store.MaxReports || len(reports) < store.MaxReports-store.MaxReports/100-1 {
+		t.Fatalf("reports = %d, want at most the cap %d and not far below it", len(reports), store.MaxReports)
+	}
+	if reports[len(reports)-1].Target == "t0" {
+		t.Error("the oldest report survived the eviction")
+	}
+}
+
+func TestSweepPurgesOldReports(t *testing.T) {
+	e := newEnv(t, nil)
+	e.st.AddReport(store.Report{Target: "old", Reason: "x", Time: time.Now().Add(-15 * 24 * time.Hour)})
+	e.st.AddReport(store.Report{Target: "new", Reason: "x", Time: time.Now()})
+	n, err := e.st.PurgeReports(time.Now().Add(-store.ReportRetention))
+	if err != nil || n != 1 {
+		t.Fatalf("PurgeReports = %d, %v", n, err)
+	}
+	reports, _ := e.st.ListReports()
+	if len(reports) != 1 || reports[0].Target != "new" {
+		t.Errorf("reports after purge = %+v", reports)
+	}
+}
+
+// One source cannot flood the CSP endpoint, and the count of distinct
+// sources is what tells a real phishing page from one reporter's script.
+func TestCSPReportCountsDistinctSourcesAndLimitsEach(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	site, _ := e.st.ByViewID(c.ID)
+	body := `{"csp-report":{"blocked-uri":"https://evil.example/collect"}}`
+	send := func(ip string) int {
+		req := httptest.NewRequest("POST", "/_sitebin/csp-report", strings.NewReader(body))
+		req.Host = c.ID + ".sitebin.example"
+		req.RemoteAddr = ip + ":1"
+		return e.public(t, req).Code
+	}
+	// three distinct networks: sources are counted per /24, not per address
+	for i := 0; i < 3; i++ {
+		send("198.51.10" + string(rune('0'+i)) + ".7")
+	}
+	limited := false
+	for i := 0; i < cspBurst+5; i++ {
+		if send("203.0.113.9") == http.StatusTooManyRequests {
+			limited = true
+			break
+		}
+	}
+	if !limited {
+		t.Error("one source was never throttled")
+	}
+	e.api.csp.now = func() time.Time { return time.Now().Add(2 * time.Hour) }
+	send("198.51.110.9")
+	st := e.st.Stats(site)
+	if st.CSPSources < 3 {
+		t.Errorf("distinct sources = %d, want at least 3", st.CSPSources)
 	}
 }

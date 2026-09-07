@@ -122,6 +122,11 @@ type Store struct {
 	verifier   DomainVerifier
 	viewDomain string
 
+	// reportsN caches the number of files under reports/ (-1 = not yet
+	// counted), so the cap in AddReport costs one listing, not one per report.
+	reportsMu sync.Mutex
+	reportsN  int
+
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex // per view id
 }
@@ -154,6 +159,7 @@ func New(dataDir, baseDomain string, maxSiteBytes int64, maxFiles int) (*Store, 
 		reserved:     []string{baseDomain},
 		maxSiteBytes: maxSiteBytes,
 		maxFiles:     maxFiles,
+		reportsN:     -1,
 		locks:        make(map[string]*sync.Mutex),
 	}
 	for _, d := range []string{s.sitesDir(), s.editIndexDir(), s.domainIndexDir()} {

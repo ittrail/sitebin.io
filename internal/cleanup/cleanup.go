@@ -101,6 +101,13 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 		slog.Info("cleanup: deleted expired site", "id", site.ViewID, "owner", site.Meta.OwnerAccountID)
 		removed++
 	}
+	// Abuse reports are a log somebody typed; they go after the retention the
+	// privacy page promises for logs.
+	if n, err := st.PurgeReports(now.Add(-store.ReportRetention)); err != nil {
+		slog.Error("cleanup: purge reports", "err", err)
+	} else if n > 0 {
+		slog.Info("cleanup: purged reports past retention", "count", n)
+	}
 	dangling, err := st.DanglingIndexLinks()
 	if err != nil {
 		return removed, err

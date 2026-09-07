@@ -19,6 +19,11 @@ type Stats struct {
 	// destination is the evidence, the count is only volume.
 	CSPViolations int      `json:"csp_violations,omitempty"`
 	CSPBlocked    []string `json:"csp_blocked,omitempty"`
+	// CSPSources is the most distinct reporting networks seen in one
+	// aggregation window. One reporter can send any number of reports; a
+	// count of sources is what tells a phishing page with real visitors
+	// from someone flagging a competitor from a script.
+	CSPSources int `json:"csp_sources,omitempty"`
 }
 
 // MaxBlockedURIs caps the distinct blocked destinations kept per site. A
@@ -37,10 +42,11 @@ func (s *Store) Stats(site *Site) Stats {
 	return st
 }
 
-// RecordCSPViolation records n reports naming the given blocked destinations.
-// Distinct destinations accumulate up to MaxBlockedURIs; the count always
-// moves, so volume stays visible after the list is full.
-func (s *Store) RecordCSPViolation(site *Site, n int, blocked []string) {
+// RecordCSPViolation records n reports from `sources` distinct networks
+// naming the given blocked destinations. Distinct destinations accumulate up
+// to MaxBlockedURIs; the count always moves, so volume stays visible after
+// the list is full; the source count keeps its maximum.
+func (s *Store) RecordCSPViolation(site *Site, n int, blocked []string, sources int) {
 	l := s.lockSite(site.ViewID)
 	l.Lock()
 	defer l.Unlock()
@@ -50,6 +56,9 @@ func (s *Store) RecordCSPViolation(site *Site, n int, blocked []string) {
 		json.Unmarshal(b, &st)
 	}
 	st.CSPViolations += n
+	if sources > st.CSPSources {
+		st.CSPSources = sources
+	}
 	for _, u := range blocked {
 		if u == "" || len(st.CSPBlocked) >= MaxBlockedURIs {
 			continue

@@ -33,6 +33,7 @@ func (s siteService) infoOf(site *store.Site) ext.SiteInfo {
 	return ext.SiteInfo{
 		Violations: st.CSPViolations,
 		Blocked:    st.CSPBlocked,
+		Reporters:  st.CSPSources,
 		ViewID:     site.ViewID,
 		Owner:      site.Meta.OwnerAccountID,
 		Mode:       site.Meta.Mode,

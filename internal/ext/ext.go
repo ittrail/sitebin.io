@@ -236,6 +236,10 @@ type SiteInfo struct {
 	// host is almost always phishing, so the admin console shows both.
 	Violations int
 	Blocked    []string
+	// Reporters is the most distinct reporting networks seen in one
+	// aggregation window — the number that separates a phishing page with
+	// real visitors from one person's script flagging a competitor.
+	Reporters int
 	// ExpiresAt is when the site stops serving, or nil if it has no expiry. A
 	// downgrade stamps a 30-day grace here, and that date is the only warning
 	// the owner gets before the sweep deletes the site — the dashboard must

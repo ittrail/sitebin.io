@@ -42,7 +42,10 @@ type API struct {
 
 	verifyCache    *auth.VerifyCache
 	createLimiter  *auth.Limiter
-	reportLimiter  *auth.Limiter
+	reportLimiter  *auth.Limiter // abuse reports per source
+	reportGlobal   *auth.Limiter // abuse reports instance-wide
+	reportDedupe   *auth.Limiter // one report per (target, source) per day
+	cspLimiter     *auth.Limiter // CSP reports per source
 	authLimiter    *auth.Limiter // per (ip, target)
 	targetLimiter  *auth.Limiter // per target, any source
 	davLockSystems *davLocks
@@ -65,6 +68,9 @@ func New(cfg config.Config, st *store.Store, secret []byte, webFS fs.FS) (*API, 
 		verifyCache:    auth.NewVerifyCache(5 * time.Minute),
 		createLimiter:  auth.NewLimiter(float64(cfg.RateCreatePerHour), cfg.RateCreateBurst),
 		reportLimiter:  auth.NewLimiter(20, 5),
+		reportGlobal:   auth.NewLimiter(200, 50),
+		reportDedupe:   auth.NewLimiter(1.0/24, 1),
+		cspLimiter:     auth.NewLimiter(cspPerHour, cspBurst),
 		authLimiter:    auth.NewLimiter(float64(cfg.RateAuthPer5Min)*12, cfg.RateAuthPer5Min), // per-5min → per-hour
 		targetLimiter:  auth.NewLimiter(float64(cfg.RateAuthPer5Min)*12*6, cfg.RateAuthPer5Min*6),
 		davLockSystems: newDavLocks(),

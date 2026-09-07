@@ -475,3 +475,17 @@ func TestSweepAttachesAPendingDomainOnceProven(t *testing.T) {
 		t.Fatalf("the sweep did not attach the proven domain: %v", err)
 	}
 }
+
+func TestSweepPurgesReportsOlderThanRetention(t *testing.T) {
+	st, _ := store.New(t.TempDir(), "sitebin.example", 1<<20, 100)
+	now := time.Now()
+	st.AddReport(store.Report{Target: "old", Reason: "x", Time: now.Add(-store.ReportRetention - time.Hour)})
+	st.AddReport(store.Report{Target: "new", Reason: "x", Time: now})
+	if _, err := Sweep(st, now); err != nil {
+		t.Fatal(err)
+	}
+	reports, _ := st.ListReports()
+	if len(reports) != 1 || reports[0].Target != "new" {
+		t.Fatalf("reports after sweep = %+v", reports)
+	}
+}

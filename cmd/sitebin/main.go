@@ -366,8 +366,8 @@ func listReports() error {
 		return nil
 	}
 	for _, r := range reports {
-		fmt.Printf("%s  target=%s  site=%s  ip=%s\n  reason: %s\n",
-			r.Time.Format("2006-01-02 15:04:05"), r.Target, r.ViewID, r.IP, r.Reason)
+		fmt.Printf("%s  target=%s  site=%s  source=%s\n  reason: %s\n",
+			r.Time.Format("2006-01-02 15:04:05"), r.Target, r.ViewID, r.Source, r.Reason)
 		if r.Details != "" {
 			fmt.Printf("  details: %s\n", r.Details)
 		}

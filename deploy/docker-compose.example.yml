@@ -68,6 +68,16 @@ services:
 
     restart: unless-stopped
 
+    # Request logs carry client IPs. Bound what the container keeps: three
+    # files of 50 MB is a few days on a busy instance, well inside the 14
+    # days a privacy notice typically promises. Journald/Loki shippers need
+    # their own retention set the same way.
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
     environment:
       # =======================================================================
       # CORE (community) -- applies to both editions

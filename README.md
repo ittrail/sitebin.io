@@ -532,6 +532,11 @@ Operator commands (run inside the container, e.g. `docker exec sitebin sitebin <
 - **Health:** the image ships a `HEALTHCHECK`.
 - **Freeze:** `SITEBIN_READONLY=true` disables new-site creation.
 - **Logs:** structured request + lifecycle logs on stdout (`docker logs`).
+  Request lines carry the client IP, so **retention is yours to bound**: the
+  example compose sets `json-file` to three 50 MB files; a journald or Loki
+  shipper needs its own retention. Abuse reports keep only the reporter's
+  network (`/24`, `/48`) and are purged by the cleanup sweep after 14 days;
+  at most 10,000 are kept, oldest first out.
 
 ### Availability & failover
 

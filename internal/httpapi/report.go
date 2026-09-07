@@ -10,10 +10,13 @@ import (
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
-// report accepts a public abuse/takedown report. It is rate-limited and writes
-// the report to /data/reports for the operator to review (`sitebin reports`).
+// report accepts a public abuse/takedown report. It is rate-limited per
+// source and instance-wide, and writes the report to /data/reports for the
+// operator to review (`sitebin reports`). The same source reporting the same
+// target again within a day is acknowledged and not stored: one report is
+// one report, however many times the button is pressed.
 func (a *API) report(w http.ResponseWriter, r *http.Request) {
-	if !a.reportLimiter.Allow(clientIP(r)) {
+	if !a.reportLimiter.Allow(clientIP(r)) || !a.reportGlobal.Allow("all") {
 		writeError(w, 429, "too many reports, please try again later")
 		return
 	}
@@ -42,10 +45,14 @@ func (a *API) report(w http.ResponseWriter, r *http.Request) {
 		Target:  body.Target,
 		Reason:  body.Reason,
 		Details: body.Details,
-		IP:      clientIP(r),
+		Source:  store.AnonymizeIP(clientIP(r)),
 	}
 	if site := a.resolveTarget(body.Target); site != nil {
 		rep.ViewID = site.ViewID
+	}
+	if !a.reportDedupe.Allow(strings.ToLower(rep.Target) + "|" + rep.Source) {
+		writeJSON(w, 202, map[string]string{"status": "received"})
+		return
 	}
 	if err := a.st.AddReport(rep); err != nil {
 		a.log.Error("save report", "err", err)
