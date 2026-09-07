@@ -119,7 +119,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
     <span class="spacer" style="flex:1"></span>
     {{if .IsAdmin}}<a class="btn small" href="/account/admin">Instance register</a>{{end}}
     {{if .AccountURL}}<a class="btn small" href="{{.AccountURL}}" rel="noopener" title="Password, sign-in methods, sessions, data export and account deletion">Manage account</a>{{end}}
-    <form class="inline" method="post" action="/account/logout"><button class="btn small" type="submit">Sign out</button></form>
+    <form class="inline" method="post" action="/account/logout"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn small" type="submit">Sign out</button></form>
   </div>
 
   {{with .License}}

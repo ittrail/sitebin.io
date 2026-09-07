@@ -14,8 +14,11 @@ import (
 // CookieName is the account-session cookie on the main domain.
 const CookieName = "sitebin_s"
 
-// DefaultTTL is the sliding session lifetime.
-const DefaultTTL = 30 * 24 * time.Hour
+// DefaultTTL is the session lifetime. The dashboard re-issues the cookie on
+// every render, so an active user never lapses and an abandoned session ends
+// after a week — a stolen cookie is worth at most that, and nothing at all
+// once the owner signs out (see provider.handleLogout).
+const DefaultTTL = 7 * 24 * time.Hour
 
 // Manager mints and validates session cookies.
 type Manager struct {

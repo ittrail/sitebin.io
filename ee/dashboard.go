@@ -84,6 +84,8 @@ func (p *provider) handleRoot(w http.ResponseWriter, r *http.Request) {
 		p.redirect(w, r, "/account/login")
 		return
 	}
+	// Sliding lifetime: a render re-issues the cookie for a full term.
+	http.SetCookie(w, p.sessions.Cookie(acc.ID, acc.TokenVersion))
 	p.renderDashboard(w, acc, "")
 }
 
@@ -176,7 +178,27 @@ func (p *provider) handleSignupPost(w http.ResponseWriter, r *http.Request) {
 	p.redirect(w, r, "/account")
 }
 
+// handleLogout ends EVERY session of the account, not just the cookie that
+// asked. Sessions are stateless signed cookies, so clearing one changes
+// nothing a thief holds; bumping the account's token version — the number
+// every cookie is checked against — is the only revocation there is, and
+// "sign out everywhere" is what a person clicking Sign out on a shared
+// machine means anyway. Behind the CSRF token, because a cross-site form
+// signing people out is a nuisance an attacker should not have.
 func (p *provider) handleLogout(w http.ResponseWriter, r *http.Request) {
+	acc, ok := p.currentAccount(r)
+	if !ok {
+		http.SetCookie(w, p.sessions.Clear())
+		p.redirect(w, r, "/account/login")
+		return
+	}
+	if !p.checkCSRF(r, acc) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if err := p.accounts.Update(acc, func(cur *account.Account) error { cur.TokenVersion++; return nil }); err != nil {
+		slog.Error("logout: could not revoke sessions", "account", acc.ID, "err", err)
+	}
 	http.SetCookie(w, p.sessions.Clear())
 	p.redirect(w, r, "/account/login")
 }
