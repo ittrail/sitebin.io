@@ -77,10 +77,9 @@ func TestGenerateHTTPSDeepBaseDomainLabelIndex(t *testing.T) {
 
 func TestGenerateHTTPOnly(t *testing.T) {
 	cfg := mustLoad(t, map[string]string{
-		"SITEBIN_BASE_DOMAIN":  "sitebin.localtest.me",
-		"SITEBIN_HTTP_ONLY":    "true",
-		"SITEBIN_BACKEND_HOST": "backend",
-		"SITEBIN_DATA_DIR":     "/data",
+		"SITEBIN_BASE_DOMAIN": "sitebin.localtest.me",
+		"SITEBIN_HTTP_ONLY":   "true",
+		"SITEBIN_DATA_DIR":    "/data",
 	})
 	out := Generate(cfg)
 	for _, want := range []string{
@@ -89,8 +88,8 @@ func TestGenerateHTTPOnly(t *testing.T) {
 		"http://*.sitebin.localtest.me {",
 		"http://:80 {", // custom-domain catch-all
 		"root * /data/sites/{labels.3}/files",
-		"forward_auth backend:9000",
-		"reverse_proxy backend:8080",
+		"forward_auth 127.0.0.1:9000",
+		"reverse_proxy 127.0.0.1:8080",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in generated Caddyfile:\n%s", want, out)

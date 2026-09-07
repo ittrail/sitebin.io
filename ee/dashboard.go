@@ -13,6 +13,7 @@ import (
 	"github.com/ittrail/sitebin.io/ee/authn"
 	"github.com/ittrail/sitebin.io/ee/billing"
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 // PublicRoutes mounts the account dashboard and auth endpoints on the main
@@ -582,19 +583,4 @@ func (p *provider) renderMessage(w http.ResponseWriter, v msgView) {
 	msgTmpl.Execute(w, v)
 }
 
-func humanBytes(n int64) string {
-	if n < 1024 {
-		return fmt.Sprintf("%d B", n)
-	}
-	const units = "KMGT"
-	f := float64(n)
-	i := -1
-	for f >= 1024 && i < len(units)-1 {
-		f /= 1024
-		i++
-	}
-	if f >= 100 {
-		return fmt.Sprintf("%.0f %cB", f, units[i])
-	}
-	return fmt.Sprintf("%.1f %cB", f, units[i])
-}
+func humanBytes(n int64) string { return store.HumanBytes(n) }

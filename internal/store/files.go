@@ -58,6 +58,25 @@ func CleanRelPath(p string) (string, error) {
 	return c, nil
 }
 
+// HumanBytes renders a byte count for people: "512 B", "3.4 MB", "120 GB".
+// The one copy the CLI and the dashboard share.
+func HumanBytes(n int64) string {
+	if n < 1024 {
+		return fmt.Sprintf("%d B", n)
+	}
+	const units = "KMGT"
+	f := float64(n)
+	i := -1
+	for f >= 1024 && i < len(units)-1 {
+		f /= 1024
+		i++
+	}
+	if f >= 100 {
+		return fmt.Sprintf("%.0f %cB", f, units[i])
+	}
+	return fmt.Sprintf("%.1f %cB", f, units[i])
+}
+
 // usage returns the current byte and file count under dir (0s if missing).
 func usage(dir string) (bytes int64, files int, err error) {
 	err = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {

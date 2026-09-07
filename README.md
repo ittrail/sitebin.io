@@ -80,8 +80,10 @@ workflow in `.github/workflows/release.yml` publishes multi-arch images.)
   a fully commented all-in-one example documenting **every** setting, with a
   ready-to-run local config (`docker compose -f deploy/docker-compose.example.yml up -d`
   → `http://sitebin.localtest.me:8080/`). Good for trying the variants.
-- [`deploy/docker-compose.yml`](deploy/docker-compose.yml) — the multi-service
-  shape (separate Caddy + backend, same image).
+
+Sitebin ships in exactly one shape: Caddy and the Go backend in one
+container, the backend on loopback where nothing but Caddy can reach it.
+There is no split layout.
 
 ### Local / behind an existing proxy
 
@@ -113,7 +115,7 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | `SITEBIN_FTP_PUBLIC_HOST` | base domain | Host advertised for FTP passive mode. |
 | `SITEBIN_FTP_TLS_CERT` / `SITEBIN_FTP_TLS_KEY` | — | Optional PEM cert/key for FTPS (encrypts credentials). |
 | `SITEBIN_MCP_ENABLED` | `true` | Serve the MCP endpoint at `/mcp` for AI agents. See [MCP server](#mcp-server-for-ai-agents). |
-| `SITEBIN_MCP_OAUTH_ISSUER` | = `SITEBIN_OAUTH_OIDC_ISSUER` | Authorization server whose access tokens `/mcp` accepts. Empty disables OAuth; the endpoint then authenticates with edit passwords and account tokens only. |
+| `SITEBIN_MCP_OAUTH_ISSUER` | — | Authorization server whose access tokens `/mcp` accepts. **Not inherited** from `SITEBIN_OAUTH_OIDC_ISSUER`: switching `/mcp` to bearer-only is a decision, not a side effect of configuring SSO. Empty disables OAuth; the endpoint then authenticates with edit passwords and account tokens only. |
 | `SITEBIN_MCP_OAUTH_RESOURCE` | `<base>/mcp` | This server's OAuth resource identifier — the value a token's audience must contain. Immutable once published. |
 | `SITEBIN_TRACK_VIEWS` | `true` | Count per-site page views (Accept: text/html) + last-seen. |
 | `SITEBIN_READONLY` | `false` | Freeze new site creation. |
@@ -123,7 +125,6 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | `SITEBIN_CLEANUP_INTERVAL` | `10m` | Expiry sweep interval. |
 | `SITEBIN_PUBLIC_ADDR` | `:8080` | Address of the Go backend listener that Caddy proxies. Change it only if `8080` is taken inside the container. |
 | `SITEBIN_INTERNAL_ADDR` | `:9000` | Address of the authz / `tls-check` / health listener. It is **never proxied publicly**; do not expose it. |
-| `SITEBIN_BACKEND_HOST` | `127.0.0.1` | Host Caddy dials to reach the backend. Only differs from loopback if you run Caddy and the Go server in separate containers, which is not a supported layout. |
 
 A tier's `max_expiry_days` works the same way per site and adds one rule:
 while a site **owned by an account** stays under a cap, every content change
@@ -730,7 +731,7 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_STACK_LICENSING` | JSON `licensing` block sent with the self-registration above, declaring what a Sitebin **Enterprise license** is worth and how long a lapsed one stays usable: `{"graceMonths":3,"plans":{"team":{"max_custom_domains":25},"platform":{}}}`. The stack mints licenses, so it has to be told; a plan absent from `plans` carries no entitlements, which means **unlimited**. Only meaningful alongside `SITEBIN_STACK_URL`, and only the vendor's own deployment (the one holding the platform admin key) ever sets it. Absent = declare nothing, and the stack keeps whatever it already holds — registration merges, so an empty block would erase the entitlements rather than leave them. |
 | `SITEBIN_STACK_CONSENTS` | JSON `consents` list sent with the self-registration below, declaring **this deployment's own consent documents** — its terms of service and its data processing agreement — so the stack's consent gate can ask for each of them inside the sign-in, in this order, after the platform's own: `[{"key":"terms","version":"2026-09-08","url":"https://sitebin.io/terms/","title":{"en":"Sitebin Terms of Service","de":"Sitebin Nutzungsbedingungen"}},{"key":"dpa","version":"2026-09-08","url":"https://sitebin.io/dpa/","title":{"en":"Data Processing Agreement"}}]`. `key`, `version` and `url` are required per document; `title` is an optional `locale → heading` map; `required` defaults to true on the stack, and `false` makes a document that is shown and recorded but does not block (a marketing consent). Sitebin renders no consent screen of its own — declaring this list is the whole integration. `key` is the document's identity for ever; `version` is opaque and **raising it asks every user again for that document**, and it is immutable, so re-declaring one the stack already recorded with different content is refused. Sent as the stack's `consents` block, never its one-document `terms` shorthand. Not hardcoded for the same reason `SITEBIN_STACK_LICENSING` is not: these are one deployment's legal documents and this repo is public. Absent = declare nothing, and the stack keeps whatever it already holds; an empty list is refused at startup. |
 | `SITEBIN_STACK_GDPR_SECRET` | The shared secret the SaaS Stack signs its **GDPR orders** with — delete this user (Art. 17), export this user's data (Art. 20). At least 32 characters; **required whenever `SITEBIN_STACK_URL` is set**, and accepted on its own for an app registered by hand. With it set, `POST /account/gdpr/delete` and `POST /account/gdpr/export` are mounted and declared to the stack as its `gdpr` block; without it neither exists. See [GDPR: the stack orders, Sitebin erases](#gdpr-the-stack-orders-sitebin-erases). |
-| `SITEBIN_STACK_URL` / `_APP_ID` / `_ADMIN_KEY` | Self-registration against the IT-Trail SaaS Stack. With all three set, the instance announces itself to the stack on every start — its identity, its OIDC callback, its tier catalogue, its consent documents, its GDPR endpoints and its MCP block — so auth, billing, consent and MCP are configured by deploying rather than by hand. `_ADMIN_KEY` is the stack's platform admin key: a master credential, so keep it in a secret store. Unset = no self-registration. |
+| `SITEBIN_STACK_URL` / `_APP_ID` / `_ADMIN_KEY` (or `_ADMIN_KEY_FILE`) | Self-registration against the IT-Trail SaaS Stack. With all three set, the instance announces itself to the stack on every start — its identity, its OIDC callback, its tier catalogue, its consent documents, its GDPR endpoints and its MCP block — so auth, billing, consent and MCP are configured by deploying rather than by hand. `_ADMIN_KEY` is the stack's platform admin key: a master credential, so keep it in a secret store and prefer `_ADMIN_KEY_FILE` (a docker secret or mounted file) so it never sits in the container's environment; the variable is scrubbed from the process environment after it is read. Unset = no self-registration. |
 
 ### Account API tokens *(Enterprise)*
 

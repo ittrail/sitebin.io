@@ -45,9 +45,6 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.PublicAddr != ":8080" || cfg.InternalAddr != ":9000" {
 		t.Errorf("addrs = %q %q", cfg.PublicAddr, cfg.InternalAddr)
 	}
-	if cfg.BackendHost != "127.0.0.1" {
-		t.Errorf("BackendHost = %q", cfg.BackendHost)
-	}
 	if cfg.RateCreatePerHour != 30 || cfg.RateCreateBurst != 10 || cfg.RateAuthPer5Min != 10 {
 		t.Errorf("rates = %d %d %d", cfg.RateCreatePerHour, cfg.RateCreateBurst, cfg.RateAuthPer5Min)
 	}
@@ -73,7 +70,6 @@ func TestLoadOverrides(t *testing.T) {
 		"SITEBIN_RATE_CREATE_BURST":    "20",
 		"SITEBIN_RATE_AUTH_PER_5MIN":   "3",
 		"SITEBIN_CLEANUP_INTERVAL":     "1m",
-		"SITEBIN_BACKEND_HOST":         "backend",
 	}))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -95,9 +91,6 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.CleanupInterval != time.Minute {
 		t.Errorf("CleanupInterval = %v", cfg.CleanupInterval)
-	}
-	if cfg.BackendHost != "backend" {
-		t.Errorf("BackendHost = %q", cfg.BackendHost)
 	}
 }
 

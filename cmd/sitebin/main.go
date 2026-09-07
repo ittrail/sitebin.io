@@ -1,7 +1,6 @@
 // Command sitebin is the Sitebin backend and all-in-one entrypoint.
 //
-//	sitebin run          all-in-one: backend + cleanup + supervised Caddy
-//	sitebin server       backend only (compose / external Caddy)
+//	sitebin run          backend + cleanup + supervised Caddy
 //	sitebin caddyfile    print the generated Caddyfile and exit
 //	sitebin cleanup      run one cleanup sweep and exit
 //	sitebin healthcheck  probe the internal health endpoint (container HEALTHCHECK)
@@ -43,8 +42,8 @@ func main() {
 		cmd = os.Args[1]
 	}
 	switch cmd {
-	case "run", "server":
-		if err := serve(cmd == "run"); err != nil {
+	case "run":
+		if err := serve(); err != nil {
 			slog.Error("fatal", "err", err)
 			os.Exit(1)
 		}
@@ -147,25 +146,22 @@ func mustStore(cfg config.Config) *store.Store {
 	return st
 }
 
-// serve runs the backend; withCaddy additionally generates the Caddyfile and
-// supervises a Caddy child process (the all-in-one shape).
-func serve(withCaddy bool) error {
+// serve runs the backend, the cleanup sweep and a supervised Caddy child:
+// the one shape Sitebin ships in.
+func serve() error {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
 	cfg := mustConfig()
 	st := mustStore(cfg)
 
-	// In the all-in-one image Caddy is a child on the same host and reaches the
-	// backend over 127.0.0.1, so there is no reason to expose the backend
-	// listeners on all interfaces. Bind them to loopback unless the operator
-	// overrode the addresses (the compose split needs 0.0.0.0 + a reachable
-	// BackendHost).
-	if withCaddy {
-		if cfg.PublicAddr == ":8080" {
-			cfg.PublicAddr = "127.0.0.1:8080"
-		}
-		if cfg.InternalAddr == ":9000" {
-			cfg.InternalAddr = "127.0.0.1:9000"
-		}
+	// Caddy is a child on the same host and reaches the backend over
+	// 127.0.0.1, so the backend listeners are bound to loopback unless the
+	// operator chose other addresses: the internal one answers Caddy's
+	// authz subrequests and must not be reachable from the docker network.
+	if cfg.PublicAddr == ":8080" {
+		cfg.PublicAddr = "127.0.0.1:8080"
+	}
+	if cfg.InternalAddr == ":9000" {
+		cfg.InternalAddr = "127.0.0.1:9000"
 	}
 
 	secret, err := auth.LoadOrCreateSecret(filepath.Join(cfg.DataDir, ".secret"))
@@ -232,22 +228,19 @@ func serve(withCaddy bool) error {
 		"internal", cfg.InternalAddr, "data", cfg.DataDir,
 		"version", version, "edition", edition)
 
-	var caddyDone <-chan error
-	if withCaddy {
-		caddyDir := filepath.Join(cfg.DataDir, "caddy")
-		if err := os.MkdirAll(caddyDir, 0o755); err != nil {
-			return err
-		}
-		caddyfile := filepath.Join(caddyDir, "Caddyfile")
-		if err := os.WriteFile(caddyfile, []byte(caddygen.Generate(cfg)), 0o644); err != nil {
-			return err
-		}
-		caddyDone, err = supervisor.StartCaddy(ctx, caddyfile)
-		if err != nil {
-			return fmt.Errorf("start caddy: %w", err)
-		}
-		slog.Info("caddy started", "caddyfile", caddyfile, "https", !cfg.HTTPOnly)
+	caddyDir := filepath.Join(cfg.DataDir, "caddy")
+	if err := os.MkdirAll(caddyDir, 0o755); err != nil {
+		return err
 	}
+	caddyfile := filepath.Join(caddyDir, "Caddyfile")
+	if err := os.WriteFile(caddyfile, []byte(caddygen.Generate(cfg)), 0o644); err != nil {
+		return err
+	}
+	caddyDone, err := supervisor.StartCaddy(ctx, caddyfile)
+	if err != nil {
+		return fmt.Errorf("start caddy: %w", err)
+	}
+	slog.Info("caddy started", "caddyfile", caddyfile, "https", !cfg.HTTPOnly)
 
 	var runErr error
 	select {
@@ -255,7 +248,7 @@ func serve(withCaddy bool) error {
 		slog.Info("shutting down (signal)")
 	case err := <-errs:
 		runErr = err
-	case err := <-caddyOrNever(caddyDone):
+	case err := <-caddyDone:
 		runErr = fmt.Errorf("caddy exited: %w", err)
 	}
 
@@ -267,11 +260,9 @@ func serve(withCaddy bool) error {
 	if ftpSrv != nil {
 		ftpSrv.Stop()
 	}
-	if caddyDone != nil {
-		select { // give caddy a moment to drain
-		case <-caddyDone:
-		case <-time.After(15 * time.Second):
-		}
+	select { // give caddy a moment to drain
+	case <-caddyDone:
+	case <-time.After(15 * time.Second):
 	}
 	if runErr != nil && !errors.Is(runErr, http.ErrServerClosed) {
 		return runErr
@@ -303,14 +294,6 @@ func newInternalServer(addr string, h http.Handler) *http.Server {
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
-}
-
-// caddyOrNever adapts a possibly-nil channel for select.
-func caddyOrNever(c <-chan error) <-chan error {
-	if c != nil {
-		return c
-	}
-	return make(chan error) // never fires
 }
 
 func healthcheck(cfg config.Config) error {
@@ -376,18 +359,7 @@ func listReports() error {
 	return nil
 }
 
-func humanSize(n int64) string {
-	if n < 1024 {
-		return fmt.Sprintf("%dB", n)
-	}
-	const u = "KMGT"
-	f, i := float64(n), -1
-	for f >= 1024 && i < len(u)-1 {
-		f /= 1024
-		i++
-	}
-	return fmt.Sprintf("%.1f%cB", f, u[i])
-}
+func humanSize(n int64) string { return store.HumanBytes(n) }
 
 // deleteSite is the operator/abuse takedown: accepts a view id, edit id, or
 // custom domain.

@@ -166,9 +166,6 @@ func Load(getenv func(string) string) (Config, error) {
 	cfg.DNSToken = getenv("SITEBIN_DNS_TOKEN")
 	cfg.TLSSnippet = getenv("SITEBIN_TLS_SNIPPET")
 	cfg.ACMEEmail = getenv("SITEBIN_ACME_EMAIL")
-	if v := getenv("SITEBIN_BACKEND_HOST"); v != "" {
-		cfg.BackendHost = v
-	}
 	if v := getenv("SITEBIN_PUBLIC_ADDR"); v != "" {
 		cfg.PublicAddr = v
 	}

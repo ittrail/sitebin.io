@@ -14,7 +14,9 @@ import (
 // Generate renders the complete Caddyfile for cfg.
 func Generate(cfg config.Config) string {
 	var b strings.Builder
-	backend := func(port string) string { return cfg.BackendHost + ":" + port }
+	// Caddy and the backend share the container; the backend listens on
+	// loopback and nothing else may reach it.
+	backend := func(port string) string { return "127.0.0.1:" + port }
 	// The wildcard block extracts the view id with {labels.N}, counted from the
 	// right, so N is the label count of the domain the sites live on — which is
 	// no longer necessarily the main domain.

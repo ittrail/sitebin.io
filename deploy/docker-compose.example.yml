@@ -27,7 +27,7 @@
 #
 # The enterprise image is NOT the default build. Build it yourself with
 #   docker build --build-arg EDITION=enterprise -t sitebin:latest-ee .
-# or pull ghcr.io/ittrail/sitebin:latest-ee. A community image silently ignores
+# or pull ghcr.io/ittrail/sitebin.io:latest-ee. A community image silently ignores
 # every SITEBIN_ACCOUNT_MODE / tier / billing / license setting below.
 # =============================================================================
 
@@ -37,7 +37,7 @@ services:
     # OAuth, SMTP, billing, licensing) use the -ee image instead:
     #   image: sitebin:latest-ee
     # In production, from the registry:
-    #   image: ghcr.io/ittrail/sitebin:latest        # or :latest-ee
+    #   image: ghcr.io/ittrail/sitebin.io:latest     # or :latest-ee
     image: sitebin:latest
 
     container_name: sitebin
@@ -145,8 +145,8 @@ services:
       # enterprise edition, account API tokens. OAuth is opt-in and Sitebin is
       # only ever a RESOURCE server: with no issuer set, none of it is mounted.
       # SITEBIN_MCP_ENABLED:        "true"
-      # Authorization server whose access tokens /mcp accepts. Defaults to
-      # SITEBIN_OAUTH_OIDC_ISSUER when that is set; empty disables OAuth.
+      # Authorization server whose access tokens /mcp accepts. NOT inherited
+      # from SITEBIN_OAUTH_OIDC_ISSUER; empty disables OAuth.
       # SITEBIN_MCP_OAUTH_ISSUER:   "https://auth.saas-stack.example.com/api/v1/sitebin"
       # This server's OAuth resource identifier -- the value a token's audience
       # must contain. Defaults to <base>/mcp. IMMUTABLE once published: changing
@@ -163,7 +163,6 @@ services:
       # SITEBIN_RATE_CREATE_BURST:     "10"
       # SITEBIN_RATE_AUTH_PER_5MIN:    "10"             # password attempts/5min/(IP,target)
       # SITEBIN_CLEANUP_INTERVAL:      "10m"            # expiry sweep interval
-      # SITEBIN_BACKEND_HOST:          "127.0.0.1"      # only needed for the split-compose variant
       # SITEBIN_PUBLIC_ADDR:           ":8080"          # internal backend listener
       # SITEBIN_INTERNAL_ADDR:         ":9000"          # authz/tls-check/health (never public)
 
@@ -279,7 +278,8 @@ services:
       # SITEBIN_PAYGATE_APP_ID:     "sitebin"
       # SITEBIN_PAYGATE_API_KEY:    "ssk_live_..."
       # SITEBIN_PAYGATE_CACHE_TTL:  "5m"
-      # SITEBIN_PAYGATE_MANAGE_URL: "https://account.example.com"
+      # "Manage subscription" goes to the stack's hosted plan page, derived
+      # from the issuer and the app id; there is nothing to configure for it.
 
       # --- Self-registration against the SaaS Stack ---
       # With all three set, the instance announces itself on every start -- its
@@ -301,15 +301,21 @@ services:
       # holds, so declare it or omit it -- never declare it empty.
       # SITEBIN_STACK_LICENSING: '{"graceMonths":3,"plans":{"team":{"max_custom_domains":25},"business":{"max_custom_domains":100},"platform":{}}}'
       #
-      # THIS DEPLOYMENT'S OWN TERMS OF SERVICE. The stack's consent gate asks
-      # for two documents inside the sign-in -- the platform's, once per user,
-      # and the app's, once per app -- and this block is the whole of Sitebin's
-      # side of it: no page, no endpoint, no callback. It is only ever shown if
-      # SITEBIN_OAUTH_OIDC_DISCOVERY_URL points at the Auth Gateway.
-      # "version" is opaque; RAISING IT ASKS EVERY USER AGAIN, and re-declaring
-      # a version the stack already recorded with different content is refused.
-      # Registration MERGES, so leaving it out keeps what the stack holds.
-      # SITEBIN_STACK_TERMS: '{"version":"2026-09-01","url":"https://sitebin.io/terms","title":{"en":"Sitebin Terms of Service"}}'
+      # THIS DEPLOYMENT'S OWN CONSENT DOCUMENTS -- its terms of service and,
+      # if it has one, its data processing agreement -- as an ORDERED LIST.
+      # The stack's consent gate collects the platform's document once per
+      # user and then each of these once per app, inside the sign-in; this
+      # list is the whole of Sitebin's side of it: no page, no endpoint, no
+      # callback. It is only ever shown if SITEBIN_OAUTH_OIDC_DISCOVERY_URL
+      # points at the Auth Gateway. "key" is a document's identity for ever;
+      # "version" is opaque and RAISING IT ASKS EVERY USER AGAIN for that
+      # document. Registration MERGES, so leaving this out keeps what the
+      # stack holds.
+      # SITEBIN_STACK_CONSENTS: '[{"key":"terms","version":"2026-09-08","url":"https://example.com/terms/","title":{"en":"Terms of Service"}},{"key":"dpa","version":"2026-09-08","url":"https://example.com/dpa/","title":{"en":"Data Processing Agreement"}}]'
+      #
+      # The secret the stack signs its GDPR orders with (delete user, export
+      # user data); at least 32 characters, required with SITEBIN_STACK_URL.
+      # SITEBIN_STACK_GDPR_SECRET: "..."
 
       # --- SMTP (email verification & password reset) ---
       # SITEBIN_SMTP_HOST: "smtp.example.com"
