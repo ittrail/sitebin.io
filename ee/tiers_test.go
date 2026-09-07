@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -839,5 +840,50 @@ func TestSyncTierLeavesEverythingAloneOnLookupFailure(t *testing.T) {
 	sites := p.host.Sites().(*fakeSites)
 	if len(sites.quotas) != 0 {
 		t.Fatalf("restamped despite a failed lookup: %v", sites.quotas)
+	}
+}
+
+// A customer who has just paid on the stack's plan page comes back to the
+// dashboard and must see the plan they paid for, not the cached answer from
+// before the checkout. PayGate has no webhook into Sitebin, and the tier
+// cache (default 5m) exists for the hot paths; the dashboard is one page,
+// opened rarely, and asks PayGate afresh.
+func TestDashboardReadsTheTierFreshAfterAPurchase(t *testing.T) {
+	var mu sync.Mutex
+	tier := "free"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		w.Write([]byte(`{"data":{"tier":"` + tier + `","status":"active"}}`))
+	}))
+	defer srv.Close()
+	p := setupPayGate(t, srv.URL)
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-fresh", "fresh@example.com", true, "free")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := serveMux(p)
+	cookie := p.sessions.Cookie(acc.ID, acc.TokenVersion)
+	dashboard := func() string {
+		req := httptest.NewRequest("GET", "/account", nil)
+		req.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		return w.Body.String()
+	}
+	if body := dashboard(); !strings.Contains(body, "Free tier") {
+		t.Fatalf("before the purchase the dashboard should say Free tier; got %.200s", body)
+	}
+	// The purchase happened on the stack; PayGate now says pro. The cache
+	// still holds "free" for minutes.
+	mu.Lock()
+	tier = "pro"
+	mu.Unlock()
+	if body := dashboard(); !strings.Contains(body, "Pro tier") {
+		t.Errorf("the dashboard served the cached tier after the purchase; got %.200s", body)
+	}
+	// And the cache learned it: the hot paths now see pro without another call.
+	if got := p.effectiveTier(acc).ID; got != "pro" {
+		t.Errorf("effectiveTier after the fresh read = %q, want pro", got)
 	}
 }

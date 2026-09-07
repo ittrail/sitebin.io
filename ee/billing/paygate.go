@@ -165,6 +165,18 @@ func (g *PayGate) TierFor(ctx context.Context, userID string) (tier string, ok b
 	}
 	g.mu.Unlock()
 
+	return g.refresh(ctx, userID)
+}
+
+// RefreshTierFor asks PayGate now, whatever the cache holds, and replaces
+// the cached answer. The dashboard uses it: a customer who has just paid on
+// the stack's plan page must see the plan they paid for, not the answer
+// cached before the checkout. The hot paths keep using TierFor.
+func (g *PayGate) RefreshTierFor(ctx context.Context, userID string) (tier string, ok bool, err error) {
+	return g.refresh(ctx, userID)
+}
+
+func (g *PayGate) refresh(ctx context.Context, userID string) (tier string, ok bool, err error) {
 	tier, ok, err = g.fetch(ctx, userID)
 	ttl := g.cfg.CacheTTL
 	if err != nil {

@@ -220,10 +220,21 @@ var errUnknownTier = errors.New("account references a tier id that is not config
 // the stored tier". Both effectiveTier and effectiveTierStrict go through here
 // so their PayGate handling cannot drift apart.
 func (p *provider) paygateTier(acc *account.Account) (eeconfig.Tier, bool, error) {
+	return p.paygateTierVia(acc, false)
+}
+
+// paygateTierVia is paygateTier with the choice of asking PayGate afresh:
+// the dashboard does, because the customer may have just paid on the
+// stack's plan page and the cache (default 5m) still says otherwise.
+func (p *provider) paygateTierVia(acc *account.Account, fresh bool) (eeconfig.Tier, bool, error) {
 	if p.paygate == nil || acc.Provider != account.OIDCProv || acc.OAuthSubject == "" {
 		return eeconfig.Tier{}, false, nil
 	}
-	id, ok, err := p.paygate.TierFor(context.Background(), acc.OAuthSubject)
+	lookup := p.paygate.TierFor
+	if fresh {
+		lookup = p.paygate.RefreshTierFor
+	}
+	id, ok, err := lookup(context.Background(), acc.OAuthSubject)
 	if err != nil {
 		return eeconfig.Tier{}, false, fmt.Errorf("paygate tier lookup for %s: %w", acc.ID, err)
 	}
@@ -268,7 +279,18 @@ func (p *provider) storedTier(acc *account.Account) (eeconfig.Tier, bool) {
 // or act destructively on it (tier sync, the cleanup sweep's quota lookup) must
 // use effectiveTierStrict instead, which reports what this one hides.
 func (p *provider) effectiveTier(acc *account.Account) eeconfig.Tier {
-	t, ok, err := p.paygateTier(acc)
+	return p.effectiveTierVia(acc, false)
+}
+
+// effectiveTierFresh is effectiveTier for the dashboard: it asks PayGate
+// now rather than the cache, so a customer back from the stack's plan page
+// sees the plan they just paid for.
+func (p *provider) effectiveTierFresh(acc *account.Account) eeconfig.Tier {
+	return p.effectiveTierVia(acc, true)
+}
+
+func (p *provider) effectiveTierVia(acc *account.Account, fresh bool) eeconfig.Tier {
+	t, ok, err := p.paygateTierVia(acc, fresh)
 	switch {
 	case err != nil:
 		slog.Warn("paygate lookup failed; using stored tier", "account", acc.ID, "err", err)

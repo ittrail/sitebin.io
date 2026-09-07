@@ -530,7 +530,7 @@ func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, 
 			})
 		}
 	}
-	current := p.effectiveTier(acc)
+	current := p.effectiveTierFresh(acc)
 	tier := current.Label
 	if tier == "" {
 		tier = current.ID
