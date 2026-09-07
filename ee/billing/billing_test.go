@@ -3,10 +3,15 @@
 package billing
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,5 +123,66 @@ func TestPaddleCancellation(t *testing.T) {
 	}
 	if !u.Canceled {
 		t.Errorf("cancel update wrong: %+v", u)
+	}
+}
+
+// Cancellation goes to the provider's own endpoint with immediate effect, and
+// a subscription the provider has already dropped counts as cancelled.
+func TestStripeCancelSubscription(t *testing.T) {
+	var gotMethod, gotPath, gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath, gotAuth = r.Method, r.URL.Path, r.Header.Get("Authorization")
+		switch r.URL.Path {
+		case "/v1/subscriptions/sub_gone":
+			w.WriteHeader(404)
+		case "/v1/subscriptions/sub_bad":
+			w.WriteHeader(402)
+			w.Write([]byte(`{"error":{"message":"nope"}}`))
+		default:
+			w.Write([]byte(`{"id":"sub_1","status":"canceled"}`))
+		}
+	}))
+	defer srv.Close()
+	s := NewStripe(eeconfig.StripeConfig{SecretKey: "sk_test"})
+	s.apiBase = srv.URL
+	if err := s.CancelSubscription(context.Background(), Customer{Subscription: "sub_1"}); err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != "DELETE" || gotPath != "/v1/subscriptions/sub_1" || gotAuth != "Bearer sk_test" {
+		t.Errorf("cancel request = %s %s %q", gotMethod, gotPath, gotAuth)
+	}
+	if err := s.CancelSubscription(context.Background(), Customer{Subscription: "sub_gone"}); err != nil {
+		t.Errorf("an already-gone subscription must count as cancelled: %v", err)
+	}
+	if err := s.CancelSubscription(context.Background(), Customer{Subscription: "sub_bad"}); err == nil {
+		t.Error("a provider refusal must be an error")
+	}
+	if err := s.CancelSubscription(context.Background(), Customer{}); err == nil {
+		t.Error("no subscription id must be an error, not a silent success")
+	}
+}
+
+func TestPaddleCancelSubscription(t *testing.T) {
+	var gotMethod, gotPath, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotMethod, gotPath, gotBody = r.Method, r.URL.Path, string(b)
+		if r.URL.Path == "/subscriptions/sub_gone/cancel" {
+			w.WriteHeader(404)
+			return
+		}
+		w.Write([]byte(`{"data":{"id":"sub_1","status":"canceled"}}`))
+	}))
+	defer srv.Close()
+	p := NewPaddle(eeconfig.PaddleConfig{APIKey: "pdl"})
+	p.apiBase = srv.URL
+	if err := p.CancelSubscription(context.Background(), Customer{Subscription: "sub_1"}); err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != "POST" || gotPath != "/subscriptions/sub_1/cancel" || !strings.Contains(gotBody, "immediately") {
+		t.Errorf("cancel request = %s %s %s", gotMethod, gotPath, gotBody)
+	}
+	if err := p.CancelSubscription(context.Background(), Customer{Subscription: "sub_gone"}); err != nil {
+		t.Errorf("an already-gone subscription must count as cancelled: %v", err)
 	}
 }

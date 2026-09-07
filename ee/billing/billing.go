@@ -72,6 +72,19 @@ type WebhookReceiver interface {
 	VerifyWebhook(sigHeader string, body []byte, now time.Time) (Update, error)
 }
 
+// SubscriptionCanceller is implemented by a backend that can end a
+// subscription Sitebin holds the record of. The direct providers do: with them
+// Sitebin owns the subscription, so deleting the account has to end it first
+// or the customer keeps paying for an account that no longer exists. PayGate
+// does not, and must not: the stack owns that subscription and ends it itself
+// when the identity is deleted at the account console.
+type SubscriptionCanceller interface {
+	// CancelSubscription ends c.Subscription with immediate effect. It is
+	// called BEFORE the account is deleted, and an error keeps the account:
+	// a person must never be erased while still being charged.
+	CancelSubscription(ctx context.Context, c Customer) error
+}
+
 // Update is the provider-agnostic result of interpreting a webhook: what to
 // apply to an account's billing state and tier.
 type Update struct {
@@ -108,4 +121,7 @@ var (
 
 	_ WebhookReceiver = (*Stripe)(nil)
 	_ WebhookReceiver = (*Paddle)(nil)
+
+	_ SubscriptionCanceller = (*Stripe)(nil)
+	_ SubscriptionCanceller = (*Paddle)(nil)
 )

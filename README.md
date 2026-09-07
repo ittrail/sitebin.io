@@ -915,7 +915,11 @@ stack, "manage my account" and "manage my plan" are links, not screens:
   stack account redirects there too. The stack erases the identity and orders
   Sitebin to erase its half — see the next section. Deleting locally first
   would leave an identity behind that still names this app. Local accounts,
-  which the stack has never heard of, keep local deletion.
+  which the stack has never heard of, keep local deletion: a server-rendered
+  confirmation page (the dashboard's CSP runs no inline `confirm()`), and
+  with a direct Stripe/Paddle backend the live subscription is **cancelled
+  first, with immediate effect** — if it cannot be, the account is kept and
+  the page says why, because nobody is deleted while still being charged.
 
 #### GDPR: the stack orders, Sitebin erases
 

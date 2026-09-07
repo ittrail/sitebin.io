@@ -221,13 +221,32 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
     <p class="muted">Your account is deleted from the account console, where your sign-in lives. When it is, every site, token and record this instance holds for you is removed as well.</p>
     <a class="btn danger" href="{{.AccountURL}}" rel="noopener">Delete account in the account console</a>
     {{else}}
-    <form method="post" action="/account/delete" onsubmit="return confirm('Delete your account AND all its sites? This cannot be undone.')">
+    <p class="muted">Removes this account, every site it owns and every API token. You will be asked to confirm on the next page.</p>
+    <form method="post" action="/account/delete">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
       <button class="btn danger" type="submit">Delete account and all sites</button>
     </form>
     {{end}}
   </div>
 </main>
+` + pageFoot))
+
+// deleteConfirmTmpl is the second step of a local account deletion. It is a
+// page, not a confirm() dialog, because the dashboard's CSP has no
+// 'unsafe-inline' and an inline handler would silently never run.
+var deleteConfirmTmpl = template.Must(template.New("deleteconfirm").Parse(pageHead + `
+<main class="acct"><div class="authwrap"><div class="card" style="border-color:rgba(242,109,109,.4)">
+  <h1 style="color:var(--danger)">Delete your account?</h1>
+  <p class="muted">This removes the account <strong>{{.Email}}</strong> together with
+    <strong>{{.Sites}} site{{if ne .Sites 1}}s{{end}}</strong> and
+    <strong>{{.Tokens}} API token{{if ne .Tokens 1}}s{{end}}</strong>. Every site URL and custom domain stops working immediately. There is no undo.</p>
+  {{if .Subscription}}<p class="muted">Your paid subscription will be <strong>cancelled first</strong>, with immediate effect. If it cannot be cancelled, the account is kept and you are told why.</p>{{end}}
+  <form method="post" action="/account/delete/confirm" style="margin-top:18px;display:flex;gap:10px;flex-wrap:wrap">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button class="btn danger" type="submit">Yes, delete my account and all its sites</button>
+    <a class="btn" href="/account">Cancel</a>
+  </form>
+</div></div></main>
 ` + pageFoot))
 
 var msgTmpl = template.Must(template.New("msg").Parse(pageHead + `

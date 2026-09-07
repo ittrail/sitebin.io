@@ -5,11 +5,13 @@ package ee
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/ittrail/sitebin.io/ee/account"
 	"github.com/ittrail/sitebin.io/ee/authn"
+	"github.com/ittrail/sitebin.io/ee/billing"
 	"github.com/ittrail/sitebin.io/internal/ext"
 )
 
@@ -30,6 +32,7 @@ func (p *provider) PublicRoutes() map[string]http.Handler {
 		"POST /account/sites/{id}/rotate":       http.HandlerFunc(p.handleRotate),
 		"POST /account/sites/{id}/delete":       http.HandlerFunc(p.handleDeleteSite),
 		"POST /account/delete":                  http.HandlerFunc(p.handleDeleteAccount),
+		"POST /account/delete/confirm":          http.HandlerFunc(p.handleDeleteAccountConfirm),
 		"POST /account/tokens":                  http.HandlerFunc(p.handleCreateToken),
 		"POST /account/tokens/{id}/delete":      http.HandlerFunc(p.handleDeleteToken),
 		"GET /account/admin":                    http.HandlerFunc(p.handleAdmin),
@@ -251,6 +254,27 @@ func (p *provider) handleDeleteSite(w http.ResponseWriter, r *http.Request) {
 	p.redirect(w, r, "/account")
 }
 
+// deleteConfirmView is the confirmation step of a local account deletion:
+// what goes, and whether a subscription has to be ended first.
+type deleteConfirmView struct {
+	Email        string
+	CSRF         string
+	Sites        int
+	Tokens       int
+	Subscription string // the provider's name when a live subscription will be cancelled first
+}
+
+// liveSubscription reports whether acc holds a subscription that is still
+// charging — one a deletion has to end before the account may go.
+func liveSubscription(acc *account.Account) bool {
+	return acc.Billing != nil && acc.Billing.Subscription != "" && acc.Billing.Status != "canceled"
+}
+
+// handleDeleteAccount is step ONE of a local deletion: it renders the
+// confirmation and deletes nothing. The dashboard's CSP has no
+// 'unsafe-inline', so a confirm() dialog on the form would silently never
+// run — the confirmation has to be a page the server renders, exactly as the
+// admin console's is.
 func (p *provider) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	acc, ok := p.currentAccount(r)
 	if !ok {
@@ -269,6 +293,46 @@ func (p *provider) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, p.cfg.AccountConsoleURL(), http.StatusSeeOther)
 		return
 	}
+	ids, _ := p.accounts.ListSiteIDs(acc)
+	toks, _ := p.accounts.ListTokens(acc)
+	v := deleteConfirmView{Email: acc.Email, CSRF: p.csrf(acc), Sites: len(ids), Tokens: len(toks)}
+	if liveSubscription(acc) {
+		v.Subscription = acc.Billing.Provider
+	}
+	p.securityHeaders(w)
+	deleteConfirmTmpl.Execute(w, v)
+}
+
+// handleDeleteAccountConfirm is step TWO: the subscription is ended first,
+// then the account, its sites and its tokens go. It fails closed on the
+// subscription — an account that cannot stop being charged is not deleted,
+// and the page says so.
+func (p *provider) handleDeleteAccountConfirm(w http.ResponseWriter, r *http.Request) {
+	acc, ok := p.currentAccount(r)
+	if !ok {
+		p.redirect(w, r, "/account/login")
+		return
+	}
+	if !p.checkCSRF(r, acc) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if p.stackDeletion(acc) {
+		http.Redirect(w, r, p.cfg.AccountConsoleURL(), http.StatusSeeOther)
+		return
+	}
+	if liveSubscription(acc) {
+		if err := p.cancelSubscription(r, acc); err != nil {
+			slog.Error("account deletion: subscription could not be cancelled; keeping the account",
+				"account", acc.ID, "provider", acc.Billing.Provider, "err", err)
+			p.renderMessage(w, msgView{
+				Title: "Account not deleted",
+				Body:  "Your subscription could not be cancelled, so your account was kept: deleting it now would leave you paying for nothing. Cancel the subscription under Billing first, or try again in a few minutes.",
+				Back:  "/account",
+			})
+			return
+		}
+	}
 	err := p.accounts.Delete(acc, func(viewID string) error {
 		err := p.host.Sites().Delete(viewID)
 		if errors.Is(err, ext.ErrSiteGone) {
@@ -277,14 +341,41 @@ func (p *provider) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		return err
 	})
 	if err != nil {
+		slog.Error("account deletion failed", "account", acc.ID, "err", err)
 		http.Error(w, "could not delete the account", http.StatusInternalServerError)
 		return
 	}
+	slog.Info("account deleted by its owner", "account", acc.ID)
 	http.SetCookie(w, p.sessions.Clear())
 	p.renderMessage(w, msgView{
 		Title: "Account deleted",
 		Body:  "Your account and all its sites have been removed.",
 		Back:  "/account/login",
+	})
+}
+
+// cancelSubscription ends acc's live subscription through the active backend.
+// The backend has to be the one that issued the subscription AND able to
+// cancel: a subscription with a provider this instance no longer runs cannot
+// be ended from here, and saying so beats deleting around it.
+func (p *provider) cancelSubscription(r *http.Request, acc *account.Account) error {
+	if p.billing == nil || p.billing.Name() != acc.Billing.Provider {
+		return fmt.Errorf("subscription belongs to %q, which is not the active billing backend", acc.Billing.Provider)
+	}
+	c, ok := p.billing.(billing.SubscriptionCanceller)
+	if !ok {
+		return fmt.Errorf("the %s backend cannot cancel subscriptions from here", p.billing.Name())
+	}
+	if err := c.CancelSubscription(r.Context(), p.billingCustomer(acc)); err != nil {
+		return err
+	}
+	// Recorded before the deletion, so a failure between the two leaves the
+	// account saying what the provider now says.
+	return p.accounts.Update(acc, func(cur *account.Account) error {
+		if cur.Billing != nil {
+			cur.Billing.Status = "canceled"
+		}
+		return nil
 	})
 }
 

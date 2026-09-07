@@ -210,6 +210,35 @@ func (s *Stripe) CheckoutURL(ctx context.Context, c Customer, tier eeconfig.Tier
 	return s.sessionURL(ctx, tier.Price.Stripe, c.AccountID, tier.ID, c.Email, successURL, cancelURL)
 }
 
+// CancelSubscription cancels the subscription immediately
+// (DELETE /v1/subscriptions/{id}). A subscription Stripe no longer knows
+// (404) is treated as cancelled: the end state is what matters, and the
+// account deletion this precedes must not be blocked by a record Stripe has
+// already dropped.
+func (s *Stripe) CancelSubscription(ctx context.Context, c Customer) error {
+	if c.Subscription == "" {
+		return fmt.Errorf("stripe cancel: account has no subscription id")
+	}
+	req, err := http.NewRequestWithContext(ctx, "DELETE", s.apiBase+"/v1/subscriptions/"+url.PathEscape(c.Subscription), nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.cfg.SecretKey)
+	resp, err := s.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("stripe cancel: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("stripe cancel status %d: %s", resp.StatusCode, body)
+	}
+	return nil
+}
+
 // PortalURL opens Stripe's customer portal. A customer Sitebin has never seen
 // pay has nothing to manage, which is not an error.
 func (s *Stripe) PortalURL(ctx context.Context, c Customer, returnURL string) (string, error) {

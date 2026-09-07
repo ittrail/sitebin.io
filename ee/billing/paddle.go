@@ -154,6 +154,37 @@ func (p *Paddle) CheckoutURL(ctx context.Context, c Customer, tier eeconfig.Tier
 	return p.sessionURL(ctx, tier.Price.Paddle, c.AccountID, tier.ID, successURL)
 }
 
+// CancelSubscription cancels the subscription with immediate effect
+// (POST /subscriptions/{id}/cancel, effective_from=immediately). A
+// subscription Paddle no longer knows (404) is treated as cancelled, for the
+// same reason as with Stripe.
+func (p *Paddle) CancelSubscription(ctx context.Context, c Customer) error {
+	if c.Subscription == "" {
+		return fmt.Errorf("paddle cancel: account has no subscription id")
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		p.apiBase+"/subscriptions/"+url.PathEscape(c.Subscription)+"/cancel",
+		strings.NewReader(`{"effective_from":"immediately"}`))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+p.cfg.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := p.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("paddle cancel: %w", err)
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("paddle cancel status %d: %s", resp.StatusCode, rb)
+	}
+	return nil
+}
+
 // PortalURL returns Paddle's hosted management link for the subscription.
 // Paddle has no portal-session endpoint: the URLs live on the subscription, so
 // an account without one has nothing to manage.

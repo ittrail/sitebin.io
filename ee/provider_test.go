@@ -294,8 +294,17 @@ func TestDeleteAccount(t *testing.T) {
 	cookie := sessionCookie(t, w)
 	acc, _ := p.accounts.ByEmail("z@example.com")
 
+	// Two steps: /account/delete confirms, /account/delete/confirm deletes.
 	del := form(url.Values{"csrf": {p.csrf(acc)}})
 	del.URL.Path = "/account/delete"
+	del.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, del)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "/account/delete/confirm") {
+		t.Fatalf("delete step one = %d", w.Code)
+	}
+	del = form(url.Values{"csrf": {p.csrf(acc)}})
+	del.URL.Path = "/account/delete/confirm"
 	del.AddCookie(cookie)
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, del)

@@ -132,9 +132,11 @@ func TestStackAccountIsDeletedAtTheConsole(t *testing.T) {
 		t.Error("the danger zone still offers the local delete form to a stack user")
 	}
 
-	w := postAs(mux, "/account/delete", cookie, url.Values{"csrf": {p.csrf(acc)}})
-	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != wantAccountURL {
-		t.Fatalf("local delete for a stack user = %d %q, want a 303 to the console", w.Code, w.Header().Get("Location"))
+	for _, path := range []string{"/account/delete", "/account/delete/confirm"} {
+		w := postAs(mux, path, cookie, url.Values{"csrf": {p.csrf(acc)}})
+		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != wantAccountURL {
+			t.Fatalf("%s for a stack user = %d %q, want a 303 to the console", path, w.Code, w.Header().Get("Location"))
+		}
 	}
 	if _, err := p.accounts.ByID(acc.ID); err != nil {
 		t.Error("the account was deleted locally, leaving the stack identity behind")
@@ -160,7 +162,7 @@ func TestStackAccountDeletesLocallyWhenTheStackCannotOrderIt(t *testing.T) {
 	if !strings.Contains(body, wantAccountURL) {
 		t.Error("the account console link is missing")
 	}
-	w := postAs(mux, "/account/delete", cookie, url.Values{"csrf": {p.csrf(acc)}})
+	w := postAs(mux, "/account/delete/confirm", cookie, url.Values{"csrf": {p.csrf(acc)}})
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "Account deleted") {
 		t.Fatalf("local delete = %d (%s)", w.Code, w.Body)
 	}
@@ -182,7 +184,7 @@ func TestLocalAccountDeletesLocallyOnAStackInstance(t *testing.T) {
 	// And a marker for a site that is already gone must not block it.
 	p.accounts.LinkSite(acc, "bbbbbbbbbbbbbbbbbbbbbbbbbb")
 
-	w := postAs(mux, "/account/delete", cookie, url.Values{"csrf": {p.csrf(acc)}})
+	w := postAs(mux, "/account/delete/confirm", cookie, url.Values{"csrf": {p.csrf(acc)}})
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "Account deleted") {
 		t.Fatalf("local delete = %d (%s)", w.Code, w.Body)
 	}
