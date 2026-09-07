@@ -683,7 +683,7 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_LOCAL_AUTH` | `true` | `false` = SSO only: no email/password form, signup/reset disabled; with a single OAuth provider, `/account/login` redirects straight to it. Requires an `SITEBIN_OAUTH_*` provider. |
 | `SITEBIN_BILLING` | Which backend may charge customers: `stripe`, `paddle` or `paygate` (case-insensitive). Unset = inferred when exactly one is configured; **two configured and no choice is a startup error**. Exactly one backend is ever active: with `paygate` selected, configured Stripe/Paddle credentials are inert *and their webhook routes are not mounted*, so provider deliveries get a silent `404` — remove the webhook from the provider's dashboard, or you will be debugging retries. Startup also refuses a catalogue the selected direct backend cannot sell: every tier with a `price` must carry the matching `price.stripe` / `price.paddle`. See [Billing](#billing). |
 | `SITEBIN_PAYGATE_URL` / `_APP_ID` / `_API_KEY` | Sell tiers and resolve subscriptions through a SaaS-Stack PayGate. See [Billing](#billing) and [SaaS-Stack integration](#saas-stack-integration). |
-| `SITEBIN_PAYGATE_CACHE_TTL` / `_MANAGE_URL` | Per-user tier cache (default `5m`); optional dashboard "manage subscription" link. |
+| `SITEBIN_PAYGATE_CACHE_TTL` | Per-user tier cache (default `5m`). "Manage subscription" needs no setting: with PayGate and `SITEBIN_OAUTH_OIDC_ISSUER` set it goes to the stack's hosted plan page, `<issuer origin>/apps/<SITEBIN_PAYGATE_APP_ID>/plan`, derived exactly as the stack's own `planUrl()` derives it. |
 | `SITEBIN_SMTP_HOST` / `_PORT` / `_USER` / `_PASS` / `_FROM` / `_TLS` | Email (verification, password reset). Port default 587; `_TLS=true` for implicit TLS (465). |
 | `SITEBIN_STRIPE_SECRET_KEY` / `_WEBHOOK_SECRET` | Stripe billing, direct. Webhook: `POST /account/billing/stripe/webhook`. |
 | `SITEBIN_PADDLE_API_KEY` / `_WEBHOOK_SECRET` / `_SANDBOX` | Paddle billing, direct. Webhook: `POST /account/billing/paddle/webhook`. |
@@ -691,8 +691,9 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_LICENSE_REFRESH` | How often the instance collects its license from the stack. Default **24h**; any positive Go duration (`5m`, `1h`). Shorten it to watch a renewal apply without a restart, which is otherwise a day-long experiment. A value that is not a positive duration is warned about and ignored. Ignored entirely when `SITEBIN_LICENSE_KEY` is set. |
 | `SITEBIN_LICENSE_URL` | Optional override for where the running instance collects a renewed license (default: `<SITEBIN_PAYGATE_URL>/api/v1/licenses/renew`). The request carries **no credential**: the instance presents the license it already holds, and the stack — which signed it — verifies it. Fetched daily, cached under the data dir and applied without a restart; a failure never restricts anything. Ignored when `SITEBIN_LICENSE_KEY` is set. |
 | `SITEBIN_STACK_LICENSING` | JSON `licensing` block sent with the self-registration above, declaring what a Sitebin **Enterprise license** is worth and how long a lapsed one stays usable: `{"graceMonths":3,"plans":{"team":{"max_custom_domains":25},"platform":{}}}`. The stack mints licenses, so it has to be told; a plan absent from `plans` carries no entitlements, which means **unlimited**. Only meaningful alongside `SITEBIN_STACK_URL`, and only the vendor's own deployment (the one holding the platform admin key) ever sets it. Absent = declare nothing, and the stack keeps whatever it already holds — registration merges, so an empty block would erase the entitlements rather than leave them. |
-| `SITEBIN_STACK_TERMS` | JSON `terms` block sent with the self-registration below, declaring **this deployment's own terms of service** so the stack's consent gate can ask for them inside the sign-in: `{"version":"2026-09-01","url":"https://sitebin.io/terms","title":{"en":"Sitebin Terms of Service"}}`. `version` and `url` are required; `title` is an optional `locale → heading` map. Sitebin renders no terms screen of its own — declaring this block is the whole integration. `version` is opaque and **raising it asks every user again**; it is also immutable, so re-declaring one the stack already recorded with different content is refused. Not hardcoded for the same reason `SITEBIN_STACK_LICENSING` is not: these are one deployment's legal terms and this repo is public. Absent = declare nothing, and the stack keeps whatever it already holds. |
-| `SITEBIN_STACK_URL` / `_APP_ID` / `_ADMIN_KEY` | Self-registration against the IT-Trail SaaS Stack. With all three set, the instance announces itself to the stack on every start — its identity, its OIDC callback, its tier catalogue and its MCP block — so auth, billing and MCP are configured by deploying rather than by hand. `_ADMIN_KEY` is the stack's platform admin key: a master credential, so keep it in a secret store. Unset = no self-registration. |
+| `SITEBIN_STACK_CONSENTS` | JSON `consents` list sent with the self-registration below, declaring **this deployment's own consent documents** — its terms of service and its data processing agreement — so the stack's consent gate can ask for each of them inside the sign-in, in this order, after the platform's own: `[{"key":"terms","version":"2026-09-08","url":"https://sitebin.io/terms/","title":{"en":"Sitebin Terms of Service","de":"Sitebin Nutzungsbedingungen"}},{"key":"dpa","version":"2026-09-08","url":"https://sitebin.io/dpa/","title":{"en":"Data Processing Agreement"}}]`. `key`, `version` and `url` are required per document; `title` is an optional `locale → heading` map; `required` defaults to true on the stack, and `false` makes a document that is shown and recorded but does not block (a marketing consent). Sitebin renders no consent screen of its own — declaring this list is the whole integration. `key` is the document's identity for ever; `version` is opaque and **raising it asks every user again for that document**, and it is immutable, so re-declaring one the stack already recorded with different content is refused. Sent as the stack's `consents` block, never its one-document `terms` shorthand. Not hardcoded for the same reason `SITEBIN_STACK_LICENSING` is not: these are one deployment's legal documents and this repo is public. Absent = declare nothing, and the stack keeps whatever it already holds; an empty list is refused at startup. |
+| `SITEBIN_STACK_GDPR_SECRET` | The shared secret the SaaS Stack signs its **GDPR orders** with — delete this user (Art. 17), export this user's data (Art. 20). At least 32 characters; **required whenever `SITEBIN_STACK_URL` is set**, and accepted on its own for an app registered by hand. With it set, `POST /account/gdpr/delete` and `POST /account/gdpr/export` are mounted and declared to the stack as its `gdpr` block; without it neither exists. See [GDPR: the stack orders, Sitebin erases](#gdpr-the-stack-orders-sitebin-erases). |
+| `SITEBIN_STACK_URL` / `_APP_ID` / `_ADMIN_KEY` | Self-registration against the IT-Trail SaaS Stack. With all three set, the instance announces itself to the stack on every start — its identity, its OIDC callback, its tier catalogue, its consent documents, its GDPR endpoints and its MCP block — so auth, billing, consent and MCP are configured by deploying rather than by hand. `_ADMIN_KEY` is the stack's platform admin key: a master credential, so keep it in a secret store. Unset = no self-registration. |
 
 ### Account API tokens *(Enterprise)*
 
@@ -816,9 +817,13 @@ issued, so only accounts signed in through the generic OIDC provider can be
 sold to. A local account has no subscription there and never will — which is
 why `SITEBIN_LOCAL_AUTH=false` is the recommendation on a stack instance.
 
-Setting `SITEBIN_PAYGATE_MANAGE_URL` replaces Sitebin's own plan card with a
-link to that page. It is an override, not an addition: two competing answers to
-"where do I manage my subscription" is worse than either one.
+"Manage subscription" on the dashboard is the stack's **hosted plan page** —
+current plan, the plans it could move to, change, cancel, resume, invoices,
+themed as Sitebin and built by nobody here. Its address is derived, not
+configured: `<issuer origin>/apps/<SITEBIN_PAYGATE_APP_ID>/plan`, exactly as
+the stack's own `planUrl()` builds it from `SITEBIN_OAUTH_OIDC_ISSUER`. A
+configured URL was one more value that could disagree with the stack the
+instance signs in against, so there is none.
 
 #### A different processor entirely
 
@@ -866,18 +871,20 @@ Enterprise license** is worth — see [Enterprise licensing](#enterprise-licensi
 Registration merges rather than replaces, so a block that is absent leaves what
 the stack already holds untouched.
 
-**Terms acceptance is the stack's, not Sitebin's.** The stack gates sign-in on
-two documents — the platform's terms, once per user, and the app's own terms,
-once per app — on a page it hosts inside the sign-in flow, themed and
-localized. Sitebin's whole side of it is `SITEBIN_STACK_TERMS`: a version, a
-URL and an optional heading, declared with the registration. There is no page
-to render, no endpoint to expose and no callback to implement, and if Sitebin
-ever finds itself showing a terms screen of its own, that is the bug.
+**Consent is the stack's, not Sitebin's.** The stack gates sign-in on the
+platform's own terms, once per user, and then on each document the app
+declares, once per app — on a page it hosts inside the sign-in flow, themed and
+localized. Sitebin's whole side of it is `SITEBIN_STACK_CONSENTS`: an ordered
+list of documents — on sitebin.io the terms of service and the data processing
+agreement — each with a key, a version, a URL and an optional heading, declared
+with the registration. There is no page to render, no endpoint to expose and no
+callback to implement, and if Sitebin ever finds itself showing a consent
+screen of its own, that is the bug.
 
-Two things have to be true for a user to actually see it:
+Two things have to be true for a user to actually see them:
 
-- `SITEBIN_STACK_TERMS` is set, or the stack has nothing of Sitebin's to show
-  and asks for the platform document alone.
+- `SITEBIN_STACK_CONSENTS` is set, or the stack has nothing of Sitebin's to
+  show and asks for the platform document alone.
 - `SITEBIN_OAUTH_OIDC_DISCOVERY_URL` points at the **Auth Gateway**. The gate
   lives on the gateway's authorization endpoint, and the gateway's discovery
   document is the only thing that names it. An instance configured with the
@@ -887,6 +894,46 @@ Two things have to be true for a user to actually see it:
 Registration never blocks startup. A stack that is briefly unreachable makes
 the attempt fail and log; Sitebin serves sites regardless and converges again
 on the next start.
+
+**Self-service is on the stack's pages.** Once a user is signed in through the
+stack, "manage my account" and "manage my plan" are links, not screens:
+
+- **Manage account** on the dashboard is the stack's account console —
+  `<issuer>/account/?referrer=<client id>`, as the stack's `accountUrl()`
+  builds it — for password, sign-in methods, sessions and devices, second
+  factors, data export and **account deletion**.
+- **Manage subscription** posts to `/account/billing/portal`, which with
+  PayGate redirects to the stack's hosted plan page,
+  `<issuer origin>/apps/<app id>/plan` (`planUrl()`): current plan, change,
+  cancel, resume, invoices.
+- **Deleting a stack account happens at the console, not in Sitebin.** The
+  danger zone sends a stack user there, and a `POST /account/delete` from a
+  stack account redirects there too. The stack erases the identity and orders
+  Sitebin to erase its half — see the next section. Deleting locally first
+  would leave an identity behind that still names this app. Local accounts,
+  which the stack has never heard of, keep local deletion.
+
+#### GDPR: the stack orders, Sitebin erases
+
+A data subject asks the stack — in the account console, or an operator does it
+for them in the stack's user directory — and the stack calls every app the
+person belongs to. Sitebin's side is two endpoints, mounted and declared as
+the registration's `gdpr` block when `SITEBIN_STACK_GDPR_SECRET` is set:
+
+| | |
+|---|---|
+| `POST /account/gdpr/export` | Everything this instance holds about the user, as JSON: the account record (never a password hash), the metadata of every site it owns (id, URL, mode, custom domains, origin, size, files, created, expires), the metadata of every API token (never a secret — none is stored), and what is held about sessions (nothing: they are signed cookies the browser keeps). An unknown user exports an empty document, not an error. |
+| `POST /account/gdpr/delete` | Removes the account, its ownership markers, its sites, its API tokens and — by removing the record every cookie is validated against — its sessions. **Idempotent: a user with no account here is a `200`**, because the stack reads every other status, `404` included, as "the app still holds the data" and never deletes the identity. A site that cannot be deleted stops the order with a `500` and keeps the account, so the stack keeps the identity and the operator retries; whatever was deleted before stays deleted and the retry steps over it. |
+
+Both take `{"userId": "<stack user id>", "email": "..."}` and are authenticated
+by nothing but the signature: `X-Signature: sha256=<hex HMAC-SHA256 over
+"<X-Timestamp>.<body>" with the secret>`, compared in constant time, with the
+timestamp — Unix seconds — accepted within five minutes either way. The
+timestamp is inside the MAC, so a captured order cannot be replayed with a
+fresh one, and an old one is refused. No session, admin key or API token is
+accepted there, and a request that fails verification is refused before its
+body is parsed. The user id is the OIDC subject; the stack knows nothing about
+local accounts and never orders anything for them.
 
 ```bash
 # 1. SSO through the stack's Auth Gateway (generic OIDC)
@@ -901,17 +948,18 @@ SITEBIN_OAUTH_OIDC_LABEL="Example SSO"
 # (recommended) SSO only — local accounts would bypass PayGate billing
 SITEBIN_LOCAL_AUTH=false
 
-# 2. Self-registration: identity, callback, tiers and MCP, on every start
+# 2. Self-registration: identity, callback, tiers, consents, GDPR and MCP, on every start
 SITEBIN_STACK_URL=https://platform.saas-stack.example.com
 SITEBIN_STACK_APP_ID=sitebin
 SITEBIN_STACK_ADMIN_KEY=…            # the stack's PLATFORM_ADMIN_KEY
-SITEBIN_STACK_TERMS='{"version":"2026-09-01","url":"https://sitebin.io/terms","title":{"en":"Sitebin Terms of Service"}}'
+SITEBIN_STACK_CONSENTS='[{"key":"terms","version":"2026-09-08","url":"https://sitebin.io/terms/","title":{"en":"Sitebin Terms of Service"}},{"key":"dpa","version":"2026-09-08","url":"https://sitebin.io/dpa/","title":{"en":"Data Processing Agreement"}}]'
+SITEBIN_STACK_GDPR_SECRET=…          # >= 32 chars; the stack signs its GDPR orders with it
 
 # 3. Tiers from PayGate (requires SITEBIN_ACCOUNT_MODE=tiers)
 SITEBIN_PAYGATE_URL=https://paygate.saas-stack.example.com
 SITEBIN_PAYGATE_APP_ID=sitebin
 SITEBIN_PAYGATE_API_KEY=ssk_live_…
-SITEBIN_PAYGATE_MANAGE_URL=https://account.example.com   # "manage subscription" link
+# "Manage subscription" -> https://auth.example.com/apps/sitebin/plan, derived; nothing to set
 ```
 
 Conventions and behavior: **stack tier ids must match `tiers.json` ids** —
@@ -921,9 +969,9 @@ stored), are cached (`SITEBIN_PAYGATE_CACHE_TTL`), and fail open to the
 account's stored tier so a PayGate outage never blocks publishing. Tiers
 resolve via PayGate only for accounts signed in through the generic OIDC
 provider (their subject *is* the stack user id); `active`, `trialing` and
-`past_due` subscriptions are honored. For those accounts the dashboard links
-to the stack's subscription management instead of built-in checkout, and
-`SITEBIN_TIER_SELF_SELECT` is ignored.
+`past_due` subscriptions are honored. For those accounts the dashboard sells
+through PayGate's checkout and sends "manage subscription" to the stack's
+hosted plan page, and `SITEBIN_TIER_SELF_SELECT` is ignored.
 
 ### Enterprise licensing
 

@@ -127,3 +127,35 @@ advertising some other issuer is still refused.
 
 Playwright is not a Sitebin dependency and adding one for this would be
 disproportionate.
+
+---
+
+> **Corrections (post-implementation, 2026-09-07).** One document was not
+> enough, and the shape above did not survive it.
+>
+> - **`SITEBIN_STACK_TERMS` is gone; `SITEBIN_STACK_CONSENTS` replaces it.**
+>   sitebin.io has two documents the gate must collect — the terms of service
+>   and the data processing agreement — and the `terms` block this document
+>   describes is the stack's *shorthand* for exactly one document keyed
+>   `terms`. There is no room in it for a second, and a payload carrying both
+>   `terms` and `consents` is refused (`400 CONSENT_DECLARATION_AMBIGUOUS`).
+>   The declaration is now the stack's `consents` list verbatim — an ordered
+>   list of `{key, version, url, title?, required?}` — and the wire field is
+>   `consents`, never `terms`. The old name has no alias; this repo is
+>   greenfield.
+> - **What carried over unchanged:** omitted means "keep what the stack
+>   holds", `version` is opaque and immutable once recorded, and raising it
+>   asks everyone again. **What changed with it:** a version is now
+>   per document, so the DPA's can move without the terms'; `key` is the
+>   document's identity for ever (renaming one declares a new document);
+>   the list's order is the presentation order after the platform's; and an
+>   **empty list is refused at boot**, because it is not "declare nothing"
+>   but "this app asks for nothing" — a real state an operator sets on the
+>   stack on purpose, not by leaving a variable blank.
+> - **`consent.ps1` now proves three documents on the gate, not two**, and
+>   reads the stack's record of the acceptance back
+>   (`GET /api/v1/apps/<id>/users/<uid>/consents` and the per-document counts
+>   on `GET /api/v1/apps/<id>/consent`) rather than inferring it from the
+>   second sign-in alone.
+> - The full design of the change, together with the GDPR endpoints it shipped
+>   beside, is `2026-09-07-gdpr-webhooks-and-two-consents-design.md`.

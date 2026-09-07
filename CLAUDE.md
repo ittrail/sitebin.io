@@ -26,7 +26,11 @@ by hand: `e2e.ps1`, `spa.ps1`, `paths.ps1`, `ftp.ps1`, `mcp.ps1` (community
 image), `accounts.ps1`, `tiers.ps1` (enterprise image), `license.ps1`, and
 `consent.ps1` -- the last of which is the only one that needs a **running SaaS
 Stack** (the stack's consent gate, the OIDC issuer/discovery split, and the
-`terms` declaration; see `docs/superpowers/specs/2026-09-01-consent-gate-through-the-stack-design.md`).
+`consents` declaration; see `docs/superpowers/specs/2026-09-01-consent-gate-through-the-stack-design.md`).
+`e2e/stack/verify.ps1` is the tenth, run against the compose container in
+`e2e/stack/` rather than one it starts itself: the registration the stack
+holds, the stack-hosted self-service links, and a signed GDPR export and
+deletion.
 
 They default to `-Image sitebin:dev` (`sitebin:dev-ee` for `accounts.ps1` and
 `tiers.ps1`), tags nothing in this repo builds. Tag them yourself, and build the
@@ -246,6 +250,15 @@ All caps and toggles are startup env vars (`SITEBIN_*`) — see the README's
 - PayGate has **no webhook into Sitebin**; tiers are polled through
   `effectiveTier`. A plan change is only ever noticed at a request that already
   resolves the tier, so there is no "on tier change" hook to hang work on.
+- **The only calls the stack makes INTO Sitebin are the two GDPR orders**
+  (`ee/gdpr.go`: delete user, export user data), authenticated by nothing but
+  the HMAC over `<X-Timestamp>.<body>` with `SITEBIN_STACK_GDPR_SECRET`. A
+  verified deletion IS the instruction — but a site that cannot be deleted
+  still stops the order with a 5xx, so the stack keeps the identity and the
+  operator retries; and a user with no account here is a 200, because the
+  stack reads every other status as "the app still holds the data". Accounts
+  the stack issued (OIDC) delete themselves at the stack's account console,
+  never locally; see `docs/superpowers/specs/2026-09-07-gdpr-webhooks-and-two-consents-design.md`.
 
 ## Working here
 

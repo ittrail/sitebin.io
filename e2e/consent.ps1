@@ -8,13 +8,13 @@
 #
 # WHAT IT PROVES
 #
-# The stack gates sign-in on two documents -- the IT-Trail PLATFORM terms once
-# per user, and the APP's own terms once per app -- on a page the stack hosts
-# inside the sign-in flow. An app only gets the gate if its OIDC discovery
-# points at the AUTH GATEWAY: the gateway serves the realm's document with
-# `authorization_endpoint` changed to itself, and that one field is the whole
-# mechanism. Point discovery at the identity provider instead and the gate is
-# bypassed SILENTLY -- sign-in works, and nobody is ever asked anything.
+# The stack gates sign-in on the IT-Trail PLATFORM terms once per user, and
+# then on each document the APP declares, once per app -- on a page the stack
+# hosts inside the sign-in flow. An app only gets the gate if its OIDC
+# discovery points at the AUTH GATEWAY: the gateway serves the realm's document
+# with `authorization_endpoint` changed to itself, and that one field is the
+# whole mechanism. Point discovery at the identity provider instead and the
+# gate is bypassed SILENTLY -- sign-in works, and nobody is ever asked anything.
 #
 # So this script asserts, against the live stack and a real container:
 #
@@ -22,11 +22,17 @@
 #                   says); SITEBIN_OAUTH_OIDC_DISCOVERY_URL is the gateway.
 #                   go-oidc refuses a document whose issuer is not the URL it
 #                   came from, so without the split this cannot even start.
-#   the declaration Sitebin's own registration carries the `terms` block from
-#                   SITEBIN_STACK_TERMS, and the stack stores it
-#   the gate        a FIRST registration is stopped and shown BOTH documents,
-#                   naming the platform's version and Sitebin's declared one
-#   signed in       accepting both lands the user in Sitebin's own /account
+#   the declaration Sitebin's own registration carries the `consents` list
+#                   from SITEBIN_STACK_CONSENTS -- TWO documents, its terms
+#                   and its DPA, in that order -- and the stack stores both
+#                   and never a `terms` shorthand beside them
+#   the gate        a FIRST registration is stopped and shown THREE
+#                   documents: the platform's, then Sitebin's two, each
+#                   named by the app id, its key and its declared version
+#   signed in       accepting all three lands the user in Sitebin's /account
+#   recorded        the stack's audit view holds one accepted record per
+#                   document for that user, against the right key and
+#                   version, and each document counts one acceptance
 #   once only       a second sign-in is not asked again
 #   the control     with discovery pointed at the identity provider, the
 #                   authorization redirect goes there and the gate is gone
@@ -44,7 +50,7 @@
 # delete again, and a realm identity is not otherwise removable without
 # realm-admin credentials this script has no business holding. It makes no
 # difference to what is being tested: the gate evaluates consent on every
-# sign-in, so a brand-new user has BOTH documents outstanding at their first
+# sign-in, so a brand-new user has every document outstanding at their first
 # one, however the identity came to exist.
 #
 # The consent RECORDS the run writes are append-only by design and survive; so
@@ -57,8 +63,10 @@ param(
     [string]$Image = "sitebin:consent-e2e",
     [string]$AppId = "sitebin-consent-e2e",
     [int]$Port = 8093,
-    [string]$TermsVersion = "e2e-2026-09-01",
-    [string]$TermsURL = "https://sitebin.io/terms",
+    [string]$TermsVersion = "e2e-2026-09-08",
+    [string]$TermsURL = "https://sitebin.io/terms/",
+    [string]$DPAVersion = "e2e-2026-09-08",
+    [string]$DPAURL = "https://sitebin.io/dpa/",
     [switch]$SkipBuild,
     [switch]$KeepUp
 )
@@ -81,11 +89,14 @@ $origin = "http://${base}:$Port"
 $name = "sitebin-consent-e2e"
 $vol = "sitebin-consent-e2e-data"
 $callback = "$origin/account/auth/oidc/callback"
+# The stack signs its GDPR orders with this; it is required alongside
+# SITEBIN_STACK_*, and this script never uses it beyond satisfying that.
+$gdprSecret = "consent-e2e-gdpr-" + [guid]::NewGuid().ToString("N")
 
 # Every assertion in this script must run. A throw or an early return leaves the
 # totals looking healthy while the run is silently smaller, so the count is
 # checked at the end against this number. Update it when you add or remove one.
-$ExpectedAssertions = 27
+$ExpectedAssertions = 40
 
 $script:pass = 0; $script:fail = 0
 function Assert([string]$n, $c, [string]$d = "") {
@@ -170,8 +181,12 @@ function MatchAll([string]$html, [string]$re) {
 function StartSitebin([string]$discoveryURL, [string]$issuerURL, [string]$secret) {
     docker rm -f $name 2>$null | Out-Null
     docker volume rm $vol 2>$null | Out-Null
-    $terms = '{"version":"' + $TermsVersion + '","url":"' + $TermsURL +
-    '","title":{"en":"Sitebin Terms of Service","de":"Sitebin Nutzungsbedingungen"}}'
+    # Two documents, in the order the gate is to show them after the
+    # platform's own. The stack's `consents` list, never its `terms` shorthand.
+    $consents = '[{"key":"terms","version":"' + $TermsVersion + '","url":"' + $TermsURL +
+    '","title":{"en":"Sitebin Terms of Service","de":"Sitebin Nutzungsbedingungen"}},' +
+    '{"key":"dpa","version":"' + $DPAVersion + '","url":"' + $DPAURL +
+    '","title":{"en":"Data Processing Agreement","de":"Auftragsverarbeitungsvertrag"}}]'
     # The JSON-valued variables go through an env FILE, not -e. PowerShell 5.1
     # rewrites quotes on their way to a native executable, and the value that
     # reaches the container is JSON with its quotes stripped -- which fails at
@@ -179,7 +194,8 @@ function StartSitebin([string]$discoveryURL, [string]$issuerURL, [string]$secret
     $envFile = Join-Path $work "consent.env"
     [IO.File]::WriteAllLines($envFile, @(
             'SITEBIN_TIERS=[{"id":"free","label":"Free","max_site_bytes":10485760,"max_files":50,"max_sites":3,"max_expiry_days":7}]',
-            "SITEBIN_STACK_TERMS=$terms"
+            "SITEBIN_STACK_CONSENTS=$consents",
+            "SITEBIN_STACK_GDPR_SECRET=$gdprSecret"
         ), (New-Object System.Text.UTF8Encoding($false)))
     $a = @("run", "-d", "--name", $name, "--env-file", $envFile,
         # Discovery through the gateway hands back Keycloak's INTERNAL
@@ -204,7 +220,7 @@ function StartSitebin([string]$discoveryURL, [string]$issuerURL, [string]$secret
         "-e", "SITEBIN_OAUTH_OIDC_CLIENT_ID=$AppId-app",
         "-e", "SITEBIN_OAUTH_OIDC_CLIENT_SECRET=$secret",
         "-e", "SITEBIN_OAUTH_OIDC_LABEL=Sign in with IT-Trail",
-        # Self-registration, which is what carries the terms declaration.
+        # Self-registration, which is what carries the consents declaration.
         "-e", "SITEBIN_STACK_URL=$platform",
         "-e", "SITEBIN_STACK_APP_ID=$AppId",
         "-e", "SITEBIN_STACK_ADMIN_KEY=$AdminKey",
@@ -229,8 +245,8 @@ function Cleanup {
     docker volume rm $vol 2>$null | Out-Null
     # Hard delete, purging the licence signing key registration minted: this is
     # a throwaway app that never issued a licence to anybody. Verified rather
-    # than fired and forgotten: an app left behind on the stack holds a
-    # `terms` version, and a version is immutable once recorded.
+    # than fired and forgotten: an app left behind on the stack holds consent
+    # versions, and a version is immutable once recorded.
     $del = Req "DELETE" "$platform/api/v1/apps/${AppId}?hard=true&purge_licensing=true" @("-H", "Authorization: Bearer $AdminKey")
     $gone = Req "GET" "$platform/api/v1/apps/$AppId" @("-H", "Authorization: Bearer $AdminKey")
     if ($gone.code -ne 404) {
@@ -258,13 +274,14 @@ else {
 Write-Host "== registering the throwaway app $AppId" -ForegroundColor Cyan
 
 # Start from nothing. A leftover row from an interrupted run would already hold
-# the terms this run is about to prove Sitebin declared.
+# the documents this run is about to prove Sitebin declared.
 Req "DELETE" "$platform/api/v1/apps/${AppId}?hard=true&purge_licensing=true" @("-H", "Authorization: Bearer $AdminKey") | Out-Null
 
 # A skeleton registration first, only to obtain the OIDC client secret: it is
-# returned once, and Sitebin needs it in its environment before it can boot and
-# make its OWN declaration. Deliberately declares NO terms, so what the stack
-# ends up holding can only have come from Sitebin.
+# returned on every registration, and Sitebin needs it in its environment
+# before it can boot and make its OWN declaration. Deliberately declares NO
+# consent documents, so what the stack ends up holding can only have come from
+# Sitebin.
 $skeleton = '{"app_id":"' + $AppId + '","display_name":"Sitebin (consent e2e)","domain":"' + $base + ':' + $Port +
 '","auth":{"redirectUris":["' + $callback + '"],"webOrigins":["' + $origin + '"]}}'
 $r = Req "POST" "$platform/api/v1/apps" @("-H", "Authorization: Bearer $AdminKey", "-H", "Content-Type: application/json", "--data-binary", (JsonBody $skeleton))
@@ -277,7 +294,7 @@ Assert "the throwaway app registered and returned a client secret" ($secret.Leng
 
 $r = Req "GET" "$platform/api/v1/apps/$AppId" @("-H", "Authorization: Bearer $AdminKey")
 $app = $null; try { $app = $r.body | ConvertFrom-Json } catch {}
-Assert "it declares no terms yet" ($null -eq $app.config.terms) "got $($app.config.terms)"
+Assert "it declares no consent documents yet" ($null -eq $app.config.consents -and $null -eq $app.config.terms) "got consents=$($app.config.consents) terms=$($app.config.terms)"
 
 # ---------- the stack side of the split ----------
 
@@ -316,7 +333,7 @@ if ((Req "GET" "$gwOrigin/api/v1/$AppId/.well-known/openid-configuration").code 
     Fatal ("the gateway advertises {0}, which does not answer. That is AUTH_GATEWAY_PUBLIC_URL on the stack's auth-gateway: it must name a scheme, host and port a BROWSER can reach." -f $gwOrigin)
 }
 
-# ---------- Sitebin declares its own terms ----------
+# ---------- Sitebin declares its own documents ----------
 
 Write-Host "== starting Sitebin behind the gateway" -ForegroundColor Cyan
 
@@ -329,16 +346,30 @@ Assert "sitebin is up on $origin" $true
 
 Start-Sleep -Seconds 2
 $logs = (docker logs $name 2>&1 | Out-String)
-Assert "it logged a successful self-registration naming the terms version" ($logs -match "registered with the saas stack" -and $logs -match "terms=$([regex]::Escape($TermsVersion))") "see docker logs $name"
+Assert "it logged a successful self-registration naming both documents" ($logs -match "registered with the saas stack" -and $logs -match "consents=terms@$([regex]::Escape($TermsVersion)),dpa@$([regex]::Escape($DPAVersion))") "see docker logs $name"
 
 $r = Req "GET" "$platform/api/v1/apps/$AppId" @("-H", "Authorization: Bearer $AdminKey")
 $app = $null; try { $app = $r.body | ConvertFrom-Json } catch {}
-$stored = $null; if ($null -ne $app) { $stored = $app.config.terms }
-Assert "the stack now stores the version Sitebin declared" ($null -ne $stored -and $stored.version -eq $TermsVersion) "got $($stored.version)"
-Assert "and the URL" ($null -ne $stored -and $stored.url -eq $TermsURL) "got $($stored.url)"
+$stored = @(); if ($null -ne $app -and $null -ne $app.config.consents) { $stored = @($app.config.consents) }
+Assert "the stack now stores TWO documents of Sitebin's" ($stored.Count -eq 2) "got $($stored.Count)"
+Assert "and no `terms` shorthand beside them" ($null -eq $app.config.terms) "got $($app.config.terms)"
+$termsDoc = $null; $dpaDoc = $null
+if ($stored.Count -eq 2) { $termsDoc = $stored[0]; $dpaDoc = $stored[1] }
+Assert "the first is the terms, at the version Sitebin declared" ($null -ne $termsDoc -and $termsDoc.key -eq "terms" -and $termsDoc.version -eq $TermsVersion) "got $($termsDoc.key)@$($termsDoc.version)"
+Assert "with its URL" ($null -ne $termsDoc -and $termsDoc.url -eq $TermsURL) "got $($termsDoc.url)"
 # The title is a locale map, and a heading in the user's own language is the
 # visible half of the declaration.
-Assert "and the localized heading" ($null -ne $stored -and $stored.title.de -eq "Sitebin Nutzungsbedingungen") "got $($stored.title)"
+Assert "and its localized heading" ($null -ne $termsDoc -and $termsDoc.title.de -eq "Sitebin Nutzungsbedingungen") "got $($termsDoc.title)"
+Assert "the second is the DPA, at its version" ($null -ne $dpaDoc -and $dpaDoc.key -eq "dpa" -and $dpaDoc.version -eq $DPAVersion) "got $($dpaDoc.key)@$($dpaDoc.version)"
+Assert "with its URL and heading" ($null -ne $dpaDoc -and $dpaDoc.url -eq $DPAURL -and $dpaDoc.title.de -eq "Auftragsverarbeitungsvertrag") "got $($dpaDoc.url) $($dpaDoc.title)"
+
+# The read side the stack's own admin surface uses: the documents in order,
+# each with the count of acceptances it has collected -- none yet.
+$r = Req "GET" "$platform/api/v1/apps/$AppId/consent" @("-H", "Authorization: Bearer $AdminKey")
+$shown = $null; try { $shown = $r.body | ConvertFrom-Json } catch {}
+$docs = @(); if ($null -ne $shown -and $null -ne $shown.documents) { $docs = @($shown.documents) }
+Assert "the stack's consent view lists both, in the declared order" ($docs.Count -eq 2 -and $docs[0].key -eq "terms" -and $docs[1].key -eq "dpa") "got $(($docs | ForEach-Object { $_.key }) -join ',')"
+Assert "and neither has been accepted by anybody" ($docs.Count -eq 2 -and $docs[0].acceptedCount -eq 0 -and $docs[1].acceptedCount -eq 0) "got $($docs[0].acceptedCount), $($docs[1].acceptedCount)"
 
 # ---------- the redirect that decides everything ----------
 
@@ -353,7 +384,7 @@ Assert "sign-in redirects to the GATEWAY's authorization endpoint" ($loc -like "
 
 # ---------- a brand-new user is stopped at the gate ----------
 
-Write-Host "== first sign-in: both documents" -ForegroundColor Cyan
+Write-Host "== first sign-in: all three documents" -ForegroundColor Cyan
 
 # Created through the gateway so it can be deleted again at the end. It has
 # accepted nothing, which is all the gate cares about.
@@ -382,17 +413,44 @@ Assert "a first sign-in is stopped at the stack's consent page" ($p.url -like "$
 Assert "which Sitebin does not render (it is the gateway's origin)" ($p.url -notlike "$origin/*") "got $($p.url)"
 
 $accepts = MatchAll $p.html 'name="accept" value="([^"]+)"'
-Assert "it offers exactly TWO documents" ($accepts.Count -eq 2) "got $($accepts -join ', ')"
+Assert "it offers exactly THREE documents" ($accepts.Count -eq 3) "got $($accepts -join ', ')"
 Assert "one of them is the PLATFORM's, which no app can declare" (@($accepts | Where-Object { $_ -like "platform:*" }).Count -eq 1) "got $($accepts -join ', ')"
-Assert "the other is Sitebin's own, at the version it declared" (@($accepts | Where-Object { $_ -eq "${AppId}:$TermsVersion" }).Count -eq 1) "got $($accepts -join ', ')"
-Assert "and the page names Sitebin's version in its text" ($p.html -match [regex]::Escape($TermsVersion)) ""
+# The form value is <scope>:<key>:<version>, so the key and the version are
+# both visible in what the browser is asked to tick.
+Assert "one is Sitebin's terms, by key, at the version it declared" (@($accepts | Where-Object { $_ -eq "${AppId}:terms:$TermsVersion" }).Count -eq 1) "got $($accepts -join ', ')"
+Assert "one is Sitebin's DPA, by key, at its version" (@($accepts | Where-Object { $_ -eq "${AppId}:dpa:$DPAVersion" }).Count -eq 1) "got $($accepts -join ', ')"
+Assert "the platform's comes first, then Sitebin's in the declared order" ($accepts.Count -eq 3 -and $accepts[0] -like "platform:*" -and $accepts[1] -like "*:terms:*" -and $accepts[2] -like "*:dpa:*") "got $($accepts -join ', ')"
+Assert "and the page shows the DPA under the heading Sitebin declared" ($p.html -match "Data Processing Agreement") ""
 
 $flow = Match1 $p.html 'name="flow" value="([^"]+)"'
 $form = @("flow=$flow")
 foreach ($a in $accepts) { $form += "accept=$a" }
 $p = Browse "$gwOrigin/api/v1/_consent" $form
 
-Assert "accepting both lands the user in Sitebin, signed in" ($p.url -eq "$origin/account" -and $p.html -match [regex]::Escape($email)) "got $($p.url)"
+Assert "accepting all three lands the user in Sitebin, signed in" ($p.url -eq "$origin/account" -and $p.html -match [regex]::Escape($email)) "got $($p.url)"
+
+# ---------- and it is recorded ----------
+
+Write-Host "== the stack's record of it" -ForegroundColor Cyan
+
+# The audit view: every consent this person has given, across scopes. Not
+# filtered by app on purpose -- the platform's document is not any app's.
+$r = Req "GET" "$platform/api/v1/apps/$AppId/users/$($script:userId)/consents" @("-H", "Authorization: Bearer $AdminKey")
+$audit = $null; try { $audit = $r.body | ConvertFrom-Json } catch {}
+$records = @(); if ($null -ne $audit -and $null -ne $audit.consents) { $records = @($audit.consents) }
+$termsRec = @($records | Where-Object { $_.scope -eq $AppId -and $_.documentKey -eq "terms" -and $_.documentVersion -eq $TermsVersion -and $_.decision -eq "accepted" })
+$dpaRec = @($records | Where-Object { $_.scope -eq $AppId -and $_.documentKey -eq "dpa" -and $_.documentVersion -eq $DPAVersion -and $_.decision -eq "accepted" })
+$platRec = @($records | Where-Object { $_.scope -eq "platform" -and $_.decision -eq "accepted" })
+Assert "the audit view holds an accepted record for Sitebin's terms, at that version" ($termsRec.Count -eq 1) "got $($records.Count) records: $(($records | ForEach-Object { $_.scope + ':' + $_.documentKey + '@' + $_.documentVersion + '=' + $_.decision }) -join ', ')"
+Assert "and one for the DPA" ($dpaRec.Count -eq 1) ""
+Assert "and one for the platform's document" ($platRec.Count -eq 1) ""
+Assert "each stamped with when it was given" ($termsRec.Count -eq 1 -and -not [string]::IsNullOrWhiteSpace($termsRec[0].acceptedAt)) "got $($termsRec[0].acceptedAt)"
+
+# And the per-document counts moved by exactly one.
+$r = Req "GET" "$platform/api/v1/apps/$AppId/consent" @("-H", "Authorization: Bearer $AdminKey")
+$shown = $null; try { $shown = $r.body | ConvertFrom-Json } catch {}
+$docs = @(); if ($null -ne $shown -and $null -ne $shown.documents) { $docs = @($shown.documents) }
+Assert "each of Sitebin's documents now counts exactly one acceptance" ($docs.Count -eq 2 -and $docs[0].acceptedCount -eq 1 -and $docs[1].acceptedCount -eq 1) "got $($docs[0].acceptedCount), $($docs[1].acceptedCount)"
 
 # ---------- and only once ----------
 
@@ -411,9 +469,9 @@ Assert "and lands signed in again" ($p.url -eq "$origin/account" -and $p.html -m
 
 Write-Host "== control: discovery pointed at the identity provider" -ForegroundColor Cyan
 
-# Same app, same terms, same everything -- one setting changed. This is the
-# configuration every earlier release of the docs recommended, and the reason
-# the gate needed the discovery URL at all.
+# Same app, same documents, same everything -- one setting changed. This is
+# the configuration every earlier release of the docs recommended, and the
+# reason the gate needed the discovery URL at all.
 $up = StartSitebin $issuer $issuer $secret
 Assert "sitebin still comes up pointed straight at the realm" $up
 $loc = Redirect "$origin/account/auth/oidc"

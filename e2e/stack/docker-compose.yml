@@ -13,6 +13,11 @@
 # the stack's root public key in LICENSE_ROOTS; the stack's admin portal offers
 # it for download.
 
+# Named, so the container is `sitebin-stack-sitebin-1` and the volume
+# `sitebin-stack_sitebin-data` wherever this file is checked out, rather than
+# taking the name of the directory it happens to sit in.
+name: sitebin-stack
+
 services:
   sitebin:
     build:
@@ -83,20 +88,33 @@ services:
       SITEBIN_STACK_URL: ${SITEBIN_STACK_URL:-}
       SITEBIN_STACK_APP_ID: ${SITEBIN_STACK_APP_ID:-}
       SITEBIN_STACK_ADMIN_KEY: ${SITEBIN_STACK_ADMIN_KEY:-}
-      # This deployment's own terms of service, declared so the consent gate
-      # has a second document to ask for. Registration MERGES, so an empty
-      # value declares nothing rather than erasing what the stack holds.
-      SITEBIN_STACK_TERMS: ${SITEBIN_STACK_TERMS:-}
+      # This deployment's own consent documents -- its terms and its DPA --
+      # declared as an ORDERED LIST so the consent gate asks for each of them
+      # after the platform's own. Registration MERGES, so an empty value
+      # declares nothing rather than erasing what the stack holds.
+      SITEBIN_STACK_CONSENTS: ${SITEBIN_STACK_CONSENTS:-}
+      # The secret the stack signs its GDPR orders with (delete user, export
+      # user data). Required with SITEBIN_STACK_URL, at least 32 characters;
+      # the two endpoints are mounted under /account/gdpr/ and declared to the
+      # stack only when it is set.
+      SITEBIN_STACK_GDPR_SECRET: ${SITEBIN_STACK_GDPR_SECRET:-}
 
       # ---- billing through PayGate ----
       # Exactly one backend may be selected; two configured with no explicit
       # SITEBIN_BILLING is a startup error by design. URL, app id and api key
-      # must be set together.
+      # must be set together. "Manage subscription" goes to the stack's
+      # hosted plan page, derived from the issuer and the app id -- there is
+      # nothing to configure for it.
       SITEBIN_BILLING: paygate
       SITEBIN_PAYGATE_URL: ${SITEBIN_PAYGATE_URL:?}
       SITEBIN_PAYGATE_APP_ID: ${SITEBIN_PAYGATE_APP_ID:-sitebin}
       SITEBIN_PAYGATE_API_KEY: ${SITEBIN_PAYGATE_API_KEY:?}
-      SITEBIN_PAYGATE_MANAGE_URL: ${SITEBIN_PAYGATE_MANAGE_URL:-}
+
+      # ---- MCP (optional) ----
+      # With an issuer set, the MCP endpoint accepts that issuer's access
+      # tokens and the self-registration declares the MCP resource and scopes
+      # to the stack. Leave empty to keep MCP on account API tokens alone.
+      SITEBIN_MCP_OAUTH_ISSUER: ${SITEBIN_MCP_OAUTH_ISSUER:-}
 
       # ---- licensing ----
       # Leave SITEBIN_LICENSE_KEY empty to exercise the real path: the instance
