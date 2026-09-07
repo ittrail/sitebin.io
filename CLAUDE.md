@@ -198,8 +198,10 @@ What is easy to get wrong:
 
 - **The trusted roots are a LIST, baked in at build time** (`-ldflags -X
   …/ee/licensing.trustedRootsB64=`). A list, so a root can be rotated without
-  redistributing every binary. `SITEBIN_LICENSE_ROOTS_DEV` overrides them for
-  **development only** — anything that can set it can mint itself a licence.
+  redistributing every binary. There is deliberately NO environment override:
+  anything that could set one could mint itself a licence. Tests replace the
+  roots in-process (`licensing.UseRootsForTesting`); a developer bakes a
+  throwaway root with the `LICENSE_ROOTS` build arg, as `e2e/license.ps1` does.
 - **Signatures cover the ENCODED segment, not the JSON it decodes to** — the
   JWT convention. Verifying the decoded bytes instead would make the check
   depend on both sides serialising JSON identically (key order, spacing,

@@ -41,7 +41,7 @@ func newTestChain(t *testing.T) *testChain {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SITEBIN_LICENSE_ROOTS_DEV", base64.StdEncoding.EncodeToString(rootPub))
+	t.Cleanup(licensing.UseRootsForTesting(base64.StdEncoding.EncodeToString(rootPub)))
 	return &testChain{rootPriv, appPub, appPriv}
 }
 
@@ -426,7 +426,7 @@ func TestLicenseFetcherTreatsAnUnknownShapeAsNoAnswer(t *testing.T) {
 // as its only warning. The warning is now an ERROR that names the fix.
 func TestNoTrustedRootsIsLoggedAsAnError(t *testing.T) {
 	t.Setenv("SITEBIN_ACCOUNT_MODE", "accounts")
-	t.Setenv("SITEBIN_LICENSE_ROOTS_DEV", "")
+	t.Cleanup(licensing.UseRootsForTesting(""))
 	var buf bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))

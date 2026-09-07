@@ -224,16 +224,23 @@ func TestParseRootsAcceptsAListAndBothAlphabets(t *testing.T) {
 	}
 }
 
-// The dev-only override exists so a local build can point at a throwaway root.
-func TestTrustedRootsDevOverride(t *testing.T) {
+// The in-process test hook replaces the roots; nothing in the environment
+// can. A release binary that honoured an env var here would let any operator
+// mint themselves a licence.
+func TestTrustedRootsTestHookAndNoEnvOverride(t *testing.T) {
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
-	t.Setenv(rootsEnv, base64.StdEncoding.EncodeToString(pub))
+	b64 := base64.StdEncoding.EncodeToString(pub)
+	t.Setenv("SITEBIN_LICENSE_ROOTS_DEV", b64)
+	if roots, _ := TrustedRoots(); len(roots) != 0 {
+		t.Fatalf("an environment variable replaced the trusted roots: %v", roots)
+	}
+	t.Cleanup(UseRootsForTesting(b64))
 	roots, err := TrustedRoots()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(roots) != 1 || !roots[0].Equal(pub) {
-		t.Fatalf("dev override not honoured: %v", roots)
+		t.Fatalf("test hook not honoured: %v", roots)
 	}
 }
 

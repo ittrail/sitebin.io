@@ -1031,10 +1031,10 @@ docker build \
   artifact before you ship it; a rootless build looks fine for 90 days.
 - The root **public** key is all that is ever distributed. The private half is
   generated at the issuing stack's first bootstrap and never leaves it.
-- `SITEBIN_LICENSE_ROOTS_DEV` overrides the baked roots **for development
-  only**, and only in a binary built with `-tags sitebindev`; a release binary
-  ignores the variable entirely, because anything that can set it could mint
-  itself a license.
+- There is deliberately **no environment override** for the roots. Anything
+  that could set one could mint itself a license, which is exactly the
+  substitution baking them in prevents. A throwaway root for development goes
+  in through the build argument, as `e2e/license.ps1` does.
 
 **The published `-ee` image** gets its roots from the `LICENSE_ROOTS`
 **repository variable** (GitHub → Settings → Secrets and variables → Actions →

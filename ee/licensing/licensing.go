@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 )
@@ -38,15 +37,23 @@ const AppID = "sitebin"
 // start.
 var trustedRootsB64 = ""
 
-// rootsEnv is a DEVELOPMENT-ONLY override for the baked-in roots. It exists so
-// a developer can point a local build at a throwaway root without relinking.
-//
-// It is NOT a supported production configuration and must never be documented
-// as one: anything that can set this environment variable can also mint itself
-// a perpetual licence, which is exactly the substitution the baked-in anchor
-// exists to prevent. Circumventing the licence key check is in any case
-// prohibited by ee/LICENSE (Elastic License 2.0).
-const rootsEnv = "SITEBIN_LICENSE_ROOTS_DEV"
+// testRoots replaces the baked-in roots from INSIDE the process, for tests.
+// There is deliberately no environment or configuration equivalent: an
+// override any process environment could set is a public key an attacker can
+// substitute, which is exactly what baking the roots in exists to prevent.
+// A developer who wants a throwaway root builds with it (the LICENSE_ROOTS
+// build argument), as e2e/license.ps1 does. Circumventing the licence check
+// is in any case prohibited by ee/LICENSE (Elastic License 2.0).
+var testRoots = ""
+
+// UseRootsForTesting points TrustedRoots at list until the returned function
+// is called. It is reachable only from Go code linked into the binary, which
+// is the whole point — see testRoots.
+func UseRootsForTesting(list string) (restore func()) {
+	prev := testRoots
+	testRoots = list
+	return func() { testRoots = prev }
+}
 
 // CertPayload binds an app id to the signing public key the stack minted for
 // that app. Signed by the ROOT.
@@ -124,9 +131,8 @@ var (
 // to the unlicensed state, never to "expired".
 func TrustedRoots() ([]ed25519.PublicKey, error) {
 	src := trustedRootsB64
-	if dev := strings.TrimSpace(os.Getenv(rootsEnv)); dev != "" {
-		// Development only — see rootsEnv.
-		src = dev
+	if testRoots != "" {
+		src = testRoots
 	}
 	return parseRoots(src)
 }
