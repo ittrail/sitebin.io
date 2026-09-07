@@ -214,8 +214,9 @@ type CreateInput struct {
 // generic message by the implementation, not passed through.
 type Ops interface {
 	// Authenticate resolves the request's credentials. It is called once per
-	// MCP session, on the request that opens it. This is the single point
-	// where Phase 2's OAuth access tokens will attach.
+	// MCP session, on the request that opens it, and is the single point at
+	// which every kind of credential — edit password, account token, OAuth
+	// access token — is resolved.
 	Authenticate(r *http.Request) Auth
 
 	CreateSite(ctx context.Context, a Auth, in CreateInput) (*SiteResult, error)

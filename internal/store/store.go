@@ -68,6 +68,7 @@ func (s *Store) ReserveDomains(domains ...string) {
 	}
 }
 
+// WriteSPAMarker creates the SPA-fallback marker in the site's files/ dir.
 func (s *Store) WriteSPAMarker(site *Site) error {
 	f, err := os.OpenFile(filepath.Join(site.FilesDir(), SPAMarker), os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {

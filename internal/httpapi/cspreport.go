@@ -100,9 +100,9 @@ func (c *cspAggregator) add(site *store.Site, blockedURI, source string) []*cspP
 	return due
 }
 
-// cspReport is the subset of both report shapes we care about: the legacy
-// report-uri body ({"csp-report":{...}}) and the Reporting API array
-// ([{"type":"csp-violation","body":{...}}]).
+// cspReport is the subset of both report shapes we care about: the
+// report-uri body ({"csp-report":{...}}), which every browser still sends,
+// and the Reporting API array ([{"type":"csp-violation","body":{...}}]).
 type cspReport struct {
 	CSPReport struct {
 		BlockedURI string `json:"blocked-uri"`
@@ -153,9 +153,9 @@ func (a *API) handleCSPReport(w http.ResponseWriter, r *http.Request) {
 // returning "" when neither parses — a report that only tells us a violation
 // happened is still worth counting.
 func blockedURIFrom(body []byte) string {
-	var legacy cspReport
-	if json.Unmarshal(body, &legacy) == nil && legacy.CSPReport.BlockedURI != "" {
-		return legacy.CSPReport.BlockedURI
+	var single cspReport
+	if json.Unmarshal(body, &single) == nil && single.CSPReport.BlockedURI != "" {
+		return single.CSPReport.BlockedURI
 	}
 	var modern []reportingAPIEntry
 	if json.Unmarshal(body, &modern) == nil {

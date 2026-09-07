@@ -37,7 +37,7 @@ import (
 // is that the app states the amount and the stack creates the product in
 // whatever processor it uses — there is no field for a price id an operator
 // made by hand. What the amounts are is never decided here: they come from the
-// instance's tiers.json (`/opt/sitebin/tiers.json` on the hosted instance), so
+// instance's tiers.json (the operator's, outside this repo), so
 // changing a price is an instance-configuration change, not a release. The
 // same holds for the licence entitlements below.
 

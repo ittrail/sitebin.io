@@ -10,8 +10,9 @@ package ee
 
 import "github.com/ittrail/sitebin.io/internal/ext"
 
-// Version of the enterprise extension.
-const Version = "0.1.0-phase1"
+// Version of the enterprise extension. It is the binary's own version: the
+// extension ships inside it and has no release cycle of its own.
+var Version = "dev"
 
 func init() {
 	ext.Register(newProvider())

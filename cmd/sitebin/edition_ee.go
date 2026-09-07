@@ -7,11 +7,13 @@ package main
 import (
 	"fmt"
 
-	_ "github.com/ittrail/sitebin.io/ee"
+	"github.com/ittrail/sitebin.io/ee"
 	"github.com/ittrail/sitebin.io/ee/licensing"
 )
 
 const edition = "enterprise"
+
+func init() { ee.Version = version }
 
 // editionDetail is what `sitebin version` prints after the edition: the number
 // of license roots this binary trusts. It is the check a release runbook makes

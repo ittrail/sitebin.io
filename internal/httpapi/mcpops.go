@@ -23,8 +23,9 @@ import (
 type mcpOps struct{ a *API }
 
 // Authenticate resolves the request's credentials. It is the ONLY place MCP
-// decides who a caller is, which is what makes Phase 2 (OAuth access tokens) a
-// second branch here rather than a change to twelve tool handlers.
+// decides who a caller is, which is what lets a second kind of credential —
+// an OAuth access token — be one branch here rather than a change to twelve
+// tool handlers.
 //
 // It accepts a bearer token and nothing else. The extension's AuthorizeCreate
 // additionally honours a dashboard session cookie, so an exotic caller — a

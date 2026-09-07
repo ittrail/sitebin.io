@@ -26,7 +26,7 @@ var (
 	ErrBadEmail   = errors.New("invalid email address")
 )
 
-// Billing captures an account's payment-provider state (set in Phase 5).
+// Billing captures an account's state with a direct payment provider.
 type Billing struct {
 	Provider     string `json:"provider,omitempty"` // stripe | paddle
 	Customer     string `json:"customer,omitempty"`

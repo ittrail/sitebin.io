@@ -195,8 +195,8 @@ than merely unrouted.
   `price.paddle`; PayGate needs `price.monthly` / `annual` / `currency`
   **amounts**, because the stack creates the product and has no field for a
   hand-made price id. A tier with no amount creates no payment product.
-  Amounts are instance configuration — they belong in `/opt/sitebin/tiers.json`,
-  never in this repo.
+  Amounts are instance configuration — they belong in the operator's
+  `tiers.json`, never in this repo.
 
 Read `docs/superpowers/specs/2026-08-29-billing-through-the-stack-design.md`.
 
