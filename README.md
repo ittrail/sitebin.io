@@ -211,7 +211,9 @@ curl -X POST -H "X-Edit-Password: $PW" -F "zip=@all.zip" \
 curl -X DELETE -H "X-Edit-Password: $PW" \
      https://sitebin.example.com/api/sites/$EDIT_ID/files/js/app.js
 
-# custom domains (Enterprise edition only; 403 in community)
+# custom domains (Enterprise edition only; 403 in community). 202 = claimed,
+# pending DNS proof: the body lists it under pending_domains with the TXT
+# record (or CNAME) to create; POST again to re-check. 200 = attached.
 curl -X POST -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
      -d '{"domain":"docs.client.com"}' \
      https://sitebin.example.com/api/sites/$EDIT_ID/domains
