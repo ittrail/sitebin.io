@@ -1025,13 +1025,23 @@ docker build \
   *list*, so a root can be rotated without redistributing every binary. **A
   build with no roots trusts nothing**, so no license can ever verify and the
   instance runs its 90-day trial and then restricts creation. It says so at
-  startup — `this build carries no trusted license roots; running unlicensed` —
-  and that line is the only warning you get.
+  startup, at `ERROR` level on every start — `this build carries no trusted
+  license roots, so NO license can ever verify` — and `sitebin version` prints
+  `trusted license roots: NONE (unlicensable build)`. Check that line on any
+  artifact before you ship it; a rootless build looks fine for 90 days.
 - The root **public** key is all that is ever distributed. The private half is
   generated at the issuing stack's first bootstrap and never leaves it.
 - `SITEBIN_LICENSE_ROOTS_DEV` overrides the baked roots **for development
-  only**. Anything that can set it can mint itself a license; never set it on
-  an instance you care about.
+  only**, and only in a binary built with `-tags sitebindev`; a release binary
+  ignores the variable entirely, because anything that can set it could mint
+  itself a license.
+
+**The published `-ee` image** gets its roots from the `LICENSE_ROOTS`
+**repository variable** (GitHub → Settings → Secrets and variables → Actions →
+Variables — a variable, not a secret; these are public keys). The release
+workflow refuses to build the enterprise image while that variable is empty,
+because every `-ee` tag it published would otherwise be an unlicensable trial.
+Verify a pulled image with `docker run --rm ghcr.io/ittrail/sitebin.io:latest-ee version`.
 
 #### Getting and keeping a license
 

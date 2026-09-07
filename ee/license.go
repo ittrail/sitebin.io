@@ -53,7 +53,14 @@ func (p *provider) initLicensing() {
 		slog.Error("license: the trusted roots baked into this build are unusable; no license can be verified", "err", err)
 	}
 	if len(roots) == 0 {
-		slog.Warn("license: this build carries no trusted license roots; running unlicensed")
+		// An ERROR, deliberately, and every start: this is the one warning an
+		// operator gets before the trial ends and creation stops, and the
+		// published image once walked into exactly this state because the
+		// pipeline forgot the build argument.
+		slog.Error("license: this build carries no trusted license roots, so NO license can ever verify; "+
+			"the instance runs the 90-day trial and then stops creating sites. "+
+			"Rebuild with --build-arg LICENSE_ROOTS=<root public key> (the release pipeline takes it from the LICENSE_ROOTS repository variable)",
+			"trusted_roots", 0)
 	}
 	p.license = licensing.NewManager(p.host.DataDir(), roots, licensing.AppID, nil)
 	// SITEBIN_LICENSE_REFRESH shortens the daily collection interval. It is for

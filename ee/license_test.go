@@ -3,12 +3,14 @@
 package ee
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -416,5 +418,31 @@ func TestLicenseFetcherTreatsAnUnknownShapeAsNoAnswer(t *testing.T) {
 	key, ok, err := f.Fetch(context.Background(), "current.licence.four.segments")
 	if err != nil || ok || key != "" {
 		t.Errorf("Fetch = (%q, %v, %v), want no key and no error", key, ok, err)
+	}
+}
+
+// A build with no roots is the trap the published image walked into: it
+// looks fine, runs its trial, and then stops creating sites with a WARN line
+// as its only warning. The warning is now an ERROR that names the fix.
+func TestNoTrustedRootsIsLoggedAsAnError(t *testing.T) {
+	t.Setenv("SITEBIN_ACCOUNT_MODE", "accounts")
+	t.Setenv("SITEBIN_LICENSE_ROOTS_DEV", "")
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	p := newProvider()
+	host := &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}
+	if err := p.Init(host); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	t.Cleanup(p.license.Stop)
+	out := buf.String()
+	if !strings.Contains(out, "level=ERROR") || !strings.Contains(out, "no trusted license roots") {
+		t.Fatalf("a rootless build must log an ERROR naming the problem; got:\n%s", out)
+	}
+	if !strings.Contains(out, "LICENSE_ROOTS") {
+		t.Errorf("the log line does not name the build argument that fixes it:\n%s", out)
 	}
 }

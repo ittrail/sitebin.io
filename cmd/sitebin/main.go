@@ -105,7 +105,7 @@ func main() {
 			os.Exit(1)
 		}
 	case "version", "--version", "-v":
-		fmt.Printf("sitebin %s (%s edition)\n", version, edition)
+		fmt.Printf("sitebin %s (%s edition%s)\n", version, edition, editionDetail())
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n", cmd)
 		os.Exit(2)
