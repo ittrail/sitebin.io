@@ -3,6 +3,8 @@ package httpapi
 import (
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -30,9 +32,13 @@ func (d *davLocks) get(viewID string) webdav.LockSystem {
 	return ls
 }
 
+// davMutating lists the methods that change a site's content, and so are
+// serialized with API writes, renew the expiry and regenerate the viewer.
+// It is NOT the list of methods whose paths are validated: that is every
+// method, and it happens in siteFS, where it cannot be skipped per method.
 var davMutating = map[string]bool{
 	"PUT": true, "DELETE": true, "MKCOL": true, "MOVE": true, "COPY": true,
-	"PROPPATCH": true, "LOCK": false, "UNLOCK": false,
+	"PROPPATCH": true,
 }
 
 // webdav serves /dav/{editID}/... — a network-drive view of the site's own
@@ -75,41 +81,44 @@ func (a *API) webdav(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if davMutating[r.Method] {
-		if sub != "" {
-			if _, err := store.CleanRelPath(sub); err != nil {
-				writeError(w, 400, "invalid path")
-				return
-			}
+	// A readable refusal for the common cases. siteFS below is the guarantee
+	// -- it validates every name on every method -- but a 400 with a reason
+	// beats the generic status the DAV library turns a refused open into.
+	if sub != "" {
+		if _, err := store.CleanRelPath(sub); err != nil {
+			writeError(w, 400, "invalid path")
+			return
 		}
-		if dest := r.Header.Get("Destination"); dest != "" {
-			if !a.davDestinationOK(dest, editID) {
-				writeError(w, 400, "invalid destination")
-				return
-			}
+	}
+	if dest := r.Header.Get("Destination"); dest != "" {
+		if !a.davDestinationOK(dest, editID) {
+			writeError(w, 400, "invalid destination")
+			return
 		}
-		if r.Method == "PUT" {
-			used, count, err := a.st.Usage(site)
-			if err != nil {
-				writeError(w, 500, "internal error")
-				return
-			}
-			remaining := a.st.EffMaxBytes(site) - used
-			if r.ContentLength > remaining || remaining <= 0 {
-				http.Error(w, "site size limit exceeded", http.StatusInsufficientStorage)
-				return
-			}
-			if count >= a.st.EffMaxFiles(site) {
-				http.Error(w, "file count limit exceeded", http.StatusInsufficientStorage)
-				return
-			}
-			r.Body = http.MaxBytesReader(w, r.Body, remaining)
+	}
+	if r.Method == "PUT" {
+		used, count, err := a.st.Usage(site)
+		if err != nil {
+			writeError(w, 500, "internal error")
+			return
 		}
+		remaining := a.st.EffMaxBytes(site) - used
+		if r.ContentLength > remaining || remaining <= 0 {
+			http.Error(w, "site size limit exceeded", http.StatusInsufficientStorage)
+			return
+		}
+		// Only a NEW file counts against the cap; overwriting an existing
+		// one at the cap is a change, not an addition.
+		if count >= a.st.EffMaxFiles(site) && !a.davExists(site, sub) {
+			http.Error(w, "file count limit exceeded", http.StatusInsufficientStorage)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, remaining)
 	}
 
 	h := &webdav.Handler{
 		Prefix:     "/dav/" + editID,
-		FileSystem: webdav.Dir(site.ContentDir()),
+		FileSystem: newSiteFS(a.st, site),
 		LockSystem: a.davLockSystems.get(site.ViewID),
 	}
 	if davMutating[r.Method] {
@@ -130,6 +139,17 @@ func (a *API) webdav(w http.ResponseWriter, r *http.Request) {
 			a.log.Error("viewer regen after webdav", "id", site.ViewID, "err", err)
 		}
 	}
+}
+
+// davExists reports whether sub names an existing regular file in the site's
+// content root. A name the store would refuse is reported as absent.
+func (a *API) davExists(site *store.Site, sub string) bool {
+	rel, err := store.CleanRelPath(sub)
+	if err != nil {
+		return false
+	}
+	fi, err := os.Lstat(filepath.Join(site.ContentDir(), filepath.FromSlash(rel)))
+	return err == nil && fi.Mode().IsRegular()
 }
 
 // davDestinationOK validates MOVE/COPY targets: same site, sane path.

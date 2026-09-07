@@ -1904,3 +1904,83 @@ func TestReplaceUploadKeepsTheTrustMarker(t *testing.T) {
 		t.Fatal("a replace upload stripped the trust marker")
 	}
 }
+
+const davLockInfo = `<?xml version="1.0" encoding="utf-8"?><D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype><D:owner>e2e</D:owner></D:lockinfo>`
+
+// Every WebDAV method that can name a path goes through one filesystem, and
+// that filesystem applies the store's path rules. LOCK is the method that
+// slipped: x/net/webdav creates a missing lock target with O_CREATE, and LOCK
+// was not in the handler's list of methods to validate, so one request could
+// write /.sitebin-trusted into the content root and switch the anti-phishing
+// headers off for the site.
+func TestWebDAVReservedNamesRefusedOnEveryMethod(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, map[string]string{"webdav": "true"}, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+	base := "/dav/" + edit + "/"
+	site, _ := e.st.ByViewID(c.ID)
+	// The community build marks every site trusted at creation; this test is
+	// about whether DAV can put the marker there, so start without it.
+	if err := e.st.SetTrusted(site, false); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		method, path string
+		body         string
+		dest         string
+	}{
+		{"LOCK", ".sitebin-trusted", davLockInfo, ""},
+		{"LOCK", ".sitebin-spa", davLockInfo, ""},
+		{"LOCK", "meta.json", davLockInfo, ""},
+		{"LOCK", "_sitebin/x.html", davLockInfo, ""},
+		{"PUT", ".sitebin-trusted", "x", ""},
+		{"MKCOL", ".sitebin-dir", "", ""},
+		{"MKCOL", "_raw", "", ""},
+		{"COPY", "index.html", "", "http://sitebin.example" + base + ".sitebin-trusted"},
+		{"MOVE", "index.html", "", "http://sitebin.example" + base + ".sitebin-trusted"},
+	} {
+		req := httptest.NewRequest(tc.method, base+tc.path, strings.NewReader(tc.body))
+		req.SetBasicAuth("u", c.EditPassword)
+		if tc.dest != "" {
+			req.Header.Set("Destination", tc.dest)
+		}
+		w := e.public(t, req)
+		if w.Code < 300 {
+			t.Errorf("%s %s = %d, want a refusal", tc.method, tc.path, w.Code)
+		}
+		if _, err := os.Lstat(site.ContentDir() + "/" + strings.TrimSuffix(tc.path, "/x.html")); err == nil && tc.method != "COPY" && tc.method != "MOVE" {
+			t.Errorf("%s %s created the path", tc.method, tc.path)
+		}
+	}
+	if e.st.Trusted(site) {
+		t.Fatal("the trust marker exists after the reserved-name requests")
+	}
+	if _, err := os.Lstat(site.ContentDir() + "/index.html"); err != nil {
+		t.Fatal("MOVE to a reserved name took the source with it")
+	}
+	// The same LOCK on an ordinary missing path still works: clients lock
+	// before they PUT a new file, and refusing that breaks every desktop
+	// WebDAV client.
+	req := httptest.NewRequest("LOCK", base+"new.txt", strings.NewReader(davLockInfo))
+	req.SetBasicAuth("u", c.EditPassword)
+	if w := e.public(t, req); w.Code != 201 && w.Code != 200 {
+		t.Fatalf("LOCK on an ordinary new path = %d %s", w.Code, w.Body)
+	}
+}
+
+// LOCK creates the target, so it is bound by the file-count cap like PUT is.
+func TestWebDAVLockRespectsFileCountCap(t *testing.T) {
+	e := newEnv(t, map[string]string{"SITEBIN_MAX_FILES": "1"})
+	c := e.createSite(t, map[string]string{"webdav": "true"}, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+	req := httptest.NewRequest("LOCK", "/dav/"+edit+"/second.txt", strings.NewReader(davLockInfo))
+	req.SetBasicAuth("u", c.EditPassword)
+	if w := e.public(t, req); w.Code < 300 {
+		t.Fatalf("LOCK created a file past the cap: %d", w.Code)
+	}
+	site, _ := e.st.ByViewID(c.ID)
+	if _, err := os.Lstat(site.ContentDir() + "/second.txt"); err == nil {
+		t.Fatal("file created past the cap")
+	}
+}
