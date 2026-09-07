@@ -32,6 +32,9 @@ type Token struct {
 	Name      string    `json:"name,omitempty"` // optional label chosen by the owner
 	Prefix    string    `json:"prefix"`         // first few chars, to tell tokens apart in the UI
 	CreatedAt time.Time `json:"created_at"`
+	// Hash names the token's index entry, so revoking the token can remove
+	// it. It is the SHA-256 of the secret, which is not the secret.
+	Hash string `json:"hash,omitempty"`
 }
 
 func (s *Store) tokensDir(accountID string) string {
@@ -60,6 +63,7 @@ func (s *Store) CreateToken(a *Account, name string) (Token, string, error) {
 		Name:      strings.TrimSpace(name),
 		Prefix:    secret[:len(ids.APITokenPrefix)+6],
 		CreatedAt: time.Now().UTC(),
+		Hash:      hashKey(secret),
 	}
 	if err := os.MkdirAll(s.tokensDir(a.ID), 0o700); err != nil {
 		return Token{}, "", err
@@ -142,9 +146,9 @@ func (s *Store) listTokensLocked(accountID string) ([]Token, error) {
 	return out, nil
 }
 
-// DeleteToken revokes a token by id. The index entry is left behind — it is
-// keyed by a hash nobody can reverse, and ByToken already treats a missing
-// record as "no such token", so the credential is dead either way.
+// DeleteToken revokes a token by id: the record goes, which is what kills the
+// credential (ByToken treats a missing record as "no such token"), and so does
+// the index entry, because a row that names an account is still a row.
 func (s *Store) DeleteToken(a *Account, tokenID string) error {
 	if !ids.ValidID(tokenID) {
 		return fmt.Errorf("invalid token id")
@@ -152,7 +156,14 @@ func (s *Store) DeleteToken(a *Account, tokenID string) error {
 	l := s.lock(a.ID)
 	l.Lock()
 	defer l.Unlock()
-	err := os.Remove(filepath.Join(s.tokensDir(a.ID), tokenID+".json"))
+	rec := filepath.Join(s.tokensDir(a.ID), tokenID+".json")
+	if b, err := os.ReadFile(rec); err == nil {
+		var t Token
+		if json.Unmarshal(b, &t) == nil && t.Hash != "" {
+			os.Remove(filepath.Join(s.indexDir("token"), t.Hash))
+		}
+	}
+	err := os.Remove(rec)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}

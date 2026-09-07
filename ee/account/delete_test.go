@@ -8,10 +8,9 @@ import (
 	"testing"
 )
 
-// An erased account leaves no row naming it. DeleteToken deliberately leaves
-// its index entry behind (it holds no secret and revokes on its own); Delete
-// must not inherit that leniency, because after the account is gone the entry
-// is a record of a person who asked to be forgotten.
+// An erased account leaves no row naming it: every token-index entry that
+// points at it goes with the account, whether or not the token was ever
+// revoked on its own.
 func TestDeleteRemovesTheTokenIndex(t *testing.T) {
 	s, err := New(t.TempDir())
 	if err != nil {
@@ -68,5 +67,32 @@ func TestDeleteRemovesTheTokenIndex(t *testing.T) {
 	}
 	if _, err := os.Stat(s.accountDir(acc.ID)); !os.IsNotExist(err) {
 		t.Error("the account directory survived")
+	}
+}
+
+// Revoking a token removes its index entry as well as its record: a hash
+// nobody can reverse is still a row that names an account.
+func TestDeleteTokenRemovesTheIndexEntry(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	acc, err := s.CreateLocal("tok@example.com", "$hash", "free")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, secret, err := s.CreateToken(acc, "one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteToken(acc, tok.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.ByToken(secret); ok {
+		t.Error("a revoked token still authenticates")
+	}
+	entries, _ := os.ReadDir(filepath.Join(s.root, "account-index", "token"))
+	if len(entries) != 0 {
+		t.Errorf("token index has %d entries after revocation, want none", len(entries))
 	}
 }
