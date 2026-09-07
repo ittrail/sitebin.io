@@ -88,6 +88,9 @@ type SubscriptionCanceller interface {
 // Update is the provider-agnostic result of interpreting a webhook: what to
 // apply to an account's billing state and tier.
 type Update struct {
+	// EventID is the provider's own id for the delivery, so a captured event
+	// replayed inside the signature window is recognised and applied once.
+	EventID      string
 	Provider     string // stripe | paddle
 	AccountID    string // resolved from checkout metadata / customer index
 	Customer     string
@@ -95,6 +98,20 @@ type Update struct {
 	TierID       string // tier to activate; "" when only status changed / canceled
 	Status       string // active | canceled | past_due
 	Canceled     bool   // true → revert account to the default tier
+}
+
+// webhookMaxSkew is the signature window, in EITHER direction. A timestamp
+// far in the future is a replay that never expires, not a clock error.
+const webhookMaxSkew = 5 * time.Minute
+
+// withinWindow reports whether the signed timestamp ts is within
+// webhookMaxSkew of now, either way.
+func withinWindow(ts, now time.Time) bool {
+	d := now.Sub(ts)
+	if d < 0 {
+		d = -d
+	}
+	return d <= webhookMaxSkew
 }
 
 // hmacSHA256Hex returns the lowercase hex HMAC-SHA256 of payload under secret.

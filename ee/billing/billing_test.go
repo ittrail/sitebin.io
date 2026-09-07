@@ -186,3 +186,39 @@ func TestPaddleCancelSubscription(t *testing.T) {
 		t.Errorf("an already-gone subscription must count as cancelled: %v", err)
 	}
 }
+
+// Both providers: the signature window is a WINDOW, not a floor, and the
+// event id is surfaced so the caller can drop duplicates.
+func TestWebhookTimestampWindowAndEventID(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	s := NewStripe(eeconfig.StripeConfig{WebhookSecret: "whsec_test"})
+	body := `{"id":"evt_123","type":"customer.subscription.deleted","data":{"object":{"customer":"cus_1"}}}`
+	sigAt := func(at time.Time) string {
+		ts := fmt.Sprintf("%d", at.Unix())
+		return "t=" + ts + ",v1=" + sign("whsec_test", ts+"."+body)
+	}
+	u, err := s.VerifyWebhook(sigAt(now), []byte(body), now)
+	if err != nil || u.EventID != "evt_123" {
+		t.Fatalf("stripe: %v, event id %q", err, u.EventID)
+	}
+	if _, err := s.VerifyWebhook(sigAt(now.Add(10*time.Minute)), []byte(body), now); err == nil {
+		t.Error("stripe: a timestamp ten minutes in the future was accepted")
+	}
+	if _, err := s.VerifyWebhook(sigAt(now.Add(-10*time.Minute)), []byte(body), now); err == nil {
+		t.Error("stripe: a timestamp ten minutes in the past was accepted")
+	}
+
+	p := NewPaddle(eeconfig.PaddleConfig{WebhookSecret: "pdl_secret"})
+	pbody := `{"event_id":"evt_p1","event_type":"subscription.canceled","data":{"id":"sub_2","customer_id":"ctm_2","status":"canceled"}}`
+	psign := func(at time.Time) string {
+		ts := fmt.Sprintf("%d", at.Unix())
+		return "ts=" + ts + ";h1=" + sign("pdl_secret", ts+":"+pbody)
+	}
+	pu, err := p.VerifyWebhook(psign(now), []byte(pbody), now)
+	if err != nil || pu.EventID != "evt_p1" {
+		t.Fatalf("paddle: %v, event id %q", err, pu.EventID)
+	}
+	if _, err := p.VerifyWebhook(psign(now.Add(10*time.Minute)), []byte(pbody), now); err == nil {
+		t.Error("paddle: a timestamp ten minutes in the future was accepted")
+	}
+}

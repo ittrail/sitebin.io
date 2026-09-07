@@ -89,7 +89,7 @@ func (p *Paddle) VerifyWebhook(sigHeader string, body []byte, now time.Time) (Up
 		return Update{}, errBadSignature
 	}
 	tsInt, err := strconv.ParseInt(ts, 10, 64)
-	if err != nil || now.Sub(time.Unix(tsInt, 0)) > 5*time.Minute {
+	if err != nil || !withinWindow(time.Unix(tsInt, 0), now) {
 		return Update{}, errBadSignature
 	}
 	expected := hmacSHA256Hex([]byte(p.cfg.WebhookSecret), []byte(ts+":"+string(body)))
@@ -101,6 +101,7 @@ func (p *Paddle) VerifyWebhook(sigHeader string, body []byte, now time.Time) (Up
 
 func parsePaddleEvent(body []byte) (Update, error) {
 	var ev struct {
+		EventID   string `json:"event_id"`
 		EventType string `json:"event_type"`
 		Data      struct {
 			ID         string `json:"id"`
@@ -116,6 +117,7 @@ func parsePaddleEvent(body []byte) (Update, error) {
 		return Update{}, err
 	}
 	u := Update{
+		EventID:      ev.EventID,
 		Provider:     "paddle",
 		AccountID:    ev.Data.CustomData.Account,
 		Customer:     ev.Data.CustomerID,

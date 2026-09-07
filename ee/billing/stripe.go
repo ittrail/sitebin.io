@@ -96,7 +96,7 @@ func (s *Stripe) VerifyWebhook(sigHeader string, body []byte, now time.Time) (Up
 		return Update{}, errBadSignature
 	}
 	tsInt, err := strconv.ParseInt(ts, 10, 64)
-	if err != nil || now.Sub(time.Unix(tsInt, 0)) > 5*time.Minute {
+	if err != nil || !withinWindow(time.Unix(tsInt, 0), now) {
 		return Update{}, errBadSignature
 	}
 	expected := hmacSHA256Hex([]byte(s.cfg.WebhookSecret), []byte(ts+"."+string(body)))
@@ -116,6 +116,7 @@ func (s *Stripe) VerifyWebhook(sigHeader string, body []byte, now time.Time) (Up
 // parseStripeEvent maps the relevant Stripe events to an Update.
 func parseStripeEvent(body []byte) (Update, error) {
 	var ev struct {
+		ID   string `json:"id"`
 		Type string `json:"type"`
 		Data struct {
 			Object json.RawMessage `json:"object"`
@@ -124,7 +125,7 @@ func parseStripeEvent(body []byte) (Update, error) {
 	if err := json.Unmarshal(body, &ev); err != nil {
 		return Update{}, err
 	}
-	u := Update{Provider: "stripe"}
+	u := Update{Provider: "stripe", EventID: ev.ID}
 	switch ev.Type {
 	case "checkout.session.completed":
 		var o struct {

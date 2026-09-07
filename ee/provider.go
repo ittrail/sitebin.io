@@ -47,6 +47,9 @@ type provider struct {
 	// limits throttles the local-auth routes. Site passwords have the core's
 	// limiter; these are the account's.
 	limits *authLimiters
+	// events remembers which webhook deliveries were applied, so a replay is
+	// recognised.
+	events *seenEvents
 	// license holds the instance's enterprise licence and its state. It is
 	// consulted at exactly one place (AuthorizeCreate) and rendered in the
 	// account UI; nothing on the serving path asks it.
@@ -91,6 +94,7 @@ func (p *provider) Init(h ext.Host) error {
 	p.sessions = session.New(h.Secret(), !h.HTTPOnly(), session.DefaultTTL)
 	p.local = authn.NewLocal(store)
 	p.limits = newAuthLimiters()
+	p.events = newSeenEvents(h.DataDir())
 	p.oidc = authn.NewOIDC(cfg, p.baseURL())
 	// MCP OAuth is inert unless an issuer is configured. Sitebin validates
 	// tokens that issuer signed; it never issues any.

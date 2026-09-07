@@ -98,12 +98,22 @@ func (p *provider) handlePortal(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, url, http.StatusSeeOther)
 }
 
-// webhookHandler verifies an event with the backend and applies it. The
-// billing package stops at verification so it never reaches into accounts.
+// webhookHandler verifies an event with the backend and applies it — once.
+// The billing package stops at verification so it never reaches into
+// accounts; remembering which deliveries were applied is this side's job,
+// because a captured checkout.session.completed replayed inside the
+// signature window would otherwise re-upgrade an account after its
+// subscription was cancelled. A duplicate is acknowledged (200), so the
+// provider stops retrying, and applied to nothing.
 func (p *provider) webhookHandler(wr billing.WebhookReceiver) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		u, err := wr.VerifyWebhook(r.Header.Get(wr.SignatureHeader()), body, time.Now())
+		if err == nil && u.EventID != "" && !p.events.first(u.Provider, u.EventID) {
+			slog.Warn("billing webhook: duplicate delivery ignored", "provider", u.Provider, "event", u.EventID)
+			w.WriteHeader(200)
+			return
+		}
 		p.finishWebhook(w, u, err)
 	})
 }
