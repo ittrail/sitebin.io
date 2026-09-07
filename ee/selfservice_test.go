@@ -86,17 +86,51 @@ func TestDashboardLinksTheStackConsoleAndPlanPage(t *testing.T) {
 		t.Error("the dashboard has no way to the plan page")
 	}
 
+	// The dashboard's CSP says form-action 'self', and Chrome applies that to
+	// the REDIRECT a form submission is answered with: a 303 to the stack's
+	// origin was silently dropped and the customer stayed on the dashboard.
+	// So the route answers with a handoff page that navigates on its own.
 	w := postAs(mux, "/account/billing/portal", cookie, url.Values{"csrf": {p.csrf(acc)}})
-	if w.Code != http.StatusSeeOther {
-		t.Fatalf("portal = %d, want 303 (%s)", w.Code, w.Body)
-	}
-	if loc := w.Header().Get("Location"); loc != wantPlanURL {
-		t.Errorf("portal redirects to %q, want the stack's hosted plan page %q", loc, wantPlanURL)
-	}
+	assertHandoff(t, w, wantPlanURL)
 	// And still nothing without the CSRF token.
 	if w := postAs(mux, "/account/billing/portal", cookie, url.Values{}); w.Code != http.StatusForbidden {
 		t.Errorf("portal without csrf = %d, want 403", w.Code)
 	}
+}
+
+// assertHandoff: a POST that leaves this origin answers 200 with a page that
+// carries the destination as a meta refresh AND as a link, and no Location
+// header, because a redirect is exactly what the dashboard's form-action
+// stops the browser from following.
+func assertHandoff(t *testing.T, w *httptest.ResponseRecorder, dest string) {
+	t.Helper()
+	if w.Code != http.StatusOK {
+		t.Fatalf("handoff = %d, want 200 (%s)", w.Code, w.Body)
+	}
+	if loc := w.Header().Get("Location"); loc != "" {
+		t.Errorf("handoff carries Location %q; a form-submission redirect off this origin is what the CSP blocks", loc)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `http-equiv="refresh" content="0;url=`+dest+`"`) {
+		t.Errorf("handoff page does not refresh to %s: %s", dest, body)
+	}
+	if !strings.Contains(body, `href="`+dest+`"`) {
+		t.Errorf("handoff page has no link to %s for a browser that does not follow the refresh", dest)
+	}
+	if csp := w.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "form-action 'self'") {
+		t.Errorf("the handoff page relaxed the CSP (%q); it must not need to", csp)
+	}
+}
+
+// The purchase leaves the origin the same way: to whatever checkout the
+// backend minted, without the dashboard ever naming the processor.
+func TestUpgradeHandsOffToTheBackendsCheckout(t *testing.T) {
+	p, _, mux := setupSelfService(t, testGDPRSecret)
+	p.billing = &fakeBilling{name: "paygate"}
+	acc, cookie := oidcUser(t, p, "11111111-1111-4111-8111-111111111111", "stack@example.com")
+
+	w := postAs(mux, "/account/upgrade", cookie, url.Values{"csrf": {p.csrf(acc)}, "tier": {"pro"}})
+	assertHandoff(t, w, "https://pay.example/checkout")
 }
 
 // A local account has no stack identity: no console to manage it in, and a

@@ -289,9 +289,9 @@ func TestPayGateDashboardOffersTheHostedPlanPage(t *testing.T) {
 	portal.AddCookie(cookie)
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, portal)
-	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "https://auth.stack.example/apps/sitebin/plan" {
-		t.Errorf("portal = %d %q, want a 303 to the stack's plan page", w.Code, w.Header().Get("Location"))
-	}
+	// Not a redirect: the dashboard's form-action 'self' makes the browser
+	// drop a 303 to another origin. See assertHandoff in selfservice_test.go.
+	assertHandoff(t, w, "https://auth.stack.example/apps/sitebin/plan")
 }
 
 // TestDashboardShowsSiteExpiry pins the promise the pricing FAQ makes about

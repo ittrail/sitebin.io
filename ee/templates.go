@@ -249,6 +249,27 @@ var deleteConfirmTmpl = template.Must(template.New("deleteconfirm").Parse(pageHe
 </div></div></main>
 ` + pageFoot))
 
+// handoffTmpl is the page a POST answers with when its destination is
+// another origin -- the stack's plan page, the backend's checkout. The
+// dashboard's CSP says form-action 'self', and the browser applies that to
+// the REDIRECT a form submission is answered with, so a 303 off this origin
+// was dropped without a word and the customer stayed where they were. A page
+// that navigates on its own is not a form action; the link is for a browser
+// that does not follow the refresh.
+var handoffTmpl = template.Must(template.New("handoff").Parse(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="refresh" content="0;url={{.URL}}">
+<title>{{.Title}}</title>
+<link rel="stylesheet" href="/_sitebin/assets/static/app.css">
+</head><body>
+<main class="acct"><div class="authwrap"><div class="card">
+  <h1>{{.Title}}</h1>
+  <p class="muted">{{.Body}}</p>
+  <div style="margin-top:18px"><a class="btn" href="{{.URL}}" rel="noopener">Continue</a></div>
+</div></div></main>
+</body></html>
+`))
+
 var msgTmpl = template.Must(template.New("msg").Parse(pageHead + `
 <main class="acct"><div class="authwrap"><div class="card">
   <h1>{{.Title}}</h1>

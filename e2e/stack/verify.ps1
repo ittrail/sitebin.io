@@ -16,9 +16,10 @@
 #                     lands in /account
 #   self-service      the dashboard links the stack's account console
 #                     (accountUrl: <issuer>/account/?referrer=<client id>),
-#                     sends deletion there, and the portal route answers 303
-#                     to the stack's hosted plan page (planUrl:
-#                     <issuer origin>/apps/<app>/plan)
+#                     sends deletion there, and the portal route answers a
+#                     handoff page that refreshes to the stack's hosted plan
+#                     page (planUrl: <issuer origin>/apps/<app>/plan) -- not
+#                     a 303, which the dashboard's form-action would block
 #   GDPR export       an order signed the way platform-api/src/routes/gdpr.ts
 #                     signs it (sha256=HMAC(secret, "<ts>.<body>")) returns
 #                     the account, the site the user just made, its tokens
@@ -254,8 +255,10 @@ Assert "the billing card offers the portal route" ($dash -match 'action="/accoun
 
 $r = Req "POST" "$origin/account/billing/portal" @("-b", $jar, "--data-urlencode", "csrf=$csrf")
 $loc = Match1 $r.headers 'Location: (\S+)'
-Assert "POST /account/billing/portal answers 303" ($r.code -eq 303) "got $($r.code)"
-Assert "to the stack's hosted plan page (planUrl)" ($loc -eq $wantPlanURL) "got $loc, want $wantPlanURL"
+# Not a 303: the dashboard's CSP form-action 'self' makes Chrome drop a form
+# redirect to another origin, so the route answers a handoff page instead.
+Assert "POST /account/billing/portal answers 200 with a handoff page, not a redirect the CSP would block" ($r.code -eq 200 -and $r.headers -notmatch "(?im)^Location:") "got $($r.code)"
+Assert "which refreshes to the stack's hosted plan page (planUrl)" ($r.body -match [regex]::Escape('http-equiv="refresh" content="0;url=' + $wantPlanURL + '"')) "want $wantPlanURL"
 
 $r = Req "POST" "$origin/account/delete" @("-b", $jar, "--data-urlencode", "csrf=$csrf")
 $loc = Match1 $r.headers 'Location: (\S+)'

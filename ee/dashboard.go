@@ -408,6 +408,14 @@ func (p *provider) redirect(w http.ResponseWriter, r *http.Request, path string)
 	http.Redirect(w, r, path, http.StatusSeeOther)
 }
 
+// leaveTo answers a form submission whose destination is another origin.
+// Not a redirect: see handoffTmpl for why the browser would drop one.
+func (p *provider) leaveTo(w http.ResponseWriter, url, title, body string) {
+	p.securityHeaders(w)
+	w.WriteHeader(http.StatusOK)
+	handoffTmpl.Execute(w, struct{ URL, Title, Body string }{url, title, body})
+}
+
 func (p *provider) securityHeaders(w http.ResponseWriter) {
 	w.Header().Set("Content-Security-Policy",
 		"default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "+

@@ -70,7 +70,7 @@ func (p *provider) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 		p.renderMessage(w, msgView{Title: "Checkout unavailable", Body: "Could not start checkout. Please try again.", Back: "/account"})
 		return
 	}
-	http.Redirect(w, r, url, http.StatusSeeOther)
+	p.leaveTo(w, url, "Taking you to checkout", "Your order is being handed to the payment page.")
 }
 
 // handlePortal sends an existing subscriber to their backend's portal.
@@ -95,7 +95,7 @@ func (p *provider) handlePortal(w http.ResponseWriter, r *http.Request) {
 		p.redirect(w, r, "/account")
 		return
 	}
-	http.Redirect(w, r, url, http.StatusSeeOther)
+	p.leaveTo(w, url, "Opening your subscription", "Your plan, payment method and invoices are managed on the next page.")
 }
 
 // webhookHandler verifies an event with the backend and applies it — once.
