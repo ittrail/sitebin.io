@@ -4,6 +4,7 @@ package eeconfig
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -878,5 +879,40 @@ func TestLoadGDPRSecret(t *testing.T) {
 	// And a short one alone is still a mistake worth stopping on.
 	if _, err := Load(env(map[string]string{"SITEBIN_STACK_GDPR_SECRET": short}), noFile); err == nil {
 		t.Error("a short secret must be refused even without self-registration")
+	}
+}
+
+// The stack's admin key acts on every app on the stack. It can come from a
+// file, so it never sits in the container's environment where docker inspect
+// and every child process can read it.
+func TestStackAdminKeyFromFile(t *testing.T) {
+	read := func(p string) ([]byte, error) {
+		if p == "/run/secrets/stack_admin_key" {
+			return []byte("padm_from_file\n"), nil
+		}
+		return nil, os.ErrNotExist
+	}
+	cfg, err := Load(env(map[string]string{
+		"SITEBIN_ACCOUNT_MODE":         "accounts",
+		"SITEBIN_STACK_URL":            "https://platform.example",
+		"SITEBIN_STACK_APP_ID":         "sitebin",
+		"SITEBIN_STACK_ADMIN_KEY_FILE": "/run/secrets/stack_admin_key",
+		"SITEBIN_STACK_GDPR_SECRET":    strings.Repeat("s", 40),
+	}), read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.StackRegistration == nil || cfg.StackRegistration.AdminKey != "padm_from_file" {
+		t.Fatalf("admin key not read from the file: %+v", cfg.StackRegistration)
+	}
+	// a file that cannot be read is a configuration error, not a silent skip
+	if _, err := Load(env(map[string]string{
+		"SITEBIN_ACCOUNT_MODE":         "accounts",
+		"SITEBIN_STACK_URL":            "https://platform.example",
+		"SITEBIN_STACK_APP_ID":         "sitebin",
+		"SITEBIN_STACK_ADMIN_KEY_FILE": "/nope",
+		"SITEBIN_STACK_GDPR_SECRET":    strings.Repeat("s", 40),
+	}), read); err == nil {
+		t.Fatal("an unreadable key file was accepted")
 	}
 }

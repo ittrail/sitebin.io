@@ -13,7 +13,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/ittrail/sitebin.io/ee/account"
@@ -71,6 +70,10 @@ func (p *provider) Init(h ext.Host) error {
 		return fmt.Errorf("enterprise config: %w", err)
 	}
 	p.cfg = cfg
+	// The stack admin key is read; nothing else in this process needs it in
+	// the environment, and a child process or a leaked env dump must not
+	// find it there. (docker inspect still shows it: use the _FILE form.)
+	os.Unsetenv("SITEBIN_STACK_ADMIN_KEY")
 
 	// Licensing. It NEVER fails the start: an absent, malformed, unverifiable
 	// or expired key is logged and surfaced in the account UI, and the only
@@ -384,9 +387,9 @@ func (p *provider) OnSiteCreated(ownerAccountID, viewID string) error {
 	return p.accounts.LinkSite(acc, viewID)
 }
 
-// accountForAPI resolves an API caller: an Authorization: Bearer token, else
-// the session cookie (which is how the browser's own drop page creates sites).
-// accountForAPI resolves the caller of an API-shaped request.
+// accountForAPI resolves the caller of an API-shaped request: an
+// Authorization: Bearer token, else the session cookie (which is how the
+// browser's own drop page creates sites).
 //
 // A presented bearer is answered ONLY from that bearer: an account API token,
 // or — where MCP OAuth is configured — an access token from the issuer. It
@@ -632,5 +635,3 @@ func (p *provider) tierForNewAccount() string {
 	}
 	return ""
 }
-
-var _ = strconv.Itoa // reserved for future numeric config

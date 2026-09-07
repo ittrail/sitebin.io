@@ -407,8 +407,18 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Co
 	if url := strings.TrimSpace(getenv("SITEBIN_STACK_URL")); url != "" {
 		appID := strings.TrimSpace(getenv("SITEBIN_STACK_APP_ID"))
 		key := strings.TrimSpace(getenv("SITEBIN_STACK_ADMIN_KEY"))
+		// The admin key acts on every app on the stack. A file (a docker
+		// secret, a mounted volume) keeps it out of the container's
+		// environment, where docker inspect and every child process read it.
+		if path := strings.TrimSpace(getenv("SITEBIN_STACK_ADMIN_KEY_FILE")); path != "" {
+			b, err := readFile(path)
+			if err != nil {
+				return cfg, fmt.Errorf("SITEBIN_STACK_ADMIN_KEY_FILE: %w", err)
+			}
+			key = strings.TrimSpace(string(b))
+		}
 		if appID == "" || key == "" {
-			return cfg, fmt.Errorf("SITEBIN_STACK_URL needs SITEBIN_STACK_APP_ID and SITEBIN_STACK_ADMIN_KEY")
+			return cfg, fmt.Errorf("SITEBIN_STACK_URL needs SITEBIN_STACK_APP_ID and SITEBIN_STACK_ADMIN_KEY (or SITEBIN_STACK_ADMIN_KEY_FILE)")
 		}
 		cfg.StackRegistration = &StackConfig{
 			URL: strings.TrimRight(url, "/"), AppID: appID, AdminKey: key,
