@@ -3,6 +3,7 @@
 package ee
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -38,6 +39,7 @@ func (p *provider) PublicRoutes() map[string]http.Handler {
 	p.oauthRoutes(routes)
 	p.emailRoutes(routes)
 	p.billingRoutes(routes)
+	p.gdprRoutes(routes)
 	return routes
 }
 
@@ -247,7 +249,21 @@ func (p *provider) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	err := p.accounts.Delete(acc, func(viewID string) error { return p.host.Sites().Delete(viewID) })
+	// A stack identity is deleted where it lives. The console erases it and
+	// the stack orders this instance to erase its half (handleGDPRDelete);
+	// deleting here first would leave the identity behind, still a member of
+	// this app, with nothing of its own left to come back to.
+	if p.stackDeletion(acc) {
+		http.Redirect(w, r, p.cfg.AccountConsoleURL(), http.StatusSeeOther)
+		return
+	}
+	err := p.accounts.Delete(acc, func(viewID string) error {
+		err := p.host.Sites().Delete(viewID)
+		if errors.Is(err, ext.ErrSiteGone) {
+			return nil // a stale ownership marker is not a reason to keep the account
+		}
+		return err
+	})
 	if err != nil {
 		http.Error(w, "could not delete the account", http.StatusInternalServerError)
 		return
@@ -321,13 +337,23 @@ type tierOption struct {
 }
 
 type dashView struct {
-	ManageURL  string // PayGate manage link ('' = built-in plans card)
-	Email      string
-	Tier       string
-	Sites      []siteRow
-	CSRF       string
-	Base       string
-	SelfSelect bool
+	// AccountURL is the identity provider's account console — password,
+	// sessions, second factors, data export, account deletion — for an
+	// account that signed in through the generic OIDC provider. Sitebin links
+	// it and builds none of it. Empty for local accounts and for instances
+	// with no such issuer.
+	AccountURL string
+	// StackDeletion says the account is deleted at the account console, not
+	// here: the stack erases its identity there and orders this instance to
+	// erase its own half through the GDPR webhook. Deleting locally instead
+	// would leave a stack identity behind that still names this app.
+	StackDeletion bool
+	Email         string
+	Tier          string
+	Sites         []siteRow
+	CSRF          string
+	Base          string
+	SelfSelect    bool
 	// Checkout says a backend can sell a plan. It deliberately does not say
 	// which: the page posts to one neutral route so a customer never sees the
 	// processor's name, which is what lets the stack change providers.
@@ -380,21 +406,11 @@ func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, 
 	}
 	checkout := p.canCheckout()
 	var opts []tierOption
-	var manageURL string
 	// A backend that can sell can also show a portal, so an existing
-	// subscriber gets a way back to their subscription.
+	// subscriber gets a way back to their subscription. With PayGate that
+	// portal is the stack's hosted plan page.
 	portal := p.billing != nil
-	if p.paygate != nil && acc.Provider == account.OIDCProv {
-		manageURL = p.paygate.ManageURL()
-	}
-	if manageURL != "" {
-		// An operator who configured a manage URL has said where subscriptions
-		// are handled. Sitebin's own plan card and portal would be a second,
-		// competing answer, so the override replaces them rather than joining
-		// them.
-		checkout, portal = false, false
-	}
-	if manageURL == "" && (p.cfg.SelfSelect || checkout) {
+	if p.cfg.SelfSelect || checkout {
 		for _, t := range p.cfg.Tiers {
 			label := t.Label
 			if label == "" {
@@ -407,14 +423,26 @@ func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, 
 			opts = append(opts, tierOption{ID: t.ID, Label: label, Current: t.ID == current.ID, Paid: t.Paid(), Price: t.Price.Label()})
 		}
 	}
+	var accountURL string
+	if acc.Provider == account.OIDCProv {
+		accountURL = p.cfg.AccountConsoleURL()
+	}
 	dashTmpl.Execute(w, dashView{
 		MCPEndpoint: p.host.BaseURL() + "/mcp",
 		Email:       acc.Email, Tier: tier, Sites: rows, CSRF: token, Base: p.baseURL(),
-		SelfSelect: p.cfg.SelfSelect, Checkout: checkout, Portal: portal, Tiers: opts, ManageURL: manageURL,
+		SelfSelect: p.cfg.SelfSelect, Checkout: checkout, Portal: portal, Tiers: opts,
+		AccountURL: accountURL, StackDeletion: p.stackDeletion(acc),
 		IsAdmin: p.isAdmin(acc),
 		Tokens:  p.tokenRows(acc, token),
 		License: p.licenseNotice(),
 	})
+}
+
+// stackDeletion reports whether acc is deleted at the stack's account console
+// rather than here. Only an account the stack issued (OIDC), and only when the
+// stack can order the local erasure back — see eeconfig.Config.StackDeletion.
+func (p *provider) stackDeletion(acc *account.Account) bool {
+	return acc.Provider == account.OIDCProv && p.cfg.StackDeletion()
 }
 
 type msgView struct {

@@ -30,6 +30,7 @@ func stackProvider(t *testing.T, licensing string) *provider {
 	t.Setenv("SITEBIN_STACK_URL", "https://platform.example")
 	t.Setenv("SITEBIN_STACK_APP_ID", "sitebin")
 	t.Setenv("SITEBIN_STACK_ADMIN_KEY", "padm_test")
+	t.Setenv("SITEBIN_STACK_GDPR_SECRET", testGDPRSecret)
 	if licensing != "" {
 		t.Setenv("SITEBIN_STACK_LICENSING", licensing)
 	}
@@ -173,51 +174,69 @@ func TestDashboardShowsThePriceOfAPayGateTier(t *testing.T) {
 	}
 }
 
-// The stack gates sign-in on two documents — the platform's and the app's —
-// and an app that declares no `terms` block contributes nothing to the second.
-// Sitebin renders no terms screen of its own, so this declaration is the only
-// place its terms of service exist as far as the sign-in is concerned.
-func TestStackDeclarationCarriesTerms(t *testing.T) {
-	t.Run("declared when configured", func(t *testing.T) {
-		t.Setenv("SITEBIN_STACK_TERMS",
-			`{"version":"2026-09-01","url":"https://sitebin.io/terms","title":{"en":"Sitebin Terms of Service","de":"Nutzungsbedingungen"}}`)
+const testGDPRSecret = "gdpr-e2e-secret-0123456789abcdef0123456789"
+
+// The stack gates sign-in on the platform's document and then on each of the
+// app's own, and an app that declares no `consents` contributes nothing.
+// Sitebin renders no consent screen of its own, so this declaration is the
+// only place its terms and its DPA exist as far as the sign-in is concerned.
+func TestStackDeclarationCarriesConsents(t *testing.T) {
+	t.Run("declared in order when configured", func(t *testing.T) {
+		t.Setenv("SITEBIN_STACK_CONSENTS", `[
+		  {"key":"terms","version":"2026-09-08","url":"https://sitebin.io/terms/","title":{"en":"Sitebin Terms of Service","de":"Sitebin Nutzungsbedingungen"}},
+		  {"key":"dpa","version":"2026-09-08","url":"https://sitebin.io/dpa/","title":{"en":"Data Processing Agreement","de":"Auftragsverarbeitungsvertrag"}}
+		]`)
 		reg := stackProvider(t, "").stackDeclaration("sitebin")
-		if reg.Terms == nil {
-			t.Fatal("configured terms were not declared")
-		}
-		if reg.Terms.Version != "2026-09-01" || reg.Terms.URL != "https://sitebin.io/terms" {
-			t.Errorf("terms = %+v", reg.Terms)
+		if len(reg.Consents) != 2 {
+			t.Fatalf("consents = %+v", reg.Consents)
 		}
 
-		// The wire shape is the stack's, verbatim.
+		// The wire shape is the stack's `consents` block, verbatim — and
+		// NEVER its `terms` shorthand: a payload carrying both is a 400, and
+		// the shorthand has room for one document.
 		b, err := json.Marshal(reg)
 		if err != nil {
 			t.Fatal(err)
 		}
 		var wire struct {
-			Terms *struct {
-				Version string            `json:"version"`
-				URL     string            `json:"url"`
-				Title   map[string]string `json:"title"`
-			} `json:"terms"`
+			Consents []struct {
+				Key      string            `json:"key"`
+				Version  string            `json:"version"`
+				URL      string            `json:"url"`
+				Title    map[string]string `json:"title"`
+				Required *bool             `json:"required"`
+			} `json:"consents"`
+			Terms json.RawMessage `json:"terms"`
 		}
 		if err := json.Unmarshal(b, &wire); err != nil {
 			t.Fatal(err)
 		}
-		if wire.Terms == nil || wire.Terms.Version != "2026-09-01" ||
-			wire.Terms.URL != "https://sitebin.io/terms" ||
-			wire.Terms.Title["de"] != "Nutzungsbedingungen" {
-			t.Fatalf("terms did not survive the wire: %s", b)
+		if wire.Terms != nil {
+			t.Fatalf("the payload must never carry `terms` beside `consents`: %s", b)
+		}
+		if len(wire.Consents) != 2 || wire.Consents[0].Key != "terms" || wire.Consents[1].Key != "dpa" {
+			t.Fatalf("consents did not survive the wire in order: %s", b)
+		}
+		if wire.Consents[0].Version != "2026-09-08" || wire.Consents[0].URL != "https://sitebin.io/terms/" ||
+			wire.Consents[0].Title["de"] != "Sitebin Nutzungsbedingungen" {
+			t.Errorf("terms = %+v", wire.Consents[0])
+		}
+		if wire.Consents[1].URL != "https://sitebin.io/dpa/" || wire.Consents[1].Title["en"] != "Data Processing Agreement" {
+			t.Errorf("dpa = %+v", wire.Consents[1])
+		}
+		// `required` unstated is `required` unsent: the default is the stack's.
+		if wire.Consents[0].Required != nil || wire.Consents[1].Required != nil {
+			t.Errorf("an unstated required must be absent from the wire: %s", b)
 		}
 	})
 
-	// Same rule as licensing: the stack MERGES, so an absent block keeps what
-	// the app already declared and an empty one would replace real terms with
-	// a version and a URL of nothing.
+	// Same rule as licensing: the stack MERGES, so an absent list keeps what
+	// the app already declared, and an empty one would tell the stack this
+	// app asks for nothing.
 	t.Run("omitted entirely when unconfigured", func(t *testing.T) {
 		reg := stackProvider(t, "").stackDeclaration("sitebin")
-		if reg.Terms != nil {
-			t.Fatal("unconfigured terms must not be declared")
+		if reg.Consents != nil {
+			t.Fatal("unconfigured consents must not be declared")
 		}
 		b, err := json.Marshal(reg)
 		if err != nil {
@@ -227,8 +246,67 @@ func TestStackDeclarationCarriesTerms(t *testing.T) {
 		if err := json.Unmarshal(b, &wire); err != nil {
 			t.Fatal(err)
 		}
-		if _, present := wire["terms"]; present {
-			t.Errorf("terms must be absent from the payload, not empty: %s", b)
+		for _, k := range []string{"consents", "terms"} {
+			if _, present := wire[k]; present {
+				t.Errorf("%s must be absent from the payload, not empty: %s", k, b)
+			}
+		}
+	})
+}
+
+// The stack can only order a deletion or an export where it has been told to
+// send it and what to sign it with. The URLs come from the SAME base URL as
+// the OIDC callback, so the declared endpoint is the served one.
+func TestStackDeclarationCarriesGDPR(t *testing.T) {
+	t.Run("declared with the secret", func(t *testing.T) {
+		reg := stackProvider(t, "").stackDeclaration("sitebin")
+		if reg.GDPR == nil {
+			t.Fatal("the gdpr block was not declared")
+		}
+		if reg.GDPR.DeleteUserURL != "http://sitebin.example/account/gdpr/delete" ||
+			reg.GDPR.ExportUserDataURL != "http://sitebin.example/account/gdpr/export" ||
+			reg.GDPR.WebhookSecret != testGDPRSecret {
+			t.Errorf("gdpr = %+v", reg.GDPR)
+		}
+		b, err := json.Marshal(reg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wire struct {
+			GDPR *struct {
+				Delete string `json:"deleteUserUrl"`
+				Export string `json:"exportUserDataUrl"`
+				Secret string `json:"webhookSecret"`
+			} `json:"gdpr"`
+		}
+		if err := json.Unmarshal(b, &wire); err != nil {
+			t.Fatal(err)
+		}
+		if wire.GDPR == nil || wire.GDPR.Delete == "" || wire.GDPR.Export == "" || wire.GDPR.Secret != testGDPRSecret {
+			t.Fatalf("gdpr did not survive the wire in the stack's field names: %s", b)
+		}
+	})
+
+	// No secret, no block — and no routes either (see gdpr_test.go). An
+	// instance the stack could call but that could verify nothing must not
+	// advertise itself.
+	t.Run("omitted without a secret", func(t *testing.T) {
+		t.Setenv("SITEBIN_ACCOUNT_MODE", "tiers")
+		t.Setenv("SITEBIN_TIERS", stackTiersJSON)
+		t.Setenv("SITEBIN_DEFAULT_TIER", "free")
+		p := newProvider()
+		if err := p.Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
+			t.Fatalf("Init: %v", err)
+		}
+		reg := p.stackDeclaration("sitebin")
+		if reg.GDPR != nil {
+			t.Fatal("a gdpr block with no secret must not be declared")
+		}
+		b, _ := json.Marshal(reg)
+		var wire map[string]json.RawMessage
+		json.Unmarshal(b, &wire)
+		if _, present := wire["gdpr"]; present {
+			t.Errorf("gdpr must be absent from the payload: %s", b)
 		}
 	})
 }

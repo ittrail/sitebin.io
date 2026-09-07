@@ -239,14 +239,13 @@ func TestLoadGenericOIDCInvalid(t *testing.T) {
 
 func TestLoadPayGate(t *testing.T) {
 	cfg, err := Load(env(map[string]string{
-		"SITEBIN_ACCOUNT_MODE":       "tiers",
-		"SITEBIN_TIERS":              twoTiers,
-		"SITEBIN_DEFAULT_TIER":       "free",
-		"SITEBIN_PAYGATE_URL":        "https://paygate.stack.example/",
-		"SITEBIN_PAYGATE_APP_ID":     "sitebin",
-		"SITEBIN_PAYGATE_API_KEY":    "ssk_live_x",
-		"SITEBIN_PAYGATE_CACHE_TTL":  "2m",
-		"SITEBIN_PAYGATE_MANAGE_URL": "https://stack.example/account",
+		"SITEBIN_ACCOUNT_MODE":      "tiers",
+		"SITEBIN_TIERS":             twoTiers,
+		"SITEBIN_DEFAULT_TIER":      "free",
+		"SITEBIN_PAYGATE_URL":       "https://paygate.stack.example/",
+		"SITEBIN_PAYGATE_APP_ID":    "sitebin",
+		"SITEBIN_PAYGATE_API_KEY":   "ssk_live_x",
+		"SITEBIN_PAYGATE_CACHE_TTL": "2m",
 	}), noFile)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -255,9 +254,91 @@ func TestLoadPayGate(t *testing.T) {
 		t.Fatal("PayGate not parsed")
 	}
 	if cfg.PayGate.URL != "https://paygate.stack.example" || cfg.PayGate.AppID != "sitebin" ||
-		cfg.PayGate.APIKey != "ssk_live_x" || cfg.PayGate.CacheTTL.Minutes() != 2 ||
-		cfg.PayGate.ManageURL != "https://stack.example/account" {
+		cfg.PayGate.APIKey != "ssk_live_x" || cfg.PayGate.CacheTTL.Minutes() != 2 {
 		t.Fatalf("PayGate = %+v", cfg.PayGate)
+	}
+	// No OIDC issuer, no stack identity, no plan page to send anyone to.
+	if cfg.PayGate.PlanURL != "" {
+		t.Errorf("PlanURL = %q without an issuer, want empty", cfg.PayGate.PlanURL)
+	}
+}
+
+// The hosted plan page is DERIVED from the issuer and the app id, the way the
+// stack's own planUrl() derives it, so an operator cannot configure a page
+// that disagrees with the stack the instance signs in against. It used to be
+// SITEBIN_PAYGATE_MANAGE_URL, which is exactly that disagreement waiting to
+// happen.
+func TestPayGatePlanURLIsDerivedFromTheIssuer(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"SITEBIN_ACCOUNT_MODE":         "tiers",
+		"SITEBIN_TIERS":                twoTiers,
+		"SITEBIN_DEFAULT_TIER":         "free",
+		"SITEBIN_PAYGATE_URL":          "https://paygate.saas-stack.example.com",
+		"SITEBIN_PAYGATE_APP_ID":       "sitebin",
+		"SITEBIN_PAYGATE_API_KEY":      "ssk_live_x",
+		"SITEBIN_OAUTH_OIDC_ISSUER":    "https://auth.example.com/realms/saas-stack/",
+		"SITEBIN_OAUTH_OIDC_CLIENT_ID": "sitebin-app",
+	}), noFile)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, want := cfg.PayGate.PlanURL, "https://auth.example.com/apps/sitebin/plan"; got != want {
+		t.Errorf("PlanURL = %q, want %q", got, want)
+	}
+	// The origin, not the realm path: the plan page is the portal's, which
+	// shares the issuer's host and nothing below it.
+	if got, want := stackPlanURL("http://auth.saas.localtest.me:8080/realms/saas-stack", "sitebin"),
+		"http://auth.saas.localtest.me:8080/apps/sitebin/plan"; got != want {
+		t.Errorf("stackPlanURL = %q, want %q", got, want)
+	}
+	// encodeURIComponent on the stack's side; an app id with a stray
+	// character must not become a second path segment.
+	if got := stackPlanURL("https://auth.example.com/realms/x", "a b/c"); got != "https://auth.example.com/apps/a%20b%2Fc/plan" {
+		t.Errorf("stackPlanURL escaped = %q", got)
+	}
+	if stackPlanURL("not a url", "sitebin") != "" {
+		t.Error("an unparseable issuer must derive no page rather than a broken link")
+	}
+}
+
+// The account console is where a stack user manages password, sessions,
+// second factors, data export and deletion; Sitebin links it instead of
+// building any of it, built as the stack's accountUrl() builds it.
+func TestAccountConsoleURL(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"SITEBIN_ACCOUNT_MODE":         "accounts",
+		"SITEBIN_OAUTH_OIDC_ISSUER":    "https://auth.example.com/realms/saas-stack/",
+		"SITEBIN_OAUTH_OIDC_CLIENT_ID": "sitebin-app",
+	}), noFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.AccountConsoleURL(), "https://auth.example.com/realms/saas-stack/account/?referrer=sitebin-app"; got != want {
+		t.Errorf("AccountConsoleURL = %q, want %q", got, want)
+	}
+	if cfg.StackDeletion() {
+		t.Error("without a GDPR secret nothing will ever order the local deletion, so the console must not be where deletion goes")
+	}
+
+	cfg, err = Load(env(map[string]string{"SITEBIN_ACCOUNT_MODE": "accounts"}), noFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AccountConsoleURL() != "" {
+		t.Error("no issuer, no console")
+	}
+
+	cfg, err = Load(env(map[string]string{
+		"SITEBIN_ACCOUNT_MODE":         "accounts",
+		"SITEBIN_OAUTH_OIDC_ISSUER":    "https://auth.example.com/realms/saas-stack",
+		"SITEBIN_OAUTH_OIDC_CLIENT_ID": "sitebin-app",
+		"SITEBIN_STACK_GDPR_SECRET":    strings.Repeat("s", MinGDPRSecretLen),
+	}), noFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.StackDeletion() {
+		t.Error("an issuer plus a GDPR secret is a stack that can order the deletion back: the console is where deletion goes")
 	}
 }
 
@@ -538,9 +619,10 @@ func TestSellableTierMustCarryTheActiveBackendsPriceID(t *testing.T) {
 
 func TestLoadStackLicensing(t *testing.T) {
 	stack := map[string]string{
-		"SITEBIN_STACK_URL":       "https://platform.example/",
-		"SITEBIN_STACK_APP_ID":    "sitebin",
-		"SITEBIN_STACK_ADMIN_KEY": "padm_test",
+		"SITEBIN_STACK_URL":         "https://platform.example/",
+		"SITEBIN_STACK_APP_ID":      "sitebin",
+		"SITEBIN_STACK_ADMIN_KEY":   "padm_test",
+		"SITEBIN_STACK_GDPR_SECRET": "0123456789abcdef0123456789abcdef",
 	}
 	with := func(v string) func(string) string {
 		m := map[string]string{}
@@ -659,12 +741,18 @@ func TestLoadGenericOIDCDiscoveryURLDefaultsToEmpty(t *testing.T) {
 	}
 }
 
-func TestLoadStackTerms(t *testing.T) {
+const twoConsents = `[
+  {"key":"terms","version":"2026-09-08","url":"https://sitebin.io/terms/","title":{"en":"Sitebin Terms of Service","de":"Sitebin Nutzungsbedingungen"}},
+  {"key":"dpa","version":"2026-09-08","url":"https://sitebin.io/dpa/","title":{"en":"Data Processing Agreement","de":"Auftragsverarbeitungsvertrag"}}
+]`
+
+func TestLoadStackConsents(t *testing.T) {
 	base := func(extra map[string]string) map[string]string {
 		m := map[string]string{
-			"SITEBIN_STACK_URL":       "https://platform.example/",
-			"SITEBIN_STACK_APP_ID":    "sitebin",
-			"SITEBIN_STACK_ADMIN_KEY": "padm_test",
+			"SITEBIN_STACK_URL":         "https://platform.example/",
+			"SITEBIN_STACK_APP_ID":      "sitebin",
+			"SITEBIN_STACK_ADMIN_KEY":   "padm_test",
+			"SITEBIN_STACK_GDPR_SECRET": "0123456789abcdef0123456789abcdef",
 		}
 		for k, v := range extra {
 			m[k] = v
@@ -672,17 +760,40 @@ func TestLoadStackTerms(t *testing.T) {
 		return m
 	}
 
-	t.Run("parsed", func(t *testing.T) {
+	t.Run("parsed in order", func(t *testing.T) {
+		cfg, err := Load(env(base(map[string]string{"SITEBIN_STACK_CONSENTS": twoConsents})), noFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := cfg.StackRegistration.Consents
+		if len(got) != 2 {
+			t.Fatalf("consents = %+v", got)
+		}
+		// The order is the presentation order on the gate, so it must survive.
+		if got[0].Key != "terms" || got[0].Version != "2026-09-08" || got[0].URL != "https://sitebin.io/terms/" ||
+			got[0].Title["de"] != "Sitebin Nutzungsbedingungen" {
+			t.Errorf("terms = %+v", got[0])
+		}
+		if got[1].Key != "dpa" || got[1].URL != "https://sitebin.io/dpa/" || got[1].Title["en"] != "Data Processing Agreement" {
+			t.Errorf("dpa = %+v", got[1])
+		}
+		// Not stated means not sent: the stack's default (required) is the
+		// stack's to apply.
+		if got[0].Required != nil || got[1].Required != nil {
+			t.Error("an unstated `required` must stay nil so it is omitted from the wire")
+		}
+	})
+
+	t.Run("an optional document stays optional", func(t *testing.T) {
 		cfg, err := Load(env(base(map[string]string{
-			"SITEBIN_STACK_TERMS": `{"version":"2026-09-01","url":"https://sitebin.io/terms","title":{"en":"Sitebin Terms of Service"}}`,
+			"SITEBIN_STACK_CONSENTS": `[{"key":"terms","version":"1","url":"https://x.example/t"},{"key":"news","version":"1","url":"https://x.example/n","required":false}]`,
 		})), noFile)
 		if err != nil {
 			t.Fatal(err)
 		}
-		got := cfg.StackRegistration.Terms
-		if got == nil || got.Version != "2026-09-01" || got.URL != "https://sitebin.io/terms" ||
-			got.Title["en"] != "Sitebin Terms of Service" {
-			t.Fatalf("terms = %+v", got)
+		news := cfg.StackRegistration.Consents[1]
+		if news.Required == nil || *news.Required {
+			t.Errorf("news.Required = %v, want false", news.Required)
 		}
 	})
 
@@ -691,24 +802,81 @@ func TestLoadStackTerms(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.StackRegistration.Terms != nil {
-			t.Fatalf("terms = %+v, want nil", cfg.StackRegistration.Terms)
+		if cfg.StackRegistration.Consents != nil {
+			t.Fatalf("consents = %+v, want nil", cfg.StackRegistration.Consents)
 		}
 	})
 
-	// A half-filled block would register terms the gate cannot show, and the
-	// failure would happen in a background goroutine at boot.
+	// A half-filled list would register documents the gate cannot show, and
+	// the failure would happen in a background goroutine at boot.
 	for name, bad := range map[string]string{
-		"no version": `{"url":"https://sitebin.io/terms"}`,
-		"no url":     `{"version":"2026-09-01"}`,
-		"blank url":  `{"version":"2026-09-01","url":"   "}`,
-		"not a url":  `{"version":"2026-09-01","url":"sitebin.io/terms"}`,
-		"not json":   `{`,
+		"no key":        `[{"version":"1","url":"https://sitebin.io/terms/"}]`,
+		"bad key":       `[{"key":"Terms Of Service","version":"1","url":"https://sitebin.io/terms/"}]`,
+		"duplicate key": `[{"key":"terms","version":"1","url":"https://a.example"},{"key":"terms","version":"2","url":"https://b.example"}]`,
+		"no version":    `[{"key":"terms","url":"https://sitebin.io/terms/"}]`,
+		"no url":        `[{"key":"terms","version":"1"}]`,
+		"blank url":     `[{"key":"terms","version":"1","url":"   "}]`,
+		"not a url":     `[{"key":"terms","version":"1","url":"sitebin.io/terms"}]`,
+		"empty list":    `[]`,
+		"the old shape": `{"version":"1","url":"https://sitebin.io/terms/"}`,
+		"not json":      `[`,
+		"too many":      "[" + strings.TrimSuffix(strings.Repeat(`{"key":"k","version":"1","url":"https://x.example"},`, 21), ",") + "]",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := Load(env(base(map[string]string{"SITEBIN_STACK_TERMS": bad})), noFile); err == nil {
-				t.Fatalf("SITEBIN_STACK_TERMS=%q must not start", bad)
+			if _, err := Load(env(base(map[string]string{"SITEBIN_STACK_CONSENTS": bad})), noFile); err == nil {
+				t.Fatalf("SITEBIN_STACK_CONSENTS=%q must not start", bad)
 			}
 		})
+	}
+}
+
+// The stack signs its deletion and export orders with this secret; a stack
+// instance without one cannot be erased, so it is required alongside
+// SITEBIN_STACK_URL and refused when shorter than the stack's own floor.
+func TestLoadGDPRSecret(t *testing.T) {
+	stack := map[string]string{
+		"SITEBIN_STACK_URL":       "https://platform.example",
+		"SITEBIN_STACK_APP_ID":    "sitebin",
+		"SITEBIN_STACK_ADMIN_KEY": "padm_test",
+	}
+	with := func(extra map[string]string) func(string) string {
+		m := map[string]string{}
+		for k, v := range stack {
+			m[k] = v
+		}
+		for k, v := range extra {
+			m[k] = v
+		}
+		return env(m)
+	}
+
+	if _, err := Load(with(nil), noFile); err == nil || !strings.Contains(err.Error(), "SITEBIN_STACK_GDPR_SECRET") {
+		t.Fatalf("self-registration without a GDPR secret must not start, got %v", err)
+	}
+	short := strings.Repeat("x", MinGDPRSecretLen-1)
+	if _, err := Load(with(map[string]string{"SITEBIN_STACK_GDPR_SECRET": short}), noFile); err == nil || !strings.Contains(err.Error(), "32") {
+		t.Fatalf("a %d-char secret must be refused, got %v", len(short), err)
+	}
+	ok := strings.Repeat("x", MinGDPRSecretLen)
+	cfg, err := Load(with(map[string]string{"SITEBIN_STACK_GDPR_SECRET": " " + ok + " "}), noFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GDPRSecret != ok {
+		t.Errorf("GDPRSecret = %q", cfg.GDPRSecret)
+	}
+
+	// Alone, without self-registration: an operator who registered the app
+	// by hand still gets the endpoints.
+	cfg, err = Load(env(map[string]string{"SITEBIN_STACK_GDPR_SECRET": ok}), noFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GDPRSecret != ok {
+		t.Error("the secret must be accepted without SITEBIN_STACK_URL")
+	}
+	// And a short one alone is still a mistake worth stopping on.
+	if _, err := Load(env(map[string]string{"SITEBIN_STACK_GDPR_SECRET": short}), noFile); err == nil {
+		t.Error("a short secret must be refused even without self-registration")
 	}
 }

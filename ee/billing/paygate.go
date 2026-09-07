@@ -59,11 +59,6 @@ func NewPayGate(cfg eeconfig.PayGateConfig) *PayGate {
 // would create exactly the dependency this backend exists to avoid.
 func (g *PayGate) Name() string { return eeconfig.BackendPayGate }
 
-// ManageURL returns the configured "manage subscription" link ("" if unset).
-// It is only a fallback for an instance with no backend; a PayGate instance
-// gets a real portal from PortalURL.
-func (g *PayGate) ManageURL() string { return g.cfg.ManageURL }
-
 // CheckoutURL sells a tier by NAME. Sitebin never sends a provider price id,
 // because it must not know one: the stack resolves the tier to whatever the
 // processor it currently uses calls that price.
@@ -97,12 +92,22 @@ func (g *PayGate) CheckoutURL(ctx context.Context, c Customer, tier eeconfig.Tie
 	return out.Data.CheckoutURL, nil
 }
 
-// PortalURL returns the stack's billing portal for an existing subscriber, or
-// "" when they have never paid -- which is not an error, it just means the
-// dashboard shows the plans instead.
+// PortalURL is where a stack user manages their subscription.
+//
+// It is the stack's HOSTED PLAN PAGE whenever one can be derived (an OIDC
+// issuer is configured — see eeconfig.PayGateConfig.PlanURL): current plan,
+// the plans it could move to, change, cancel, resume, invoices, all themed as
+// Sitebin and built by nobody here. No call is made to find it; the page is
+// where the stack says it is. The processor's own portal, which the stack can
+// also mint, is the fallback for an instance that has PayGate without an
+// issuer — and "" for a customer who has never paid, which is not an error,
+// it just means the dashboard shows the plans instead.
 func (g *PayGate) PortalURL(ctx context.Context, c Customer, returnURL string) (string, error) {
 	if c.Subject == "" {
 		return "", nil
+	}
+	if g.cfg.PlanURL != "" {
+		return g.cfg.PlanURL, nil
 	}
 	body := map[string]string{}
 	if returnURL != "" {

@@ -5,6 +5,8 @@ package eeconfig
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -191,19 +193,43 @@ type Config struct {
 	// StackRegistration makes the instance announce itself to the SaaS Stack
 	// at startup. nil = it does not.
 	StackRegistration *StackConfig
+	// GDPRSecret is the shared secret the SaaS Stack signs its GDPR webhook
+	// calls with (delete user, export user data). Empty = the endpoints are
+	// not mounted at all, because nothing could verify a caller. Required,
+	// and at least 32 characters, whenever SITEBIN_STACK_URL is set: a stack
+	// instance that cannot take a deletion order is one that leaves personal
+	// data behind after the identity is gone.
+	GDPRSecret string
 
 	byID map[string]Tier
 }
+
+// MinGDPRSecretLen is the stack's own floor for the webhook secret
+// (`gdpr.webhookSecret`, min 32); refusing a shorter one here rather than in
+// the registration goroutine is what makes the mistake visible at boot.
+const MinGDPRSecretLen = 32
 
 // PayGateConfig points Sitebin at a SaaS-Stack PayGate as the subscription
 // source of truth: accounts signed in via the generic OIDC provider get their
 // tier from PayGate (stack tier ids must match tiers.json ids).
 type PayGateConfig struct {
-	URL       string        // PayGate base URL, no trailing slash
-	AppID     string        // the stack app id Sitebin is onboarded as
-	APIKey    string        // stack app API key (ssk_…)
-	CacheTTL  time.Duration // per-user tier cache (default 5m)
-	ManageURL string        // optional dashboard "manage subscription" link
+	URL      string        // PayGate base URL, no trailing slash
+	AppID    string        // the stack app id Sitebin is onboarded as
+	APIKey   string        // stack app API key (ssk_…)
+	CacheTTL time.Duration // per-user tier cache (default 5m)
+	// PlanURL is the stack's hosted manage-my-plan page for this app —
+	// current plan, the plans it could move to, change, cancel, resume,
+	// invoices — DERIVED from the OIDC issuer and the app id exactly as the
+	// stack's own SDK does (`planUrl()` in packages/oidc): the issuer's origin
+	// is the stack portal's origin, and the page is `/apps/<appId>/plan` on
+	// it. Empty when no generic OIDC issuer is configured, in which case there
+	// is no stack identity to show a plan for anyway.
+	//
+	// Derived rather than configured on purpose. It used to be an operator
+	// setting (a "manage URL"), which is one more value that can disagree
+	// with the issuer the instance actually signs in against; the stack
+	// defines where the page is, and so does this.
+	PlanURL string
 }
 
 // StackConfig makes this instance register itself with the IT-Trail SaaS
@@ -222,39 +248,58 @@ type StackConfig struct {
 	// stack so it can mint licences with the right entitlements. nil = declare
 	// nothing, and the stack keeps whatever it already holds.
 	Licensing *StackLicensing
-	// Terms is this deployment's own terms of service, declared to the stack
-	// so its consent gate can ask for them. nil = declare nothing, and the
-	// stack keeps whatever it already holds.
-	Terms *StackTerms
+	// Consents are this deployment's own consent documents — its terms of
+	// service, its data processing agreement — declared to the stack so its
+	// consent gate can ask for them, in this order, after the platform's own
+	// document. nil = declare nothing, and the stack keeps whatever it
+	// already holds.
+	Consents []StackConsent
 }
 
-// StackTerms is the registration payload's `terms` block: the deployment's own
-// terms of service, which the stack's consent gate shows inside the sign-in
-// (the second of the two documents — the first is the platform's, which no app
-// may declare). Sitebin renders nothing and stores nothing; declaring this is
-// the whole integration.
+// StackConsent is one entry of the registration payload's `consents` block:
+// one document the stack's consent gate shows inside the sign-in, after the
+// platform's own (which no app may declare). Sitebin renders nothing and
+// stores nothing; declaring the list is the whole integration.
 //
-// It comes from SITEBIN_STACK_TERMS rather than from a constant in this repo
-// for exactly the reason SITEBIN_STACK_LICENSING does: these are one
-// deployment's commercial and legal terms — sitebin.io's, on the hosted
-// instance — they change when that page changes, and this repo is public and
+// It comes from SITEBIN_STACK_CONSENTS rather than from a constant in this
+// repo for exactly the reason SITEBIN_STACK_LICENSING does: these are one
+// deployment's commercial and legal documents — sitebin.io's, on the hosted
+// instance — they change when those pages change, and this repo is public and
 // released on its own schedule. A self-hosted Sitebin has its own terms or
 // none, and neither is ours to write.
 //
-// The shape is the stack's, verbatim, so an operator can paste the block the
+// The shape is the stack's, verbatim, so an operator can paste the list the
 // stack's README documents:
 //
-//	{"version":"2026-09-01","url":"https://sitebin.io/terms","title":{"en":"Sitebin Terms of Service"}}
+//	[{"key":"terms","version":"2026-09-08","url":"https://sitebin.io/terms/","title":{"en":"Sitebin Terms of Service"}},
+//	 {"key":"dpa","version":"2026-09-08","url":"https://sitebin.io/dpa/","title":{"en":"Data Processing Agreement"}}]
 //
-// Version is opaque and RAISING IT ASKS EVERY USER AGAIN. It is also
-// immutable: re-declaring a version the stack has already recorded with
-// different content is refused outright, because registration runs on every
-// boot and a warning would scroll past.
-type StackTerms struct {
+// Key is the document's IDENTITY within this app, for ever: changing it does
+// not rename a document, it declares a new one and asks everybody again.
+// Version is opaque and RAISING IT ASKS EVERY USER AGAIN, for that document
+// alone; it is also immutable, because re-declaring a version the stack has
+// already recorded with different content is refused outright, and
+// registration runs on every boot where a warning would scroll past. Required
+// defaults to true on the stack; a false entry is shown and recorded and
+// does not block, which is what a marketing consent needs. The list's order
+// is the presentation order.
+type StackConsent struct {
+	Key     string            `json:"key"`
 	Version string            `json:"version"`
 	URL     string            `json:"url"`
 	Title   map[string]string `json:"title,omitempty"`
+	// Required is a pointer so that "not stated" is sent as nothing at all
+	// and the stack applies its own default (true), rather than Sitebin
+	// restating a default it does not own.
+	Required *bool `json:"required,omitempty"`
 }
+
+// consentKeyRe is the stack's CONSENT_KEY_PATTERN, verbatim: a key is a slug
+// the gate puts in form values and record rows, not a heading.
+var consentKeyRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+
+// maxStackConsents is the stack's MAX_APP_CONSENT_DOCUMENTS.
+const maxStackConsents = 20
 
 // StackLicensing is the registration payload's `licensing` block: the
 // entitlements each licence PLAN carries and how long a lapsed licence stays
@@ -385,24 +430,24 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Co
 			}
 			cfg.StackRegistration.Licensing = &lic
 		}
-		if raw := strings.TrimSpace(getenv("SITEBIN_STACK_TERMS")); raw != "" {
-			var terms StackTerms
-			if err := json.Unmarshal([]byte(raw), &terms); err != nil {
-				return cfg, fmt.Errorf("SITEBIN_STACK_TERMS: %w", err)
+		if raw := strings.TrimSpace(getenv("SITEBIN_STACK_CONSENTS")); raw != "" {
+			consents, err := parseConsents(raw)
+			if err != nil {
+				return cfg, fmt.Errorf("SITEBIN_STACK_CONSENTS: %w", err)
 			}
-			terms.Version = strings.TrimSpace(terms.Version)
-			terms.URL = strings.TrimSpace(terms.URL)
-			// Both are required by the stack, and a half-filled block is the
-			// operator mistake worth catching here rather than in a
-			// registration that fails in a background goroutine at boot.
-			if terms.Version == "" || terms.URL == "" {
-				return cfg, fmt.Errorf("SITEBIN_STACK_TERMS: both version and url are required")
-			}
-			if !strings.HasPrefix(terms.URL, "https://") && !strings.HasPrefix(terms.URL, "http://") {
-				return cfg, fmt.Errorf("SITEBIN_STACK_TERMS: url %q is not an http(s) URL", terms.URL)
-			}
-			cfg.StackRegistration.Terms = &terms
+			cfg.StackRegistration.Consents = consents
 		}
+	}
+	// The GDPR webhook secret. Parsed outside the SITEBIN_STACK_URL block so an
+	// operator who registered the app by hand can still take the stack's
+	// deletion and export calls; required inside it, because a self-registered
+	// instance that declares no `gdpr` block is one the stack can never erase.
+	cfg.GDPRSecret = strings.TrimSpace(getenv("SITEBIN_STACK_GDPR_SECRET"))
+	if cfg.GDPRSecret != "" && len(cfg.GDPRSecret) < MinGDPRSecretLen {
+		return cfg, fmt.Errorf("SITEBIN_STACK_GDPR_SECRET must be at least %d characters (the stack refuses a shorter one)", MinGDPRSecretLen)
+	}
+	if cfg.StackRegistration != nil && cfg.GDPRSecret == "" {
+		return cfg, fmt.Errorf("SITEBIN_STACK_GDPR_SECRET is required with SITEBIN_STACK_URL: the stack must be able to order a deletion and an export")
 	}
 	cfg.DefaultTier = strings.TrimSpace(getenv("SITEBIN_DEFAULT_TIER"))
 	cfg.AnonTier = strings.TrimSpace(getenv("SITEBIN_ANON_TIER"))
@@ -502,7 +547,10 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Co
 		}
 		cfg.PayGate = &PayGateConfig{
 			URL: strings.TrimRight(pgURL, "/"), AppID: pgApp, APIKey: pgKey,
-			CacheTTL: ttl, ManageURL: strings.TrimSpace(getenv("SITEBIN_PAYGATE_MANAGE_URL")),
+			CacheTTL: ttl,
+		}
+		if cfg.OIDC != nil {
+			cfg.PayGate.PlanURL = stackPlanURL(cfg.OIDC.Issuer, pgApp)
 		}
 	}
 
@@ -592,6 +640,89 @@ func emailList(s string) []string {
 		}
 	}
 	return out
+}
+
+// parseConsents decodes SITEBIN_STACK_CONSENTS and refuses at boot what the
+// stack would refuse in the registration goroutine, where the failure would
+// only be a log line: a document with no key, version or URL, a key the gate
+// cannot put in a form value, two entries claiming one key, more than the
+// stack's cap, and an EMPTY list — which is not "declare nothing" (that is the
+// variable being unset) but "this app asks for nothing", a state the stack
+// distinguishes and an operator clears on the stack rather than by accident.
+func parseConsents(raw string) ([]StackConsent, error) {
+	var consents []StackConsent
+	if err := json.Unmarshal([]byte(raw), &consents); err != nil {
+		return nil, err
+	}
+	if len(consents) == 0 {
+		return nil, fmt.Errorf("declares no documents; unset it to declare nothing, or clear the app's consents on the stack")
+	}
+	if len(consents) > maxStackConsents {
+		return nil, fmt.Errorf("declares %d documents; the stack accepts at most %d", len(consents), maxStackConsents)
+	}
+	seen := map[string]bool{}
+	for i := range consents {
+		c := &consents[i]
+		c.Key = strings.TrimSpace(c.Key)
+		c.Version = strings.TrimSpace(c.Version)
+		c.URL = strings.TrimSpace(c.URL)
+		if !consentKeyRe.MatchString(c.Key) {
+			return nil, fmt.Errorf("document %d: key %q must be lowercase letters, digits, \"-\" or \"_\" (e.g. \"terms\", \"dpa\")", i+1, c.Key)
+		}
+		if seen[c.Key] {
+			return nil, fmt.Errorf("key %q is declared twice; a key IS the document within this app", c.Key)
+		}
+		seen[c.Key] = true
+		if c.Version == "" || c.URL == "" {
+			return nil, fmt.Errorf("document %q: both version and url are required", c.Key)
+		}
+		if !strings.HasPrefix(c.URL, "https://") && !strings.HasPrefix(c.URL, "http://") {
+			return nil, fmt.Errorf("document %q: url %q is not an http(s) URL", c.Key, c.URL)
+		}
+	}
+	return consents, nil
+}
+
+// stackPlanURL is the stack's hosted plan page for one app, built exactly as
+// the stack's own SDK builds it (`planUrl()` in packages/oidc/src/urls.ts):
+// the portal's origin, then `/apps/<appId>/plan`. The portal's origin is the
+// issuer's origin — `https://auth.<domain>` serves both the realm and the
+// stack portal — so the issuer is the one value it is derived from.
+func stackPlanURL(issuer, appID string) string {
+	u, err := url.Parse(issuer)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host + "/apps/" + url.PathEscape(appID) + "/plan"
+}
+
+// AccountConsoleURL is the identity provider's account console — password,
+// sessions, second factors, linked identities, data export and account
+// deletion — for a user who signed in through the generic OIDC provider.
+// Built as the stack's own SDK builds it (`accountUrl()` in
+// packages/oidc/src/urls.ts): `<issuer>/account/`, with `referrer` naming the
+// client so the console brands itself for this app and offers a way back.
+// Empty when no generic OIDC issuer is configured.
+//
+// It is Keycloak's convention and it works for any Keycloak-backed issuer, not
+// only the stack; a plain OIDC provider that has no console at that path
+// simply answers 404 to a link the operator can see on the dashboard.
+func (c Config) AccountConsoleURL() string {
+	if c.OIDC == nil {
+		return ""
+	}
+	return strings.TrimRight(c.OIDC.Issuer, "/") + "/account/?referrer=" + url.QueryEscape(c.OIDC.ClientID)
+}
+
+// StackDeletion reports whether the account console, not Sitebin, is where an
+// OIDC-signed-in user deletes their account. It is true only when the stack
+// can actually order the deletion back — the GDPR webhook secret is set —
+// because sending a user to the console when nothing will ever call Sitebin
+// afterwards would leave their sites and tokens behind with no owner to be
+// found. Local accounts always delete locally: the stack has never heard of
+// them.
+func (c Config) StackDeletion() bool {
+	return c.OIDC != nil && c.GDPRSecret != ""
 }
 
 // resolveBillingBackend settles which single backend may sell a tier.

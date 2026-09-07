@@ -62,18 +62,38 @@ type stackRegistration struct {
 	// the stack's convergence MERGES: a block that is absent keeps what the
 	// app already had, and an empty one would wipe it.
 	Licensing *eeconfig.StackLicensing `json:"licensing,omitempty"`
-	// Terms is this deployment's own terms of service. The stack's consent
-	// gate collects two documents inside the sign-in — the platform's, once
-	// per user, and the app's, once per app — and this block is the whole of
-	// Sitebin's side of it: no page, no endpoint, no callback. Sitebin must
-	// never render a terms screen of its own; if it does, this declaration is
-	// what is wrong.
+	// Consents are this deployment's own consent documents — its terms of
+	// service and its data processing agreement, on the hosted instance. The
+	// stack's consent gate collects the platform's document once per user and
+	// then each of these once per app, in this order, inside the sign-in, and
+	// this list is the whole of Sitebin's side of it: no page, no endpoint, no
+	// callback. Sitebin must never render a consent screen of its own; if it
+	// does, this declaration is what is wrong.
+	//
+	// It is the stack's `consents` block and NEVER its `terms` shorthand:
+	// `terms` is exactly one document keyed "terms", a second document has
+	// nowhere to go in it, and a payload carrying both is refused outright.
 	//
 	// Omitted when unconfigured rather than sent empty, for the same reason
-	// Licensing is: the stack's convergence MERGES, so an absent block keeps
-	// what the app already declared, and an empty one would be a version and
-	// a URL of nothing.
-	Terms *eeconfig.StackTerms `json:"terms,omitempty"`
+	// Licensing is: the stack's convergence MERGES, so an absent list keeps
+	// what the app already declared, and an empty one means "this app asks
+	// for nothing" — a real state, but one an operator sets on purpose on the
+	// stack, not by leaving a variable blank.
+	Consents []eeconfig.StackConsent `json:"consents,omitempty"`
+	// GDPR is where the stack orders a deletion (Art. 17) or an export
+	// (Art. 20) of one user's data, and the secret it signs those orders
+	// with. The URLs are built from the same base URL as the OIDC callback,
+	// so what is declared and what is served cannot disagree; the secret is
+	// SITEBIN_STACK_GDPR_SECRET. Omitted when no secret is configured, in
+	// which case the endpoints are not mounted either — a URL the stack can
+	// call but nothing can verify would be worse than none.
+	GDPR *stackGDPR `json:"gdpr,omitempty"`
+}
+
+type stackGDPR struct {
+	DeleteUserURL     string `json:"deleteUserUrl"`
+	ExportUserDataURL string `json:"exportUserDataUrl"`
+	WebhookSecret     string `json:"webhookSecret"`
 }
 
 type stackBilling struct {
@@ -137,12 +157,13 @@ func (p *provider) registerWithStack() {
 				"url", reg.URL, "app", reg.AppID, "err", err)
 			return
 		}
-		terms := ""
-		if body.Terms != nil {
-			terms = body.Terms.Version
+		consents := make([]string, 0, len(body.Consents))
+		for _, c := range body.Consents {
+			consents = append(consents, c.Key+"@"+c.Version)
 		}
 		slog.Info("registered with the saas stack", "app", reg.AppID, "url", reg.URL,
-			"tiers", len(body.Billing.Tiers), "mcp", body.MCP != nil, "terms", terms)
+			"tiers", len(body.Billing.Tiers), "mcp", body.MCP != nil,
+			"consents", strings.Join(consents, ","), "gdpr", body.GDPR != nil)
 	}()
 }
 
@@ -187,7 +208,17 @@ func (p *provider) stackDeclaration(appID string) stackRegistration {
 	// worse than no block, because the stack merges.
 	if p.cfg.StackRegistration != nil {
 		reg.Licensing = p.cfg.StackRegistration.Licensing
-		reg.Terms = p.cfg.StackRegistration.Terms
+		reg.Consents = p.cfg.StackRegistration.Consents
+	}
+	// The GDPR endpoints, at the paths gdprRoutes mounts them on and from the
+	// same base URL as the callback above, so the stack is told exactly where
+	// the running instance answers.
+	if p.cfg.GDPRSecret != "" {
+		reg.GDPR = &stackGDPR{
+			DeleteUserURL:     base + gdprDeletePath,
+			ExportUserDataURL: base + gdprExportPath,
+			WebhookSecret:     p.cfg.GDPRSecret,
+		}
 	}
 
 	// MCP is declared only where it is actually served, and the resource comes

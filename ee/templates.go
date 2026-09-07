@@ -118,6 +118,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
     <span class="muted">{{.Email}}{{if .Tier}} · {{.Tier}} tier{{end}}</span>
     <span class="spacer" style="flex:1"></span>
     {{if .IsAdmin}}<a class="btn small" href="/account/admin">Instance register</a>{{end}}
+    {{if .AccountURL}}<a class="btn small" href="{{.AccountURL}}" rel="noopener" title="Password, sign-in methods, sessions, data export and account deletion">Manage account</a>{{end}}
     <form class="inline" method="post" action="/account/logout"><button class="btn small" type="submit">Sign out</button></form>
   </div>
 
@@ -176,18 +177,10 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
     </form>
   </div>
 
-  {{if .ManageURL}}
-  <div class="card">
-    <h3>Plan</h3>
-    <p class="muted">Your plan is managed through your organization's subscription.</p>
-    <a class="btn small" href="{{.ManageURL}}" target="_blank" rel="noopener">Manage subscription</a>
-  </div>
-  {{end}}
-
   {{if .Portal}}
   <div class="card">
     <h3>Billing</h3>
-    <p class="muted">Payment method, invoices and cancellation.</p>
+    <p class="muted">Your plan, payment method, invoices and cancellation.</p>
     <form class="inline" method="post" action="/account/billing/portal">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
       <button class="btn small" type="submit">Manage subscription</button>
@@ -224,10 +217,15 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
 
   <div class="card" style="border-color:rgba(242,109,109,.25)">
     <h3 style="color:var(--danger)">Danger zone</h3>
+    {{if .StackDeletion}}
+    <p class="muted">Your account is deleted from the account console, where your sign-in lives. When it is, every site, token and record this instance holds for you is removed as well.</p>
+    <a class="btn danger" href="{{.AccountURL}}" rel="noopener">Delete account in the account console</a>
+    {{else}}
     <form method="post" action="/account/delete" onsubmit="return confirm('Delete your account AND all its sites? This cannot be undone.')">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
       <button class="btn danger" type="submit">Delete account and all sites</button>
     </form>
+    {{end}}
   </div>
 </main>
 ` + pageFoot))

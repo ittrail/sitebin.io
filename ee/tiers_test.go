@@ -254,29 +254,43 @@ func TestPayGateUnknownTierFallsBack(t *testing.T) {
 	}
 }
 
-func TestPayGateDashboardShowsManageLink(t *testing.T) {
+// A PayGate-resolved account manages its subscription on the stack's hosted
+// plan page, which is DERIVED from the issuer and the app id — there is no
+// manage URL to configure and so none that can disagree with the stack the
+// instance signs in against. The dashboard offers it through the neutral
+// portal route, and the account console beside it.
+func TestPayGateDashboardOffersTheHostedPlanPage(t *testing.T) {
 	srv := pgStub(t, "pro", "active", 200)
 	defer srv.Close()
-	t.Setenv("SITEBIN_PAYGATE_MANAGE_URL", "https://stack.example/account")
 	p := setupPayGate(t, srv.URL)
 	acc, err := p.accounts.CreateOAuth(account.OIDCProv, "stack-user-9", "u9@example.com", "free")
 	if err != nil {
 		t.Fatal(err)
 	}
 	mux := serveMux(p)
+	cookie := p.sessions.Cookie(acc.ID, acc.TokenVersion)
 	req := httptest.NewRequest("GET", "/account", nil)
-	req.AddCookie(p.sessions.Cookie(acc.ID, acc.TokenVersion))
+	req.AddCookie(cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	body := w.Body.String()
-	if !strings.Contains(body, "https://stack.example/account") || !strings.Contains(body, "Manage subscription") {
-		t.Error("manage-subscription link missing from dashboard")
+	if !strings.Contains(body, `action="/account/billing/portal"`) || !strings.Contains(body, "Manage subscription") {
+		t.Error("manage-subscription form missing from dashboard")
 	}
-	if strings.Contains(body, "/account/billing/") {
-		t.Error("built-in checkout should be hidden for PayGate-resolved accounts")
+	if !strings.Contains(body, "https://auth.stack.example/api/v1/sitebin/account/?referrer=sitebin") {
+		t.Error("account console link missing from dashboard")
 	}
 	if !strings.Contains(body, "Pro tier") {
 		t.Errorf("dashboard should show the PayGate-resolved tier; body header: %.200s", body)
+	}
+
+	portal := form(url.Values{"csrf": {p.csrf(acc)}})
+	portal.URL.Path = "/account/billing/portal"
+	portal.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, portal)
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "https://auth.stack.example/apps/sitebin/plan" {
+		t.Errorf("portal = %d %q, want a 303 to the stack's plan page", w.Code, w.Header().Get("Location"))
 	}
 }
 
