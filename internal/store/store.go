@@ -117,6 +117,10 @@ type Store struct {
 	reserved     []string
 	maxSiteBytes int64
 	maxFiles     int
+	// verifier proves custom-domain ownership; viewDomain is what a site's
+	// view host is built from for the CNAME route. See SetDomainVerifier.
+	verifier   DomainVerifier
+	viewDomain string
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex // per view id

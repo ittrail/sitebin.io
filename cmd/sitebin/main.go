@@ -131,6 +131,19 @@ func mustStore(cfg config.Config) *store.Store {
 	}
 	// Nobody may claim a custom domain under the view namespace.
 	st.ReserveDomains(cfg.ViewDomain)
+	// A custom domain is attached only once its DNS proves it belongs to the
+	// site — unless the operator switched that off for a trusted instance.
+	// The CNAME route needs the view host, which only exists with subdomain
+	// views.
+	viewDomain := ""
+	if cfg.SubdomainViews() {
+		viewDomain = cfg.ViewDomain
+	}
+	if cfg.DomainVerification == config.DomainVerifyOff {
+		st.SetDomainVerifier(store.TrustingVerifier{}, viewDomain)
+	} else {
+		st.SetDomainVerifier(store.NewDNSVerifier(), viewDomain)
+	}
 	return st
 }
 
@@ -173,6 +186,9 @@ func serve(withCaddy bool) error {
 		}
 		slog.Info("extension active", "name", p.Name(), "version", p.Version(),
 			"accounts_enabled", p.AccountsEnabled())
+	}
+	if cfg.DomainVerification == config.DomainVerifyOff {
+		slog.Warn("SITEBIN_DOMAIN_VERIFICATION=off: custom domains are attached without proof of ownership; only safe when every account holder is trusted")
 	}
 	if p, ok := ext.Get(); len(cfg.EmbedOrigins) > 0 && (!ok || !p.EmbedOriginsAllowed()) {
 		slog.Warn("SITEBIN_EMBED_ORIGINS is set, but cross-origin embedding is an enterprise feature; ignoring it in this edition")

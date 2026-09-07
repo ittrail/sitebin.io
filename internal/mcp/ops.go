@@ -136,26 +136,40 @@ type Settings struct {
 // same struct for create, get, update and the file tools: an agent that has
 // learned to read one has learned to read all of them.
 type SiteResult struct {
-	ID            string     `json:"id" jsonschema:"the site's view id"`
-	EditID        string     `json:"edit_id" jsonschema:"the id that addresses this site in later tool calls"`
-	EditPassword  string     `json:"edit_password,omitempty" jsonschema:"returned once, at creation only, and never again — store it or you cannot manage this site without an account token"`
-	ViewURL       string     `json:"view_url" jsonschema:"the public URL of the site"`
-	EditURL       string     `json:"edit_url" jsonschema:"the human edit page for this site"`
-	Mode          string     `json:"mode"`
-	EntryFile     string     `json:"entry_file,omitempty"`
-	SPAFallback   bool       `json:"spa_fallback"`
-	ViewProtected bool       `json:"view_password_protected"`
-	WebDAVEnabled bool       `json:"webdav_enabled"`
-	FTPEnabled    bool       `json:"ftp_enabled"`
-	CustomDomains []string   `json:"custom_domains,omitempty"`
-	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
-	ExpiryCapDays int        `json:"expiry_cap_days,omitempty" jsonschema:"the maximum lifetime this site's plan allows, in days; 0 means unlimited"`
-	Files         []FileInfo `json:"files"`
-	Bytes         int64      `json:"bytes"`
-	FileCount     int        `json:"file_count"`
-	MaxBytes      int64      `json:"max_bytes,omitempty"`
-	MaxFiles      int        `json:"max_files,omitempty"`
-	Warnings      []string   `json:"warnings,omitempty"`
+	ID            string   `json:"id" jsonschema:"the site's view id"`
+	EditID        string   `json:"edit_id" jsonschema:"the id that addresses this site in later tool calls"`
+	EditPassword  string   `json:"edit_password,omitempty" jsonschema:"returned once, at creation only, and never again — store it or you cannot manage this site without an account token"`
+	ViewURL       string   `json:"view_url" jsonschema:"the public URL of the site"`
+	EditURL       string   `json:"edit_url" jsonschema:"the human edit page for this site"`
+	Mode          string   `json:"mode"`
+	EntryFile     string   `json:"entry_file,omitempty"`
+	SPAFallback   bool     `json:"spa_fallback"`
+	ViewProtected bool     `json:"view_password_protected"`
+	WebDAVEnabled bool     `json:"webdav_enabled"`
+	FTPEnabled    bool     `json:"ftp_enabled"`
+	CustomDomains []string `json:"custom_domains,omitempty" jsonschema:"custom domains that are verified and serving"`
+	// PendingDomains are custom domains claimed but not yet proven. Each
+	// carries the DNS record that proves it; add_domain again once it is in
+	// place, or wait for the instance to check on its own.
+	PendingDomains []PendingDomain `json:"pending_domains,omitempty" jsonschema:"custom domains claimed but not yet verified, with the DNS record to create"`
+	ExpiresAt      *time.Time      `json:"expires_at,omitempty"`
+	ExpiryCapDays  int             `json:"expiry_cap_days,omitempty" jsonschema:"the maximum lifetime this site's plan allows, in days; 0 means unlimited"`
+	Files          []FileInfo      `json:"files"`
+	Bytes          int64           `json:"bytes"`
+	FileCount      int             `json:"file_count"`
+	MaxBytes       int64           `json:"max_bytes,omitempty"`
+	MaxFiles       int             `json:"max_files,omitempty"`
+	Warnings       []string        `json:"warnings,omitempty"`
+}
+
+// PendingDomain is a claimed custom domain and the proof it is waiting for:
+// EITHER a TXT record at TXTName with value TXTValue, OR a CNAME at the domain
+// pointing at CNAMETarget (absent on instances without view hosts).
+type PendingDomain struct {
+	Domain      string `json:"domain"`
+	TXTName     string `json:"txt_name" jsonschema:"owner name of the TXT record that proves control"`
+	TXTValue    string `json:"txt_value" jsonschema:"the value that TXT record must carry"`
+	CNAMETarget string `json:"cname_target,omitempty" jsonschema:"alternatively, the host a CNAME at the domain must point to"`
 }
 
 // FileInfo is one entry in a site's file listing.

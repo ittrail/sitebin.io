@@ -20,6 +20,9 @@ func newTestStore(t *testing.T) *Store {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	// Domains attach without DNS proof here; the verification tests install
+	// their own verifier.
+	s.SetDomainVerifier(TrustingVerifier{}, "sitebin.example")
 	return s
 }
 

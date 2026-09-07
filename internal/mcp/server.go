@@ -233,7 +233,9 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 	sdk.AddTool(s, &sdk.Tool{
 		Name: "add_domain",
 		Description: "Attach a custom domain to a site. Enterprise instances only. " +
-			"The domain's DNS must already point at this Sitebin instance.",
+			"The domain is attached once its DNS proves it belongs to this site: until then the result lists it under " +
+			"pending_domains with the TXT record (or CNAME) to create. Create the record, then call add_domain again, " +
+			"or wait: the instance re-checks pending domains itself.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in domainArgs) (*sdk.CallToolResult, *SiteResult, error) {
 		if err := authorize(auth, ScopeWrite); err != nil {
 			return nil, nil, err

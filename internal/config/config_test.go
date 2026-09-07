@@ -343,3 +343,22 @@ func TestViewURLUsesTheViewDomain(t *testing.T) {
 		t.Error("the edit page is app UI and must stay on the main domain")
 	}
 }
+
+func TestDomainVerificationSetting(t *testing.T) {
+	base := map[string]string{"SITEBIN_BASE_DOMAIN": "sitebin.example", "SITEBIN_HTTP_ONLY": "true"}
+	cfg, err := Load(env(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DomainVerification != DomainVerifyDNS {
+		t.Errorf("default = %q, want dns: ownership is proven unless an operator opts out", cfg.DomainVerification)
+	}
+	base["SITEBIN_DOMAIN_VERIFICATION"] = "OFF"
+	if cfg, err := Load(env(base)); err != nil || cfg.DomainVerification != DomainVerifyOff {
+		t.Errorf("off: %q %v", cfg.DomainVerification, err)
+	}
+	base["SITEBIN_DOMAIN_VERIFICATION"] = "sometimes"
+	if _, err := Load(env(base)); err == nil || !strings.Contains(err.Error(), "SITEBIN_DOMAIN_VERIFICATION") {
+		t.Errorf("an unknown value must be refused: %v", err)
+	}
+}

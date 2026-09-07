@@ -11,18 +11,23 @@ import (
 // Meta is the per-site metadata file (meta.json), the single source of truth
 // for a site's settings. Plaintext passwords are never stored here.
 type Meta struct {
-	ID                    string   `json:"id"`
-	EditID                string   `json:"edit_id"`
-	EditPasswordHash      string   `json:"edit_password_hash"`
-	Mode                  string   `json:"mode"`
-	ViewPasswordProtected bool     `json:"view_password_protected"`
-	ViewPasswordHash      string   `json:"view_password_hash,omitempty"`
-	WebDAVEnabled         bool     `json:"webdav_enabled"`
-	FTPEnabled            bool     `json:"ftp_enabled"`
-	CustomDomains         []string `json:"custom_domains"`
-	EntryFile             string   `json:"entry_file"`
-	SPAFallback           bool     `json:"spa_fallback"`               // webserver mode: serve index.html for unknown paths
-	OwnerAccountID        string   `json:"owner_account_id,omitempty"` // enterprise: owning account (empty = anonymous)
+	ID                    string `json:"id"`
+	EditID                string `json:"edit_id"`
+	EditPasswordHash      string `json:"edit_password_hash"`
+	Mode                  string `json:"mode"`
+	ViewPasswordProtected bool   `json:"view_password_protected"`
+	ViewPasswordHash      string `json:"view_password_hash,omitempty"`
+	WebDAVEnabled         bool   `json:"webdav_enabled"`
+	FTPEnabled            bool   `json:"ftp_enabled"`
+	// CustomDomains are the VERIFIED custom domains: indexed, served, issued
+	// certificates. DomainClaims holds every domain the site has asked for,
+	// verified or pending, with the token its owner proves control with; a
+	// pending claim is never in CustomDomains. See domainverify.go.
+	CustomDomains  []string      `json:"custom_domains"`
+	DomainClaims   []DomainClaim `json:"domain_claims,omitempty"`
+	EntryFile      string        `json:"entry_file"`
+	SPAFallback    bool          `json:"spa_fallback"`               // webserver mode: serve index.html for unknown paths
+	OwnerAccountID string        `json:"owner_account_id,omitempty"` // enterprise: owning account (empty = anonymous)
 
 	// Origin records which surface created the site. Empty — the value every
 	// meta.json written before this field has — means the UI or the JSON API,

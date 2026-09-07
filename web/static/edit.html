@@ -154,9 +154,10 @@
       <button class="btn small" id="e-add-domain">Add domain</button>
     </div>
     <div class="dnshint">
-      Point the domain at this server first:
-      <code>A → your server IP</code> or <code>CNAME → <span id="dns-target"></span></code>.
-      The certificate is issued automatically on the first visit.
+      A domain is attached once its DNS proves it belongs to this site: a TXT record with the token shown
+      after you add it, or a <code>CNAME</code> at the domain pointing at this site's own address. Route it with
+      <code>A → your server IP</code> or that <code>CNAME</code> (<span id="dns-target"></span> also works for routing,
+      but only the site's own address counts as proof). The certificate is issued automatically on the first visit.
     </div>
   </section>
 

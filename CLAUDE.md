@@ -82,6 +82,20 @@ Corollaries worth stating, because they have been violated before:
   sweep keeps the site and retries. A site kept too long is recoverable; a
   deleted one is not.
 
+## Custom domains prove ownership
+
+A custom domain is attached — indexed, served, issued a certificate — only
+once its DNS proves it belongs to the site: a TXT record with the claim's
+token, or a CNAME at the site's own view host (`internal/store/domainverify.go`).
+`CustomDomains` in `meta.json` stays the list of VERIFIED domains and is what
+everything else reads; `DomainClaims` carries every claim, pending or not,
+with its token. A pending claim is never indexed and reserves nothing. The
+sweep re-checks claims and detaches a verified domain only after its proof
+has been definitively absent for three days — a lookup error never detaches.
+A verified domain with no claim record predates verification and is left
+alone. `SITEBIN_DOMAIN_VERIFICATION=off` is for trusted instances and the e2e
+suite; the default is `dns`.
+
 ## Tiers, quotas and lifetimes
 
 The area with the most subtlety, and where the current unmerged work sits.

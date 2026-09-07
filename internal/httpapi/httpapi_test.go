@@ -3,6 +3,7 @@ package httpapi
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,6 +57,9 @@ func newEnv(t *testing.T, over map[string]string) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Domains attach without DNS proof in the suite; the verification tests
+	// install their own verifier.
+	st.SetDomainVerifier(store.TrustingVerifier{}, cfg.ViewDomain)
 	api, err := New(cfg, st, []byte("0123456789abcdef0123456789abcdef"), testFS)
 	if err != nil {
 		t.Fatal(err)
@@ -1982,5 +1986,77 @@ func TestWebDAVLockRespectsFileCountCap(t *testing.T) {
 	site, _ := e.st.ByViewID(c.ID)
 	if _, err := os.Lstat(site.ContentDir() + "/second.txt"); err == nil {
 		t.Fatal("file created past the cap")
+	}
+}
+
+// ---- custom-domain verification over the API ----
+
+// apiVerifier is a DomainVerifier the test flips per domain.
+type apiVerifier struct{ ok map[string]bool }
+
+func (v *apiVerifier) Verify(_ context.Context, domain, _, _ string) (bool, error) {
+	return v.ok[domain], nil
+}
+
+func TestAddDomainPendingUntilDNSProvesControl(t *testing.T) {
+	ext.Register(&fakeProvider{domainsOK: true})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	v := &apiVerifier{ok: map[string]bool{}}
+	e.st.SetDomainVerifier(v, e.cfg.ViewDomain)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+
+	add := func() *httptest.ResponseRecorder {
+		req := authed(httptest.NewRequest("POST", "/api/sites/"+edit+"/domains", strings.NewReader(`{"domain":"docs.customer.example"}`)), c.EditPassword)
+		req.Header.Set("Content-Type", "application/json")
+		return e.public(t, req)
+	}
+	w := add()
+	if w.Code != 202 {
+		t.Fatalf("add without proof = %d %s, want 202", w.Code, w.Body)
+	}
+	var out struct {
+		CustomDomains  []string `json:"custom_domains"`
+		PendingDomains []struct {
+			Domain      string `json:"domain"`
+			TXTName     string `json:"txt_name"`
+			TXTValue    string `json:"txt_value"`
+			CNAMETarget string `json:"cname_target"`
+		} `json:"pending_domains"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.CustomDomains) != 0 {
+		t.Errorf("attached without proof: %v", out.CustomDomains)
+	}
+	if len(out.PendingDomains) != 1 {
+		t.Fatalf("pending_domains = %+v", out.PendingDomains)
+	}
+	p := out.PendingDomains[0]
+	if p.Domain != "docs.customer.example" || p.TXTName != "_sitebin-challenge.docs.customer.example" ||
+		!strings.HasPrefix(p.TXTValue, "sitebin-verify=") || p.CNAMETarget != c.ID+".sitebin.example" {
+		t.Errorf("record instructions = %+v", p)
+	}
+	// Not indexed: no certificate, no serving.
+	if iw := e.internal(t, httptest.NewRequest("GET", "/internal/tls-check?domain=docs.customer.example", nil)); iw.Code != 404 {
+		t.Errorf("tls-check for a pending domain = %d, want 404", iw.Code)
+	}
+	if aw := e.internal(t, authzReq("docs.customer.example", "/", "")); aw.Code != 404 {
+		t.Errorf("authz for a pending domain = %d, want 404", aw.Code)
+	}
+	// The record appears; asking again attaches it.
+	v.ok["docs.customer.example"] = true
+	if w := add(); w.Code != 200 {
+		t.Fatalf("add with proof = %d %s", w.Code, w.Body)
+	}
+	if iw := e.internal(t, httptest.NewRequest("GET", "/internal/tls-check?domain=docs.customer.example", nil)); iw.Code != 200 {
+		t.Errorf("tls-check after verification = %d", iw.Code)
+	}
+	// GET shows no pending domain any more.
+	gw := e.public(t, authed(httptest.NewRequest("GET", "/api/sites/"+edit, nil), c.EditPassword))
+	if strings.Contains(gw.Body.String(), `"pending_domains":[{`) {
+		t.Errorf("a verified domain is still listed as pending: %s", gw.Body)
 	}
 }

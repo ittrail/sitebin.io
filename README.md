@@ -107,6 +107,7 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | `SITEBIN_MAX_FILES` | `1000` | Per-site file-count cap. |
 | `SITEBIN_MAX_EXPIRY_DAYS` | `0` (off) | Cap on how far in the future expiry may be set. A cap is also the default lifetime of a site created without an explicit expiry, and it cannot be cleared from the API. |
 | `SITEBIN_WEBDAV_ENABLED` | `true` | Global WebDAV switch (per-site toggle still applies). |
+| `SITEBIN_DOMAIN_VERIFICATION` | `dns` | How a custom domain proves it belongs to the site that claims it. `dns` attaches it only once a TXT record with the site's token or a CNAME at the site's own address is visible; `off` attaches on the owner's word alone — only for an instance whose every account holder you trust. See [Custom domains](#custom-domains-enterprise). |
 | `SITEBIN_FTP_ENABLED` | `false` | Global FTP switch (per-site toggle also required). See [FTP](#ftp). |
 | `SITEBIN_FTP_ADDR` / `SITEBIN_FTP_PASV_PORT_MIN` / `_MAX` | `:21` / `21000` / `21010` | FTP control port + passive data-port range (map them in `docker run`). |
 | `SITEBIN_FTP_PUBLIC_HOST` | base domain | Host advertised for FTP passive mode. |
@@ -455,12 +456,36 @@ challenge). Set `SITEBIN_VIEW_ACCESS` to change this:
 ### Custom domains *(Enterprise)*
 
 Custom domains are an [Enterprise](#editions) feature. In the enterprise
-edition, add a domain in the edit UI (or API), then point DNS at your server
-(`A <domain> → server IP`, or `CNAME → sitebin.example.com`). The certificate
-is issued automatically on the first HTTPS request, and the internal
-`tls-check` endpoint ensures certificates are only issued for domains that
-actually belong to a site (prevents issuance-DoS). In the community edition the
-domain API returns `403`.
+edition, add a domain in the edit UI (or API) and **prove you control it**:
+until then the claim is *pending* — recorded, shown with the record to create,
+but not served and not issued a certificate. Either record suffices:
+
+| Proof | Record |
+|---|---|
+| TXT | `_sitebin-challenge.<domain>` = `sitebin-verify=<token>` — the token is shown when you add the domain (`pending_domains[].txt_name` / `txt_value` in the API) |
+| CNAME | `<domain>` → `<view id>.<view domain>`, the site's own address — which is also how the domain routes here |
+
+The check runs when you add the domain, again on "Check now" (a repeat `POST`
+of the same domain re-checks with the same token), and every cleanup sweep,
+which attaches a claim on its own once the record appears. A claim that never
+verifies is dropped after 7 days. A pending claim reserves nothing: the site
+whose DNS carries *its* token gets the domain, whoever asked first — which is
+the point, because before this a stranger could claim `docs.customer.com`,
+wait for the customer to point DNS here, and be served on it with a valid
+certificate. Verified domains are re-checked daily and detached only after
+the proof has been **definitively** absent for three days; a lookup error
+never detaches anything. **Keep the TXT record** if you route with an `A`
+record — with a `CNAME` at the site's address the CNAME itself is the proof.
+
+Route the domain with `A <domain> → server IP` or that `CNAME`. The
+certificate is issued automatically on the first HTTPS request, and the
+internal `tls-check` endpoint issues certificates only for verified domains
+(prevents issuance-DoS). In the community edition the domain API returns
+`403`. `SITEBIN_DOMAIN_VERIFICATION=off` attaches on the owner's word alone;
+use it only where every account holder is trusted (the e2e suite does).
+
+Pending claims count against the per-site cap below, so claims cannot be
+sprayed.
 
 Two independent limits apply, and neither is per account:
 

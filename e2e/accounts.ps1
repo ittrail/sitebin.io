@@ -100,12 +100,23 @@ if ($site) {
     $r = Req "GET" "$origin/account" @("-b", $jar2)
     Assert "other account sees no sites" ($r.body -match "No sites yet")
 
-    # custom domains ARE available in the enterprise edition
+    # custom domains ARE available in the enterprise edition -- but a domain is
+    # attached only once its DNS proves it belongs to the site. acct.e2e.test
+    # has no such record, so the claim is recorded as pending (202) with the
+    # record to create, and nothing is served on it.
     $edit = ($site.edit_url -split "/e/")[1]
     $r = Req "POST" "$origin/api/sites/$edit/domains" @("-H", "X-Edit-Password: $($site.edit_password)", "-H", "Content-Type: application/json", "--data", (JsonBodyA '{"domain":"acct.e2e.test"}'))
-    Assert "custom domain allowed in enterprise (200)" ($r.code -eq 200) "got $($r.code): $($r.body)"
+    Assert "custom domain claim is pending verification (202)" ($r.code -eq 202) "got $($r.code): $($r.body)"
+    $claim = $null; if ($r.code -eq 202) { $claim = $r.body | ConvertFrom-Json }
+    Assert "pending claim names the TXT record to create" ($null -ne $claim -and $claim.pending_domains.Count -eq 1 -and $claim.pending_domains[0].txt_name -eq "_sitebin-challenge.acct.e2e.test" -and $claim.pending_domains[0].txt_value -match "^sitebin-verify=") "$($r.body)"
+    Assert "pending claim is not attached" ($null -ne $claim -and $claim.custom_domains.Count -eq 0) "$($r.body)"
     $r = Req "GET" "http://127.0.0.1:$Port/" @("-H", "Host: acct.e2e.test")
-    Assert "custom domain serves owned site" ($r.body -match "owned-site-ok") "code $($r.code)"
+    Assert "unverified domain serves nothing" ($r.code -ne 200 -or $r.body -notmatch "owned-site-ok") "code $($r.code)"
+    # asking again re-checks; the record is still absent, so still pending
+    $r = Req "POST" "$origin/api/sites/$edit/domains" @("-H", "X-Edit-Password: $($site.edit_password)", "-H", "Content-Type: application/json", "--data", (JsonBodyA '{"domain":"acct.e2e.test"}'))
+    Assert "re-check without the record stays pending (202)" ($r.code -eq 202) "got $($r.code)"
+    $r = Req "DELETE" "$origin/api/sites/$edit/domains/acct.e2e.test" @("-H", "X-Edit-Password: $($site.edit_password)")
+    Assert "a pending claim can be removed (200)" ($r.code -eq 200) "got $($r.code): $($r.body)"
 }
 
 # duplicate email rejected

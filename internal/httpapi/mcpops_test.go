@@ -667,3 +667,28 @@ func TestMCPOAuthScopesReachTheTools(t *testing.T) {
 		t.Errorf("refusal does not name the missing scope: %s", mcpText(res))
 	}
 }
+
+// A pending domain is a result, not a tool error: the agent gets the record
+// to create and the instruction to call add_domain again.
+func TestMCPAddDomainReportsPendingVerification(t *testing.T) {
+	ext.Register(&fakeProvider{domainsOK: true})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	e.st.SetDomainVerifier(&apiVerifier{ok: map[string]bool{}}, e.cfg.ViewDomain)
+	cs := mcpClient(t, e, nil)
+	editID, pw := mcpCreate(t, cs, "hi")
+
+	res := mcpCall(t, cs, "add_domain", map[string]any{
+		"edit_id": editID, "edit_password": pw, "domain": "docs.example.com",
+	})
+	if res.IsError {
+		t.Fatalf("a pending domain must not be a tool error: %s", mcpText(res))
+	}
+	text := mcpText(res)
+	if !strings.Contains(text, "pending_domains") || !strings.Contains(text, "_sitebin-challenge.docs.example.com") || !strings.Contains(text, "sitebin-verify=") {
+		t.Errorf("the result does not carry the record to create: %s", text)
+	}
+	if strings.Contains(text, `"custom_domains":["docs.example.com"]`) {
+		t.Error("the result lists an unverified domain as attached")
+	}
+}

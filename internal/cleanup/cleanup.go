@@ -66,6 +66,14 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 	removed := 0
 	for _, site := range sites {
 		reconcileTrust(st, site)
+		// The second half of custom-domain verification: claims whose record
+		// appeared since the owner asked are attached, verified domains are
+		// re-checked. Lookup errors change nothing (see store.ReconcileDomains).
+		if len(site.Meta.DomainClaims) > 0 {
+			if err := st.ReconcileDomains(context.Background(), site, now); err != nil {
+				slog.Error("cleanup: reconcile domains", "id", site.ViewID, "err", err)
+			}
+		}
 		if site.Meta.ExpiresAt == nil || !now.After(site.Meta.ExpiresAt.Add(grace)) {
 			continue
 		}

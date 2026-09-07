@@ -141,7 +141,10 @@ function StartInstance([string]$vol, [string[]]$envArgs, [switch]$Keep) {
     $script:vol = $vol
     $a = @("run", "-d", "--name", $name, "-p", "${Port}:80", "-v", "${vol}:/data",
         "-e", "SITEBIN_BASE_DOMAIN=${base}:$Port", "-e", "SITEBIN_HTTP_ONLY=true",
-        "-e", "SITEBIN_ACCOUNT_MODE=accounts", "-e", "SITEBIN_RATE_AUTH_PER_5MIN=200") + $envArgs + @($Image)
+        "-e", "SITEBIN_ACCOUNT_MODE=accounts", "-e", "SITEBIN_RATE_AUTH_PER_5MIN=200",
+        # This suite is about the licence's domain ceiling, not DNS: attach on
+        # the owner's word so the domains it adds serve at once.
+        "-e", "SITEBIN_DOMAIN_VERIFICATION=off") + $envArgs + @($Image)
     & docker @a | Out-Null
     if ($LASTEXITCODE -ne 0) { return $false }
     for ($i = 0; $i -lt 40; $i++) {

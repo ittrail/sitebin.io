@@ -1,6 +1,7 @@
 package cleanup
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"os"
@@ -17,6 +18,7 @@ func TestSweep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	st.SetDomainVerifier(store.TrustingVerifier{}, "sitebin.example")
 	now := time.Now().UTC()
 
 	healthy, _, _ := st.Create()
@@ -437,4 +439,39 @@ type trustProvider struct {
 
 func (p *trustProvider) QuotaFor(owner string) (ext.CreateGrant, bool, error) {
 	return ext.CreateGrant{OwnerAccountID: owner, Trusted: p.trusted[owner]}, true, nil
+}
+
+// sweepVerifier flips per domain.
+type sweepVerifier struct{ ok map[string]bool }
+
+func (v *sweepVerifier) Verify(_ context.Context, domain, _, _ string) (bool, error) {
+	return v.ok[domain], nil
+}
+
+// The sweep is the second half of domain verification: a claim whose record
+// appeared after the owner clicked "add" is attached without them coming back.
+func TestSweepAttachesAPendingDomainOnceProven(t *testing.T) {
+	st, err := store.New(t.TempDir(), "sitebin.example", 1<<20, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := &sweepVerifier{ok: map[string]bool{}}
+	st.SetDomainVerifier(v, "sitebin.example")
+	site, _, _ := st.Create()
+	if err := st.AddDomain(site, "later.example.org"); !errors.Is(err, store.ErrDomainPending) {
+		t.Fatalf("AddDomain = %v", err)
+	}
+	if _, err := Sweep(st, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ByDomain("later.example.org"); err == nil {
+		t.Fatal("attached without proof")
+	}
+	v.ok["later.example.org"] = true
+	if _, err := Sweep(st, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.ByDomain("later.example.org"); err != nil || got.ViewID != site.ViewID {
+		t.Fatalf("the sweep did not attach the proven domain: %v", err)
+	}
 }

@@ -13,6 +13,7 @@ func TestReservedDomainsCoverTheViewDomain(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.ReserveDomains("sitebin.app")
+	st.SetDomainVerifier(TrustingVerifier{}, "sitebin.app")
 	site, _, _ := st.Create()
 
 	for _, d := range []string{"sitebin.app", "evil.sitebin.app", "app.sitebin.io", "x.app.sitebin.io"} {

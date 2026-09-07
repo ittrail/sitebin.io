@@ -154,6 +154,9 @@ func (o mcpOps) siteResult(site *store.Site) *mcp.SiteResult {
 	for _, f := range files {
 		out.Files = append(out.Files, mcp.FileInfo{Path: f.Path, Bytes: f.Size})
 	}
+	for _, p := range o.a.pendingDomains(site) {
+		out.PendingDomains = append(out.PendingDomains, mcp.PendingDomain{Domain: p.Domain, TXTName: p.TXTName, TXTValue: p.TXTValue, CNAMETarget: p.CNAMETarget})
+	}
 	return out
 }
 
@@ -366,7 +369,7 @@ func (o mcpOps) AddDomain(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, dom
 	} else if err := p.CustomDomainsAllowed(); err != nil {
 		return nil, err
 	}
-	if err := o.a.st.AddDomain(site, domain); err != nil {
+	if err := o.a.st.AddDomain(site, domain); err != nil && !errors.Is(err, store.ErrDomainPending) {
 		return nil, o.mcpError(err)
 	}
 	return o.siteResult(site), nil

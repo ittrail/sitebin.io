@@ -317,6 +317,30 @@ func (a *API) extractZipPart(site *store.Site, part io.Reader) error {
 	return a.st.ExtractZip(site, tmp, n)
 }
 
+// pendingDomain is one claimed-but-unproven custom domain and the DNS
+// record that proves it. Either record suffices.
+type pendingDomain struct {
+	Domain      string `json:"domain"`
+	TXTName     string `json:"txt_name"`
+	TXTValue    string `json:"txt_value"`
+	CNAMETarget string `json:"cname_target,omitempty"`
+	RequestedAt string `json:"requested_at"`
+}
+
+// pendingDomains lists the site's unverified claims with their records. The
+// CNAME route exists only where the site has a view host.
+func (a *API) pendingDomains(site *store.Site) []pendingDomain {
+	out := []pendingDomain{}
+	for _, c := range site.PendingDomains() {
+		p := pendingDomain{Domain: c.Domain, TXTName: c.TXTName(), TXTValue: c.TXTValue(), RequestedAt: c.RequestedAt.UTC().Format(time.RFC3339)}
+		if a.cfg.SubdomainViews() {
+			p.CNAMETarget = site.ViewID + "." + a.cfg.ViewDomain
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
 // sitePayload is the full settings/state document returned by GET/PUT.
 func (a *API) sitePayload(site *store.Site) map[string]any {
 	files, err := a.st.ListFiles(site)
@@ -353,6 +377,7 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"ftp_enabled":             m.FTPEnabled,
 		"ftp_available":           ftpAvailable,
 		"custom_domains":          m.CustomDomains,
+		"pending_domains":         a.pendingDomains(site),
 		"origin":                  m.Origin,
 		"expires_at":              m.ExpiresAt,
 		"expiry_cap_days":         a.expiryCap(site),
@@ -700,10 +725,18 @@ func (a *API) addDomain(w http.ResponseWriter, r *http.Request, site *store.Site
 		writeError(w, 400, `body must be {"domain": "example.com"}`)
 		return
 	}
-	if err := a.st.AddDomain(site, body.Domain); err != nil {
+	err := a.st.AddDomain(site, body.Domain)
+	switch {
+	case errors.Is(err, store.ErrDomainPending):
+		// Recorded, not attached: the payload carries the record to create.
+		a.log.Info("custom domain claimed, pending verification", "id", site.ViewID, "owner", site.Meta.OwnerAccountID, "domain", body.Domain)
+		writeJSON(w, 202, a.sitePayload(site))
+		return
+	case err != nil:
 		respondErr(w, err)
 		return
 	}
+	a.log.Info("custom domain attached", "id", site.ViewID, "owner", site.Meta.OwnerAccountID, "domain", body.Domain)
 	writeJSON(w, 200, a.sitePayload(site))
 }
 

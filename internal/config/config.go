@@ -37,6 +37,12 @@ type Config struct {
 	MaxFiles      int
 	MaxExpiryDays int // 0 = unlimited
 	WebDAVAllowed bool
+	// DomainVerification says how a custom domain proves it belongs to the
+	// site that claims it: "dns" (the default) requires a TXT record carrying
+	// the site's token or a CNAME at the site's view host before the domain is
+	// attached; "off" attaches on the owner's word alone, which is only safe
+	// on an instance whose every account holder is trusted.
+	DomainVerification string
 	// MCPOAuthIssuer is the authorization server whose access tokens /mcp
 	// accepts. Empty disables OAuth entirely and the endpoint authenticates
 	// exactly as it did before. It is usually the same issuer users sign in
@@ -81,6 +87,12 @@ type Config struct {
 	EmbedOrigins []string
 }
 
+// Custom-domain verification modes.
+const (
+	DomainVerifyDNS = "dns" // prove control with a TXT record or a CNAME (default)
+	DomainVerifyOff = "off" // attach on the owner's word alone
+)
+
 // View-access modes for serving site content.
 const (
 	ViewSubdomain = "subdomain" // <view-id>.base (default; needs a wildcard cert)
@@ -106,22 +118,23 @@ var singleTokenProviders = map[string]bool{
 // Load reads configuration using getenv (os.Getenv in production).
 func Load(getenv func(string) string) (Config, error) {
 	cfg := Config{
-		DataDir:           "/data",
-		ViewAccess:        ViewSubdomain,
-		MaxSiteBytes:      104857600,
-		MaxFiles:          1000,
-		WebDAVAllowed:     true,
-		MCPEnabled:        true,
-		PublicAddr:        ":8080",
-		InternalAddr:      ":9000",
-		BackendHost:       "127.0.0.1",
-		RateCreatePerHour: 30,
-		RateCreateBurst:   10,
-		RateAuthPer5Min:   10,
-		CleanupInterval:   10 * time.Minute,
-		FTPAddr:           ":21",
-		FTPPasvMin:        21000,
-		FTPPasvMax:        21010,
+		DataDir:            "/data",
+		ViewAccess:         ViewSubdomain,
+		MaxSiteBytes:       104857600,
+		MaxFiles:           1000,
+		WebDAVAllowed:      true,
+		DomainVerification: DomainVerifyDNS,
+		MCPEnabled:         true,
+		PublicAddr:         ":8080",
+		InternalAddr:       ":9000",
+		BackendHost:        "127.0.0.1",
+		RateCreatePerHour:  30,
+		RateCreateBurst:    10,
+		RateAuthPer5Min:    10,
+		CleanupInterval:    10 * time.Minute,
+		FTPAddr:            ":21",
+		FTPPasvMin:         21000,
+		FTPPasvMax:         21010,
 	}
 
 	base := strings.ToLower(strings.TrimSpace(getenv("SITEBIN_BASE_DOMAIN")))
@@ -187,6 +200,14 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	if cfg.MCPEnabled, err = boolVar(getenv, "SITEBIN_MCP_ENABLED", true); err != nil {
 		return cfg, err
+	}
+	if v := strings.ToLower(strings.TrimSpace(getenv("SITEBIN_DOMAIN_VERIFICATION"))); v != "" {
+		switch v {
+		case DomainVerifyDNS, DomainVerifyOff:
+			cfg.DomainVerification = v
+		default:
+			return cfg, fmt.Errorf("SITEBIN_DOMAIN_VERIFICATION %q is invalid (want dns|off)", v)
+		}
 	}
 	// No fallback to the sign-in issuer. Inheriting it would turn /mcp into a
 	// bearer-only endpoint on every instance that merely configured SSO, and

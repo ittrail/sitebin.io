@@ -197,11 +197,64 @@ function render() {
   }
   $("clear-expiry").classList.toggle("hidden", capped);
 
-  // domains
+  // domains: verified ones serve; pending ones show the record that proves them
   const dr = $("domainrows");
   dr.innerHTML = "";
-  if (!site.custom_domains.length) {
+  const pending = site.pending_domains || [];
+  if (!site.custom_domains.length && !pending.length) {
     dr.innerHTML = '<div class="domainrow" style="color:var(--ink-faint)">No custom domains yet.</div>';
+  }
+  for (const p of pending) {
+    const row = document.createElement("div");
+    row.className = "domainrow pending";
+    const name = document.createElement("span");
+    name.className = "d";
+    name.textContent = p.domain;
+    const tag = document.createElement("span");
+    tag.className = "sub";
+    tag.textContent = "pending verification";
+    const rec = document.createElement("div");
+    rec.className = "dnshint";
+    rec.style.flexBasis = "100%";
+    const txt = document.createElement("div");
+    txt.append("Prove you control it with a TXT record: ");
+    const n = document.createElement("code"); n.textContent = p.txt_name;
+    const v = document.createElement("code"); v.textContent = p.txt_value;
+    txt.append(n, " = ", v);
+    rec.append(txt);
+    if (p.cname_target) {
+      const cn = document.createElement("div");
+      cn.append("or a CNAME: ");
+      const c = document.createElement("code"); c.textContent = p.domain;
+      const t = document.createElement("code"); t.textContent = p.cname_target;
+      cn.append(c, " \u2192 ", t);
+      rec.append(cn);
+    }
+    const note = document.createElement("div");
+    note.textContent = "Checked automatically every few minutes; a claim that never verifies is dropped after 7 days.";
+    rec.append(note);
+    const check = document.createElement("button");
+    check.className = "btn small";
+    check.textContent = "Check now";
+    check.addEventListener("click", async () => {
+      try {
+        site = await api("POST", "/domains", { domain: p.domain });
+        render();
+        toast(site.custom_domains.includes(p.domain) ? "Verified " + p.domain : "Not verified yet: the record is not visible");
+      } catch (err) { toast(err.message, true); }
+    });
+    const rm = document.createElement("button");
+    rm.className = "btn small";
+    rm.textContent = "Remove";
+    rm.addEventListener("click", async () => {
+      try {
+        site = await api("DELETE", "/domains/" + encodeURIComponent(p.domain));
+        render();
+        toast("Removed " + p.domain);
+      } catch (err) { toast(err.message, true); }
+    });
+    row.append(name, tag, check, rm, rec);
+    dr.appendChild(row);
   }
   for (const d of site.custom_domains) {
     const row = document.createElement("div");
@@ -395,7 +448,8 @@ $("e-add-domain").addEventListener("click", async () => {
     site = await api("POST", "/domains", { domain: d });
     $("e-domain").value = "";
     render();
-    toast("Added " + d + " — set the DNS record to go live");
+    if (site.custom_domains.includes(d)) toast("Verified and attached " + d);
+    else toast("Claimed " + d + ": create the DNS record shown to verify it");
   } catch (err) { toast(err.message, true); }
 });
 $("e-domain").addEventListener("keydown", (e) => {
