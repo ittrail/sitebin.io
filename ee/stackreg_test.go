@@ -315,6 +315,24 @@ func TestStackDeclarationCarriesGDPR(t *testing.T) {
 // the plan page -- paint themselves from the app's declared theme. An
 // instance that declares none is rendered in the stack's stock grey, which
 // a customer reads as somebody else's product asking for their card.
+// The account console draws "Back to Sitebin" only when referrer_uri is an
+// address the client registered, so the dashboard's address is declared
+// beside the callback.
+func TestStackDeclarationRegistersTheDashboardAsAReturnAddress(t *testing.T) {
+	p := stackProvider(t, "")
+	reg := p.stackDeclaration("sitebin")
+	want := p.baseURL() + "/account"
+	found := false
+	for _, u := range reg.Auth.RedirectURIs {
+		if u == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("redirect URIs %v do not include the dashboard %s, so the console cannot link back", reg.Auth.RedirectURIs, want)
+	}
+}
+
 func TestStackDeclarationCarriesSitebinsOwnBrand(t *testing.T) {
 	p := stackProvider(t, "")
 	reg := p.stackDeclaration("sitebin")

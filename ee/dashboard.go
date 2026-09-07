@@ -313,7 +313,7 @@ func (p *provider) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	// deleting here first would leave the identity behind, still a member of
 	// this app, with nothing of its own left to come back to.
 	if p.stackDeletion(acc) {
-		http.Redirect(w, r, p.cfg.AccountConsoleURL(), http.StatusSeeOther)
+		http.Redirect(w, r, p.cfg.AccountConsoleURL(p.baseURL()+"/account"), http.StatusSeeOther)
 		return
 	}
 	ids, _ := p.accounts.ListSiteIDs(acc)
@@ -341,7 +341,7 @@ func (p *provider) handleDeleteAccountConfirm(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if p.stackDeletion(acc) {
-		http.Redirect(w, r, p.cfg.AccountConsoleURL(), http.StatusSeeOther)
+		http.Redirect(w, r, p.cfg.AccountConsoleURL(p.baseURL()+"/account"), http.StatusSeeOther)
 		return
 	}
 	if liveSubscription(acc) {
@@ -559,7 +559,7 @@ func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, 
 	}
 	var accountURL string
 	if acc.Provider == account.OIDCProv {
-		accountURL = p.cfg.AccountConsoleURL()
+		accountURL = p.cfg.AccountConsoleURL(p.baseURL() + "/account")
 	}
 	dashTmpl.Execute(w, dashView{
 		MCPEndpoint: p.host.BaseURL() + "/mcp",

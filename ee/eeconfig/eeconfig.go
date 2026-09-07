@@ -717,11 +717,18 @@ func stackPlanURL(issuer, appID string) string {
 // It is Keycloak's convention and it works for any Keycloak-backed issuer, not
 // only the stack; a plain OIDC provider that has no console at that path
 // simply answers 404 to a link the operator can see on the dashboard.
-func (c Config) AccountConsoleURL() string {
+func (c Config) AccountConsoleURL(returnTo string) string {
 	if c.OIDC == nil {
 		return ""
 	}
-	return strings.TrimRight(c.OIDC.Issuer, "/") + "/account/?referrer=" + url.QueryEscape(c.OIDC.ClientID)
+	q := url.Values{}
+	q.Set("referrer", c.OIDC.ClientID)
+	// Keycloak draws "Back to <app>" only with referrer_uri, and only when it
+	// is an address the client registered: stackreg declares the dashboard.
+	if returnTo != "" {
+		q.Set("referrer_uri", returnTo)
+	}
+	return strings.TrimRight(c.OIDC.Issuer, "/") + "/account/?" + q.Encode()
 }
 
 // StackDeletion reports whether the account console, not Sitebin, is where an

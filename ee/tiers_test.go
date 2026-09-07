@@ -277,7 +277,7 @@ func TestPayGateDashboardOffersTheHostedPlanPage(t *testing.T) {
 	if !strings.Contains(body, `action="/account/billing/portal"`) || !strings.Contains(body, "Manage subscription") {
 		t.Error("manage-subscription form missing from dashboard")
 	}
-	if !strings.Contains(body, "https://auth.stack.example/api/v1/sitebin/account/?referrer=sitebin") {
+	if !strings.Contains(body, "https://auth.stack.example/api/v1/sitebin/account/?referrer=sitebin&amp;referrer_uri=") {
 		t.Error("account console link missing from dashboard")
 	}
 	if !strings.Contains(body, "Pro tier") {

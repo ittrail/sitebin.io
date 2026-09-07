@@ -79,10 +79,13 @@ $authGw = "http://auth-gw.saas-stack.$StackDomain"
 $platform = "http://platform.saas-stack.$StackDomain"
 $issuer = "http://auth.$StackDomain/realms/$Realm"
 $issuerOrigin = "http://auth.$StackDomain"
-$wantAccountURL = "$issuer/account/?referrer=$ClientId"
+# referrer_uri is the dashboard, which stackreg registers as a redirect URI so
+# Keycloak draws "Back to Sitebin". Raw for a Location header, escaped in HTML.
+$wantAccountURL = "$issuer/account/?referrer=$ClientId&referrer_uri=" + [uri]::EscapeDataString("$origin/account")
+$wantAccountURLHtml = $wantAccountURL.Replace("&", "&amp;")
 $wantPlanURL = "$issuerOrigin/apps/$AppId/plan"
 
-$ExpectedAssertions = 40
+$ExpectedAssertions = 41
 
 $script:pass = 0; $script:fail = 0
 function Assert([string]$n, $c, [string]$d = "") {
@@ -208,6 +211,7 @@ Assert "tierAfterRegistration is the default tier" ($c.billing.tierAfterRegistra
 
 $redirects = @(); if ($null -ne $c.auth -and $null -ne $c.auth.redirectUris) { $redirects = @($c.auth.redirectUris) }
 Assert "the redirect URI is this container's callback, on the same port" ($redirects -contains "$origin/account/auth/oidc/callback") "got $($redirects -join ', ')"
+Assert "and the dashboard is registered as the console's return address" ($redirects -contains "$origin/account") "got $($redirects -join ', ')"
 Assert "and the MCP resource is on it too" ($null -ne $c.mcp -and $c.mcp.resourceUrl -eq "$origin/mcp") "got $($c.mcp.resourceUrl)"
 
 # ---------- sign a throwaway user in through the gate ----------
@@ -249,7 +253,7 @@ if ([string]::IsNullOrWhiteSpace($csrf)) { Fatal "no csrf token on the dashboard
 # ---------- self-service on the stack's pages ----------
 
 Write-Host "== self-service links" -ForegroundColor Cyan
-Assert "the dashboard links the account console (accountUrl)" ($dash -match [regex]::Escape('href="' + $wantAccountURL + '"') -and $dash -match "Manage account") "want $wantAccountURL"
+Assert "the dashboard links the account console (accountUrl)" ($dash -match [regex]::Escape('href="' + $wantAccountURLHtml + '"') -and $dash -match "Manage account") "want $wantAccountURL"
 Assert "the danger zone sends deletion to the console, not to a local form" ($dash -match "Delete account in the account console" -and $dash -notmatch 'action="/account/delete"') ""
 Assert "the billing card offers the portal route" ($dash -match 'action="/account/billing/portal"') ""
 

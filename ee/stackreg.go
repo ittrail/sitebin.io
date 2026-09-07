@@ -195,7 +195,9 @@ func (p *provider) stackDeclaration(appID string) stackRegistration {
 	reg.Domain = p.host.BaseDomain()
 	// The generic-OIDC callback, built the same way handleOAuthStart builds it,
 	// so a declared URI and a used URI cannot disagree.
-	reg.Auth.RedirectURIs = []string{base + "/account/auth/oidc/callback"}
+	// The dashboard beside the callback: it is the account console's return
+	// address (referrer_uri), which Keycloak honours only for a registered one.
+	reg.Auth.RedirectURIs = []string{base + "/account/auth/oidc/callback", base + "/account"}
 	reg.Auth.WebOrigins = []string{base}
 	reg.Theme = sitebinTheme(base)
 

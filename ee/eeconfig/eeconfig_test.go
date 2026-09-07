@@ -314,7 +314,10 @@ func TestAccountConsoleURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := cfg.AccountConsoleURL(), "https://auth.example.com/realms/saas-stack/account/?referrer=sitebin-app"; got != want {
+	// referrer names the client so the console brands itself; referrer_uri is
+	// where its "Back to Sitebin" goes, and Keycloak shows that link only for
+	// an address the client registered (stackreg declares /account).
+	if got, want := cfg.AccountConsoleURL("https://sitebin.example/account"), "https://auth.example.com/realms/saas-stack/account/?referrer=sitebin-app&referrer_uri=https%3A%2F%2Fsitebin.example%2Faccount"; got != want {
 		t.Errorf("AccountConsoleURL = %q, want %q", got, want)
 	}
 	if cfg.StackDeletion() {
@@ -325,7 +328,7 @@ func TestAccountConsoleURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.AccountConsoleURL() != "" {
+	if cfg.AccountConsoleURL("") != "" {
 		t.Error("no issuer, no console")
 	}
 

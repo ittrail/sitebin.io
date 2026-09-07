@@ -68,7 +68,7 @@ func postAs(mux http.Handler, path string, cookie *http.Cookie, v url.Values) *h
 }
 
 const (
-	wantAccountURL = "https://auth.example.com/realms/saas-stack/account/?referrer=sitebin-app"
+	wantAccountURL = "https://auth.example.com/realms/saas-stack/account/?referrer=sitebin-app&referrer_uri=https%3A%2F%2Fsitebin.example%2Faccount"
 	wantPlanURL    = "https://auth.example.com/apps/sitebin/plan"
 )
 
@@ -79,7 +79,8 @@ func TestDashboardLinksTheStackConsoleAndPlanPage(t *testing.T) {
 	acc, cookie := oidcUser(t, p, "11111111-1111-4111-8111-111111111111", "stack@example.com")
 
 	body := getAs(mux, "/account", cookie).Body.String()
-	if !strings.Contains(body, `href="`+wantAccountURL+`"`) || !strings.Contains(body, "Manage account") {
+	// html/template writes the query's & as &amp; inside the attribute.
+	if !strings.Contains(body, `href="`+strings.ReplaceAll(wantAccountURL, "&", "&amp;")+`"`) || !strings.Contains(body, "Manage account") {
 		t.Errorf("the dashboard does not link the account console at %s", wantAccountURL)
 	}
 	if !strings.Contains(body, `action="/account/billing/portal"`) {
@@ -140,7 +141,7 @@ func TestLocalAccountGetsNoStackLinks(t *testing.T) {
 	acc, cookie := localUser(t, p, "local@example.com")
 
 	body := getAs(mux, "/account", cookie).Body.String()
-	if strings.Contains(body, "Manage account") || strings.Contains(body, wantAccountURL) {
+	if strings.Contains(body, "Manage account") || strings.Contains(body, strings.ReplaceAll(wantAccountURL, "&", "&amp;")) {
 		t.Error("a local account was offered the stack's account console")
 	}
 	w := postAs(mux, "/account/billing/portal", cookie, url.Values{"csrf": {p.csrf(acc)}})
