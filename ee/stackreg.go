@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -295,7 +296,7 @@ func postRegistration(ctx context.Context, reg *eeconfig.StackConfig, body stack
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+reg.AdminKey)
 
-	res, err := http.DefaultClient.Do(req)
+	res, err := registrationClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -304,6 +305,11 @@ func postRegistration(ctx context.Context, reg *eeconfig.StackConfig, body stack
 		return nil
 	}
 	var buf bytes.Buffer
-	buf.ReadFrom(res.Body)
+	buf.ReadFrom(io.LimitReader(res.Body, 64<<10))
 	return fmt.Errorf("stack returned %d: %s", res.StatusCode, strings.TrimSpace(buf.String()))
 }
+
+// registrationClient bounds the self-registration call on its own, over and
+// above the context: a stack that accepts the connection and never answers
+// must not hold the goroutine, and an error body is read to a limit.
+var registrationClient = &http.Client{Timeout: 30 * time.Second}

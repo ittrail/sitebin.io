@@ -64,6 +64,11 @@ func (d *driver) GetSettings() (*ftpserver.Settings, error) {
 			Start: d.cfg.FTPPasvMin,
 			End:   d.cfg.FTPPasvMax,
 		},
+		// A control connection that goes quiet is closed, and a data
+		// connection that never arrives stops being waited for: without
+		// these, every half-open session is held for ever.
+		IdleTimeout:       300,
+		ConnectionTimeout: 30,
 	}
 	if d.tlsConfig != nil {
 		s.TLSRequired = ftpserver.MandatoryEncryption

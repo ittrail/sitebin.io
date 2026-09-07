@@ -197,8 +197,8 @@ func serve(withCaddy bool) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	public := &http.Server{Addr: cfg.PublicAddr, Handler: api.Public()}
-	internal := &http.Server{Addr: cfg.InternalAddr, Handler: api.Internal()}
+	public := newPublicServer(cfg.PublicAddr, api.Public())
+	internal := newInternalServer(cfg.InternalAddr, api.Internal())
 	errs := make(chan error, 4)
 	go func() { errs <- fmt.Errorf("public listener: %w", public.ListenAndServe()) }()
 	go func() { errs <- fmt.Errorf("internal listener: %w", internal.ListenAndServe()) }()
@@ -277,6 +277,32 @@ func serve(withCaddy bool) error {
 		return runErr
 	}
 	return nil
+}
+
+// newPublicServer is the listener Caddy proxies. Caddy fronts it, but it
+// proxies bodies through, so a slow client reaches this server: headers are
+// bounded tightly, the body generously — a full-size site over a slow link
+// takes minutes — and idle keep-alives are reaped.
+func newPublicServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       10 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+	}
+}
+
+// newInternalServer answers Caddy's own subrequests (authz, tls-check) and
+// the healthcheck. Nothing on it is slow, so nothing on it may wait long.
+func newInternalServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
 }
 
 // caddyOrNever adapts a possibly-nil channel for select.
