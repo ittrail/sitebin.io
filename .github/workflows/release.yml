@@ -6,16 +6,33 @@ on:
     tags: ["v*"]
   pull_request:
 
+# Actions are pinned to commit SHAs (the tag is kept as a comment for
+# readability): a tag can be moved, a SHA cannot.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.25"
+          go-version-file: go.mod
       - run: go vet ./... && go test ./...              # community
       - run: go vet -tags ee ./... && go test -tags ee ./...  # enterprise
+      # Known-vulnerable code paths in dependencies or the standard library
+      # fail the build; the toolchain in go.mod is what is scanned, so a
+      # stale patch level shows up here first.
+      - uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1
+        with:
+          go-version-file: go.mod
+          go-package: ./...
+      - uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1
+        with:
+          go-version-file: go.mod
+          go-package: ./...
+          flags: -tags ee
 
   image:
     needs: test
@@ -24,6 +41,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write # provenance attestation
     strategy:
       matrix:
         include:
@@ -32,7 +50,7 @@ jobs:
           - edition: enterprise
             suffix: "-ee"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # The enterprise image verifies licenses against Ed25519 ROOT public
       # keys baked in at build time (Dockerfile: LICENSE_ROOTS). They are
       # public keys, so they live in a plain repository VARIABLE, not a
@@ -55,18 +73,18 @@ jobs:
             exit 1
           fi
           echo "LICENSE_ROOTS carries $(echo "$LICENSE_ROOTS" | tr ',' '\n' | grep -c .) root(s)"
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/metadata-action@v5
+      - uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         id: meta
         with:
           # Published as ghcr.io/ittrail/sitebin.io (the repository's name),
-          # with -ee appended for the enterprise edition. The compose files
+          # with -ee appended for the enterprise edition. The compose example
           # and the README reference exactly this path.
           images: ghcr.io/${{ github.repository }}
           flavor: |
@@ -75,11 +93,13 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=sha
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          provenance: true
+          sbom: true
           build-args: |
             VERSION=${{ github.ref_name }}
             EDITION=${{ matrix.edition }}

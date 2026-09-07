@@ -1,5 +1,8 @@
 # ---- backend: test + build (static binary) ----
-FROM golang:1.25-alpine AS build
+# Base images are pinned by digest (multi-arch manifest list) so a build is
+# reproducible and a moved tag cannot change what ships. Bump the tag AND the
+# digest together: `docker buildx imagetools inspect <image:tag>`.
+FROM golang:1.25.14-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -24,7 +27,7 @@ RUN set -eux; \
     CGO_ENABLED=0 go build $TAGS -trimpath -ldflags "$LDFLAGS" -o /out/sitebin ./cmd/sitebin
 
 # ---- caddy with DNS modules for the wildcard certificate ----
-FROM caddy:2-builder AS caddybuild
+FROM caddy:2-builder@sha256:b8f9c720f13f64c13dd42db28e8f38a3fab54c11fce4d93bda26d710c448dcfd AS caddybuild
 RUN xcaddy build \
     --with github.com/caddy-dns/cloudflare \
     --with github.com/caddy-dns/hetzner/v2 \
@@ -33,7 +36,7 @@ RUN xcaddy build \
     --with github.com/caddy-dns/porkbun
 
 # ---- final: all-in-one, non-root ----
-FROM alpine:3.20
+FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce
 RUN apk add --no-cache ca-certificates tini libcap mailcap \
     && addgroup -S -g 1000 sitebin \
     && adduser -S -u 1000 -G sitebin -h /data sitebin \
