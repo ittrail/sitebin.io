@@ -68,7 +68,7 @@ func postAs(mux http.Handler, path string, cookie *http.Cookie, v url.Values) *h
 }
 
 const (
-	wantAccountURL = "https://auth.example.com/realms/saas-stack/account/?referrer=sitebin-app&referrer_uri=https%3A%2F%2Fsitebin.example%2Faccount"
+	wantAccountURL = "https://auth.example.com/realms/saas-stack/account/?referrer=sitebin-app&referrer_uri=http%3A%2F%2Fsitebin.example%2Faccount"
 	wantPlanURL    = "https://auth.example.com/apps/sitebin/plan"
 )
 
@@ -194,7 +194,7 @@ func TestStackAccountDeletesLocallyWhenTheStackCannotOrderIt(t *testing.T) {
 		t.Error("the local delete form is missing although nothing else can delete this account")
 	}
 	// The console link itself is still right: password and sessions live there.
-	if !strings.Contains(body, wantAccountURL) {
+	if !strings.Contains(body, strings.ReplaceAll(wantAccountURL, "&", "&amp;")) {
 		t.Error("the account console link is missing")
 	}
 	w := postAs(mux, "/account/delete/confirm", cookie, url.Values{"csrf": {p.csrf(acc)}})
