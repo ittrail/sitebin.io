@@ -3,6 +3,7 @@
 package ee
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ittrail/sitebin.io/ee/account"
+	"github.com/ittrail/sitebin.io/ee/authn"
 )
 
 // emailRoutes adds verification + password-reset endpoints when SMTP is on.
@@ -83,6 +85,17 @@ func (p *provider) handleResetGet(w http.ResponseWriter, r *http.Request) {
 
 func (p *provider) handleResetPost(w http.ResponseWriter, r *http.Request) {
 	email := r.PostFormValue("email")
+	// Throttled per address and per source, and the throttled answer is the
+	// SAME page as the successful one: a limit that only fired for existing
+	// accounts would be an enumeration oracle.
+	if !p.limits.allowReset(r, email) {
+		p.renderThrottledMessage(w, msgView{
+			Title: "Check your email",
+			Body:  "If an account exists for that address, a password-reset link is on its way.",
+			Back:  "/account/login",
+		})
+		return
+	}
 	// Best-effort + uniform response: never reveal whether the email exists.
 	if acc, err := p.accounts.ByEmail(email); err == nil && acc.PasswordHash != "" {
 		link := p.baseURL() + "/account/reset/confirm?token=" + p.makeToken("reset", acc.ID, acc.TokenVersion, time.Hour)
@@ -114,6 +127,10 @@ func (p *provider) handleResetConfirmGet(w http.ResponseWriter, r *http.Request)
 }
 
 func (p *provider) handleResetConfirmPost(w http.ResponseWriter, r *http.Request) {
+	if !p.limits.allowResetConfirm(r) {
+		p.renderThrottledMessage(w, msgView{Title: "Too many attempts", Body: "Please wait a few minutes and open your reset link again.", Back: "/account/reset"})
+		return
+	}
 	token := r.PostFormValue("token")
 	id, ver, ok := p.parseToken("reset", token)
 	if !ok {
@@ -127,8 +144,12 @@ func (p *provider) handleResetConfirmPost(w http.ResponseWriter, r *http.Request
 	}
 	// ChangePassword bumps token_version, making this token single-use.
 	if err := p.local.ChangePassword(acc, r.PostFormValue("password")); err != nil {
+		msg := "Password must be at least 8 characters."
+		if errors.Is(err, authn.ErrPasswordTooLong) {
+			msg = "Password must be at most 256 characters."
+		}
 		p.securityHeaders(w)
-		resetConfirmTmpl.Execute(w, map[string]string{"Token": token, "Error": "Password must be at least 8 characters."})
+		resetConfirmTmpl.Execute(w, map[string]string{"Token": token, "Error": msg})
 		return
 	}
 	p.renderMessage(w, msgView{Title: "Password updated", Body: "You can now sign in with your new password.", Back: "/account/login"})

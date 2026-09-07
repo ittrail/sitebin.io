@@ -44,6 +44,9 @@ type provider struct {
 	// separately because a few places need PayGate specifically.
 	paygate  *billing.PayGate
 	mcpOAuth *mcpOAuth
+	// limits throttles the local-auth routes. Site passwords have the core's
+	// limiter; these are the account's.
+	limits *authLimiters
 	// license holds the instance's enterprise licence and its state. It is
 	// consulted at exactly one place (AuthorizeCreate) and rendered in the
 	// account UI; nothing on the serving path asks it.
@@ -87,6 +90,7 @@ func (p *provider) Init(h ext.Host) error {
 	p.accounts = store
 	p.sessions = session.New(h.Secret(), !h.HTTPOnly(), session.DefaultTTL)
 	p.local = authn.NewLocal(store)
+	p.limits = newAuthLimiters()
 	p.oidc = authn.NewOIDC(cfg, p.baseURL())
 	// MCP OAuth is inert unless an issuer is configured. Sitebin validates
 	// tokens that issuer signed; it never issues any.

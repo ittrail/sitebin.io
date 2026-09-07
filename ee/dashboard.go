@@ -116,6 +116,12 @@ func (p *provider) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email := r.PostFormValue("email")
+	// Consulted BEFORE the password is looked at: the limiter is what keeps a
+	// guess from costing a 64 MiB hash, so it has to answer first.
+	if !p.limits.allowLogin(r, email) {
+		p.renderThrottled(w, "login", email)
+		return
+	}
 	acc, err := p.local.Login(email, r.PostFormValue("password"))
 	if err != nil {
 		p.renderAuth(w, "login", email, "Incorrect email or password.")
@@ -142,12 +148,18 @@ func (p *provider) handleSignupPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email := r.PostFormValue("email")
+	if !p.limits.allowSignup(r) {
+		p.renderThrottled(w, "signup", email)
+		return
+	}
 	acc, err := p.local.Signup(email, r.PostFormValue("password"), p.tierForNewAccount())
 	if err != nil {
 		msg := "Could not create the account."
 		switch err {
 		case authn.ErrWeakPassword:
 			msg = "Password must be at least 8 characters."
+		case authn.ErrPasswordTooLong:
+			msg = "Password must be at most 256 characters."
 		case account.ErrEmailTaken:
 			msg = "That email is already registered."
 		case account.ErrBadEmail:

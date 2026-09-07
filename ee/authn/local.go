@@ -13,10 +13,27 @@ import (
 // MinPasswordLen is the minimum local-account password length.
 const MinPasswordLen = 8
 
+// MaxPasswordLen bounds what is handed to Argon2. The hash costs the same
+// whatever the length, but a form field can be megabytes and there is no
+// reason to read one into a key derivation.
+const MaxPasswordLen = 256
+
 var (
-	ErrWeakPassword   = errors.New("password must be at least 8 characters")
-	ErrBadCredentials = errors.New("incorrect email or password")
+	ErrWeakPassword    = errors.New("password must be at least 8 characters")
+	ErrPasswordTooLong = errors.New("password must be at most 256 bytes")
+	ErrBadCredentials  = errors.New("incorrect email or password")
 )
+
+// checkPassword applies the length rules a new password has to meet.
+func checkPassword(password string) error {
+	if len(password) > MaxPasswordLen {
+		return ErrPasswordTooLong
+	}
+	if len([]rune(strings.TrimSpace(password))) < MinPasswordLen {
+		return ErrWeakPassword
+	}
+	return nil
+}
 
 // Local orchestrates local (email+password) authentication over the account
 // store.
@@ -29,8 +46,8 @@ func NewLocal(store *account.Store) *Local { return &Local{store: store} }
 // Signup creates a local account. The plaintext password is hashed with
 // Argon2id and never stored. tier is the account's initial tier id.
 func (l *Local) Signup(email, password, tier string) (*account.Account, error) {
-	if len([]rune(strings.TrimSpace(password))) < MinPasswordLen {
-		return nil, ErrWeakPassword
+	if err := checkPassword(password); err != nil {
+		return nil, err
 	}
 	return l.store.CreateLocal(email, auth.HashPassword(password), tier)
 }
@@ -39,6 +56,11 @@ func (l *Local) Signup(email, password, tier string) (*account.Account, error) {
 // same ErrBadCredentials for unknown emails and wrong passwords to avoid
 // account enumeration. OAuth-only accounts (no password hash) never match.
 func (l *Local) Login(email, password string) (*account.Account, error) {
+	if len(password) > MaxPasswordLen {
+		// No stored password is this long, so there is nothing to compare
+		// against and no hash worth computing.
+		return nil, ErrBadCredentials
+	}
 	a, err := l.store.ByEmail(email)
 	if err != nil {
 		// still spend some work to reduce timing signal
@@ -54,8 +76,8 @@ func (l *Local) Login(email, password string) (*account.Account, error) {
 // ChangePassword sets a new password and bumps the account's token version,
 // invalidating existing sessions.
 func (l *Local) ChangePassword(a *account.Account, newPassword string) error {
-	if len([]rune(strings.TrimSpace(newPassword))) < MinPasswordLen {
-		return ErrWeakPassword
+	if err := checkPassword(newPassword); err != nil {
+		return err
 	}
 	hash := auth.HashPassword(newPassword)
 	return l.store.Update(a, func(cur *account.Account) error {

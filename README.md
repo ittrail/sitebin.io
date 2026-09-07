@@ -555,7 +555,11 @@ but not implemented.
 - User content is **only** served on random subdomains and custom domains —
   never on the main domain. Each site gets its own origin.
 - Passwords are stored as Argon2id hashes; password attempts (API, gate, and
-  WebDAV) are rate limited per IP and per site.
+  WebDAV) are rate limited per IP and per site. The enterprise edition's
+  local-account routes are rate limited too, with fixed limits: sign-in 10
+  attempts in a burst then 30/hour, per IP **and** per email address; signup
+  5/hour per IP; password-reset mail 3/hour per address. Passwords are 8 to
+  256 characters.
 - Uploads are sanitized against path traversal; symlinks in zips are
   rejected; per-site size/count quotas are enforced during streaming.
 - The authz/tls-check/health endpoints live on a separate listener that is

@@ -157,17 +157,7 @@ func (w *statusWriter) WriteHeader(code int) {
 // clientIP returns the caller's IP. Behind Caddy the last X-Forwarded-For
 // entry is the peer Caddy actually saw; earlier entries are client-supplied
 // and untrustworthy.
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		return strings.TrimSpace(parts[len(parts)-1])
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
+func clientIP(r *http.Request) string { return auth.ClientIP(r) }
 
 func hostWithoutPort(h string) string {
 	if host, _, err := net.SplitHostPort(h); err == nil {

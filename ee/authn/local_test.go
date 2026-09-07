@@ -4,6 +4,7 @@ package authn
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ittrail/sitebin.io/ee/account"
@@ -92,5 +93,31 @@ func TestChangePasswordBumpsTokenVersion(t *testing.T) {
 	}
 	if _, err := l.Login("fay@example.com", "password1"); !errors.Is(err, ErrBadCredentials) {
 		t.Error("old password still works")
+	}
+}
+
+// Argon2 hashes whatever it is given, and a form field can be megabytes.
+// A password longer than MaxPasswordLen is refused before any hashing.
+func TestPasswordLengthIsCapped(t *testing.T) {
+	l := newLocal(t)
+	long := string(make([]byte, MaxPasswordLen+1))
+	if _, err := l.Signup("long@example.com", long, "free"); !errors.Is(err, ErrPasswordTooLong) {
+		t.Fatalf("Signup with %d bytes: %v, want ErrPasswordTooLong", len(long), err)
+	}
+	a, err := l.Signup("ok@example.com", "password123", "free")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.ChangePassword(a, long); !errors.Is(err, ErrPasswordTooLong) {
+		t.Fatalf("ChangePassword: %v", err)
+	}
+	// Login with an over-long password can never succeed, and must not cost
+	// a hash to find that out.
+	if _, err := l.Login("ok@example.com", long); !errors.Is(err, ErrBadCredentials) {
+		t.Fatalf("Login: %v", err)
+	}
+	exact := strings.Repeat("x", MaxPasswordLen)
+	if _, err := l.Signup("exact@example.com", exact, "free"); err != nil {
+		t.Fatalf("a password of exactly MaxPasswordLen must be accepted: %v", err)
 	}
 }
