@@ -88,6 +88,53 @@ func backupData(root, outPath string) error {
 	return nil
 }
 
+// linkStaysUnder refuses a symlink whose target, resolved from the link's own
+// directory, leaves root: absolute targets and enough "..". A symlink inside
+// the data dir only ever points at a sibling (the indexes point at
+// ../sites/<id>), so nothing legitimate is lost.
+func linkStaysUnder(root, link, linkname string) error {
+	if filepath.IsAbs(linkname) || strings.HasPrefix(filepath.ToSlash(linkname), "/") {
+		return fmt.Errorf("absolute link target %q", linkname)
+	}
+	resolved := filepath.Clean(filepath.Join(filepath.Dir(link), filepath.FromSlash(linkname)))
+	rootClean := filepath.Clean(root)
+	if resolved != rootClean && !strings.HasPrefix(resolved, rootClean+string(os.PathSeparator)) {
+		return fmt.Errorf("link target %q escapes the data root", linkname)
+	}
+	return nil
+}
+
+// parentStaysUnder resolves the nearest existing ancestor of target through
+// any symlinks and checks it is still under root, so a write can never be
+// redirected outside by a link an earlier entry created.
+func parentStaysUnder(root, target string) error {
+	rootReal, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // nothing exists yet, nothing can redirect
+		}
+		return err
+	}
+	dir := filepath.Dir(target)
+	for {
+		real, err := filepath.EvalSymlinks(dir)
+		if err == nil {
+			if real != rootReal && !strings.HasPrefix(real, rootReal+string(os.PathSeparator)) {
+				return fmt.Errorf("parent %q resolves outside the data root", dir)
+			}
+			return nil
+		}
+		if !os.IsNotExist(err) {
+			return err
+		}
+		next := filepath.Dir(dir)
+		if next == dir {
+			return nil
+		}
+		dir = next
+	}
+}
+
 // restoreData extracts a backup (from backupData) into root.
 func restoreData(root, inPath string) error {
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -121,12 +168,25 @@ func restoreData(root, inPath string) error {
 			filepath.Clean(target) != filepath.Clean(root) {
 			return fmt.Errorf("refusing unsafe path in archive: %q", hdr.Name)
 		}
+		// The lexical guard sees a path under the root; the filesystem follows
+		// symlinks. An earlier symlink entry pointing outside, followed by a
+		// regular entry beneath it, would land outside — so the parent is
+		// resolved for real before anything is written, and no link may point
+		// out of the root in the first place.
+		if hdr.Typeflag != tar.TypeDir {
+			if err := parentStaysUnder(root, target); err != nil {
+				return fmt.Errorf("refusing archive entry %q: %w", hdr.Name, err)
+			}
+		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, os.FileMode(hdr.Mode)); err != nil {
 				return err
 			}
 		case tar.TypeSymlink:
+			if err := linkStaysUnder(root, target, hdr.Linkname); err != nil {
+				return fmt.Errorf("refusing symlink %q in archive: %w", hdr.Name, err)
+			}
 			os.MkdirAll(filepath.Dir(target), 0o755)
 			os.Remove(target)
 			if err := os.Symlink(hdr.Linkname, target); err != nil {

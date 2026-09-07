@@ -73,3 +73,46 @@ func TestRestoreRejectsUnsafePath(t *testing.T) {
 		t.Fatal("restore accepted a path-escaping archive")
 	}
 }
+
+// A symlink in an archive that points outside the data root, followed by a
+// regular entry written THROUGH it, lands outside the root — the lexical
+// guard sees a path under the root and the filesystem follows the link.
+func TestRestoreRefusesSymlinksThatEscapeTheRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need elevation on windows")
+	}
+	base := t.TempDir()
+	outside := filepath.Join(base, "outside")
+	os.MkdirAll(outside, 0o755)
+	archive := filepath.Join(base, "evil.tar.gz")
+	f, _ := os.Create(archive)
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	tw.WriteHeader(&tar.Header{Name: "escape", Typeflag: tar.TypeSymlink, Linkname: "../outside", Mode: 0o777})
+	body := []byte("pwned")
+	tw.WriteHeader(&tar.Header{Name: "escape/pwned.txt", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(body))})
+	tw.Write(body)
+	tw.Close()
+	gz.Close()
+	f.Close()
+
+	root := filepath.Join(base, "data")
+	if err := restoreData(root, archive); err == nil {
+		t.Fatal("an archive with an escaping symlink was restored")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "pwned.txt")); err == nil {
+		t.Fatal("a file was written outside the data root")
+	}
+	// absolute link targets are refused too
+	archive2 := filepath.Join(base, "abs.tar.gz")
+	f, _ = os.Create(archive2)
+	gz = gzip.NewWriter(f)
+	tw = tar.NewWriter(gz)
+	tw.WriteHeader(&tar.Header{Name: "abs", Typeflag: tar.TypeSymlink, Linkname: "/etc", Mode: 0o777})
+	tw.Close()
+	gz.Close()
+	f.Close()
+	if err := restoreData(filepath.Join(base, "data2"), archive2); err == nil {
+		t.Fatal("an absolute symlink target was restored")
+	}
+}
