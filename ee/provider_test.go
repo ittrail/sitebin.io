@@ -29,6 +29,9 @@ type fakeSites struct {
 	// allErr fails All(), so a test can check the console reports an
 	// enumeration failure instead of rendering an empty instance.
 	allErr error
+	// deleteErrs fails Delete for the listed site ids, so a test can make an
+	// account erasure stop half-way and check what is kept.
+	deleteErrs map[string]error
 	// expirySet records what SetExpiry was asked to write, including nil.
 	expirySet map[string]*time.Time
 }
@@ -67,6 +70,16 @@ func (s *fakeSites) RotateEditPassword(id string) (string, error) {
 	return "freshEditPw123456789012", nil
 }
 func (s *fakeSites) Delete(id string) error {
+	if err := s.deleteErrs[id]; err != nil {
+		return err
+	}
+	if _, ok := s.infos[id]; !ok {
+		// The real siteService reports a stale reference as ErrSiteGone, and a
+		// caller erasing an account has to be able to tell that from a site it
+		// could not delete. A fake that quietly succeeded would hide the
+		// difference.
+		return fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
+	}
 	s.deleted = append(s.deleted, id)
 	delete(s.infos, id)
 	return nil

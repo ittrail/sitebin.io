@@ -192,7 +192,10 @@ type SiteService interface {
 	SetExpiry(viewID string, at *time.Time) error
 	// RotateEditPassword issues a new edit password, returning it once.
 	RotateEditPassword(viewID string) (newPassword string, err error)
-	// Delete removes a site and its indexes.
+	// Delete removes a site and its indexes. Like ApplyQuota it reports a site
+	// that no longer exists as ErrSiteGone, so a caller erasing everything an
+	// account owns can tell "already gone, carry on" from "could not delete,
+	// stop" — the second must never be reported as the first.
 	Delete(viewID string) error
 	// ApplyQuota restamps a site's per-site caps from a grant and reconciles its
 	// expiry with the new lifetime cap. It returns an error wrapping ErrSiteGone

@@ -93,7 +93,7 @@ func (s siteService) RotateEditPassword(viewID string) (string, error) {
 func (s siteService) Delete(viewID string) error {
 	site, err := s.a.st.ByViewID(viewID)
 	if err != nil {
-		return err
+		return mapSiteGone(err, viewID)
 	}
 	s.a.verifyCache.Drop(site.EditID + ":")
 	return s.a.st.Delete(site)
