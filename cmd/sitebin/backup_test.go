@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -114,5 +115,52 @@ func TestRestoreRefusesSymlinksThatEscapeTheRoot(t *testing.T) {
 	f.Close()
 	if err := restoreData(filepath.Join(base, "data2"), archive2); err == nil {
 		t.Fatal("an absolute symlink target was restored")
+	}
+}
+
+// What a container leaves in a site folder — a link out of the data root and a
+// unix socket — must neither abort the backup nor make its restore refuse
+// the whole archive. Both are skipped; everything else survives.
+func TestBackupSkipsContainerDebris(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("links and sockets are the production platform's")
+	}
+	src := t.TempDir()
+	files := filepath.Join(src, "sites", "abc", "files", "app")
+	os.MkdirAll(files, 0o755)
+	os.WriteFile(filepath.Join(files, "index.js"), []byte("ok"), 0o644)
+	if err := os.Symlink("/etc", filepath.Join(files, "out")); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	if err := os.Symlink("index.js", filepath.Join(files, "inside")); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(files, "s.sock")
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Skipf("unix socket: %v", err)
+	}
+	defer l.Close()
+
+	archive := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if err := backupData(src, archive); err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	dst := t.TempDir()
+	if err := restoreData(dst, archive); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	out := filepath.Join(dst, "sites", "abc", "files", "app")
+	if b, err := os.ReadFile(filepath.Join(out, "index.js")); err != nil || string(b) != "ok" {
+		t.Errorf("file not restored: %q %v", b, err)
+	}
+	if _, err := os.Lstat(filepath.Join(out, "out")); !os.IsNotExist(err) {
+		t.Error("an escaping link was archived")
+	}
+	if _, err := os.Lstat(filepath.Join(out, "s.sock")); !os.IsNotExist(err) {
+		t.Error("a socket was archived")
+	}
+	if fi, err := os.Lstat(filepath.Join(out, "inside")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("a link inside the root was lost: %v", err)
 	}
 }

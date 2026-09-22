@@ -51,16 +51,31 @@ func backupData(root, outPath string) error {
 		if outPath != "" && p == outPath {
 			return nil
 		}
+		// A container site's folders are written by containers, which can
+		// leave sockets, pipes and links pointing anywhere. A socket would
+		// abort the whole archive (tar has no type for it), and a link out of
+		// the data root would make restore refuse the whole archive. Neither
+		// is content Sitebin manages, so both are left out, and said so.
+		var link string
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			if link, err = os.Readlink(p); err != nil {
+				return err
+			}
+			if err := linkStaysUnder(root, p, link); err != nil {
+				fmt.Fprintf(os.Stderr, "skipped %s: %v\n", filepath.ToSlash(rel), err)
+				return nil
+			}
+		case !info.Mode().IsRegular() && !info.IsDir():
+			fmt.Fprintf(os.Stderr, "skipped %s: not a file, directory or link\n", filepath.ToSlash(rel))
+			return nil
+		}
 		hdr, err := tar.FileInfoHeader(info, "")
 		if err != nil {
 			return err
 		}
 		hdr.Name = filepath.ToSlash(rel)
-		if info.Mode()&os.ModeSymlink != 0 {
-			link, err := os.Readlink(p)
-			if err != nil {
-				return err
-			}
+		if link != "" {
 			hdr.Typeflag = tar.TypeSymlink
 			hdr.Linkname = link
 		}

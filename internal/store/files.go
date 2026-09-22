@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -77,13 +78,41 @@ func HumanBytes(n int64) string {
 	return fmt.Sprintf("%.1f %cB", f, units[i])
 }
 
+// openContent opens the site's content directory as an os.Root, creating it
+// if it is missing. Every file operation on a site's content goes through one.
+//
+// The reason is containers: a container site mounts the project's folders
+// into code Sitebin does not control, and that code can create a symlink such
+// as app/x -> /data. Resolving through an os.Root confines every path to the
+// content directory with openat, so a link that leaves it is an error rather
+// than a way into the instance's secret or another customer's site — and,
+// unlike checking each component with Lstat first, it cannot be raced by a
+// container swapping a directory for a link between the check and the use.
+func openContent(site *Site) (*os.Root, error) {
+	dir := site.ContentDir()
+	r, err := os.OpenRoot(dir)
+	if err != nil && os.IsNotExist(err) {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+		r, err = os.OpenRoot(dir)
+	}
+	return r, err
+}
+
+// OpenContentRoot is openContent for the file surfaces outside the store
+// (WebDAV, FTP). The caller closes it.
+func OpenContentRoot(site *Site) (*os.Root, error) { return openContent(site) }
+
 // usage returns the current byte and file count under dir (0s if missing).
+// Only regular files count: a symlink or a socket a container left behind is
+// not content anyone uploaded, and nothing Sitebin serves.
 func usage(dir string) (bytes int64, files int, err error) {
 	err = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() {
+		if !d.Type().IsRegular() {
 			return nil
 		}
 		// Sitebin's own markers are not the user's files and must not eat into
@@ -119,8 +148,13 @@ func (s *Store) EffMaxBytes(site *Site) int64 {
 	return s.maxSiteBytes
 }
 
-// EffMaxFiles returns the site's effective file-count cap.
+// EffMaxFiles returns the site's effective file-count cap. A container site
+// has none: installing a project's dependencies writes tens of thousands of
+// files, and the byte cap already bounds what the count would protect.
 func (s *Store) EffMaxFiles(site *Site) int {
+	if site.Meta.Mode == ModeContainer {
+		return math.MaxInt
+	}
 	if site.Meta.QuotaFiles > 0 {
 		return site.Meta.QuotaFiles
 	}
@@ -157,12 +191,21 @@ func (s *Store) saveFileLocked(site *Site, rel string, r io.Reader) error {
 // (0 for a new one), so a caller writing many files can keep the totals
 // current without walking the site again. The caller holds the site lock.
 func (s *Store) writeFileLocked(site *Site, rel string, r io.Reader, used int64, count int, maxBytes int64, maxFiles int) (written, existing int64, err error) {
-	dst := filepath.Join(site.ContentDir(), filepath.FromSlash(rel))
-	if fi, err := os.Lstat(dst); err == nil {
+	root, err := openContent(site)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer root.Close()
+	dst := filepath.FromSlash(rel)
+	if fi, err := root.Lstat(dst); err == nil {
 		if fi.IsDir() {
 			return 0, 0, ErrBadPath
 		}
 		existing = fi.Size()
+	} else if !os.IsNotExist(err) {
+		// Anything but "not there" — above all a parent that is a link out of
+		// the site — is a path this site may not write.
+		return 0, 0, ErrBadPath
 	} else if count+1 > maxFiles {
 		return 0, 0, ErrTooManyFiles
 	}
@@ -170,11 +213,13 @@ func (s *Store) writeFileLocked(site *Site, rel string, r io.Reader, used int64,
 	if budget < 0 {
 		return 0, existing, ErrTooLarge
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return 0, existing, fmt.Errorf("create dirs: %w", err)
+	if dir := filepath.Dir(dst); dir != "." {
+		if err := root.MkdirAll(dir, 0o755); err != nil {
+			return 0, existing, fmt.Errorf("create dirs: %w", err)
+		}
 	}
 	tmp := dst + ".sbtmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return 0, existing, fmt.Errorf("create file: %w", err)
 	}
@@ -188,11 +233,11 @@ func (s *Store) writeFileLocked(site *Site, rel string, r io.Reader, used int64,
 		err = cerr
 	}
 	if err != nil {
-		os.Remove(tmp)
+		root.Remove(tmp)
 		return 0, existing, err
 	}
-	if err := os.Rename(tmp, dst); err != nil {
-		os.Remove(tmp)
+	if err := root.Rename(tmp, dst); err != nil {
+		root.Remove(tmp)
 		return 0, existing, fmt.Errorf("commit file: %w", err)
 	}
 	return written, existing, nil
@@ -208,21 +253,25 @@ func (s *Store) DeleteFile(site *Site, relPath string) error {
 	l.Lock()
 	defer l.Unlock()
 
-	root := site.ContentDir()
-	dst := filepath.Join(root, filepath.FromSlash(rel))
-	if fi, err := os.Lstat(dst); err != nil {
+	root, err := openContent(site)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	dst := filepath.FromSlash(rel)
+	if fi, err := root.Lstat(dst); err != nil {
 		if os.IsNotExist(err) {
 			return ErrNotFound
 		}
-		return err
+		return ErrBadPath
 	} else if fi.IsDir() {
 		return ErrBadPath
 	}
-	if err := os.Remove(dst); err != nil {
+	if err := root.Remove(dst); err != nil {
 		return err
 	}
-	for d := filepath.Dir(dst); d != root && strings.HasPrefix(d, root); d = filepath.Dir(d) {
-		if os.Remove(d) != nil { // fails when non-empty — that's the stop signal
+	for d := filepath.Dir(dst); d != "."; d = filepath.Dir(d) {
+		if root.Remove(d) != nil { // fails when non-empty — that's the stop signal
 			break
 		}
 	}
@@ -269,48 +318,66 @@ func (s *Store) ReadContentFile(site *Site, relPath string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := filepath.Join(site.ContentDir(), filepath.FromSlash(rel))
-	fi, err := os.Lstat(p)
+	root, err := openContent(site)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	p := filepath.FromSlash(rel)
+	fi, err := root.Lstat(p)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, ErrNotFound
 		}
-		return nil, err
+		return nil, ErrBadPath
 	}
-	if fi.IsDir() {
+	if !fi.Mode().IsRegular() {
 		return nil, ErrBadPath
 	}
 	if fi.Size() > MaxEditableBytes {
 		return nil, ErrTooLarge
 	}
-	return os.ReadFile(p)
+	return root.ReadFile(p)
 }
 
 // ZipContent writes a zip archive of the site's content files to w.
 func (s *Store) ZipContent(site *Site, w io.Writer) error {
-	root := site.ContentDir()
+	dir := site.ContentDir()
+	root, err := openContent(site)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	zw := zip.NewWriter(w)
-	walkErr := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+	walkErr := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
 			if os.IsNotExist(err) {
 				return nil
 			}
 			return err
 		}
-		rel, err := filepath.Rel(root, p)
+		// Regular files only: a symlink is never followed out of the site,
+		// and a socket or pipe has no bytes to archive.
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, p)
 		if err != nil {
 			return err
+		}
+		src, err := root.Open(rel)
+		if err != nil {
+			return nil // vanished or swapped for something else since the walk saw it
+		}
+		defer src.Close()
+		if fi, err := src.Stat(); err != nil || !fi.Mode().IsRegular() {
+			return nil
 		}
 		zf, err := zw.Create(filepath.ToSlash(rel))
 		if err != nil {
 			return err
 		}
-		src, err := os.Open(p)
-		if err != nil {
-			return err
-		}
 		_, err = io.Copy(zf, src)
-		src.Close()
 		return err
 	})
 	if closeErr := zw.Close(); walkErr == nil {
@@ -327,8 +394,8 @@ func (s *Store) ListFiles(site *Site) ([]FileInfo, error) {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() {
-			return nil
+		if !d.Type().IsRegular() {
+			return nil // directories, and links or sockets a container left
 		}
 		if d.Name() == SPAMarker || d.Name() == TrustedMarker {
 			return nil // internal marker, not a user file

@@ -16,19 +16,19 @@ import (
 var errQuota = errors.New("site storage limit exceeded")
 
 // quotaFs is the per-session filesystem handed to an FTP client. It is rooted
-// at the site's content directory (via afero BasePathFs, which confines all
-// paths), rejects reserved/invalid names on mutation via the store's path
-// rules, and enforces the site's byte and file-count caps on writes.
+// at the site's content directory (via rootFs, which confines every path —
+// symlinks included — with os.Root), rejects reserved/invalid names on
+// mutation via the store's path rules, and enforces the site's byte and
+// file-count caps on writes.
 type quotaFs struct {
-	afero.Fs // BasePathFs rooted at root
+	afero.Fs // rootFs over root
 	root     string
 	maxBytes int64
 	maxFiles int
 }
 
 func newQuotaFs(root string, maxBytes int64, maxFiles int) *quotaFs {
-	base := afero.NewBasePathFs(afero.NewOsFs(), root)
-	return &quotaFs{Fs: base, root: root, maxBytes: maxBytes, maxFiles: maxFiles}
+	return &quotaFs{Fs: rootFs{dir: root}, root: root, maxBytes: maxBytes, maxFiles: maxFiles}
 }
 
 // cleanName validates an FTP path against the store's rules (no traversal, no
@@ -47,7 +47,7 @@ func cleanName(name string) (string, error) {
 // usage returns the current byte and file totals under root.
 func (q *quotaFs) usage() (bytes int64, files int) {
 	filepath.WalkDir(q.root, func(_ string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil || !d.Type().IsRegular() {
 			return nil
 		}
 		if info, e := d.Info(); e == nil {

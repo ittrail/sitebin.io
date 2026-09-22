@@ -3,7 +3,6 @@ package httpapi
 import (
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -148,7 +147,12 @@ func (a *API) davExists(site *store.Site, sub string) bool {
 	if err != nil {
 		return false
 	}
-	fi, err := os.Lstat(filepath.Join(site.ContentDir(), filepath.FromSlash(rel)))
+	root, err := store.OpenContentRoot(site)
+	if err != nil {
+		return false
+	}
+	defer root.Close()
+	fi, err := root.Lstat(filepath.FromSlash(rel))
 	return err == nil && fi.Mode().IsRegular()
 }
 
