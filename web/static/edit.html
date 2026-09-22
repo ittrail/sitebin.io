@@ -65,14 +65,37 @@
     <div class="usagenote" id="usage-note"></div>
   </section>
 
+  <section class="card hidden" id="card-container">
+    <h3>Containers <span class="ctstatus" id="ct-status"></span>
+      <span style="flex:1"></span>
+      <button class="btn small" id="ct-start">Start</button>
+      <button class="btn small" id="ct-restart">Restart</button>
+      <button class="btn small danger" id="ct-stop">Stop</button>
+    </h3>
+    <div class="ctmsg hidden" id="ct-message"></div>
+    <div id="ct-services"></div>
+    <div class="row hidden" id="ct-logrow" style="margin-top:14px">
+      <select id="ct-logsvc" style="max-width:200px"></select>
+      <button class="btn small" id="ct-logs">Show log</button>
+    </div>
+    <pre class="ctlog hidden" id="ct-log"></pre>
+    <div class="dnshint">
+      The project runs what <code>sitebin-container-compose.yaml</code> in the site's root declares, and
+      <strong>every change to that file restarts it</strong> &mdash; however you save it. Each root folder is a
+      volume: upload your app into the folder a service mounts. <code>*</code> maps the site's own address;
+      any other domain in the file is a custom domain and needs the DNS record shown here.
+    </div>
+  </section>
+
   <section class="card">
     <h3>Behavior</h3>
     <div class="opt">
       <div class="seg" role="radiogroup" aria-label="Site mode">
         <label><input type="radio" name="emode" value="webserver"><span>Web server</span></label>
         <label><input type="radio" name="emode" value="viewer"><span>File viewer</span></label>
+        <label class="hidden" id="mode-container"><input type="radio" name="emode" value="container"><span>Container</span></label>
       </div>
-      <span class="sub">Web server serves files as-is. File viewer renders one document in the browser.</span>
+      <span class="sub" id="mode-sub">Web server serves files as-is. File viewer renders one document in the browser.</span>
     </div>
     <div class="opt hidden" id="entrywrap" style="margin-top:14px">
       <label for="entry-file">Viewer shows</label>
@@ -146,7 +169,7 @@
     </div>
   </section>
 
-  <section class="card">
+  <section class="card" id="card-domains">
     <h3>Custom domains</h3>
     <div id="domainrows"></div>
     <div class="row" style="margin-top:12px">

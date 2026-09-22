@@ -90,7 +90,8 @@ function render() {
   // files
   const rows = $("filerows");
   rows.innerHTML = "";
-  $("file-count").textContent = site.files.length + " file" + (site.files.length === 1 ? "" : "s");
+  $("file-count").textContent = site.files.length + " file" + (site.files.length === 1 ? "" : "s") +
+    (site.files_truncated ? " shown (the first " + site.files.length + ")" : "");
   if (!site.files.length) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
@@ -104,12 +105,17 @@ function render() {
     const tr = document.createElement("tr");
     const p = document.createElement("td");
     p.className = "fpath";
-    const link = document.createElement("a");
-    link.href = rawURL(f.path);
-    link.target = "_blank";
-    link.rel = "noopener";
-    link.textContent = f.path;
-    p.appendChild(link);
+    if (site.mode === "container") {
+      // A container site serves its app, not its files: there is no URL.
+      p.textContent = f.path;
+    } else {
+      const link = document.createElement("a");
+      link.href = rawURL(f.path);
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = f.path;
+      p.appendChild(link);
+    }
     const s = document.createElement("td");
     s.className = "fsize";
     s.textContent = fmtBytes(f.size);
@@ -142,10 +148,17 @@ function render() {
   $("usage-fill").style.width = pct + "%";
   $("usage-note").textContent =
     fmtBytes(site.usage.bytes) + " of " + fmtBytes(site.usage.max_bytes) +
-    " · " + site.usage.files + "/" + site.usage.max_files + " files";
+    " · " + site.usage.files + (site.usage.max_files ? "/" + site.usage.max_files : "") + " files";
 
   // mode + entry
+  const ct = site.container || {};
+  $("mode-container").classList.toggle("hidden", !ct.available && site.mode !== "container");
+  $("mode-sub").textContent = "Web server serves files as-is. File viewer renders one document in the browser." +
+    (ct.available ? " Container runs the project that sitebin-container-compose.yaml declares." : "");
   document.querySelector(`input[name=emode][value=${site.mode}]`).checked = true;
+  $("card-container").classList.toggle("hidden", site.mode !== "container");
+  $("card-domains").classList.toggle("hidden", site.mode === "container");
+  if (site.mode === "container") renderContainer();
   $("entrywrap").classList.toggle("hidden", site.mode !== "viewer");
   $("spawrap").classList.toggle("hidden", site.mode !== "webserver");
   $("e-spa").checked = !!site.spa_fallback;
@@ -277,6 +290,133 @@ function render() {
   }
   $("dns-target").textContent = site.dns_target;
 }
+
+// ---- containers ----
+
+let ctPoll;
+function renderContainer() {
+  const ct = site.container;
+  const st = $("ct-status");
+  st.textContent = ct.enabled ? ct.status : "stopped";
+  st.className = "ctstatus " + (ct.enabled ? ct.status : "stopped");
+  $("ct-start").classList.toggle("hidden", ct.enabled && ct.status !== "error");
+  $("ct-stop").classList.toggle("hidden", !ct.enabled);
+  $("ct-restart").classList.toggle("hidden", !ct.enabled);
+
+  const msg = $("ct-message");
+  msg.classList.toggle("hidden", !ct.message);
+  msg.classList.toggle("note", ct.status !== "error");
+  msg.textContent = ct.message || "";
+
+  const pending = {};
+  for (const p of site.pending_domains || []) pending[p.domain] = p;
+  const box = $("ct-services");
+  box.innerHTML = "";
+  if (!ct.services.length) {
+    const empty = document.createElement("div");
+    empty.className = "ctsvc";
+    empty.style.color = "var(--ink-faint)";
+    empty.textContent = ct.status === "error" ? "Nothing is running." :
+      "Nothing has started yet. Add sitebin-container-compose.yaml to the site's root.";
+    box.appendChild(empty);
+  }
+  for (const s of ct.services) {
+    const row = document.createElement("div");
+    row.className = "ctsvc";
+    const head = document.createElement("div");
+    head.className = "head";
+    const name = document.createElement("span"); name.className = "name"; name.textContent = s.name;
+    const img = document.createElement("span"); img.className = "img"; img.textContent = s.image;
+    const state = document.createElement("span"); state.className = "state " + (s.state || ""); state.textContent = s.state || "—";
+    head.append(name, img, state);
+    if (s.egress) {
+      const f = document.createElement("span"); f.className = "flag"; f.textContent = "egress";
+      head.append(f);
+    }
+    row.append(head);
+    if (s.domains && s.domains.length) {
+      const maps = document.createElement("div");
+      maps.className = "maps";
+      for (const d of s.domains) {
+        const line = document.createElement("div");
+        if (d.url) {
+          const a = document.createElement("a");
+          a.href = d.url; a.target = "_blank"; a.rel = "noopener";
+          a.textContent = d.url.replace(/\/$/, "");
+          line.append(a);
+        } else {
+          line.append(d.domain);
+        }
+        line.append(" → :" + d.port);
+        const p = pending[d.domain];
+        if (d.pending) {
+          const w = document.createElement("span");
+          w.className = "pending";
+          w.textContent = p ? "  pending DNS: TXT " + p.txt_name + " = " + p.txt_value +
+            (p.cname_target ? " (or CNAME → " + p.cname_target + ")" : "") : "  not attached";
+          line.append(w);
+        }
+        maps.append(line);
+      }
+      row.append(maps);
+    }
+    if (s.volumes && s.volumes.length) {
+      const v = document.createElement("div");
+      v.className = "vols";
+      v.textContent = "volumes: " + s.volumes.join(", ");
+      row.append(v);
+    }
+    box.append(row);
+  }
+
+  const sel = $("ct-logsvc");
+  const current = sel.value;
+  sel.innerHTML = "";
+  for (const s of ct.services) {
+    const o = document.createElement("option");
+    o.value = o.textContent = s.name;
+    if (s.name === current) o.selected = true;
+    sel.append(o);
+  }
+  $("ct-logrow").classList.toggle("hidden", !ct.services.length);
+
+  clearTimeout(ctPoll);
+  if (ct.enabled && ct.status === "starting") {
+    ctPoll = setTimeout(async () => {
+      try { site = await api("GET", ""); render(); } catch {}
+    }, 4000);
+  }
+}
+
+async function containerAction(action, okMsg) {
+  try {
+    site = await api("POST", "/containers/" + action);
+    render();
+    toast(okMsg);
+  } catch (err) { toast(err.message, true); }
+}
+$("ct-start").addEventListener("click", () => containerAction("start", "Starting…"));
+$("ct-restart").addEventListener("click", () => containerAction("restart", "Restarting…"));
+$("ct-stop").addEventListener("click", () => containerAction("stop", "Stopped"));
+$("ct-logs").addEventListener("click", async () => {
+  const svc = $("ct-logsvc").value;
+  if (!svc) return;
+  try {
+    const res = await fetch("/api/sites/" + editID + "/containers/" + encodeURIComponent(svc) + "/logs?tail=200", {
+      headers: { "X-Edit-Password": sitePw },
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      let m = text;
+      try { m = JSON.parse(text).error; } catch {}
+      throw new Error(m || "could not read the log");
+    }
+    const pre = $("ct-log");
+    pre.textContent = text || "(no output yet)";
+    pre.classList.remove("hidden");
+    pre.scrollTop = pre.scrollHeight;
+  } catch (err) { toast(err.message, true); }
+});
 
 function encodePath(p) {
   return p.split("/").map(encodeURIComponent).join("/");

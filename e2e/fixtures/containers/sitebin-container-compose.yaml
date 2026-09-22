@@ -1,0 +1,36 @@
+services:
+  app:
+    image: alpine-node-22
+    environment:
+      GREETING: hello
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_USER: appuser
+      DB_PASSWORD: apppassword
+      DB_NAME: appdb
+    volumes:
+      - app:/usr/src/app
+    domains:
+      - "*:3000"
+      - "second.localtest.me:3001"
+    egress: allowed
+    depends_on: [db]
+
+  probe:
+    image: alpine-node-22
+    command: >-
+      node -e "require('http').createServer(async (q, s) => {
+      try { await fetch('https://registry.npmjs.org/', {signal: AbortSignal.timeout(4000)}); s.end('egress open') }
+      catch (e) { s.end('egress blocked') } }).listen(3000)"
+    domains:
+      - "probe.localtest.me:3000"
+
+  db:
+    image: mysql-8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: appdb
+      MYSQL_USER: appuser
+      MYSQL_PASSWORD: apppassword
+    volumes:
+      - db:/var/lib/mysql

@@ -510,6 +510,36 @@ input::placeholder { color: var(--ink-faint); }
 }
 .dnshint code { font: 12px var(--mono); color: var(--ink); background: var(--bg); padding: 2px 6px; border-radius: 5px; }
 
+/* container sites */
+.ctstatus {
+  font: 600 11px var(--mono); letter-spacing: .1em; text-transform: uppercase;
+  padding: 3px 8px; border-radius: 6px; border: 1px dashed var(--line); color: var(--ink-dim);
+}
+.ctstatus.running { color: var(--ok); border-color: rgba(94,207,138,.45); }
+.ctstatus.starting { color: var(--amber); border-color: rgba(245,184,77,.45); }
+.ctstatus.error { color: var(--danger); border-color: rgba(242,109,109,.45); }
+.ctmsg {
+  margin-bottom: 14px; padding: 10px 12px; border-radius: 10px; font-size: 13.5px;
+  border: 1px solid rgba(242,109,109,.3); background: rgba(242,109,109,.06); color: #ffc2c2;
+}
+.ctmsg.note { border-color: rgba(245,184,77,.3); background: rgba(245,184,77,.06); color: #ffe0a8; }
+.ctsvc { padding: 12px 0; border-top: 1px solid var(--line-soft); }
+.ctsvc:first-child { border-top: 0; }
+.ctsvc .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+.ctsvc .name { font: 600 15px var(--mono); color: var(--ink); }
+.ctsvc .img, .ctsvc .state, .ctsvc .flag { font: 12px var(--mono); color: var(--ink-faint); }
+.ctsvc .state.running { color: var(--ok); }
+.ctsvc .state.restarting, .ctsvc .state.exited, .ctsvc .state.dead { color: var(--danger); }
+.ctsvc .maps { margin-top: 6px; display: grid; gap: 4px; font: 13px var(--mono); color: var(--ink-dim); }
+.ctsvc .maps a { color: var(--ink); }
+.ctsvc .maps .pending { color: var(--amber); }
+.ctsvc .vols { margin-top: 4px; font: 12px var(--mono); color: var(--ink-faint); }
+.ctlog {
+  margin-top: 12px; max-height: 320px; overflow: auto; padding: 12px 14px; border-radius: 10px;
+  background: #0d1322; border: 1px solid var(--line-soft); font: 12px/1.55 var(--mono); color: #cfd6e6;
+  white-space: pre-wrap; word-break: break-all;
+}
+
 .inline-status { font-size: 13px; color: var(--ok); min-height: 18px; }
 .inline-status.err { color: var(--danger); }
 

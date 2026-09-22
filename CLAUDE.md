@@ -21,13 +21,14 @@ docker build --build-arg EDITION=enterprise -t sitebin:latest-ee .   # enterpris
 ```
 
 **`e2e.ps1` is not the full E2E.** It is the core HTTP suite and references no
-other script; there is no aggregate entry point. A full pass is all nine run
+other script; there is no aggregate entry point. A full pass is all ten run
 by hand: `e2e.ps1`, `spa.ps1`, `paths.ps1`, `ftp.ps1`, `mcp.ps1` (community
-image), `accounts.ps1`, `tiers.ps1` (enterprise image), `license.ps1`, and
+image), `accounts.ps1`, `tiers.ps1`, `containers.ps1` (enterprise image; the
+last drives the host's real Docker Engine and pulls images), `license.ps1`, and
 `consent.ps1` -- the last of which is the only one that needs a **running SaaS
 Stack** (the stack's consent gate, the OIDC issuer/discovery split, and the
 `consents` declaration; see `docs/superpowers/specs/2026-09-01-consent-gate-through-the-stack-design.md`).
-`e2e/stack/verify.ps1` is the tenth, run against the compose container in
+`e2e/stack/verify.ps1` is the eleventh, run against the compose container in
 `e2e/stack/` rather than one it starts itself: the registration the stack
 holds, the stack-hosted self-service links, and a signed GDPR export and
 deletion.
@@ -50,8 +51,8 @@ file for the half that does need a running SaaS Stack.
   server.
 - `internal/` — the MIT core: `config`, `ids`, `auth`, `store`, `viewer`,
   `caddygen`, `httpapi`, `mcp`, `cleanup`, `ftp`, `supervisor`, and `ext`.
-- `ee/` — the enterprise extension (`account`, `authn`, `billing`, `eeconfig`,
-  `licensing`, `session`, `smtp`). **ELv2, not MIT.**
+- `ee/` — the enterprise extension (`account`, `authn`, `billing`, `containers`,
+  `eeconfig`, `licensing`, `session`, `smtp`). **ELv2, not MIT.**
 - `web/` — embedded UI, vendored viewer libraries, `static/embed.js`.
 - `docs/superpowers/{specs,plans}/` — design docs and implementation plans.
 
@@ -95,6 +96,40 @@ has been definitively absent for three days — a lookup error never detaches.
 A verified domain with no claim record predates verification and is left
 alone. `SITEBIN_DOMAIN_VERIFICATION=off` is for trusted instances and the e2e
 suite; the default is `dns`.
+
+## Container sites
+
+The third site mode (`store.ModeContainer`) runs the project its
+`sitebin-container-compose.yaml` declares. Read
+`docs/superpowers/specs/2026-09-22-container-sites-design.md` first.
+
+- **The core routes, the extension runs.** No Docker code lives in
+  `internal/`. `ext.ContainerProvider` is an *optional* interface, asserted,
+  so the community build (no provider) simply has no container mode.
+- **Desired vs observed state, two writers.** The core writes `enabled` and
+  `restart_seq` in `meta.json`; only the runtime (`ee/containers.Manager`)
+  writes the observed half, through `SiteService.SetContainerState`. The
+  runtime re-applies whenever `(sha256(compose), restart_seq)` differs from
+  what it last applied — that, plus a 5-second tick, is how an FTP or WebDAV
+  write restarts a project. Do not add a "restart" command path around it.
+- **authz is the router.** It answers a container site with
+  `X-Sitebin-Upstream`, which Caddy copies onto the request and proxies to.
+  The header is stripped from the client's request *before* forward_auth; a
+  container site is never admitted without an upstream, so it never reaches
+  the file server (its folders hold database files and passwords).
+- **A permanent failure is recorded against the file; a transient one backs
+  off.** A broken compose file or a plan over its cap is not retried until the
+  file or the sequence changes. Docker and plan-lookup errors retry after a
+  minute. An unknown plan starts nothing and stops nothing.
+- **`max_containers` 0 means none**, like `custom_domains`. It counts running
+  services across all of an account's projects.
+- **No file surface follows a symlink out of a site.** Containers write into
+  the site tree, so the store, WebDAV (`siteFS`) and FTP (`rootFs`) resolve
+  through `os.Root`; listings, ZIP and usage count regular files only; leaving
+  container mode purges every link before Caddy serves the tree; backup skips
+  links out of the data root. Any new code that touches site files must go
+  through `store.OpenContentRoot` or the store — never `os.Open` on a joined
+  path.
 
 ## Tiers, quotas and lifetimes
 

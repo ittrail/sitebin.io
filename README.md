@@ -165,6 +165,9 @@ Creating a site returns three things, shown **exactly once**:
   Markdown, DOCX, images, video, audio, code/text with highlighting). The raw
   files stay available under `/_raw/…`, and the viewer has a built-in file
   switcher + download button. Switching modes back and forth is lossless.
+- **Container** *(Enterprise)* — the site runs the project its
+  `sitebin-container-compose.yaml` declares, and Caddy proxies to it. See
+  [Container sites](#container-sites-enterprise).
 
 ### API (for scripts and agents)
 
@@ -219,6 +222,10 @@ curl -X POST -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
      https://sitebin.example.com/api/sites/$EDIT_ID/domains
 curl -X DELETE -H "X-Edit-Password: $PW" \
      https://sitebin.example.com/api/sites/$EDIT_ID/domains/docs.client.com
+
+# container sites (Enterprise): start / stop / restart, and a service's log
+curl -X POST -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/containers/restart
+curl -H "X-Edit-Password: $PW" "https://sitebin.example.com/api/sites/$EDIT_ID/containers/app/logs?tail=200"
 
 # read one file's content (used by the in-browser editor)
 curl -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/content/index.html
@@ -508,6 +515,118 @@ Two independent limits apply, and neither is per account:
   If the instance cannot count its domains, the domain is allowed: an
   unreadable `meta.json` must not cost a customer a domain they paid for.
 
+### Container sites *(Enterprise)*
+
+A third mode runs the project instead of serving it. Put a
+`sitebin-container-compose.yaml` in the site's root and switch the site to
+**Container** in the edit page (or `PUT {"mode":"container"}`):
+
+```yaml
+services:
+  app:
+    image: alpine-node-22
+    environment:
+      NODE_ENV: production
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_USER: appuser
+      DB_PASSWORD: apppassword
+      DB_NAME: appdb
+    volumes:
+      - app:/usr/src/app          # the site's root folder "app"
+    domains:
+      - "*:3000"                  # the site's own address -> port 3000
+      - "shop.example.com:3001"   # a custom domain -> port 3001
+    egress: allowed               # may reach the internet (default: denied)
+    depends_on: [db]
+
+  db:
+    image: mysql-8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: appdb
+      MYSQL_USER: appuser
+      MYSQL_PASSWORD: apppassword
+    volumes:
+      - db:/var/lib/mysql
+```
+
+| Key | Meaning |
+|---|---|
+| `image` | One of Sitebin's own images — never a registry reference. `alpine-node-22` (`node:22.23.2-alpine3.24`) and `mysql-8.4` (`mysql:8.4.11`), both pinned by digest. |
+| `environment` | A map or a `KEY=value` list, as in Compose. **No interpolation**: `$HOME` stays the five characters `$HOME`. |
+| `volumes` | `<folder>:<absolute path>[:ro]`. The folder is a **root folder of the site** — the same one the edit page, WebDAV and FTP show — created if it does not exist. That is how code reaches a container: upload it into the folder the service mounts. |
+| `domains` | `"<host>:<port>"`. `*` is the site's own address (once per project); anything else is a custom domain, claimed automatically and attached once its DNS proves it (see [Custom domains](#custom-domains-enterprise)). |
+| `egress` | `allowed` or `denied` (default). `egres` is accepted too. |
+| `command`, `working_dir`, `depends_on` | Optional. `depends_on` orders the start; it does not wait for health. The node image's default command runs `npm install` when there is no `node_modules` (needs egress) and then `npm start`, or `node index.js` without a `package.json`; the working directory defaults to the first volume. |
+
+Every other key is an error that names it. **Every change to the compose file
+restarts the project**, however the file arrives — upload, ZIP, editor,
+WebDAV, FTP, API or MCP. Services reach each other by name on a network
+private to the project. `/_sitebin/*` stays Sitebin's on every site origin.
+
+How it runs:
+
+- Caddy **reverse-proxies** to the service — a container site is never served
+  from its files (its folders hold the database; its compose file holds
+  passwords). Not running: `503`. Nothing mapped to the host: `404`. Path
+  views (`/v/<id>`) do not proxy.
+- Per container: Sitebin's own uid (files stay manageable), no capabilities,
+  `no-new-privileges`, a read-only root filesystem with bounded tmpfs scratch
+  space, and **fixed** memory / CPU / process limits set by the instance. No
+  port is published on the host. An image's data path you do not mount (e.g.
+  MySQL's) is a tmpfs, so it cannot fill the host's disk.
+- **Quotas.** The tier's `max_containers` caps running services across **all**
+  of an account's projects — `0`/absent means no containers. The site's byte
+  cap counts everything the containers write; a project over it is stopped
+  (never deleted) by the next check. The file-count cap does not apply in
+  container mode.
+- The edit page shows each service, its state, its mappings (with the DNS
+  record a pending custom domain still needs), Start / Stop / Restart, and the
+  recent log. The custom-domain editor is replaced by the mappings.
+
+```bash
+curl -X POST -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/containers/restart  # or start / stop
+curl -H "X-Edit-Password: $PW" "https://sitebin.example.com/api/sites/$EDIT_ID/containers/app/logs?tail=200"
+```
+
+**Operator setup.** Container sites need `SITEBIN_CONTAINERS=docker`, tiers
+mode, and the Docker Engine's socket (Engine 26+):
+
+```yaml
+services:
+  sitebin:
+    image: sitebin:latest-ee
+    group_add: ["988"]            # the gid that owns /var/run/docker.sock on the host
+    volumes:
+      - sitebin-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      SITEBIN_ACCOUNT_MODE: tiers
+      SITEBIN_CONTAINERS: docker
+```
+
+Sitebin finds its own container and the host location of `/data` (a bind
+mount or a named volume) by inspecting itself; `SITEBIN_CONTAINERS_SELF` and
+`SITEBIN_CONTAINERS_DATA_MOUNT` override that. It attaches itself to every
+project's network so Caddy can reach the services, and re-attaches after a
+redeploy. Everything it creates carries the `io.sitebin.managed` label, and
+nothing else on the host is touched.
+
+> **The Docker socket is root on the host.** Whoever controls Sitebin's
+> process controls the Engine. Run container sites on a host dedicated to
+> Sitebin, prefer a socket proxy (`SITEBIN_CONTAINERS_DOCKER_HOST=tcp://…`)
+> that allows only the containers, images and networks endpoints, and consider
+> `SITEBIN_CONTAINERS_RUNTIME=runsc` (gVisor) for stronger isolation.
+> Services with `egress: allowed` can reach anything the host's bridge can,
+> including other hosts on your private network — block those ranges in the
+> `DOCKER-USER` iptables chain.
+
+Leaving container mode stops the project and removes every symlink the
+containers left in the tree before the files are served again. Independently
+of mode, no file surface — API, ZIP, WebDAV, FTP — follows a symlink out of a
+site. Design: [`2026-09-22-container-sites-design.md`](docs/superpowers/specs/2026-09-22-container-sites-design.md).
+
 ### Expiry
 
 An expired site answers `410 Gone`; the cleanup worker deletes its files 24 h
@@ -594,7 +713,11 @@ but not implemented.
   5/hour per IP; password-reset mail 3/hour per address. Passwords are 8 to
   256 characters.
 - Uploads are sanitized against path traversal; symlinks in zips are
-  rejected; per-site size/count quotas are enforced during streaming.
+  rejected; per-site size/count quotas are enforced during streaming. No file
+  surface follows a symlink out of a site's directory — container sites put
+  code Sitebin does not control in front of those directories.
+- `SITEBIN_CONTAINERS=docker` gives Sitebin the Docker socket, which is root
+  on the host. Read [Container sites](#container-sites-enterprise) first.
 - The authz/tls-check/health endpoints live on a separate listener that is
   never proxied publicly.
 - Every TLS origin sends `Strict-Transport-Security` (one year). The main
@@ -624,7 +747,7 @@ a green build is a green suite.
 
 ### End-to-end tests *(Windows host, Docker required)*
 
-`e2e/` holds **nine independent scripts**, plus `e2e/stack/verify.ps1` for the
+`e2e/` holds **ten independent scripts**, plus `e2e/stack/verify.ps1` for the
 compose container that runs against a live SaaS Stack. There is no "run
 everything" entry point: `e2e.ps1` is the core suite and calls none of the
 others, so a full pass means running them all.
@@ -639,6 +762,7 @@ others, so a full pass means running them all.
 | `accounts.ps1` | accounts mode *(enterprise)* | `sitebin:dev-ee` |
 | `tiers.ps1` | tiers and quotas *(enterprise)* | `sitebin:dev-ee` |
 | `license.ps1` | licensing *(enterprise)* — builds its own image | `sitebin:e2e-license` |
+| `containers.ps1` | container sites against the host's Docker Engine: node + MySQL behind Caddy, egress, the plan cap, restarts, symlink confinement *(enterprise; pulls images, needs internet)* | `sitebin:dev-ee` |
 | `consent.ps1` | the stack's consent gate: three documents asked once *(enterprise, needs a running SaaS Stack)* | `sitebin:dev-ee` |
 | `stack/verify.ps1` | the compose container against a live stack: registration, sign-in, GDPR endpoints, self-service links | `sitebin:stack-e2e` |
 
@@ -659,6 +783,7 @@ powershell -File e2e\ftp.ps1
 powershell -File e2e\mcp.ps1
 powershell -File e2e\accounts.ps1
 powershell -File e2e\tiers.ps1
+powershell -File e2e\containers.ps1
 powershell -File e2e\license.ps1   # self-contained: mints a throwaway root and builds its own image
 ```
 
@@ -681,8 +806,8 @@ Sitebin is **open-core**:
   with `go build` / the default `sitebin:latest` image. Fully open, no
   accounts, no feature gates.
 - **Enterprise** (`ee/`) — optional premium features (user accounts, tiers &
-  quotas, Google/Microsoft OAuth, SMTP, and billing through Stripe, Paddle or
-  the SaaS Stack), compiled in
+  quotas, Google/Microsoft OAuth, SMTP, billing through Stripe, Paddle or
+  the SaaS Stack, and container sites), compiled in
   only with the `ee` build tag (`go build -tags ee`, image `sitebin:latest-ee`).
   All caps and toggles are configured at container startup.
 
@@ -716,6 +841,12 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_DEFAULT_TIER` | Tier new/free accounts start on (required in tiers mode). |
 | `SITEBIN_ANON_TIER` | Tier for anonymous creation (empty = require an account). |
 | `SITEBIN_TIER_SELF_SELECT` | Allow users to switch among free tiers. |
+| `SITEBIN_CONTAINERS` | `off` (default) or `docker`: enables [container sites](#container-sites-enterprise). Needs `SITEBIN_ACCOUNT_MODE=tiers`; each tier's `max_containers` (0/absent = none) caps the services an account runs across all its projects. An Engine that does not answer never stops startup — the mode reports itself unavailable and keeps retrying. |
+| `SITEBIN_CONTAINERS_DOCKER_HOST` | `unix:///var/run/docker.sock` (default) or `tcp://host:port` for a socket proxy. Engine API 1.45 (Docker 26) or newer. |
+| `SITEBIN_CONTAINERS_DATA_MOUNT` | Where `/data` lives for Docker: an absolute host path or `volume:<name>`. Default: found by inspecting Sitebin's own container. |
+| `SITEBIN_CONTAINERS_SELF` | Sitebin's own container id or name. Default: detected. |
+| `SITEBIN_CONTAINERS_RUNTIME` | OCI runtime for customer containers, e.g. `runsc` (gVisor). Default: the Engine's. |
+| `SITEBIN_CONTAINER_MEMORY_MB` / `_CPUS` / `_PIDS` | Fixed per-container limits: `512` MB (no swap), `0.5` CPU, `256` processes. |
 | `SITEBIN_VIEW_DOMAIN` | Domain user sites are served from, as `<id>.<view-domain>` (default: the base domain). Point it at a **separate registrable domain** and list that domain in the [Public Suffix List](https://publicsuffix.org/) to stop uploaded content sharing a browser "site" with the dashboard: no cookie can be written upward onto the app, `SameSite` stops treating navigations from a user site as same-site, and a phishing takedown against one site does not endanger the app's own domain. Needs its own wildcard DNS record and DNS-challenge access. Cannot be combined with `SITEBIN_VIEW_ACCESS=path\|both`, which would serve content from the main domain again. |
 | `SITEBIN_ADMIN_ACCOUNTS` | Comma-separated emails allowed to reach the **instance register** at `/account/admin` — every site on the instance, with delete and expiry control. Gated twice: the account's tier must also carry `"admin": true` in the tier config, so neither the plan source nor the environment can grant it alone. Unset disables the console entirely. |
 | `SITEBIN_ALLOW_ANON_CREATE` | In accounts mode, still allow anonymous sites. |
