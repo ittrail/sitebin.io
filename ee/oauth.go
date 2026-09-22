@@ -4,6 +4,7 @@ package ee
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -84,11 +85,16 @@ func (p *provider) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := p.oidc.Exchange(r.Context(), prov, r.URL.Query().Get("code"), parts[2])
 	if err != nil {
+		// The visitor gets a generic line; the operator needs the reason. An
+		// unreachable token endpoint and a failed signature look identical
+		// from the browser, and on 2026-09-23 the first was invisible here.
+		slog.Warn("oauth: code exchange failed", "provider", prov, "err", err)
 		p.oauthError(w, "Could not complete sign-in. Please try again.")
 		return
 	}
 	acc, err := p.linkOrCreateOAuth(id)
 	if err != nil {
+		slog.Warn("oauth: could not link or create the account", "provider", prov, "err", err)
 		p.oauthError(w, err.Error())
 		return
 	}
