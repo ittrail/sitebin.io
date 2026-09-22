@@ -83,6 +83,13 @@ func containerName(site, service string) string { return "sb-" + site + "-" + se
 func networkName(site string) string            { return "sb-" + site }
 func egressName(site string) string             { return "sb-" + site + "-egress" }
 
+// egressBridge is the host interface of a project's egress network. Every
+// one starts with "sbe", so an operator can hold ALL customer egress to a
+// firewall rule without knowing the projects: `iptables -I DOCKER-USER -i
+// sbe+ -d 10.0.0.0/8 -j DROP` keeps customer code off private networks and
+// the cloud metadata address. Linux caps interface names at 15 characters.
+func egressBridge(site string) string { return "sbe" + site[:min(12, len(site))] }
+
 // Manager runs container sites: a reconciler that converges the Docker
 // Engine to the desired state the core records, and reports what it saw.
 // It is the only writer of a site's observed container state.
@@ -647,7 +654,10 @@ func (m *Manager) deploy(ctx context.Context, id string, spec *Spec) error {
 	if egress {
 		// No inter-container traffic on it: services talk over the internal
 		// network, and this one exists only to reach out.
-		if err := m.ensureNetwork(ctx, egressName(id), false, labels, map[string]string{"com.docker.network.bridge.enable_icc": "false"}); err != nil {
+		if err := m.ensureNetwork(ctx, egressName(id), false, labels, map[string]string{
+			"com.docker.network.bridge.enable_icc": "false",
+			"com.docker.network.bridge.name":       egressBridge(id),
+		}); err != nil {
 			return err
 		}
 	} else if err := m.eng.NetworkRemove(ctx, egressName(id)); err != nil {

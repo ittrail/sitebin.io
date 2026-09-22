@@ -371,6 +371,9 @@ func TestApplyTheExample(t *testing.T) {
 	if r.eng.netOpts[egress]["com.docker.network.bridge.enable_icc"] != "false" {
 		t.Error("egress network allows inter-container traffic")
 	}
+	if br := r.eng.netOpts[egress]["com.docker.network.bridge.name"]; br != "sbe"+siteA[:12] || len(br) > 15 {
+		t.Errorf("egress bridge name = %q: the firewall rule matches sbe+", br)
+	}
 	if !slices.Contains(r.eng.attached[net], "self-sitebin") {
 		t.Errorf("Sitebin not attached: %v", r.eng.attached[net])
 	}

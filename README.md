@@ -620,7 +620,10 @@ nothing else on the host is touched.
 > `SITEBIN_CONTAINERS_RUNTIME=runsc` (gVisor) for stronger isolation.
 > Services with `egress: allowed` can reach anything the host's bridge can,
 > including other hosts on your private network — block those ranges in the
-> `DOCKER-USER` iptables chain.
+> `DOCKER-USER` iptables chain. Every egress bridge Sitebin creates is named
+> `sbe<id>`, so one rule per range covers all of them:
+> `iptables -I DOCKER-USER -i sbe+ -d 10.0.0.0/8 -j DROP` (likewise
+> `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `100.64.0.0/10`).
 
 Leaving container mode stops the project and removes every symlink the
 containers left in the tree before the files are served again. Independently
