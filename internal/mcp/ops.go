@@ -123,7 +123,7 @@ type DecodedFile struct {
 // field is optional; a nil pointer means "leave it alone", which is the same
 // distinction the JSON API's updateSet draws with the same technique.
 type Settings struct {
-	Mode         *string `json:"mode,omitempty" jsonschema:"webserver (serve the files as a site) or viewer (wrap a single document in a viewer)"`
+	Mode         *string `json:"mode,omitempty" jsonschema:"webserver (serve the files as a site), viewer (wrap a single document in a viewer), or container (Enterprise: run the services sitebin-container-compose.yaml declares; every change to that file restarts them)"`
 	EntryFile    *string `json:"entry_file,omitempty" jsonschema:"the file to serve at the site root"`
 	ViewPassword *string `json:"view_password,omitempty" jsonschema:"password visitors must enter; an empty string removes the protection"`
 	WebDAV       *bool   `json:"webdav_enabled,omitempty" jsonschema:"expose the site over WebDAV"`
