@@ -18,6 +18,7 @@ import (
 	"github.com/ittrail/sitebin.io/ee/account"
 	"github.com/ittrail/sitebin.io/ee/authn"
 	"github.com/ittrail/sitebin.io/ee/billing"
+	"github.com/ittrail/sitebin.io/ee/containers"
 	"github.com/ittrail/sitebin.io/ee/eeconfig"
 	"github.com/ittrail/sitebin.io/ee/licensing"
 	"github.com/ittrail/sitebin.io/ee/session"
@@ -53,7 +54,9 @@ type provider struct {
 	// consulted at exactly one place (AuthorizeCreate) and rendered in the
 	// account UI; nothing on the serving path asks it.
 	license *licensing.Manager
-	secret  []byte
+	// containers runs container sites; nil when SITEBIN_CONTAINERS is off.
+	containers *containers.Manager
+	secret     []byte
 }
 
 func newProvider() *provider { return &provider{} }
@@ -94,6 +97,9 @@ func (p *provider) Init(h ext.Host) error {
 		return fmt.Errorf("account store: %w", err)
 	}
 	p.accounts = store
+	if err := p.initContainers(); err != nil {
+		return fmt.Errorf("containers: %w", err)
+	}
 	p.sessions = session.New(h.Secret(), !h.HTTPOnly(), session.DefaultTTL)
 	p.local = authn.NewLocal(store)
 	p.limits = newAuthLimiters()

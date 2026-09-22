@@ -100,6 +100,11 @@ type Tier struct {
 	WebDAV        bool   `json:"webdav"`
 	CustomDomains int    `json:"custom_domains"`
 	MaxExpiryDays int    `json:"max_expiry_days"`
+	// MaxContainers caps the services an account runs across ALL its
+	// container sites. 0 / absent means NO containers — the same polarity as
+	// custom_domains, because a free tier that forgets the field must not get
+	// compute. Only meaningful with SITEBIN_CONTAINERS on.
+	MaxContainers int `json:"max_containers,omitempty"`
 	// Admin marks a tier whose holders may reach the admin console. It is only
 	// half of the gate: the account must ALSO be listed in
 	// SITEBIN_ADMIN_ACCOUNTS. A tier source (PayGate, a stored tier) can
@@ -200,8 +205,78 @@ type Config struct {
 	// instance that cannot take a deletion order is one that leaves personal
 	// data behind after the identity is gone.
 	GDPRSecret string
+	// Containers configures container sites. nil = the mode is off, which is
+	// the default: running customers' code is a decision an operator makes
+	// on purpose, with the Docker socket in hand.
+	Containers *ContainersConfig
 
 	byID map[string]Tier
+}
+
+// ContainersConfig is SITEBIN_CONTAINERS and its settings. The limits are
+// per container and fixed by the instance; a customer does not choose them.
+type ContainersConfig struct {
+	DockerHost string  // SITEBIN_CONTAINERS_DOCKER_HOST
+	DataMount  string  // SITEBIN_CONTAINERS_DATA_MOUNT ("" = inspect own container)
+	Self       string  // SITEBIN_CONTAINERS_SELF ("" = detect)
+	Runtime    string  // SITEBIN_CONTAINERS_RUNTIME ("" = Docker's default)
+	MemoryMB   int     // SITEBIN_CONTAINER_MEMORY_MB
+	CPUs       float64 // SITEBIN_CONTAINER_CPUS
+	Pids       int     // SITEBIN_CONTAINER_PIDS
+}
+
+// loadContainers parses the SITEBIN_CONTAINERS* variables.
+func loadContainers(getenv func(string) string, mode Mode) (*ContainersConfig, error) {
+	switch v := strings.ToLower(strings.TrimSpace(getenv("SITEBIN_CONTAINERS"))); v {
+	case "", "off", "false", "0":
+		return nil, nil
+	case "docker":
+	default:
+		return nil, fmt.Errorf("SITEBIN_CONTAINERS %q is invalid (want off|docker)", v)
+	}
+	if mode != ModeTiers {
+		// The plan's max_containers is the only cap there is; without tiers
+		// there would be none at all.
+		return nil, fmt.Errorf("SITEBIN_CONTAINERS=docker needs SITEBIN_ACCOUNT_MODE=tiers: each tier's max_containers is what limits them")
+	}
+	c := &ContainersConfig{
+		DockerHost: strings.TrimSpace(getenv("SITEBIN_CONTAINERS_DOCKER_HOST")),
+		DataMount:  strings.TrimSpace(getenv("SITEBIN_CONTAINERS_DATA_MOUNT")),
+		Self:       strings.TrimSpace(getenv("SITEBIN_CONTAINERS_SELF")),
+		Runtime:    strings.TrimSpace(getenv("SITEBIN_CONTAINERS_RUNTIME")),
+		MemoryMB:   512, CPUs: 0.5, Pids: 256,
+	}
+	if c.DockerHost == "" {
+		c.DockerHost = "unix:///var/run/docker.sock"
+	}
+	if !strings.HasPrefix(c.DockerHost, "unix://") && !strings.HasPrefix(c.DockerHost, "tcp://") {
+		return nil, fmt.Errorf("SITEBIN_CONTAINERS_DOCKER_HOST %q: use unix:// or tcp://", c.DockerHost)
+	}
+	if d := c.DataMount; d != "" && !strings.HasPrefix(d, "/") && !(strings.HasPrefix(d, "volume:") && len(d) > len("volume:")) {
+		return nil, fmt.Errorf("SITEBIN_CONTAINERS_DATA_MOUNT %q: use an absolute host path or volume:<name>", d)
+	}
+	if v := strings.TrimSpace(getenv("SITEBIN_CONTAINER_MEMORY_MB")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 64 {
+			return nil, fmt.Errorf("SITEBIN_CONTAINER_MEMORY_MB %q: a number of megabytes, at least 64", v)
+		}
+		c.MemoryMB = n
+	}
+	if v := strings.TrimSpace(getenv("SITEBIN_CONTAINER_CPUS")); v != "" {
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil || f < 0.01 || f > 64 {
+			return nil, fmt.Errorf("SITEBIN_CONTAINER_CPUS %q: a number of CPUs, e.g. 0.5", v)
+		}
+		c.CPUs = f
+	}
+	if v := strings.TrimSpace(getenv("SITEBIN_CONTAINER_PIDS")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 16 {
+			return nil, fmt.Errorf("SITEBIN_CONTAINER_PIDS %q: a number, at least 16", v)
+		}
+		c.Pids = n
+	}
+	return c, nil
 }
 
 // MinGDPRSecretLen is the stack's own floor for the webhook secret
@@ -614,6 +689,11 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Co
 			}
 		}
 	}
+	containers, err := loadContainers(getenv, cfg.Mode)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.Containers = containers
 	return cfg, nil
 }
 

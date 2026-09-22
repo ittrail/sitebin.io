@@ -336,6 +336,11 @@ func (s siteService) SetContainerState(viewID string, st ext.ContainerState) err
 		c.Message = st.Message
 		c.AppliedHash = st.AppliedHash
 		c.AppliedSeq = st.AppliedSeq
+		c.AppliedAt = nil
+		if !st.AppliedAt.IsZero() {
+			at := st.AppliedAt.UTC()
+			c.AppliedAt = &at
+		}
 		c.Services = make([]store.ContainerService, 0, len(st.Services))
 		for _, sv := range st.Services {
 			ds := make([]store.ContainerDomain, 0, len(sv.Domains))
@@ -402,6 +407,9 @@ func (s siteService) SyncContainerDomains(viewID string, domains []string) ([]st
 
 func observedOf(c *store.ContainerMeta) ext.ContainerState {
 	st := ext.ContainerState{Status: c.Status, Message: c.Message, AppliedHash: c.AppliedHash, AppliedSeq: c.AppliedSeq}
+	if c.AppliedAt != nil {
+		st.AppliedAt = *c.AppliedAt
+	}
 	for _, sv := range c.Services {
 		ds := make([]ext.ContainerDomain, 0, len(sv.Domains))
 		for _, d := range sv.Domains {

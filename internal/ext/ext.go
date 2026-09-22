@@ -290,7 +290,10 @@ type ContainerState struct {
 	Message     string
 	AppliedHash string
 	AppliedSeq  int
-	Services    []ContainerService
+	// AppliedAt is when the project was last started from its compose file.
+	// A downgrade stops the most recently started projects first.
+	AppliedAt time.Time
+	Services  []ContainerService
 }
 
 // ContainerService is one service as last applied.

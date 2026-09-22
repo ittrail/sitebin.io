@@ -45,6 +45,7 @@ type ContainerMeta struct {
 	Message     string             `json:"message,omitempty"`
 	AppliedHash string             `json:"applied_hash,omitempty"`
 	AppliedSeq  int                `json:"applied_seq,omitempty"`
+	AppliedAt   *time.Time         `json:"applied_at,omitempty"`
 	Services    []ContainerService `json:"services,omitempty"`
 	ObservedAt  *time.Time         `json:"observed_at,omitempty"`
 }
