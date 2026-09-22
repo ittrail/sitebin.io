@@ -381,3 +381,34 @@ func TestNoHSTSInHTTPOnlyMode(t *testing.T) {
 		t.Error("HSTS emitted in HTTP-only mode: a browser that ever saw it over TLS would refuse the plain instance")
 	}
 }
+
+// A container site is proxied to the upstream authz names, and only authz may
+// name it: a client-sent header is stripped BEFORE the gate, the gate copies
+// its answer onto the request, and the proxy comes before the file server so
+// a container site never reaches it.
+func TestContentRoutesProxyContainerSites(t *testing.T) {
+	cfg := mustLoad(t, map[string]string{"SITEBIN_BASE_DOMAIN": "sitebin.example", "SITEBIN_HTTP_ONLY": "true"})
+	out := Generate(cfg)
+	for _, block := range []string{"*.sitebin.example {", "http://:80 {"} {
+		i := strings.Index(out, block)
+		if i < 0 {
+			t.Fatalf("no %q block", block)
+		}
+		body := out[i:]
+		body = body[:strings.Index(body, "\n}\n")]
+		strip := strings.Index(body, "request_header -X-Sitebin-Upstream")
+		gate := strings.Index(body, "forward_auth")
+		copyH := strings.Index(body, "copy_headers Set-Cookie X-Sitebin-Upstream")
+		proxy := strings.Index(body, "reverse_proxy @proxied {http.request.header.X-Sitebin-Upstream}")
+		files := strings.Index(body, "file_server")
+		if strip < 0 || gate < 0 || copyH < 0 || proxy < 0 || files < 0 {
+			t.Fatalf("%s: missing a directive:\n%s", block, body)
+		}
+		if !(strip < gate && gate < proxy && proxy < files) {
+			t.Errorf("%s: order strip=%d gate=%d proxy=%d files=%d", block, strip, gate, proxy, files)
+		}
+		if !strings.Contains(body, "@proxied header X-Sitebin-Upstream *") {
+			t.Errorf("%s: no @proxied matcher", block)
+		}
+	}
+}

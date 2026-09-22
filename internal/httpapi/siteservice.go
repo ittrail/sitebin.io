@@ -99,6 +99,7 @@ func (s siteService) Delete(viewID string) error {
 		return mapSiteGone(err, viewID)
 	}
 	s.a.verifyCache.Drop(site.EditID + ":")
+	s.a.stopContainersBeforeDelete(site)
 	return s.a.st.Delete(site)
 }
 

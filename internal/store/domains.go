@@ -182,6 +182,15 @@ func (s *Store) RemoveDomain(site *Site, domain string) error {
 	})
 }
 
+// HasDomainClaim reports whether the site claims domain, verified or not.
+func (s *Site) HasDomainClaim(domain string) bool {
+	d, err := normalizeDomain(domain)
+	if err != nil {
+		return false
+	}
+	return slices.Contains(s.Meta.CustomDomains, d) || claimIndex(&s.Meta, d) >= 0
+}
+
 // PendingDomains returns the site's claims that are not attached yet.
 func (s *Site) PendingDomains() []DomainClaim {
 	var out []DomainClaim

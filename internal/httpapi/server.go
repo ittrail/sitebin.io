@@ -97,6 +97,8 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("DELETE /api/sites/{editID}/files/{path...}", a.withEditAuth(a.deleteFile))
 	mux.HandleFunc("POST /api/sites/{editID}/domains", a.withEditAuth(a.addDomain))
 	mux.HandleFunc("DELETE /api/sites/{editID}/domains/{domain}", a.withEditAuth(a.removeDomain))
+	mux.HandleFunc("POST /api/sites/{editID}/containers/{action}", a.withEditAuth(a.containerAction))
+	mux.HandleFunc("GET /api/sites/{editID}/containers/{service}/logs", a.withEditAuth(a.containerLogs))
 
 	mux.Handle("/dav/", http.HandlerFunc(a.webdav))
 

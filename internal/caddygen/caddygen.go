@@ -157,13 +157,22 @@ func writeContentRoutes(b *strings.Builder, backend func(string) string, root st
 	b.WriteString("\t@backend path /_sitebin/*\n")
 	fmt.Fprintf(b, "\thandle @backend {\n\t\treverse_proxy %s\n\t}\n", backend("8080"))
 	b.WriteString("\thandle {\n\t\troute {\n")
+	// The upstream of a container site is authz's answer and nobody else's.
+	// A client sending the header itself would choose where Caddy proxies —
+	// any host the instance can reach — so it is removed before the gate.
+	fmt.Fprintf(b, "\t\t\trequest_header -%s\n", upstreamHeader)
 	// Pin X-Forwarded-Host to Caddy's own {host} placeholder so authz resolves
 	// the SAME site that file_server will serve. Without this, a client-supplied
 	// X-Forwarded-Host could make the gate evaluate a different (open) site than
 	// the one whose files are served — a password-gate bypass.
-	fmt.Fprintf(b, "\t\t\tforward_auth %s {\n\t\t\t\turi /internal/authz\n\t\t\t\theader_up X-Forwarded-Host {host}\n\t\t\t\tcopy_headers Set-Cookie\n\t\t\t}\n", backend("9000"))
+	fmt.Fprintf(b, "\t\t\tforward_auth %s {\n\t\t\t\turi /internal/authz\n\t\t\t\theader_up X-Forwarded-Host {host}\n\t\t\t\tcopy_headers Set-Cookie %s\n\t\t\t}\n", backend("9000"), upstreamHeader)
 	fmt.Fprintf(b, "\t\t\troot * %s\n", root)
 	writeSecurityHeaders(b, "\t\t\t")
+	// A container site: authz admitted it WITH an upstream, so it is proxied
+	// there and never reaches the file server below. authz never admits a
+	// container site without one.
+	fmt.Fprintf(b, "\t\t\t@proxied header %s *\n", upstreamHeader)
+	fmt.Fprintf(b, "\t\t\treverse_proxy @proxied {http.request.header.%s}\n", upstreamHeader)
 	writeFileServing(b, "\t\t\t")
 	b.WriteString("\t\t}\n\t}\n")
 }
@@ -181,6 +190,9 @@ func writeFileServing(b *strings.Builder, ind string) {
 	fmt.Fprintf(b, "%s\tfile_server {\n%s\t\tbrowse\n%s\t\thide %s %s\n%s\t}\n", ind, ind, ind, spaMarkerName, trustedMarkerName, ind)
 	fmt.Fprintf(b, "%s}\n", ind)
 }
+
+// upstreamHeader mirrors httpapi's: authz sets it for a container site.
+const upstreamHeader = "X-Sitebin-Upstream"
 
 // spaMarkerName mirrors store.SPAMarker (kept local to avoid an import cycle
 // risk; asserted equal by a test).

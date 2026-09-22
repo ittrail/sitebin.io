@@ -9,6 +9,7 @@
 package ext
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -209,6 +210,104 @@ type SiteService interface {
 	// which walks every site's files for its size — was a multi-second,
 	// disk-thrashing operation any customer could trigger in a loop.
 	CustomDomainCount() (int, error)
+
+	// ---- container sites (see ContainerRuntime) ----
+
+	// ContainerSites returns every site in container mode, with its desired
+	// state and the bytes of its compose file. The runtime's full scan.
+	ContainerSites() ([]ContainerSite, error)
+	// ContainerSite is ContainerSites for one site. A site that no longer
+	// exists is ErrSiteGone; one no longer in container mode is returned with
+	// Container=false, so the runtime knows to tear it down.
+	ContainerSite(viewID string) (ContainerSite, error)
+	// PrepareVolume makes sure a root folder of the site exists as a real
+	// directory — never a link — and returns its path relative to the data
+	// directory, slash-separated. The core owns the layout; the runtime only
+	// turns the answer into a mount.
+	PrepareVolume(viewID, folder string) (string, error)
+	// SetContainerState records what the runtime observed. It never touches
+	// the desired half (enabled, restart_seq), which is the core's.
+	SetContainerState(viewID string, st ContainerState) error
+	// SyncContainerDomains makes the site's custom-domain claims match the
+	// compose file's: missing ones are claimed through the same gate, quotas
+	// and DNS proof as the domain editor, ones no longer declared are
+	// released. Domains that could not be claimed come back as warnings.
+	SyncContainerDomains(viewID string, domains []string) (warnings []string, err error)
+}
+
+// ContainerProvider is implemented by a Provider that can run container
+// sites. It is OPTIONAL — asserted, not part of Provider — so a provider
+// without it, and the community build with no provider at all, simply have
+// no container mode. Containers() returning nil means the instance has the
+// mode switched off.
+type ContainerProvider interface {
+	Containers() ContainerRuntime
+}
+
+// ContainerRuntime runs container sites. It is a reconciler: the core
+// records the desired state in the site's metadata and calls Kick; the
+// runtime converges and reports what it observed through
+// SiteService.SetContainerState. Nothing on the serving path calls it —
+// routing reads the observed state from meta.json.
+type ContainerRuntime interface {
+	// Allowed reports whether the owner may put a site into container mode.
+	// A nil error means yes; otherwise the error is the reason to show.
+	Allowed(ownerAccountID string) error
+	// Kick asks the runtime to converge this site now rather than at its
+	// next tick. It does not wait.
+	Kick(viewID string)
+	// Stop removes the site's containers and networks and returns when they
+	// are gone. Leaving container mode and deleting a site call it before
+	// they touch the files the containers were writing.
+	Stop(viewID string) error
+	// Logs returns the recent output of one service.
+	Logs(ctx context.Context, viewID, service string, tail int) (string, error)
+}
+
+// ContainerSite is a container site as the runtime needs to see it.
+type ContainerSite struct {
+	ViewID string
+	Owner  string
+	// Container is false for a site that has left container mode.
+	Container  bool
+	Enabled    bool
+	RestartSeq int
+	Expired    bool
+	// Compose is the compose file, or nil with ComposeErr saying why not.
+	Compose    []byte
+	ComposeErr string
+	// MaxBytes is the site's storage cap. The runtime measures the site
+	// against it now and then through Info, which walks the tree and is far
+	// too costly for every tick.
+	MaxBytes int64
+	// Observed is what the runtime last recorded.
+	Observed ContainerState
+}
+
+// ContainerState is what the runtime observed of a site.
+type ContainerState struct {
+	Status      string // starting, running, stopped, error
+	Message     string
+	AppliedHash string
+	AppliedSeq  int
+	Services    []ContainerService
+}
+
+// ContainerService is one service as last applied.
+type ContainerService struct {
+	Name    string
+	Image   string
+	Egress  bool
+	Volumes []string
+	Domains []ContainerDomain
+	State   string // Docker's: running, restarting, exited…
+	Host    string // its name on the project network
+}
+
+// ContainerDomain maps a host ("*" = the site's own address) to a port.
+type ContainerDomain struct {
+	Domain string
+	Port   int
 }
 
 // SiteInfo is the dashboard's view of a site.

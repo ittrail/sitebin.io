@@ -38,6 +38,20 @@ type fakeSites struct {
 
 func (s *fakeSites) Info(id string) (ext.SiteInfo, bool) { i, ok := s.infos[id]; return i, ok }
 
+// The container half of the seam is exercised against its own fake in
+// ee/containers; the provider tests never reach it.
+func (s *fakeSites) ContainerSites() ([]ext.ContainerSite, error) { return nil, nil }
+func (s *fakeSites) ContainerSite(id string) (ext.ContainerSite, error) {
+	return ext.ContainerSite{}, fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
+}
+func (s *fakeSites) PrepareVolume(string, string) (string, error) {
+	return "", errors.New("no volumes")
+}
+func (s *fakeSites) SetContainerState(string, ext.ContainerState) error { return nil }
+func (s *fakeSites) SyncContainerDomains(string, []string) ([]string, error) {
+	return nil, nil
+}
+
 func (s *fakeSites) All() ([]ext.SiteInfo, error) {
 	if s.allErr != nil {
 		return nil, s.allErr

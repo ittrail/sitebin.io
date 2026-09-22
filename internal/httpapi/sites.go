@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -124,10 +125,34 @@ func (a *API) applySettings(site *store.Site, set updateSet) error {
 			expires = &p
 		}
 	}
-	if set.Mode != nil && *set.Mode != store.ModeWebserver && *set.Mode != store.ModeViewer {
-		return &apiError{400, `mode must be "webserver" or "viewer"`}
+	if set.Mode != nil && *set.Mode != store.ModeWebserver && *set.Mode != store.ModeViewer && *set.Mode != store.ModeContainer {
+		return &apiError{400, `mode must be "webserver", "viewer" or "container"`}
 	}
+	entering := set.Mode != nil && *set.Mode == store.ModeContainer && site.Meta.Mode != store.ModeContainer
+	leaving := set.Mode != nil && *set.Mode != store.ModeContainer && site.Meta.Mode == store.ModeContainer
+	if entering {
+		if err := containerModeAllowed(site); err != nil {
+			return err
+		}
+	}
+	if leaving {
+		// Before the mode is written: the containers must be gone and their
+		// links purged before Caddy starts serving the tree as files.
+		if err := a.leaveContainerMode(site); err != nil {
+			return err
+		}
+	}
+	if err := a.writeSettings(site, set, expires); err != nil {
+		return err
+	}
+	if entering {
+		return a.enterContainerMode(site)
+	}
+	return nil
+}
 
+// writeSettings persists a validated updateSet.
+func (a *API) writeSettings(site *store.Site, set updateSet, expires **time.Time) error {
 	return a.st.Update(site, func(m *store.Meta) error {
 		if set.Mode != nil {
 			m.Mode = *set.Mode
@@ -360,6 +385,13 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 	if err != nil {
 		files = []store.FileInfo{}
 	}
+	// A container site's tree holds what its containers wrote — a
+	// node_modules alone is tens of thousands of files — and the edit page
+	// renders every entry it is sent.
+	filesTruncated := false
+	if m := site.Meta; m.Mode == store.ModeContainer && len(files) > maxListedContainerFiles {
+		files, filesTruncated = files[:maxListedContainerFiles], true
+	}
 	bytes, count, _ := a.st.Usage(site)
 	stats := a.st.Stats(site)
 	m := site.Meta
@@ -390,6 +422,7 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"ftp_enabled":             m.FTPEnabled,
 		"ftp_available":           ftpAvailable,
 		"custom_domains":          m.CustomDomains,
+		"container":               a.containerPayload(site),
 		"pending_domains":         a.pendingDomains(site),
 		"origin":                  m.Origin,
 		"expires_at":              m.ExpiresAt,
@@ -401,13 +434,14 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"created_at":       m.CreatedAt,
 		"updated_at":       m.UpdatedAt,
 		"files":            files,
+		"files_truncated":  filesTruncated,
 		"base_domain":      a.cfg.BaseDomain,
 		"dns_target":       a.cfg.BaseDomain,
 		"usage": map[string]any{
 			"bytes":     bytes,
 			"files":     count,
 			"max_bytes": a.st.EffMaxBytes(site),
-			"max_files": a.st.EffMaxFiles(site),
+			"max_files": maxFilesPayload(a.st.EffMaxFiles(site)),
 		},
 	}
 	if m.WebDAVEnabled && webdavAvailable {
@@ -679,6 +713,7 @@ func (a *API) updateSite(w http.ResponseWriter, r *http.Request, site *store.Sit
 }
 
 func (a *API) deleteSite(w http.ResponseWriter, r *http.Request, site *store.Site) {
+	a.stopContainersBeforeDelete(site)
 	if err := a.st.Delete(site); err != nil {
 		respondErr(w, err)
 		return
@@ -738,6 +773,12 @@ func (a *API) addDomain(w http.ResponseWriter, r *http.Request, site *store.Site
 		writeError(w, 400, `body must be {"domain": "example.com"}`)
 		return
 	}
+	// A container site's domains come from its compose file. Posting one it
+	// already claims is the edit page's "check now"; anything else is refused.
+	if site.Meta.Mode == store.ModeContainer && !site.HasDomainClaim(body.Domain) {
+		writeError(w, 409, errContainerDomains)
+		return
+	}
 	err := a.st.AddDomain(site, body.Domain)
 	switch {
 	case errors.Is(err, store.ErrDomainPending):
@@ -754,9 +795,28 @@ func (a *API) addDomain(w http.ResponseWriter, r *http.Request, site *store.Site
 }
 
 func (a *API) removeDomain(w http.ResponseWriter, r *http.Request, site *store.Site) {
+	if site.Meta.Mode == store.ModeContainer {
+		writeError(w, 409, errContainerDomains)
+		return
+	}
 	if err := a.st.RemoveDomain(site, r.PathValue("domain")); err != nil {
 		respondErr(w, err)
 		return
 	}
 	writeJSON(w, 200, a.sitePayload(site))
+}
+
+// errContainerDomains answers a domain edit on a container site.
+const errContainerDomains = "a container site's domains are declared in " + store.ComposeFile + "; edit the file and the project restarts with them"
+
+// maxListedContainerFiles caps the file listing of a container site.
+const maxListedContainerFiles = 2000
+
+// maxFilesPayload reports "no cap" as 0, which is how the edit page and API
+// clients read an absent limit.
+func maxFilesPayload(n int) int {
+	if n == math.MaxInt {
+		return 0
+	}
+	return n
 }

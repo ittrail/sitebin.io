@@ -49,12 +49,12 @@ type Meta struct {
 	// (the creation default, sliding renewal, or a downgrade grace) rather than
 	// chosen by a caller. A tier change may lift an imposed expiry; it must
 	// never silently discard one the owner asked for.
-	ExpiryFromTier bool      `json:"expiry_from_tier,omitempty"`
+	ExpiryFromTier bool `json:"expiry_from_tier,omitempty"`
 	// Container is the desired and observed state of a container-mode site.
 	// Nil on every site that has never been in container mode.
 	Container *ContainerMeta `json:"container,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
 }
 
 // OriginMCP marks a site created through the MCP server. See Meta.Origin.

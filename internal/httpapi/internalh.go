@@ -34,14 +34,8 @@ func (a *API) authz(w http.ResponseWriter, r *http.Request) {
 		a.msgPage(w, 410, "Site expired", "This site has reached its expiry date and is no longer available.")
 		return
 	}
-	if !site.Meta.ViewPasswordProtected {
-		a.countView(r, site)
-		w.WriteHeader(200)
-		return
-	}
-	if a.hasViewAccess(r, site) {
-		a.countView(r, site)
-		w.WriteHeader(200)
+	if !site.Meta.ViewPasswordProtected || a.hasViewAccess(r, site) {
+		a.admit(w, r, site, pathMode)
 		return
 	}
 	// The gate form needs the site id in path mode (Host is the main domain).
@@ -50,6 +44,48 @@ func (a *API) authz(w http.ResponseWriter, r *http.Request) {
 		gateSite = site.ViewID
 	}
 	a.gatePage(w, 401, sanitizeRedirect(r.Header.Get("X-Forwarded-Uri")), "", gateSite)
+}
+
+// upstreamHeader carries a container site's upstream from authz to Caddy,
+// which copies it onto the request and proxies to it. Caddy strips any copy a
+// client sent before forward_auth runs, so only authz can set it.
+const upstreamHeader = "X-Sitebin-Upstream"
+
+// admit answers a request that passed the gate. A file site is served by
+// Caddy's file server on a bare 200. A container site is never served from
+// its files — its tree holds the database's files and the compose file holds
+// its passwords — so it is admitted only WITH an upstream, and otherwise
+// answered here with a page saying why.
+func (a *API) admit(w http.ResponseWriter, r *http.Request, site *store.Site, pathMode bool) {
+	if site.Meta.Mode == store.ModeContainer {
+		if pathMode {
+			a.msgPage(w, 404, "Not available here", "This app is served on its own address, not under a path.")
+			return
+		}
+		host := r.Header.Get("X-Forwarded-Host")
+		if host == "" {
+			host = r.Host
+		}
+		viewHost := ""
+		if a.cfg.SubdomainViews() {
+			viewHost = site.ViewID + "." + a.cfg.ViewDomain
+		}
+		upstream, ok := site.Meta.Container.Upstream(hostWithoutPort(host), viewHost)
+		if !ok {
+			if c := site.Meta.Container; c == nil || !c.Enabled || c.Status != store.ContainerRunning {
+				a.msgPage(w, 503, "This app is not running", "Its owner has stopped it, or it is starting. Try again in a moment.")
+			} else {
+				a.msgPage(w, 404, "Nothing here", "No service of this app is mapped to this address.")
+			}
+			return
+		}
+		a.countView(r, site)
+		w.Header().Set(upstreamHeader, upstream)
+		w.WriteHeader(200)
+		return
+	}
+	a.countView(r, site)
+	w.WriteHeader(200)
 }
 
 // tlsCheck is Caddy's on-demand TLS ask endpoint: 200 only for domains that

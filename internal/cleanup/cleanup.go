@@ -55,6 +55,28 @@ func reconcileTrust(st *store.Store, site *store.Site) {
 	}
 }
 
+// stopContainers removes a container site's containers before its files are
+// deleted, so nothing keeps writing into a directory that is going away. A
+// failure keeps the site for the next sweep.
+func stopContainers(site *store.Site) error {
+	if site.Meta.Mode != store.ModeContainer {
+		return nil
+	}
+	p, ok := ext.Get()
+	if !ok {
+		return nil
+	}
+	cp, ok := p.(ext.ContainerProvider)
+	if !ok {
+		return nil
+	}
+	rt := cp.Containers()
+	if rt == nil {
+		return nil
+	}
+	return rt.Stop(site.ViewID)
+}
+
 // Sweep removes sites expired for longer than the grace period and prunes
 // index links whose target no longer exists. It returns the number of sites
 // deleted.
@@ -92,6 +114,10 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 			// which, so the message must not claim either.
 			slog.Info("cleanup: kept expired site, its owner's current tier gives it more time",
 				"id", site.ViewID, "owner", site.Meta.OwnerAccountID, "expires", site.Meta.ExpiresAt)
+			continue
+		}
+		if err := stopContainers(site); err != nil {
+			slog.Error("cleanup: could not stop the site's containers, keeping it", "id", site.ViewID, "owner", site.Meta.OwnerAccountID, "err", err)
 			continue
 		}
 		if err := st.Delete(site); err != nil {
