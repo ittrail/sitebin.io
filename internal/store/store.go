@@ -34,6 +34,10 @@ const maxDomainsPerSite = 20
 const (
 	ModeWebserver = "webserver"
 	ModeViewer    = "viewer"
+	// ModeContainer runs the project's sitebin-container-compose.yaml instead
+	// of serving its files. An enterprise feature: the core only routes to it,
+	// the extension runs it. See container.go.
+	ModeContainer = "container"
 
 	sitesDirName  = "sites"
 	editIndexName = "edit-index"
