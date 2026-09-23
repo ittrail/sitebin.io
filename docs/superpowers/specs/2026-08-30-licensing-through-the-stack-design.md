@@ -228,3 +228,21 @@ precondition for starting or serving.
 >   `SITEBIN_STACK_LICENSING` rather than a table in this repo: the numbers are
 >   the commercial terms on sitebin.io's pricing page, and this repo is public
 >   and released on its own schedule.
+
+> **Corrections (post-implementation, 2026-09-23).** A licence is only for an
+> Enterprise plan, and both sides now say so. The first hosted Pro purchase on
+> app.sitebin.io was mailed a signed licence with `plan: "pro"` and no
+> entitlements: the stack issued for every paid subscription of the app, the
+> hosted plans included, with `{}` for a plan `SITEBIN_STACK_LICENSING` does
+> not list — and the verifier read that as an unlimited self-hosting licence
+> (confirmed on a throwaway instance: `state=licensed`, no caps).
+>
+> - **Stack** (saas-stack `678767d`): `licensing.plans` is the list of
+>   LICENSABLE plans. An unlisted plan gets no licence and no licence mail
+>   (`services/paygate/src/services/license-plans.ts`).
+> - **Sitebin** (`c3c0ef6`): `Verify` refuses any plan but `team`, `business`
+>   and `platform` (`licensing.EnterprisePlans`, `ErrPlan`), which resolves to
+>   `none` like every other unverifiable key. Adding an Enterprise plan is a
+>   release.
+> - The one licence issued this way (the operator's own purchase) was
+>   withdrawn in PayGate the same day; no other had been issued.
