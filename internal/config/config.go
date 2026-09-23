@@ -2,10 +2,10 @@
 package config
 
 import (
-	"regexp"
 	"fmt"
 	"net"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
