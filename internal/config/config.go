@@ -2,6 +2,7 @@
 package config
 
 import (
+	"regexp"
 	"fmt"
 	"net"
 	"net/url"
@@ -43,6 +44,11 @@ type Config struct {
 	// attached; "off" attaches on the owner's word alone, which is only safe
 	// on an instance whose every account holder is trusted.
 	DomainVerification string
+	// OperatorDomains are zones the operator owns and points at the instance
+	// (SITEBIN_OPERATOR_DOMAINS). Their subdomains attach to an operator
+	// account's site with no DNS proof and are refused to everyone else.
+	// Enterprise: who the operator is comes from SITEBIN_ADMIN_ACCOUNTS.
+	OperatorDomains []string
 	// MCPOAuthIssuer is the authorization server whose access tokens /mcp
 	// accepts. Empty disables OAuth entirely and the endpoint authenticates
 	// exactly as it did before. It is usually the same issuer users sign in
@@ -114,6 +120,18 @@ var singleTokenProviders = map[string]bool{
 	"hetzner":    true,
 	"duckdns":    true,
 }
+
+// overlaps reports whether zone a and domain b are the same, or one lies
+// under the other.
+func overlaps(a, b string) bool {
+	if b == "" {
+		return false
+	}
+	return a == b || strings.HasSuffix(a, "."+b) || strings.HasSuffix(b, "."+a)
+}
+
+// operatorZoneRe is a bare domain name of at least two labels.
+var operatorZoneRe = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // Load reads configuration using getenv (os.Getenv in production).
 func Load(getenv func(string) string) (Config, error) {
@@ -205,6 +223,19 @@ func Load(getenv func(string) string) (Config, error) {
 		default:
 			return cfg, fmt.Errorf("SITEBIN_DOMAIN_VERIFICATION %q is invalid (want dns|off)", v)
 		}
+	}
+	for _, z := range strings.Split(getenv("SITEBIN_OPERATOR_DOMAINS"), ",") {
+		z = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(z)), "*.")
+		if z == "" {
+			continue
+		}
+		if !operatorZoneRe.MatchString(z) {
+			return cfg, fmt.Errorf("SITEBIN_OPERATOR_DOMAINS: %q is not a domain name", z)
+		}
+		if overlaps(z, cfg.BaseDomain) || overlaps(z, cfg.ViewDomain) {
+			return cfg, fmt.Errorf("SITEBIN_OPERATOR_DOMAINS: %q contains the instance's own domain", z)
+		}
+		cfg.OperatorDomains = append(cfg.OperatorDomains, z)
 	}
 	// No fallback to the sign-in issuer. Inheriting it would turn /mcp into a
 	// bearer-only endpoint on every instance that merely configured SSO, and

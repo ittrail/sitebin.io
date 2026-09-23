@@ -235,6 +235,14 @@ type SiteService interface {
 	SyncContainerDomains(viewID string, domains []string) (warnings []string, err error)
 }
 
+// OperatorAccounts is implemented by a Provider that knows which accounts
+// are the instance's operator. OPTIONAL, like ContainerProvider. Operator
+// zones (SITEBIN_OPERATOR_DOMAINS) are attached only to sites such an
+// account owns; with no provider, nobody is the operator.
+type OperatorAccounts interface {
+	IsOperator(accountID string) bool
+}
+
 // ContainerProvider is implemented by a Provider that can run container
 // sites. It is OPTIONAL — asserted, not part of Provider — so a provider
 // without it, and the community build with no provider at all, simply have

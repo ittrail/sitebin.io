@@ -126,6 +126,11 @@ type Store struct {
 	// view host is built from for the CNAME route. See SetDomainVerifier.
 	verifier   DomainVerifier
 	viewDomain string
+	// operatorZones are domains the instance's operator owns; their
+	// subdomains need no DNS proof, but only an operator's site may hold
+	// one. isOperator answers who that is. See operatorzones.go.
+	operatorZones []string
+	isOperator    func(ownerAccountID string) bool
 
 	// reportsN caches the number of files under reports/ (-1 = not yet
 	// counted), so the cap in AddReport costs one listing, not one per report.

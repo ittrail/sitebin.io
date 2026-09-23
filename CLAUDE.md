@@ -95,7 +95,12 @@ sweep re-checks claims and detaches a verified domain only after its proof
 has been definitively absent for three days — a lookup error never detaches.
 A verified domain with no claim record predates verification and is left
 alone. `SITEBIN_DOMAIN_VERIFICATION=off` is for trusted instances and the e2e
-suite; the default is `dns`.
+suite; the default is `dns`. `SITEBIN_OPERATOR_DOMAINS` names zones the
+operator owns (wildcard-pointed here): inside them the proof is WHOSE site it
+is, not DNS — the operator's (admin tier + allowlist, `ext.OperatorAccounts`)
+attaches at once, anyone else is refused. It lives in `store.verify`, so claim,
+sweep attach and daily re-check all agree; an unanswerable operator check is a
+lookup error and changes nothing.
 
 ## Container sites
 

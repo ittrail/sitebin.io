@@ -143,6 +143,7 @@ func mustStore(cfg config.Config) *store.Store {
 	} else {
 		st.SetDomainVerifier(store.NewDNSVerifier(), viewDomain)
 	}
+	st.SetOperatorZones(cfg.OperatorDomains)
 	return st
 }
 
@@ -182,6 +183,20 @@ func serve() error {
 		}
 		slog.Info("extension active", "name", p.Name(), "version", p.Version(),
 			"accounts_enabled", p.AccountsEnabled())
+	}
+	// Who the operator is, for operator zones. Only a running server wires
+	// it: the one-shot cleanup command leaves it unset, and an unanswerable
+	// check changes no domain.
+	st.SetOperatorCheck(func(owner string) bool {
+		p, ok := ext.Get()
+		if !ok {
+			return false
+		}
+		op, ok := p.(ext.OperatorAccounts)
+		return ok && op.IsOperator(owner)
+	})
+	if len(cfg.OperatorDomains) > 0 {
+		slog.Info("operator zones", "zones", strings.Join(cfg.OperatorDomains, ","))
 	}
 	if cfg.DomainVerification == config.DomainVerifyOff {
 		slog.Warn("SITEBIN_DOMAIN_VERIFICATION=off: custom domains are attached without proof of ownership; only safe when every account holder is trusted")

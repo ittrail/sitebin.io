@@ -355,3 +355,30 @@ func TestDomainVerificationSetting(t *testing.T) {
 		t.Errorf("an unknown value must be refused: %v", err)
 	}
 }
+
+func TestOperatorDomains(t *testing.T) {
+	base := map[string]string{"SITEBIN_BASE_DOMAIN": "app.example.com", "SITEBIN_VIEW_DOMAIN": "sites.example", "SITEBIN_HTTP_ONLY": "true"}
+	with := func(v string) map[string]string {
+		m := map[string]string{"SITEBIN_OPERATOR_DOMAINS": v}
+		for k, x := range base {
+			m[k] = x
+		}
+		return m
+	}
+	cfg, err := Load(env(with(" *.App.Ittrail.dev , apps.example.org ,")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.OperatorDomains) != 2 || cfg.OperatorDomains[0] != "app.ittrail.dev" || cfg.OperatorDomains[1] != "apps.example.org" {
+		t.Errorf("OperatorDomains = %v", cfg.OperatorDomains)
+	}
+	for _, bad := range []string{"localhost", "bad_zone.example", "example.com", "sites.example", "x.sites.example"} {
+		if _, err := Load(env(with(bad))); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+	cfg, _ = Load(env(base))
+	if len(cfg.OperatorDomains) != 0 {
+		t.Errorf("default = %v", cfg.OperatorDomains)
+	}
+}

@@ -497,6 +497,17 @@ use it only where every account holder is trusted (the e2e suite does).
 Pending claims count against the per-site cap below, so claims cannot be
 sprayed.
 
+**Operator zones.** A zone the operator owns and points at the instance with a
+wildcard — `*.app.example.com` — is exactly the situation the proof guards
+against, for every name under it at once. List such zones in
+`SITEBIN_OPERATOR_DOMAINS` and the zone becomes the operator's: a subdomain is
+attached to an **operator** account's site immediately, with no DNS record,
+and refused to every other account. The operator is who may open the admin
+console — the admin tier **and** `SITEBIN_ADMIN_ACCOUNTS`. The daily re-check
+asks the same question, so an account that stops being the operator loses
+those domains after the usual three days. Certificates are issued on demand as
+for any custom domain.
+
 Two independent limits apply, and neither is per account:
 
 - **Per site**, the tier's `custom_domains` cap. It is stamped onto the site
@@ -844,6 +855,7 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_DEFAULT_TIER` | Tier new/free accounts start on (required in tiers mode). |
 | `SITEBIN_ANON_TIER` | Tier for anonymous creation (empty = require an account). |
 | `SITEBIN_TIER_SELF_SELECT` | Allow users to switch among free tiers. |
+| `SITEBIN_OPERATOR_DOMAINS` | Comma-separated zones the operator owns and points at the instance (e.g. `app.example.com`, a leading `*.` is accepted). Their subdomains attach to sites of operator accounts (admin tier + `SITEBIN_ADMIN_ACCOUNTS`) without a DNS proof and are refused to everyone else. Must not overlap the base or view domain. See [Custom domains](#custom-domains-enterprise). |
 | `SITEBIN_CONTAINERS` | `off` (default) or `docker`: enables [container sites](#container-sites-enterprise). Needs `SITEBIN_ACCOUNT_MODE=tiers`; each tier's `max_containers` (0/absent = none) caps the services an account runs across all its projects. An Engine that does not answer never stops startup — the mode reports itself unavailable and keeps retrying. |
 | `SITEBIN_CONTAINERS_DOCKER_HOST` | `unix:///var/run/docker.sock` (default) or `tcp://host:port` for a socket proxy. Engine API 1.45 (Docker 26) or newer. |
 | `SITEBIN_CONTAINERS_DATA_MOUNT` | Where `/data` lives for Docker: an absolute host path or `volume:<name>`. Default: found by inspecting Sitebin's own container. |

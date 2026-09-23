@@ -226,7 +226,16 @@ func newClaimToken() string {
 
 // verify asks the verifier about one claim. A store with no verifier answers
 // "not proven", never an error, so a caller cannot mistake it for an outage.
+//
+// A name in an operator zone is proven by whose site it is, not by DNS: the
+// operator's site holds it, nobody else's can (see operatorzones.go). The
+// same answer serves the claim, the sweep's attach and the daily re-check,
+// so an account that stops being the operator loses its operator-zone
+// domains through the ordinary revocation window.
 func (s *Store) verify(ctx context.Context, site *Site, c DomainClaim) (bool, error) {
+	if s.InOperatorZone(c.Domain) {
+		return s.operatorOwns(site)
+	}
 	if s.verifier == nil {
 		return false, nil
 	}

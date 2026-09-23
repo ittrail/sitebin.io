@@ -49,6 +49,9 @@ func (s *Store) AddDomain(site *Site, domain string) error {
 			return fmt.Errorf("%w: %s is reserved by this Sitebin instance", ErrBadDomain, d)
 		}
 	}
+	if err := s.refuseOperatorZone(site, d); err != nil {
+		return err
+	}
 	if slices.Contains(site.Meta.CustomDomains, d) {
 		if got, err := s.ByDomain(d); err == nil && got.ViewID == site.ViewID {
 			return nil // already ours, idempotent
