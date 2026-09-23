@@ -303,6 +303,7 @@ func (s *Store) ClaimZone(ctx context.Context, accountID, zone string) (Zone, er
 		return Zone{}, err
 	}
 	var z *Zone
+	fresh := false
 	mine := 0
 	for _, o := range all {
 		if o.AccountID == accountID {
@@ -338,6 +339,7 @@ func (s *Store) ClaimZone(ctx context.Context, accountID, zone string) (Zone, er
 			s.zones.mu.Unlock()
 			return Zone{}, err
 		}
+		fresh = true
 	}
 	s.zones.mu.Unlock()
 
@@ -345,6 +347,19 @@ func (s *Store) ClaimZone(ctx context.Context, accountID, zone string) (Zone, er
 		return *z, nil
 	}
 	now := time.Now().UTC()
+	if fresh && !provesUnseen(s.verifier) {
+		// The token was minted a moment ago, so its TXT record cannot exist
+		// yet — and asking anyway is worse than useless: resolvers cache the
+		// NXDOMAIN for the zone's negative TTL (an hour on Hetzner), so the
+		// owner's "check now" a minute later would be answered from that cache
+		// and the zone would sit pending for an hour. Show the record and the
+		// conflicts, and look it up when asked again or at the next sweep.
+		z = s.recordZoneCheck(z.Zone, accountID, false, s.zoneConflicts(z), now)
+		if z == nil {
+			return Zone{}, ErrNotFound
+		}
+		return *z, ErrZonePending
+	}
 	ok, conflicts, verr := s.checkZone(ctx, z)
 	if verr != nil {
 		return *z, fmt.Errorf("%w: the DNS lookup failed (%v); try again in a moment", ErrZonePending, verr)
@@ -358,6 +373,14 @@ func (s *Store) ClaimZone(ctx context.Context, accountID, zone string) (Zone, er
 	}
 	slog.Info("zone verified", "zone", z.Zone, "account", accountID)
 	return *z, nil
+}
+
+// provesUnseen reports whether the verifier proves without looking at any
+// record (SITEBIN_DOMAIN_VERIFICATION=off), where a fresh claim may verify
+// at once because there is no DNS cache to poison.
+func provesUnseen(v DomainVerifier) bool {
+	_, ok := v.(TrustingVerifier)
+	return ok
 }
 
 // zonesAllowed asks the plan how many zones the account may hold. No check

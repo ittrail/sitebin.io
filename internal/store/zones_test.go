@@ -40,6 +40,9 @@ func zoneStore(t *testing.T) (*Store, *zoneVerifier) {
 func mustZone(t *testing.T, s *Store, v *zoneVerifier, acct, zone string) {
 	t.Helper()
 	v.zoneAnswers[zone] = true
+	// The first claim only mints the token (see TestFreshZoneClaimAsksNoDNS);
+	// asking again is the owner's "check now".
+	s.ClaimZone(context.Background(), acct, zone)
 	if _, err := s.ClaimZone(context.Background(), acct, zone); err != nil {
 		t.Fatalf("ClaimZone(%s, %s) = %v", acct, zone, err)
 	}
@@ -70,6 +73,26 @@ func TestZoneOwnerAttachesNamesWithoutDNS(t *testing.T) {
 	}
 	if got := s.ZoneOf("shop.kunde.example", "a"); got != "kunde.example" {
 		t.Errorf("ZoneOf = %q", got)
+	}
+}
+
+// A fresh claim's record cannot exist yet, and looking it up would plant an
+// NXDOMAIN in the resolver's cache for the zone's negative TTL. So the claim
+// asks no DNS; the next check does.
+func TestFreshZoneClaimAsksNoDNS(t *testing.T) {
+	s, v := zoneStore(t)
+	v.zoneAnswers["kunde.example"] = true
+	if _, err := s.ClaimZone(context.Background(), "a", "kunde.example"); !errors.Is(err, ErrZonePending) {
+		t.Fatalf("fresh claim = %v, want pending", err)
+	}
+	if len(v.zoneCalls) != 0 {
+		t.Fatalf("a fresh claim looked up its record: %v", v.zoneCalls)
+	}
+	if _, err := s.ClaimZone(context.Background(), "a", "kunde.example"); err != nil {
+		t.Fatalf("check now = %v", err)
+	}
+	if len(v.zoneCalls) != 1 {
+		t.Errorf("zone lookups = %v, want exactly the check", v.zoneCalls)
 	}
 }
 
