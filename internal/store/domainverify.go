@@ -120,10 +120,17 @@ type DNSVerifier struct {
 	lookupCNAME func(ctx context.Context, name string) (string, error)
 }
 
-// NewDNSVerifier builds the production verifier over net.DefaultResolver.
+// NewDNSVerifier builds the production verifier. It asks the domain's
+// authoritative nameservers, falling back to net.DefaultResolver only when
+// none of them answers (see authdns.go for why a cache in between breaks
+// "check now").
 func NewDNSVerifier() *DNSVerifier {
 	r := net.DefaultResolver
-	return &DNSVerifier{lookupTXT: r.LookupTXT, lookupCNAME: r.LookupCNAME}
+	a := newAuthDNS()
+	return &DNSVerifier{
+		lookupTXT:   withFallback(a.LookupTXT, r.LookupTXT),
+		lookupCNAME: withFallback(a.LookupCNAME, r.LookupCNAME),
+	}
 }
 
 // Verify implements DomainVerifier. Each route is tried on its own; a lookup

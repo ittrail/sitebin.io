@@ -508,6 +508,14 @@ asks the same question, so an account that stops being the operator loses
 those domains after the usual three days. Certificates are issued on demand as
 for any custom domain.
 
+Proofs are looked up at the domain's **authoritative nameservers**, not
+through the server's resolver, so a record is seen the moment the DNS
+provider publishes it: a resolver would have cached the "no such record"
+answer from the first check — made before the record could exist — for the
+zone's negative TTL, often an hour. The server's resolver is used only when
+no authoritative server answers, and outbound DNS (UDP and TCP port 53) must
+be allowed for the direct route.
+
 **Account zones** are the same thing, self-service, for customers whose plan
 includes them (the tier's `max_zones`; 0/absent = none). On the account page
 the customer adds a zone they own — `kunde.example` — and proves it **once**

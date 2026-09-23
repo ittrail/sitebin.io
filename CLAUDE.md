@@ -94,7 +94,11 @@ with its token. A pending claim is never indexed and reserves nothing. The
 sweep re-checks claims and detaches a verified domain only after its proof
 has been definitively absent for three days — a lookup error never detaches.
 A verified domain with no claim record predates verification and is left
-alone. `SITEBIN_DOMAIN_VERIFICATION=off` is for trusted instances and the e2e
+alone. Proofs are asked of the domain's AUTHORITATIVE nameservers
+(`internal/store/authdns.go`), not the system resolver: every proof is first
+looked up before it exists, and the hosting provider's resolver caches that
+NXDOMAIN for an hour, which made "check now" useless. The system resolver is
+only the fallback when no authoritative server answers. `SITEBIN_DOMAIN_VERIFICATION=off` is for trusted instances and the e2e
 suite; the default is `dns`. `SITEBIN_OPERATOR_DOMAINS` names zones the
 operator owns (wildcard-pointed here): inside them the proof is WHOSE site it
 is, not DNS — the operator's (admin tier + allowlist, `ext.OperatorAccounts`)

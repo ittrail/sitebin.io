@@ -289,6 +289,15 @@ Follow the ship order:
   than being treated as an ordinary domain: inside a verified zone the owner's
   site is the only one that could hold it anyway, so an ordinary claim would
   attach through the zone regardless and bypass the refusal.
+- **Proofs are asked of the authoritative nameservers** (`authdns.go`), for
+  zones and for ordinary custom domains alike. The live run against real DNS
+  never verified: the hosting provider's resolver (not ours to configure)
+  cached the NXDOMAIN of every lookup made before the record was published —
+  the claim's own check, and a "check now" seconds after creating the record —
+  for the zone's negative TTL of an hour. Asking the servers that hold the
+  zone skips every cache; the system resolver remains the fallback when none
+  of them answers. A fresh zone claim additionally asks no DNS at all, since
+  its token was minted a moment ago.
 - **The throttle's refusal is `ErrTooManyDomain`** (HTTP 409 with the wait in
   the message), so the API, MCP and container paths needed no new mapping.
 

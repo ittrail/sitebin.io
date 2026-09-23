@@ -194,7 +194,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
           {{if .Conflicts}}<div class="u">Another account holds a verified domain inside this zone: {{range $i, $c := .Conflicts}}{{if $i}}, {{end}}{{$c}}{{end}}. The zone verifies once that domain is gone.</div>{{end}}
         {{end}}
         <div class="u">TXT <code>{{.TXTName}}</code> = <code>{{.TXTValue}}</code></div>
-        {{if not .Verified}}<div class="u">Point the zone here too: <code>*.{{.Zone}}</code> as a CNAME to this instance, or an A record to its address. Once the TXT record exists, press Check now; the zone is also checked automatically every few minutes, and a resolver may take up to an hour to see a new record. Unproven claims are dropped after 7 days.</div>{{end}}
+        {{if not .Verified}}<div class="u">Point the zone here too: <code>*.{{.Zone}}</code> as a CNAME to this instance, or an A record to its address. Once the TXT record exists, press Check now (your DNS provider may take a minute to publish it); the zone is also checked automatically every few minutes. Unproven claims are dropped after 7 days.</div>{{end}}
       </div>
       {{if not .Verified}}
       <form class="inline" method="post" action="/account/zones">
