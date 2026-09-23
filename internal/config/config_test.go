@@ -382,3 +382,29 @@ func TestOperatorDomains(t *testing.T) {
 		t.Errorf("default = %v", cfg.OperatorDomains)
 	}
 }
+
+func TestZoneNamesPerHour(t *testing.T) {
+	base := map[string]string{"SITEBIN_BASE_DOMAIN": "app.example.com", "SITEBIN_HTTP_ONLY": "true"}
+	cfg, err := Load(env(base))
+	if err != nil || cfg.ZoneNamesPerHour != 50 {
+		t.Errorf("default = %d, %v; want 50", cfg.ZoneNamesPerHour, err)
+	}
+	for v, want := range map[string]int{"0": 0, "200": 200} {
+		m := map[string]string{"SITEBIN_ZONE_NAMES_PER_HOUR": v}
+		for k, x := range base {
+			m[k] = x
+		}
+		if cfg, err := Load(env(m)); err != nil || cfg.ZoneNamesPerHour != want {
+			t.Errorf("%s = %d, %v", v, cfg.ZoneNamesPerHour, err)
+		}
+	}
+	for _, bad := range []string{"-1", "many"} {
+		m := map[string]string{"SITEBIN_ZONE_NAMES_PER_HOUR": bad}
+		for k, x := range base {
+			m[k] = x
+		}
+		if _, err := Load(env(m)); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}

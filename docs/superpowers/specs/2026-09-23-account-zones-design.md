@@ -275,6 +275,23 @@ Follow the ship order:
 
 `SITEBIN_OPERATOR_DOMAINS=app.ittrail.dev` stays as it is.
 
+## Corrections (post-implementation)
+
+- **Pending claims are stored per claimant, not per zone.** "One file per zone,
+  `data/zones/<zone>.json`" would let the first person to type a zone's name
+  hold it for the 7-day pending TTL, which contradicts "a pending zone reserves
+  nothing". Verified zones stay at `data/zones/<zone>.json`, which is what the
+  per-label lookup stats; a pending claim lives at
+  `data/zones/pending/<zone>~<account>.json`, and verification moves it —
+  re-checking under the lock that no overlapping zone was proved meanwhile.
+- **A name added by an account whose plan no longer includes zones is
+  refused** (`ErrTooManyDomain`, "your plan no longer includes zones"), rather
+  than being treated as an ordinary domain: inside a verified zone the owner's
+  site is the only one that could hold it anyway, so an ordinary claim would
+  attach through the zone regardless and bypass the refusal.
+- **The throttle's refusal is `ErrTooManyDomain`** (HTTP 409 with the wait in
+  the message), so the API, MCP and container paths needed no new mapping.
+
 ## Decisions taken without asking
 
 - **The licence ceiling still counts zone names.** The agreed exemption

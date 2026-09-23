@@ -131,6 +131,8 @@ type Store struct {
 	// one. isOperator answers who that is. See operatorzones.go.
 	operatorZones []string
 	isOperator    func(ownerAccountID string) bool
+	// zones are the account zones' configuration and throttle. See zones.go.
+	zones zoneState
 
 	// reportsN caches the number of files under reports/ (-1 = not yet
 	// counted), so the cap in AddReport costs one listing, not one per report.

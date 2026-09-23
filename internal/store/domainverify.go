@@ -232,9 +232,17 @@ func newClaimToken() string {
 // same answer serves the claim, the sweep's attach and the daily re-check,
 // so an account that stops being the operator loses its operator-zone
 // domains through the ordinary revocation window.
+//
+// A name in a verified ACCOUNT zone is proven the same way: the zone owner's
+// site holds it, nobody else's can (see zones.go). Once the zone is released
+// the name falls through to the ordinary per-name proof below.
 func (s *Store) verify(ctx context.Context, site *Site, c DomainClaim) (bool, error) {
 	if s.InOperatorZone(c.Domain) {
 		return s.operatorOwns(site)
+	}
+	if z, ok := s.accountZoneFor(c.Domain); ok {
+		owner := site.Meta.OwnerAccountID
+		return owner != "" && owner == z.AccountID, nil
 	}
 	if s.verifier == nil {
 		return false, nil
@@ -276,6 +284,12 @@ func (s *Store) ReconcileDomains(ctx context.Context, site *Site, now time.Time)
 				// and only occupies a cap slot.
 				s.dropClaim(site, c.Domain)
 				slog.Info("custom domain: dropped a claim on a domain another site verified", "site", site.ViewID, "domain", c.Domain)
+				continue
+			}
+			if z, ok := s.accountZoneFor(c.Domain); ok && z.AccountID != site.Meta.OwnerAccountID {
+				// Another account proved the zone; this claim can never verify.
+				s.dropClaim(site, c.Domain)
+				slog.Info("custom domain: dropped a claim inside a zone another account proved", "site", site.ViewID, "domain", c.Domain, "zone", z.Zone)
 				continue
 			}
 			ok, err := s.verify(ctx, site, c)

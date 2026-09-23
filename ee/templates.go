@@ -177,6 +177,54 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
     </form>
   </div>
 
+  {{if or .Zones .ZonesMax}}
+  <div class="card" id="zones">
+    <h3>Zones <span class="count">{{len .Zones}}{{if .ZonesMax}} / {{.ZonesMax}}{{end}}</span></h3>
+    <p class="muted">A zone is a domain you own and point at Sitebin as a whole — <code>*.example.com</code>. Prove it once, and every name under it attaches to your sites at once, with no DNS record per name and no limit on how many. Nobody else can use a name in your zone.</p>
+    {{range .Zones}}
+    <div class="sitecard">
+      <div class="grow">
+        <strong>{{.Zone}}</strong>
+        {{if .Verified}}
+          {{if .FailingSince}}<span class="inline-status err"> · record missing</span>{{else}}<span class="inline-status"> · verified</span>{{end}}
+          <div class="u">{{len .Names}} name{{if ne (len .Names) 1}}s{{end}} in use{{range .Names}} · {{.Domain}}{{end}}</div>
+          {{if .FailingSince}}<div class="u">The TXT record below is gone. Put it back, or the zone is released three days after it was first missed.</div>{{end}}
+        {{else}}
+          <span class="muted"> · pending</span>
+          {{if .Conflicts}}<div class="u">Another account holds a verified domain inside this zone: {{range $i, $c := .Conflicts}}{{if $i}}, {{end}}{{$c}}{{end}}. The zone verifies once that domain is gone.</div>{{end}}
+        {{end}}
+        <div class="u">TXT <code>{{.TXTName}}</code> = <code>{{.TXTValue}}</code></div>
+        {{if not .Verified}}<div class="u">Point the zone here too: <code>*.{{.Zone}}</code> as a CNAME to this instance, or an A record to its address. Unproven claims are dropped after 7 days.</div>{{end}}
+      </div>
+      {{if not .Verified}}
+      <form class="inline" method="post" action="/account/zones">
+        <input type="hidden" name="csrf" value="{{.CSRF}}">
+        <input type="hidden" name="zone" value="{{.Zone}}">
+        <button class="btn small" type="submit">Check now</button>
+      </form>
+      {{end}}
+      <form class="inline" method="post" action="/account/zones/{{.Zone}}/delete">
+        <input type="hidden" name="csrf" value="{{.CSRF}}">
+        <button class="btn small danger" type="submit">Remove</button>
+      </form>
+    </div>
+    {{end}}
+    {{if .ZonesMax}}
+    <form method="post" action="/account/zones" style="display:flex;gap:8px;align-items:flex-end;margin-top:14px;flex-wrap:wrap">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <div style="flex:1;min-width:200px">
+        <label class="f" for="zonename">Zone</label>
+        <input id="zonename" type="text" name="zone" maxlength="253" placeholder="example.com" style="width:100%;background:var(--bg-raise);color:var(--ink);border:1px solid var(--line);border-radius:9px;padding:9px 12px;font:14px var(--body)">
+      </div>
+      <button class="btn small primary" type="submit">Add zone</button>
+    </form>
+    <p class="muted">Removing a zone detaches nothing at once: names that relied on it need their own DNS proof within three days. See <a href="https://sitebin.io/docs/custom-domains/#zones" rel="noreferrer noopener" target="_blank">the docs</a>.</p>
+    {{else}}
+    <p class="muted">Your current plan does not include zones. What you hold keeps working; new zones and new names need a plan that includes them.</p>
+    {{end}}
+  </div>
+  {{end}}
+
   {{if .Portal}}
   <div class="card">
     <h3>Billing</h3>

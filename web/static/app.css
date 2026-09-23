@@ -499,6 +499,7 @@ input::placeholder { color: var(--ink-faint); }
 }
 .domainrow:first-child { border-top: 0; }
 .domainrow .d { flex: 1; word-break: break-all; }
+.domainrow .via { font: 12px var(--mono); color: var(--ink-faint); margin-left: 6px; }
 .domainrow.pending { flex-wrap: wrap; }
 .domainrow.pending .sub { font: 12px var(--mono); color: var(--amber, #f5b84d); }
 .domainrow.pending .dnshint { margin-top: 8px; }

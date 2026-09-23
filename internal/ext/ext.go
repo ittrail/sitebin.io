@@ -233,6 +233,39 @@ type SiteService interface {
 	// and DNS proof as the domain editor, ones no longer declared are
 	// released. Domains that could not be claimed come back as warnings.
 	SyncContainerDomains(viewID string, domains []string) (warnings []string, err error)
+
+	// ---- account zones (see ZoneAccounts) ----
+
+	// ClaimZone records the account's claim on a zone and checks it at once.
+	// ok=false with a nil error is pending (the record or a conflict is still
+	// in the way); an error is a refusal whose text is shown to the owner.
+	ClaimZone(accountID, zone string) (z ZoneInfo, ok bool, err error)
+	// Zones lists the account's zones, pending ones included, with the names
+	// each one currently holds.
+	Zones(accountID string) ([]ZoneInfo, error)
+	// ReleaseZone removes one of the account's zones; ReleaseZones all of them
+	// (account deletion). Names that relied on a zone fall back to per-name
+	// proof; nothing is detached on the spot.
+	ReleaseZone(accountID, zone string) error
+	ReleaseZones(accountID string) error
+}
+
+// ZoneInfo is one account zone as the dashboard shows it.
+type ZoneInfo struct {
+	Zone         string
+	Verified     bool
+	TXTName      string
+	TXTValue     string
+	RequestedAt  time.Time
+	FailingSince *time.Time
+	Conflicts    []string
+	Names        []ZoneName
+}
+
+// ZoneName is one attached name inside a zone and the site holding it.
+type ZoneName struct {
+	Domain string
+	ViewID string
 }
 
 // OperatorAccounts is implemented by a Provider that knows which accounts
@@ -241,6 +274,16 @@ type SiteService interface {
 // account owns; with no provider, nobody is the operator.
 type OperatorAccounts interface {
 	IsOperator(accountID string) bool
+}
+
+// ZoneAccounts is implemented by a Provider whose plans include account
+// zones (a customer's own wildcard zone, proven once; see store/zones.go).
+// OPTIONAL, like ContainerProvider: without it no account can claim a zone.
+type ZoneAccounts interface {
+	// ZonesAllowed returns how many zones the account's CURRENT plan permits.
+	// An error means unknown: refuse the new zone or name, never release an
+	// existing one. It is asked only where a zone or a name is ADDED.
+	ZonesAllowed(accountID string) (int, error)
 }
 
 // ContainerProvider is implemented by a Provider that can run container

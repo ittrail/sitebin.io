@@ -275,6 +275,14 @@ function render() {
     const name = document.createElement("span");
     name.className = "d";
     name.textContent = d;
+    const zone = (site.zone_domains || {})[d];
+    if (zone) {
+      // Held through the owner's own zone: no record of its own needed.
+      const via = document.createElement("span");
+      via.className = "via";
+      via.textContent = "via zone " + zone;
+      name.append(" ", via);
+    }
     const rm = document.createElement("button");
     rm.className = "btn small";
     rm.textContent = "Remove";

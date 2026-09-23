@@ -102,6 +102,18 @@ attaches at once, anyone else is refused. It lives in `store.verify`, so claim,
 sweep attach and daily re-check all agree; an unanswerable operator check is a
 lookup error and changes nothing.
 
+**Account zones** (`internal/store/zones.go`) are the self-service version:
+an account proves a zone once (TXT `_sitebin-zone.<zone>`), and names under it
+attach to that account's sites only, unlimited by the per-site cap. Verified
+zones are `data/zones/<zone>.json` (found by walking a name's labels), pending
+ones `data/zones/pending/<zone>~<account>.json` — a pending claim reserves
+nothing, so there can be several. Zones never overlap; a foreign verified
+domain inside keeps the zone pending rather than being taken; a released zone
+drops its names back to per-name proof instead of detaching them. The plan
+(`max_zones`, via the optional `ext.ZoneAccounts`) is asked only where a zone
+or a name is ADDED — never in the sweep. Read
+`docs/superpowers/specs/2026-09-23-account-zones-design.md`.
+
 ## Container sites
 
 The third site mode (`store.ModeContainer`) runs the project its

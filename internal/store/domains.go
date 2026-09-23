@@ -49,7 +49,9 @@ func (s *Store) AddDomain(site *Site, domain string) error {
 			return fmt.Errorf("%w: %s is reserved by this Sitebin instance", ErrBadDomain, d)
 		}
 	}
-	if err := s.refuseOperatorZone(site, d); err != nil {
+	now := time.Now().UTC()
+	viaZone, err := s.refuseForeignZone(site, d, now)
+	if err != nil {
 		return err
 	}
 	if slices.Contains(site.Meta.CustomDomains, d) {
@@ -66,15 +68,15 @@ func (s *Store) AddDomain(site *Site, domain string) error {
 	}
 	// The per-site cap counts verified AND pending, so claims cannot be
 	// sprayed: the owner's tier value if stamped, else the instance default.
+	// Names held through the owner's own zone are exempt: unlimited.
 	cap := maxDomainsPerSite
 	if site.Meta.QuotaDomains != nil {
 		cap = *site.Meta.QuotaDomains
 	}
-	if claimIndex(&site.Meta, d) < 0 && len(site.Meta.DomainClaims)+claimlessDomains(&site.Meta) >= cap {
+	if !viaZone && claimIndex(&site.Meta, d) < 0 && s.countedClaims(site) >= cap {
 		return fmt.Errorf("%w: at most %d custom domain(s) allowed for this site", ErrTooManyDomain, cap)
 	}
 
-	now := time.Now().UTC()
 	var claim DomainClaim
 	err = s.Update(site, func(m *Meta) error {
 		if i := claimIndex(m, d); i >= 0 {
@@ -101,18 +103,6 @@ func (s *Store) AddDomain(site *Site, domain string) error {
 		return ErrDomainPending
 	}
 	return s.attach(site, d, now)
-}
-
-// claimlessDomains counts verified domains that predate claim records, so the
-// cap still sees them.
-func claimlessDomains(m *Meta) int {
-	n := 0
-	for _, d := range m.CustomDomains {
-		if claimIndex(m, d) < 0 {
-			n++
-		}
-	}
-	return n
 }
 
 // attach indexes a domain for the site and records it as verified. It is the

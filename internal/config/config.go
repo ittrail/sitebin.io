@@ -49,6 +49,11 @@ type Config struct {
 	// account's site with no DNS proof and are refused to everyone else.
 	// Enterprise: who the operator is comes from SITEBIN_ADMIN_ACCOUNTS.
 	OperatorDomains []string
+	// ZoneNamesPerHour throttles how many NEW names one account attaches
+	// through its own account zones per hour (SITEBIN_ZONE_NAMES_PER_HOUR,
+	// default 50, 0 = off). It guards the instance's shared ACME order budget;
+	// the number of names in a zone stays unlimited.
+	ZoneNamesPerHour int
 	// MCPOAuthIssuer is the authorization server whose access tokens /mcp
 	// accepts. Empty disables OAuth entirely and the endpoint authenticates
 	// exactly as it did before. It is usually the same issuer users sign in
@@ -236,6 +241,12 @@ func Load(getenv func(string) string) (Config, error) {
 			return cfg, fmt.Errorf("SITEBIN_OPERATOR_DOMAINS: %q contains the instance's own domain", z)
 		}
 		cfg.OperatorDomains = append(cfg.OperatorDomains, z)
+	}
+	if cfg.ZoneNamesPerHour, err = intVar(getenv, "SITEBIN_ZONE_NAMES_PER_HOUR", 50); err != nil {
+		return cfg, err
+	}
+	if cfg.ZoneNamesPerHour < 0 {
+		return cfg, fmt.Errorf("SITEBIN_ZONE_NAMES_PER_HOUR must not be negative")
 	}
 	// No fallback to the sign-in issuer. Inheriting it would turn /mcp into a
 	// bearer-only endpoint on every instance that merely configured SSO, and

@@ -85,6 +85,9 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	// Zones first, so a zone verified now attaches its pending names in the
+	// per-site pass below, in this same sweep.
+	st.ReconcileZones(context.Background(), now)
 	removed := 0
 	for _, site := range sites {
 		reconcileTrust(st, site)

@@ -105,6 +105,10 @@ type Tier struct {
 	// custom_domains, because a free tier that forgets the field must not get
 	// compute. Only meaningful with SITEBIN_CONTAINERS on.
 	MaxContainers int `json:"max_containers,omitempty"`
+	// MaxZones caps how many account zones (a customer's own wildcard zone,
+	// proven once) the account may hold. 0 / absent means NONE, the same
+	// polarity as custom_domains. Names inside a zone are unlimited.
+	MaxZones int `json:"max_zones,omitempty"`
 	// Admin marks a tier whose holders may reach the admin console. It is only
 	// half of the gate: the account must ALSO be listed in
 	// SITEBIN_ADMIN_ACCOUNTS. A tier source (PayGate, a stored tier) can

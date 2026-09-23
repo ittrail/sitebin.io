@@ -44,6 +44,7 @@ func (p *provider) PublicRoutes() map[string]http.Handler {
 	p.emailRoutes(routes)
 	p.billingRoutes(routes)
 	p.gdprRoutes(routes)
+	p.zoneRoutes(routes)
 	return routes
 }
 
@@ -368,6 +369,7 @@ func (p *provider) handleDeleteAccountConfirm(w http.ResponseWriter, r *http.Req
 		http.Error(w, "could not delete the account", http.StatusInternalServerError)
 		return
 	}
+	p.releaseZones(acc.ID)
 	slog.Info("account deleted by its owner", "account", acc.ID)
 	http.SetCookie(w, p.sessions.Clear())
 	p.renderMessage(w, msgView{
@@ -501,6 +503,11 @@ type dashView struct {
 	// a worse feature.
 	IsAdmin bool
 	Tokens  []tokenRow
+	// Zones are the account's zones; ZonesMax is what the plan allows. The
+	// section shows when either is non-zero, so a downgraded account still
+	// sees (and can remove) the zones it holds.
+	Zones    []zoneRow
+	ZonesMax int
 	// License is the permanent, non-dismissable licence notice, or nil when
 	// there is nothing to say. It is shown HERE and nowhere else: nothing is
 	// ever injected into a served site.
@@ -566,9 +573,11 @@ func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, 
 		Email:       acc.Email, Tier: tier, Sites: rows, CSRF: token, Base: p.baseURL(),
 		SelfSelect: p.cfg.SelfSelect, Checkout: checkout, Portal: portal, Tiers: opts,
 		AccountURL: accountURL, StackDeletion: p.stackDeletion(acc),
-		IsAdmin: p.isAdmin(acc),
-		Tokens:  p.tokenRows(acc, token),
-		License: p.licenseNotice(),
+		IsAdmin:  p.isAdmin(acc),
+		Tokens:   p.tokenRows(acc, token),
+		Zones:    p.zoneRows(acc, token),
+		ZonesMax: current.MaxZones,
+		License:  p.licenseNotice(),
 	})
 }
 

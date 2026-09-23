@@ -424,6 +424,7 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"custom_domains":          m.CustomDomains,
 		"container":               a.containerPayload(site),
 		"pending_domains":         a.pendingDomains(site),
+		"zone_domains":            a.zoneDomains(site),
 		"origin":                  m.Origin,
 		"expires_at":              m.ExpiresAt,
 		"expiry_cap_days":         a.expiryCap(site),

@@ -195,6 +195,19 @@ func serve() error {
 		op, ok := p.(ext.OperatorAccounts)
 		return ok && op.IsOperator(owner)
 	})
+	// Account zones: the plan says how many, and only a running server asks.
+	st.SetZoneCheck(func(owner string) (int, error) {
+		p, ok := ext.Get()
+		if !ok {
+			return 0, nil
+		}
+		za, ok := p.(ext.ZoneAccounts)
+		if !ok {
+			return 0, nil
+		}
+		return za.ZonesAllowed(owner)
+	})
+	st.SetZoneNamesPerHour(cfg.ZoneNamesPerHour)
 	if len(cfg.OperatorDomains) > 0 {
 		slog.Info("operator zones", "zones", strings.Join(cfg.OperatorDomains, ","))
 	}

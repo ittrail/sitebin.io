@@ -32,6 +32,10 @@ type fakeSites struct {
 	// deleteErrs fails Delete for the listed site ids, so a test can make an
 	// account erasure stop half-way and check what is kept.
 	deleteErrs map[string]error
+	// zones is the fake account-zone registry: account -> zone -> verified.
+	// zonesReleased records whose zones ReleaseZones was asked to drop.
+	zones         map[string]map[string]bool
+	zonesReleased []string
 	// expirySet records what SetExpiry was asked to write, including nil.
 	expirySet map[string]*time.Time
 }
@@ -50,6 +54,35 @@ func (s *fakeSites) PrepareVolume(string, string) (string, error) {
 func (s *fakeSites) SetContainerState(string, ext.ContainerState) error { return nil }
 func (s *fakeSites) SyncContainerDomains(string, []string) ([]string, error) {
 	return nil, nil
+}
+func (s *fakeSites) ClaimZone(acct, zone string) (ext.ZoneInfo, bool, error) {
+	if s.zones == nil {
+		s.zones = map[string]map[string]bool{}
+	}
+	if s.zones[acct] == nil {
+		s.zones[acct] = map[string]bool{}
+	}
+	s.zones[acct][zone] = false
+	return ext.ZoneInfo{Zone: zone, TXTName: "_sitebin-zone." + zone, TXTValue: "sitebin-zone=tok"}, false, nil
+}
+func (s *fakeSites) Zones(acct string) ([]ext.ZoneInfo, error) {
+	var out []ext.ZoneInfo
+	for z, v := range s.zones[acct] {
+		out = append(out, ext.ZoneInfo{Zone: z, Verified: v, TXTName: "_sitebin-zone." + z, TXTValue: "sitebin-zone=tok"})
+	}
+	return out, nil
+}
+func (s *fakeSites) ReleaseZone(acct, zone string) error {
+	if _, ok := s.zones[acct][zone]; !ok {
+		return errors.New("not found")
+	}
+	delete(s.zones[acct], zone)
+	return nil
+}
+func (s *fakeSites) ReleaseZones(acct string) error {
+	s.zonesReleased = append(s.zonesReleased, acct)
+	delete(s.zones, acct)
+	return nil
 }
 
 func (s *fakeSites) All() ([]ext.SiteInfo, error) {

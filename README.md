@@ -508,6 +508,54 @@ asks the same question, so an account that stops being the operator loses
 those domains after the usual three days. Certificates are issued on demand as
 for any custom domain.
 
+**Account zones** are the same thing, self-service, for customers whose plan
+includes them (the tier's `max_zones`; 0/absent = none). On the account page
+the customer adds a zone they own — `kunde.example` — and proves it **once**
+with a TXT record:
+
+```
+_sitebin-zone.kunde.example  TXT  "sitebin-zone=<token shown on the page>"
+```
+
+plus a wildcard pointing here (`*.kunde.example` CNAME to the instance, or an
+`A` record). From then on every name under the zone, the apex included,
+attaches to any of **that account's** sites at once, with no record per name,
+and every other account is refused there. The rules:
+
+- **Unlimited names.** Names held through the owner's own zone do not count
+  against the per-site `custom_domains` cap. They do count against the
+  licence's instance-wide ceiling below, which is what a self-hoster bought.
+  New names are throttled per account (`SITEBIN_ZONE_NAMES_PER_HOUR`, default
+  50) to protect the instance's shared Let's Encrypt order budget; the total
+  is not limited.
+- **No overlaps.** A zone may not overlap the instance's own domains, an
+  operator zone, another account's verified zone or one of the owner's own —
+  in either direction, so zones never nest.
+- **A pending zone reserves nothing.** Two accounts may both be trying to
+  prove a zone; the first to prove it holds it, and the other claim is dropped.
+  Unproven claims are dropped after 7 days.
+- **Nobody's domain is taken away.** A zone does not verify while another
+  account holds a verified domain inside it; the account page names the
+  conflict, and the zone verifies once that domain is gone. Other accounts'
+  *pending* claims inside a verified zone are dropped.
+- **Revocation** works as for domains: the TXT record is re-checked daily and
+  the zone is released after it has been definitively absent for three days
+  (a lookup error never counts). When a zone goes — revoked, removed by its
+  owner, or with its account — the names that relied on it fall back to
+  ordinary per-name proof: one with its own TXT/CNAME stays, one without is
+  detached after its own three-day window. Nothing is detached on the spot.
+- **A plan that shrinks** refuses new zones and new names in a zone; it never
+  releases anything.
+- **Account only.** Zones are managed on the account page, never through an
+  API token or MCP (a token acts on sites, not on the account). Adding a *name*
+  inside a zone is an ordinary domain add, through the edit page, the API, MCP
+  or a container's compose file, and the edit page marks it "via zone".
+- Certificates stay per name, issued on demand for **attached** names only, so
+  a request for an unused name under the wildcard triggers nothing.
+
+The order in which a name is judged: the instance's own domains, operator
+zones, verified account zones, then the ordinary per-name proof.
+
 Two independent limits apply, and neither is per account:
 
 - **Per site**, the tier's `custom_domains` cap. It is stamped onto the site
@@ -856,6 +904,7 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_ANON_TIER` | Tier for anonymous creation (empty = require an account). |
 | `SITEBIN_TIER_SELF_SELECT` | Allow users to switch among free tiers. |
 | `SITEBIN_OPERATOR_DOMAINS` | Comma-separated zones the operator owns and points at the instance (e.g. `app.example.com`, a leading `*.` is accepted). Their subdomains attach to sites of operator accounts (admin tier + `SITEBIN_ADMIN_ACCOUNTS`) without a DNS proof and are refused to everyone else. Must not overlap the base or view domain. See [Custom domains](#custom-domains-enterprise). |
+| `SITEBIN_ZONE_NAMES_PER_HOUR` | How many NEW names one account may attach through its own [account zones](#custom-domains-enterprise) per hour (default `50`, `0` = off). Guards the instance's shared ACME order budget; the number of names in a zone is not limited. The number of zones is the tier's `max_zones` (0/absent = none). |
 | `SITEBIN_CONTAINERS` | `off` (default) or `docker`: enables [container sites](#container-sites-enterprise). Needs `SITEBIN_ACCOUNT_MODE=tiers`; each tier's `max_containers` (0/absent = none) caps the services an account runs across all its projects. An Engine that does not answer never stops startup — the mode reports itself unavailable and keeps retrying. |
 | `SITEBIN_CONTAINERS_DOCKER_HOST` | `unix:///var/run/docker.sock` (default) or `tcp://host:port` for a socket proxy. Engine API 1.45 (Docker 26) or newer. |
 | `SITEBIN_CONTAINERS_DATA_MOUNT` | Where `/data` lives for Docker: an absolute host path or `volume:<name>`. Default: found by inspecting Sitebin's own container. |
@@ -936,8 +985,9 @@ claim ticket stays the only thing that confers ownership.
 
 Note that an unlimited tier needs explicit large caps, not zeros:
 `max_site_bytes: 0` and `max_files: 0` fall back to the instance globals, and
-`custom_domains: 0` means *no* custom domains. Only `max_sites: 0` and
-`max_expiry_days: 0` mean unlimited.
+`custom_domains: 0` means *no* custom domains, and `max_containers: 0` and
+`max_zones: 0` mean none. Only `max_sites: 0` and `max_expiry_days: 0` mean
+unlimited.
 
 A tier's `price` maps it to provider price IDs, e.g. a tier with
 `"price":{"stripe":"price_123","paddle":"pri_456","display":"€9/mo"}` becomes a

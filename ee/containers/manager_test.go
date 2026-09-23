@@ -255,6 +255,12 @@ func (s *fakeSites) SetContainerState(id string, st ext.ContainerState) error {
 	cs.Observed = st
 	return nil
 }
+func (s *fakeSites) ClaimZone(string, string) (ext.ZoneInfo, bool, error) {
+	return ext.ZoneInfo{}, false, nil
+}
+func (s *fakeSites) Zones(string) ([]ext.ZoneInfo, error) { return nil, nil }
+func (s *fakeSites) ReleaseZone(string, string) error     { return nil }
+func (s *fakeSites) ReleaseZones(string) error            { return nil }
 func (s *fakeSites) SyncContainerDomains(id string, d []string) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

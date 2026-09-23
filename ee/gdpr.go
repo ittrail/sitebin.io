@@ -310,6 +310,7 @@ func (p *provider) handleGDPRDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"could not delete the account's sites"}`, http.StatusInternalServerError)
 		return
 	}
+	p.releaseZones(acc.ID)
 	slog.Info("gdpr: deleted an account on the stack's order", "account", acc.ID, "subject", order.UserID, "sites", sites)
 	json.NewEncoder(w).Encode(map[string]any{
 		"status": "deleted", "found": true,
