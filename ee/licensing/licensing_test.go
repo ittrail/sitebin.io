@@ -57,7 +57,7 @@ func (c *chain) lic(t *testing.T, appID string, expires, grace time.Time) string
 	s, err := SignLicense(LicensePayload{
 		AppID:      appID,
 		Holder:     "ACME GmbH",
-		Plan:       "enterprise",
+		Plan:       "team",
 		IssuedAt:   refTime.Add(-24 * time.Hour),
 		ExpiresAt:  expires,
 		GraceUntil: grace,
@@ -85,11 +85,39 @@ func TestVerifyValidChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
-	if lic.Lic.Holder != "ACME GmbH" || lic.Lic.Plan != "enterprise" {
+	if lic.Lic.Holder != "ACME GmbH" || lic.Lic.Plan != "team" {
 		t.Errorf("license contents wrong: %+v", lic.Lic)
 	}
 	if lic.Cert.AppID != AppID {
 		t.Errorf("cert app_id = %q", lic.Cert.AppID)
+	}
+}
+
+// Only an Enterprise plan licenses a self-hosted instance. The stack signs a
+// licence for any paid plan, the hosted service's own included, and a plan
+// the licensing config does not list carries no entitlements — unlimited. A
+// Pro purchase on the hosted service once produced exactly such a key.
+func TestVerifyAcceptsOnlyEnterprisePlans(t *testing.T) {
+	c := newChain(t)
+	withPlan := func(plan string) string {
+		lic, err := SignLicense(LicensePayload{
+			AppID: AppID, Holder: "Someone", Plan: plan,
+			IssuedAt: refTime.Add(-time.Hour), ExpiresAt: refTime.Add(30 * 24 * time.Hour),
+		}, c.appPriv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Key(c.cert(t, AppID, refTime.Add(365*24*time.Hour)), lic)
+	}
+	for _, plan := range []string{"team", "business", "platform"} {
+		if _, err := Verify(withPlan(plan), c.roots(), AppID, refTime); err != nil {
+			t.Errorf("plan %q: %v", plan, err)
+		}
+	}
+	for _, plan := range []string{"pro", "studio", "free", "", "Team", "enterprise"} {
+		if _, err := Verify(withPlan(plan), c.roots(), AppID, refTime); !errors.Is(err, ErrPlan) {
+			t.Errorf("plan %q = %v, want ErrPlan", plan, err)
+		}
 	}
 }
 

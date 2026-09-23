@@ -279,6 +279,12 @@ What is easy to get wrong:
   already got wrong once: no stack-issued licence verified until it was fixed.
 - **The audience check is not optional.** `licPayload.app_id` must equal the
   certificate's *and* equal `"sitebin"`. Same reasoning as the MCP one.
+- **Only an Enterprise plan licenses self-hosting** (`licensing.EnterprisePlans`:
+  team, business, platform). The hosted plans are sold through the same stack
+  app, the stack signs a licence for any paid plan, and a plan absent from
+  `SITEBIN_STACK_LICENSING` carries no entitlements — unlimited. The first
+  hosted Pro purchase (2026-09-23) was mailed exactly such a key. Anything
+  else verifies as `none`.
 - **Startup NEVER fails on a licence problem.** Absent, malformed, unverifiable
   and expired keys are all logged and shown in the account UI.
 - **A malformed or unverifiable key is `none`, never `expired`.** A config

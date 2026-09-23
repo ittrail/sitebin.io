@@ -1236,6 +1236,10 @@ community build.
 root, plus the license that certificate's key signed. Verification is two
 Ed25519 checks and needs **no network**: there is no license server.
 
+**Only an Enterprise plan licenses an instance** — `team`, `business` or
+`platform`. A licence the stack issued for a hosted plan (`pro`, `studio`) is
+a receipt for the hosted service and verifies as `none` here.
+
 **Startup never fails on a license problem.** Absent, malformed, unverifiable
 and expired keys are all logged and shown in the account UI. Serving is never
 touched, and neither are existing sites.

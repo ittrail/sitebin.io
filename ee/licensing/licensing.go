@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -123,8 +124,19 @@ var (
 	ErrCertExpiry = errors.New("license certificate has expired")
 	ErrLicSig     = errors.New("license signature does not match the certificate key")
 	ErrAppID      = errors.New("license was issued for a different app")
+	ErrPlan       = errors.New("license is not for a self-hosted (Enterprise) plan")
 	ErrNoRoots    = errors.New("this build trusts no license roots")
 )
+
+// EnterprisePlans are the plans a licence may name. The stack signs a
+// licence for whatever plan a subscription is on, and the hosted service's
+// own plans (pro, studio) are sold through the same app: a licence for one of
+// those is a receipt for hosting, not permission to self-host — and since a
+// plan the licensing config does not list carries no entitlements, it would
+// otherwise verify as UNLIMITED. It happened: the first Pro purchase on the
+// hosted service was mailed a key that licensed a self-hosted instance with
+// no caps at all. Adding an Enterprise plan is a release, deliberately.
+var EnterprisePlans = []string{"team", "business", "platform"}
 
 // TrustedRoots returns the roots this build verifies certificates against. An
 // empty list is not an error: it means nothing can be verified, which resolves
@@ -186,7 +198,8 @@ func truncate(s string) string {
 //  2. certSig verifies over certPayload under ONE OF roots;
 //  3. the certificate is not expired at now;
 //  4. licSig verifies over licPayload under certPayload.pubkey;
-//  5. licPayload.app_id == certPayload.app_id == appID.
+//  5. licPayload.app_id == certPayload.app_id == appID;
+//  6. licPayload.plan is one of EnterprisePlans.
 //
 // A licence being past its own expires_at is NOT a verification failure: that
 // is a state (grace/expired), decided by StatusAt, not a reason to reject the
@@ -268,6 +281,11 @@ func Verify(key string, roots []ed25519.PublicKey, appID string, now time.Time) 
 	}
 	if lic.AppID != appID {
 		return License{}, fmt.Errorf("%w: license is for %q, this is %q", ErrAppID, lic.AppID, appID)
+	}
+
+	// 6. only an Enterprise plan licenses a self-hosted instance.
+	if !slices.Contains(EnterprisePlans, lic.Plan) {
+		return License{}, fmt.Errorf("%w: it names %q (Enterprise plans: %s)", ErrPlan, lic.Plan, strings.Join(EnterprisePlans, ", "))
 	}
 	return License{Cert: cert, Lic: lic}, nil
 }
