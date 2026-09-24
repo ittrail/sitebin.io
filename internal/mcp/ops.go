@@ -123,6 +123,7 @@ type DecodedFile struct {
 // field is optional; a nil pointer means "leave it alone", which is the same
 // distinction the JSON API's updateSet draws with the same technique.
 type Settings struct {
+	Name         *string `json:"name,omitempty" jsonschema:"a private label for the site, up to 60 characters, shown to its owner in the account's site list and on the edit page, never to visitors; an empty string removes it"`
 	Mode         *string `json:"mode,omitempty" jsonschema:"webserver (serve the files as a site), viewer (wrap a single document in a viewer), or container (Enterprise: run the services sitebin-container-compose.yaml declares; every change to that file restarts them)"`
 	EntryFile    *string `json:"entry_file,omitempty" jsonschema:"the file to serve at the site root"`
 	ViewPassword *string `json:"view_password,omitempty" jsonschema:"password visitors must enter; an empty string removes the protection"`
@@ -141,6 +142,7 @@ type SiteResult struct {
 	EditPassword  string   `json:"edit_password,omitempty" jsonschema:"returned once, at creation only, and never again — store it or you cannot manage this site without an account token"`
 	ViewURL       string   `json:"view_url" jsonschema:"the public URL of the site"`
 	EditURL       string   `json:"edit_url" jsonschema:"the human edit page for this site"`
+	Name          string   `json:"name,omitempty" jsonschema:"the site's private label, if it has one"`
 	Mode          string   `json:"mode"`
 	EntryFile     string   `json:"entry_file,omitempty"`
 	SPAFallback   bool     `json:"spa_fallback"`
@@ -185,6 +187,7 @@ type SiteSummary struct {
 	ID        string     `json:"id"`
 	EditID    string     `json:"edit_id"`
 	ViewURL   string     `json:"view_url"`
+	Name      string     `json:"name,omitempty" jsonschema:"the site's private label, if it has one"`
 	Mode      string     `json:"mode"`
 	Bytes     int64      `json:"bytes"`
 	FileCount int        `json:"file_count"`

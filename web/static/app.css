@@ -449,7 +449,7 @@ input::placeholder { color: var(--ink-faint); }
 /* ---------- edit page ---------- */
 
 .pagehead { margin: 4px 0 22px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 16px; }
-.pagehead h1 { font: 650 26px var(--display); letter-spacing: -.02em; }
+.pagehead h1 { font: 650 26px var(--display); letter-spacing: -.02em; overflow-wrap: anywhere; }
 .pagehead .viewlink { font: 14px var(--mono); }
 .pagehead .meta { width: 100%; color: var(--ink-faint); font-size: 13px; }
 

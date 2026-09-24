@@ -275,6 +275,7 @@ func (s *fakeSites) Info(id string) (ext.SiteInfo, bool) {
 func (s *fakeSites) All() ([]ext.SiteInfo, error)              { return nil, nil }
 func (s *fakeSites) SetExpiry(string, *time.Time) error        { return nil }
 func (s *fakeSites) RotateEditPassword(string) (string, error) { return "", nil }
+func (s *fakeSites) SetName(string, string) error              { return nil }
 func (s *fakeSites) Delete(string) error                       { return nil }
 func (s *fakeSites) ApplyQuota(string, ext.CreateGrant) error  { return nil }
 func (s *fakeSites) CustomDomainCount() (int, error)           { return 0, nil }

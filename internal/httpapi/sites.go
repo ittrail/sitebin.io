@@ -24,6 +24,7 @@ import (
 // updateSet carries settings changes. Pointers distinguish "absent" from
 // zero values; ExpiresAt additionally distinguishes JSON null (= clear).
 type updateSet struct {
+	Name          *string         `json:"name"` // "" clears it
 	Mode          *string         `json:"mode"`
 	EntryFile     *string         `json:"entry_file"`
 	ViewPassword  *string         `json:"view_password"`
@@ -50,6 +51,10 @@ func (a *API) expiryCap(site *store.Site) int {
 // settingsFromForm maps multipart form fields onto an updateSet.
 func settingsFromForm(fields url.Values) (updateSet, error) {
 	var set updateSet
+	// Present-but-empty is meaningful, as for view_password: it clears.
+	if _, ok := fields["name"]; ok {
+		set.Name = strPtr(fields.Get("name"))
+	}
 	if v := fields.Get("mode"); v != "" {
 		set.Mode = strPtr(v)
 	}
@@ -154,6 +159,13 @@ func (a *API) applySettings(site *store.Site, set updateSet) error {
 // writeSettings persists a validated updateSet.
 func (a *API) writeSettings(site *store.Site, set updateSet, expires **time.Time) error {
 	return a.st.Update(site, func(m *store.Meta) error {
+		if set.Name != nil {
+			name, err := store.CleanSiteName(*set.Name)
+			if err != nil {
+				return &apiError{400, err.Error()}
+			}
+			m.Name = name
+		}
 		if set.Mode != nil {
 			m.Mode = *set.Mode
 		}
@@ -411,6 +423,7 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"views":                   stats.Views,
 		"last_seen":               stats.LastSeen,
 		"id":                      m.ID,
+		"name":                    m.Name,
 		"view_url":                a.cfg.ViewURL(m.ID),
 		"edit_url":                a.cfg.EditURL(m.EditID),
 		"mode":                    m.Mode,

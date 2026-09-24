@@ -31,21 +31,36 @@ func (s siteService) infoOf(site *store.Site) ext.SiteInfo {
 	bytes, files, _ := s.a.st.Usage(site)
 	st := s.a.st.Stats(site)
 	return ext.SiteInfo{
-		Violations: st.CSPViolations,
-		Blocked:    st.CSPBlocked,
-		Reporters:  st.CSPSources,
-		ViewID:     site.ViewID,
-		Owner:      site.Meta.OwnerAccountID,
-		Mode:       site.Meta.Mode,
-		Domains:    site.Meta.CustomDomains,
-		Origin:     site.Meta.Origin,
-		Bytes:      bytes,
-		Files:      files,
-		ViewURL:    s.a.cfg.ViewURL(site.ViewID),
-		EditURL:    s.a.cfg.EditURL(site.Meta.EditID),
-		CreatedAt:  site.Meta.CreatedAt,
-		ExpiresAt:  site.Meta.ExpiresAt,
+		Violations:  st.CSPViolations,
+		Blocked:     st.CSPBlocked,
+		Reporters:   st.CSPSources,
+		ViewID:      site.ViewID,
+		Owner:       site.Meta.OwnerAccountID,
+		Mode:        site.Meta.Mode,
+		Name:        site.Meta.Name,
+		Domains:     site.Meta.CustomDomains,
+		DomainLinks: s.domainLinks(site),
+		Origin:      site.Meta.Origin,
+		Bytes:       bytes,
+		Files:       files,
+		ViewURL:     s.a.cfg.ViewURL(site.ViewID),
+		EditURL:     s.a.cfg.EditURL(site.Meta.EditID),
+		CreatedAt:   site.Meta.CreatedAt,
+		ExpiresAt:   site.Meta.ExpiresAt,
 	}
+}
+
+// domainLinks lists the verified domains with the URL each serves at, then the
+// pending claims, which serve nothing yet.
+func (s siteService) domainLinks(site *store.Site) []ext.DomainLink {
+	var out []ext.DomainLink
+	for _, d := range site.Meta.CustomDomains {
+		out = append(out, ext.DomainLink{Domain: d, URL: s.a.cfg.SiteURL(d)})
+	}
+	for _, c := range site.PendingDomains() {
+		out = append(out, ext.DomainLink{Domain: c.Domain, Pending: true})
+	}
+	return out
 }
 
 func (s siteService) All() ([]ext.SiteInfo, error) {
@@ -76,6 +91,19 @@ func (s siteService) SetExpiry(viewID string, at *time.Time) error {
 		m.ExpiryFromTier = false
 		return nil
 	})
+	return mapSiteGone(err, viewID)
+}
+
+func (s siteService) SetName(viewID, name string) error {
+	clean, err := store.CleanSiteName(name)
+	if err != nil {
+		return err
+	}
+	site, err := s.a.st.ByViewID(viewID)
+	if err != nil {
+		return mapSiteGone(err, viewID)
+	}
+	err = s.a.st.Update(site, func(m *store.Meta) error { m.Name = clean; return nil })
 	return mapSiteGone(err, viewID)
 }
 

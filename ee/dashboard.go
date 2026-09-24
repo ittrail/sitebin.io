@@ -31,6 +31,7 @@ func (p *provider) PublicRoutes() map[string]http.Handler {
 		"POST /account/logout":                  http.HandlerFunc(p.handleLogout),
 		"POST /account/tier":                    http.HandlerFunc(p.handleSelectTier),
 		"POST /account/sites/{id}/rotate":       http.HandlerFunc(p.handleRotate),
+		"POST /account/sites/{id}/name":         http.HandlerFunc(p.handleRenameSite),
 		"POST /account/sites/{id}/delete":       http.HandlerFunc(p.handleDeleteSite),
 		"POST /account/delete":                  http.HandlerFunc(p.handleDeleteAccount),
 		"POST /account/delete/confirm":          http.HandlerFunc(p.handleDeleteAccountConfirm),
@@ -257,6 +258,36 @@ func (p *provider) handleRotate(w http.ResponseWriter, r *http.Request) {
 		Detail: pw,
 		Back:   "/account",
 	})
+}
+
+// handleRenameSite sets or clears a site's name from the dashboard. The edit
+// page has the same setting, but it needs the site's edit password, and an
+// owner who does not have it to hand would otherwise have to RESET it to name
+// a site — breaking any deploy that still uses the old one.
+func (p *provider) handleRenameSite(w http.ResponseWriter, r *http.Request) {
+	acc, ok := p.currentAccount(r)
+	if !ok {
+		p.redirect(w, r, "/account/login")
+		return
+	}
+	viewID := r.PathValue("id")
+	if !p.checkCSRF(r, acc) || !p.owns(acc, viewID) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	err := p.host.Sites().SetName(viewID, r.PostFormValue("name"))
+	switch {
+	case errors.Is(err, store.ErrBadSiteName):
+		p.securityHeaders(w)
+		w.WriteHeader(http.StatusBadRequest)
+		msgTmpl.Execute(w, msgView{Title: "That name was not saved", Body: "Sorry — " + err.Error() + ".", Back: "/account"})
+		return
+	case err != nil:
+		slog.Error("rename site", "account", acc.ID, "site", viewID, "err", err)
+		http.Error(w, "could not rename the site", http.StatusInternalServerError)
+		return
+	}
+	p.redirect(w, r, "/account")
 }
 
 func (p *provider) handleDeleteSite(w http.ResponseWriter, r *http.Request) {

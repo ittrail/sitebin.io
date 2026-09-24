@@ -141,6 +141,7 @@ func (o mcpOps) siteResult(site *store.Site) *mcp.SiteResult {
 		EditID:        m.EditID,
 		ViewURL:       o.a.cfg.ViewURL(m.ID),
 		EditURL:       o.a.cfg.EditURL(m.EditID),
+		Name:          m.Name,
 		Mode:          m.Mode,
 		EntryFile:     m.EntryFile,
 		SPAFallback:   m.SPAFallback,
@@ -172,6 +173,7 @@ func (o mcpOps) siteResult(site *store.Site) *mcp.SiteResult {
 // same three states as nil, "" and a value.
 func settingsToUpdateSet(s mcp.Settings) updateSet {
 	set := updateSet{
+		Name:         s.Name,
 		Mode:         s.Mode,
 		EntryFile:    s.EntryFile,
 		ViewPassword: s.ViewPassword,
@@ -250,6 +252,7 @@ func (o mcpOps) ListSites(_ context.Context, auth mcp.Auth) ([]mcp.SiteSummary, 
 			ID:        site.Meta.ID,
 			EditID:    site.Meta.EditID,
 			ViewURL:   o.a.cfg.ViewURL(site.Meta.ID),
+			Name:      site.Meta.Name,
 			Mode:      site.Meta.Mode,
 			Bytes:     b,
 			FileCount: count,

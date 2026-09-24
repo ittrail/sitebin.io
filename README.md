@@ -165,6 +165,18 @@ Creating a site returns three things, shown **exactly once**:
 - **Edit password** — random secret; only its Argon2id hash is stored, so it
   cannot be recovered. Save it immediately.
 
+### Site names
+
+A site may carry an optional **name** — a private label of up to 60
+characters, so a list of random hosts becomes one you can read. It is shown
+wherever the site is managed and never where it is served: it is not a page
+title and does not change the URL. Set it on the edit page, as `name` in the
+[API](#api-for-scripts-and-agents) or the [MCP](#mcp-server-for-ai-agents)
+settings (an empty string removes it), or — on an instance with accounts —
+from the account dashboard, which lists every site by its name, its view URL
+and its custom domains (pending ones marked as waiting for DNS) and can rename
+a site without its edit password.
+
 ### Modes
 
 - **Web server** — files served exactly as uploaded, `index.html` is the
@@ -197,7 +209,7 @@ curl -F "files=@index.html" -F "files=@app.js;filename=js/app.js" \
      https://sitebin.example.com/api/sites
 
 # create a viewer site with settings
-curl -F "mode=viewer" -F "view_password=sesame" \
+curl -F "name=Q3 report" -F "mode=viewer" -F "view_password=sesame" \
      -F "expires_at=2026-12-31T23:59:59Z" -F "webdav=true" \
      -F "domain=docs.client.com" \
      -F "files=@report.pdf" \
@@ -209,9 +221,10 @@ curl -F "zip=@site.zip" https://sitebin.example.com/api/sites
 # read settings / files / usage
 curl -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID
 
-# update settings (any subset; expires_at: null clears it, unless a tier caps the site)
+# update settings (any subset; expires_at: null clears it, unless a tier caps the site;
+# name is a private label of up to 60 characters, "" removes it)
 curl -X PUT -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
-     -d '{"mode":"viewer","entry_file":"report.pdf","webdav_enabled":true}' \
+     -d '{"name":"Client docs","mode":"viewer","entry_file":"report.pdf","webdav_enabled":true}' \
      https://sitebin.example.com/api/sites/$EDIT_ID
 
 # add / remove files
@@ -310,8 +323,8 @@ require stdio) can bridge with `npx mcp-remote https://…/mcp --header …`.
 | Tool | What it does |
 |---|---|
 | `create_site` | Publish files as a new site; returns the URL, the edit id and — once — the edit password |
-| `list_sites` | The connected account's sites *(needs a token)* |
-| `get_site` / `update_site` | Read and change settings, expiry, view password, WebDAV/FTP, SPA fallback |
+| `list_sites` | The connected account's sites, with their names and custom domains *(needs a token)* |
+| `get_site` / `update_site` | Read and change the name, settings, expiry, view password, WebDAV/FTP, SPA fallback |
 | `list_files` / `read_file` | Inspect a site's contents |
 | `write_files` | Add or overwrite files; with `replace`, the site ends up containing exactly what you pass |
 | `delete_file` / `delete_site` | Remove a file, or the whole site |

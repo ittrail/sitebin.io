@@ -196,6 +196,11 @@ type SiteService interface {
 	SetExpiry(viewID string, at *time.Time) error
 	// RotateEditPassword issues a new edit password, returning it once.
 	RotateEditPassword(viewID string) (newPassword string, err error)
+	// SetName sets the site's name, or clears it when name is empty. The name
+	// is validated by the core's one rule, and a refused name is an error
+	// whose message states that rule and is safe to show as-is. A site that
+	// no longer exists is ErrSiteGone.
+	SetName(viewID, name string) error
 	// Delete removes a site and its indexes. Like ApplyQuota it reports a site
 	// that no longer exists as ErrSiteGone, so a caller erasing everything an
 	// account owns can tell "already gone, carry on" from "could not delete,
@@ -375,9 +380,19 @@ type SiteInfo struct {
 	// the admin console's instance-wide list needs it as a column.
 	Owner string
 	Mode  string
-	// Domains are the site's custom domains, if any. The admin console lists
-	// and searches by them; they are the only human-memorable handle a site has.
+	// Name is the owner's optional label for the site; empty when unnamed.
+	// Private: the dashboard and the admin console show it, nothing served
+	// ever does.
+	Name string
+	// Domains are the site's VERIFIED custom domains, if any. The admin
+	// console lists and searches by them; with the name, they are the only
+	// human-memorable handles a site has.
 	Domains []string
+	// DomainLinks are Domains again, each with the URL it serves at, followed
+	// by the claims still waiting for their DNS proof. The account dashboard
+	// lists them; the URL is built by the core because the scheme and port
+	// are the core's business.
+	DomainLinks []DomainLink
 	// Origin is the surface that created the site — "mcp", or empty for the UI
 	// and the JSON API. Provenance only; nothing gates on it.
 	Origin    string
@@ -401,6 +416,14 @@ type SiteInfo struct {
 	// the owner gets before the sweep deletes the site — the dashboard must
 	// show it.
 	ExpiresAt *time.Time
+}
+
+// DomainLink is one custom domain of a site as the dashboard shows it. A
+// pending claim serves nothing yet, so it has no URL.
+type DomainLink struct {
+	Domain  string
+	URL     string
+	Pending bool
 }
 
 var registered Provider

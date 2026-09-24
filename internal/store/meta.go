@@ -29,6 +29,12 @@ type Meta struct {
 	SPAFallback    bool          `json:"spa_fallback"`               // webserver mode: serve index.html for unknown paths
 	OwnerAccountID string        `json:"owner_account_id,omitempty"` // enterprise: owning account (empty = anonymous)
 
+	// Name is the owner's optional label for the site, validated by
+	// CleanSiteName. It is private: shown wherever the site is managed and
+	// never where it is served. Empty on every site written before names
+	// existed, which reads as unnamed.
+	Name string `json:"name,omitempty"`
+
 	// Origin records which surface created the site. Empty — the value every
 	// meta.json written before this field has — means the UI or the JSON API,
 	// so no migration is needed and no existing site is mislabelled. It is

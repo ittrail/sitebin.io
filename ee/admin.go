@@ -156,14 +156,15 @@ type adminView struct {
 	ParamsQ string
 }
 
-// matches decides whether a site survives the text query. It searches the three
-// handles an operator is likely to have: the view id, the owner's email, and a
-// custom domain.
+// matches decides whether a site survives the text query. It searches the
+// handles an operator is likely to have: the site's name, the view id, the
+// owner's email, and a custom domain.
 func matches(row adminRow, q string) bool {
 	if q == "" {
 		return true
 	}
 	if strings.Contains(strings.ToLower(row.ViewID), q) ||
+		strings.Contains(strings.ToLower(row.Name), q) ||
 		strings.Contains(strings.ToLower(row.OwnerLabel), q) {
 		return true
 	}

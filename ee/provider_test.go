@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 // --- fakes ---
@@ -123,6 +124,23 @@ func (s *fakeSites) SetExpiry(id string, at *time.Time) error {
 	s.expirySet[id] = at
 	return nil
 }
+
+// SetName mirrors the real siteService: the core's one rule decides, and a
+// site the fake has never seen is gone.
+func (s *fakeSites) SetName(id, name string) error {
+	clean, err := store.CleanSiteName(name)
+	if err != nil {
+		return err
+	}
+	info, ok := s.infos[id]
+	if !ok {
+		return fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
+	}
+	info.Name = clean
+	s.infos[id] = info
+	return nil
+}
+
 func (s *fakeSites) RotateEditPassword(id string) (string, error) {
 	s.rotated = append(s.rotated, id)
 	return "freshEditPw123456789012", nil

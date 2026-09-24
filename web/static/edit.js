@@ -79,9 +79,12 @@ $("lockform").addEventListener("submit", async (e) => {
 // ---- rendering ----
 
 function render() {
-  $("site-id").textContent = site.id;
+  // The name, when there is one, is the heading; the view id then moves into
+  // the meta line, so the page still says which site this is.
+  $("site-id").textContent = site.name || site.id;
+  document.title = "Manage " + (site.name || site.id) + " — Sitebin";
   $("view-link").href = site.view_url;
-  let meta = "created " + new Date(site.created_at).toLocaleString() +
+  let meta = (site.name ? site.id + " · " : "") + "created " + new Date(site.created_at).toLocaleString() +
     " · updated " + new Date(site.updated_at).toLocaleString();
   if (typeof site.views === "number") {
     meta += " · " + site.views + (site.views === 1 ? " view" : " views");
@@ -151,6 +154,11 @@ function render() {
   $("usage-note").textContent =
     fmtBytes(site.usage.bytes) + " of " + fmtBytes(site.usage.max_bytes) +
     " · " + site.usage.files + (site.usage.max_files ? "/" + site.usage.max_files : "") + " files";
+
+  // name: never overwrite what is being typed (a container site re-renders
+  // on a timer while it starts)
+  if (document.activeElement !== $("e-name")) $("e-name").value = site.name || "";
+  $("clear-name").classList.toggle("hidden", !site.name);
 
   // mode + entry
   const ct = site.container || {};
@@ -448,6 +456,20 @@ async function put(body, okMsg) {
     render(); // restore actual state
   }
 }
+
+function saveName() {
+  const v = $("e-name").value.trim();
+  if (v === (site.name || "")) return;
+  put({ name: v }, v ? "Named " + v : "Name removed");
+}
+$("save-name").addEventListener("click", saveName);
+$("e-name").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); saveName(); }
+});
+$("clear-name").addEventListener("click", () => {
+  $("e-name").value = "";
+  put({ name: "" }, "Name removed");
+});
 
 document.querySelectorAll("input[name=emode]").forEach((r) =>
   r.addEventListener("change", () => put({ mode: r.value }, "Mode switched to " + r.value)));

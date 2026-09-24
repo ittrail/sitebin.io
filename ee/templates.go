@@ -26,6 +26,16 @@ const pageHead = `<!doctype html>
   .acct .sitecard .grow { flex: 1; min-width: 220px; }
   .acct .sitecard .u { font: 12px var(--mono); color: var(--ink-faint); }
   .acct a.plain { font: 13px var(--mono); word-break: break-all; }
+  .acct .sitecard .sname { display: block; font: 600 15px var(--body); color: var(--ink); margin-bottom: 2px; overflow-wrap: anywhere; }
+  .acct .sitecard .doms { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 3px; }
+  .acct .sitecard .doms a { font: 12px var(--mono); color: var(--amber); word-break: break-all; }
+  .acct .sitecard .doms .pend { font: 12px var(--mono); color: rgba(245,184,77,.5); word-break: break-all; }
+  .acct .sitecard details.rename { margin-top: 6px; }
+  .acct .sitecard details.rename summary { display: inline-block; cursor: pointer; list-style: none; font: 12px var(--mono); color: var(--ink-dim); }
+  .acct .sitecard details.rename summary::-webkit-details-marker { display: none; }
+  .acct .sitecard details.rename[open] summary { color: var(--ink); }
+  .acct .sitecard details.rename form { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+  .acct .sitecard details.rename input[type=text] { flex: 1; min-width: 180px; background: var(--bg-raise); color: var(--ink); border: 1px solid var(--line); border-radius: 9px; padding: 7px 11px; font: 14px var(--body); }
   .acct .authwrap { width: min(420px, 100%); margin: 10vh auto; }
   .acct .switch-link { text-align: center; margin-top: 14px; font-size: 14px; }
   .acct label.f { display:block; font-size: 13px; color: var(--ink-dim); margin: 12px 0 6px; }
@@ -135,8 +145,18 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
     {{range .Sites}}
     <div class="sitecard">
       <div class="grow">
+        {{if .Name}}<span class="sname">{{.Name}}</span>{{end}}
         <a class="plain" href="{{.ViewURL}}" target="_blank" rel="noopener">{{.ViewURL}}</a>
+        {{if .DomainLinks}}<div class="doms">{{range .DomainLinks}}{{if .Pending}}<span class="pend" title="Claimed, waiting for its DNS record">{{.Domain}} · pending DNS</span>{{else}}<a href="{{.URL}}" target="_blank" rel="noopener">{{.Domain}}</a>{{end}}{{end}}</div>{{end}}
         <div class="u">{{.Mode}} · {{.SizeText}} · {{.Files}} files · {{.ExpiryText}}</div>
+        <details class="rename">
+          <summary>&#9998; {{if .Name}}Rename{{else}}Add a name{{end}}</summary>
+          <form method="post" action="/account/sites/{{.ViewID}}/name">
+            <input type="hidden" name="csrf" value="{{.CSRF}}">
+            <input type="text" name="name" maxlength="60" value="{{.Name}}" placeholder="e.g. Client docs" aria-label="Name for {{.ViewID}}">
+            <button class="btn small primary" type="submit">Save</button>
+          </form>
+        </details>
       </div>
       <a class="btn small" href="{{.EditURL}}">Manage</a>
       <form class="inline" method="post" action="/account/sites/{{.ViewID}}/rotate">
@@ -389,6 +409,7 @@ const adminConsoleCSS = `
   .adm .row:hover { background: rgba(91,140,255,.045); }
   .adm .row .id { font: 12px var(--mono); word-break: break-all; }
   .adm .row .id a { color: var(--ink); }
+  .adm .row .nm { display: block; font: 600 13px var(--body); color: var(--ink); margin-bottom: 2px; overflow-wrap: anywhere; }
   .adm .row .dom { display: block; font: 11px var(--mono); color: var(--amber); margin-top: 3px; word-break: break-all; }
   .adm .row .own { font-size: 12px; color: var(--ink-dim); word-break: break-all; }
   .adm .row .own.anon { color: var(--ink-faint); font-style: italic; }
@@ -435,7 +456,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
   </section>
 
   <form class="bar" method="get" action="/account/admin">
-    <input type="search" name="q" value="{{.Query}}" placeholder="view id, owner email or domain" aria-label="Search sites">
+    <input type="search" name="q" value="{{.Query}}" placeholder="name, view id, owner email or domain" aria-label="Search sites">
     <select name="filter" aria-label="Filter sites">
       <option value=""{{if eq .Filter ""}} selected{{end}}>All sites</option>
       <option value="owned"{{if eq .Filter "owned"}} selected{{end}}>Account-owned</option>
@@ -455,7 +476,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
     {{range .Rows}}
     {{if .Confirming}}
     <div class="row confirm">
-      <span class="id">{{.ViewID}}{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}</span>
+      <span class="id">{{if .Name}}<span class="nm">{{.Name}}</span>{{end}}{{.ViewID}}{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}</span>
       <span class="warnmsg">Delete this site permanently? Its {{.Files}} file(s) and any custom domain go with it. This cannot be undone.</span>
       <span class="acts">
         <form method="post" action="/account/admin/sites/{{.ViewID}}/delete{{if $.Params}}?{{$.ParamsQ}}{{end}}" class="inline">
@@ -467,7 +488,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
     </div>
     {{else}}
     <div class="row">
-      <span class="id"><a href="{{.ViewURL}}" rel="noreferrer noopener" target="_blank">{{.ViewID}}</a>{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}</span>
+      <span class="id">{{if .Name}}<span class="nm">{{.Name}}</span>{{end}}<a href="{{.ViewURL}}" rel="noreferrer noopener" target="_blank">{{.ViewID}}</a>{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}</span>
       <span class="own{{if not .Owner}} anon{{end}}">{{.OwnerLabel}}{{if .Violations}}<span class="flag" title="{{.BlockedText}}">&#9888; {{.Violations}} blocked{{if .Reporters}} &middot; {{.Reporters}} source{{if ne .Reporters 1}}s{{end}}{{end}}</span>{{end}}</span>
       <span class="num orig">{{if .Origin}}{{.Origin}}{{else}}&mdash;{{end}}</span>
       <span class="num">{{.Mode}}</span>
