@@ -485,18 +485,18 @@ func TestFormsConfigRefusals(t *testing.T) {
 		return m
 	}
 	cases := map[string]map[string]string{
-		"from missing":            {"SITEBIN_FORMS_SMTP_HOST": "smtp.example.com"},
-		"from with display name":  withHost(map[string]string{"SITEBIN_FORMS_SMTP_FROM": "Forms <forms@example.com>"}),
-		"from in angle brackets":  withHost(map[string]string{"SITEBIN_FORMS_SMTP_FROM": "<forms@example.com>"}),
-		"from not an address":     withHost(map[string]string{"SITEBIN_FORMS_SMTP_FROM": "forms"}),
-		"port out of range":       withHost(map[string]string{"SITEBIN_FORMS_SMTP_PORT": "99999"}),
-		"tls not a bool":          withHost(map[string]string{"SITEBIN_FORMS_SMTP_TLS": "maybe"}),
-		"negative per-site":       {"SITEBIN_FORMS_MAX_PER_SITE": "-1"},
-		"per-site not a number":   {"SITEBIN_FORMS_MAX_PER_SITE": "ten"},
-		"negative max files":      {"SITEBIN_FORMS_MAX_FILES": "-1"},
-		"zero file bytes":         {"SITEBIN_FORMS_MAX_FILE_BYTES": "0"},
-		"zero per-ip":             {"SITEBIN_FORMS_PER_IP_HOUR": "0"},
-		"zero per-form":           {"SITEBIN_FORMS_PER_FORM_HOUR": "0"},
+		"from missing":           {"SITEBIN_FORMS_SMTP_HOST": "smtp.example.com"},
+		"from with display name": withHost(map[string]string{"SITEBIN_FORMS_SMTP_FROM": "Forms <forms@example.com>"}),
+		"from in angle brackets": withHost(map[string]string{"SITEBIN_FORMS_SMTP_FROM": "<forms@example.com>"}),
+		"from not an address":    withHost(map[string]string{"SITEBIN_FORMS_SMTP_FROM": "forms"}),
+		"port out of range":      withHost(map[string]string{"SITEBIN_FORMS_SMTP_PORT": "99999"}),
+		"tls not a bool":         withHost(map[string]string{"SITEBIN_FORMS_SMTP_TLS": "maybe"}),
+		"negative per-site":      {"SITEBIN_FORMS_MAX_PER_SITE": "-1"},
+		"per-site not a number":  {"SITEBIN_FORMS_MAX_PER_SITE": "ten"},
+		"negative max files":     {"SITEBIN_FORMS_MAX_FILES": "-1"},
+		"zero file bytes":        {"SITEBIN_FORMS_MAX_FILE_BYTES": "0"},
+		"zero per-ip":            {"SITEBIN_FORMS_PER_IP_HOUR": "0"},
+		"zero per-form":          {"SITEBIN_FORMS_PER_FORM_HOUR": "0"},
 	}
 	for name, extra := range cases {
 		vars := formsBase()
