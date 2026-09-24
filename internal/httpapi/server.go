@@ -50,6 +50,7 @@ type API struct {
 	targetLimiter  *auth.Limiter // per target, any source
 	davLockSystems *davLocks
 	csp            *cspAggregator
+	forms          *formsState // nil when the instance has no forms
 }
 
 // New wires the API. secret signs view-session cookies; webFS provides the
@@ -74,6 +75,7 @@ func New(cfg config.Config, st *store.Store, secret []byte, webFS fs.FS) (*API, 
 		authLimiter:    auth.NewLimiter(float64(cfg.RateAuthPer5Min)*12, cfg.RateAuthPer5Min), // per-5min → per-hour
 		targetLimiter:  auth.NewLimiter(float64(cfg.RateAuthPer5Min)*12*6, cfg.RateAuthPer5Min*6),
 		davLockSystems: newDavLocks(),
+		forms:          newFormsState(cfg, secret),
 	}, nil
 }
 
@@ -99,6 +101,12 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("DELETE /api/sites/{editID}/domains/{domain}", a.withEditAuth(a.removeDomain))
 	mux.HandleFunc("POST /api/sites/{editID}/containers/{action}", a.withEditAuth(a.containerAction))
 	mux.HandleFunc("GET /api/sites/{editID}/containers/{service}/logs", a.withEditAuth(a.containerLogs))
+
+	mux.HandleFunc("GET /api/sites/{editID}/forms", a.withEditAuth(a.listForms))
+	mux.HandleFunc("POST /api/sites/{editID}/forms", a.withEditAuth(a.createForm))
+	mux.HandleFunc("PUT /api/sites/{editID}/forms/{key}", a.withEditAuth(a.patchForm))
+	mux.HandleFunc("DELETE /api/sites/{editID}/forms/{key}", a.withEditAuth(a.removeForm))
+	mux.HandleFunc("POST /api/sites/{editID}/forms/{key}/confirmation", a.withEditAuth(a.resendFormConfirmation))
 
 	mux.Handle("/dav/", http.HandlerFunc(a.webdav))
 
