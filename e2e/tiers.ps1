@@ -23,10 +23,11 @@ function JsonBodyT([string]$json) {
     $p = Join-Path $work ("jt" + (Get-Random) + ".json"); [IO.File]::WriteAllText($p, $json); return "@$p"
 }
 
-# free tier: 1 site max, 200-byte storage cap, no webdav, 0 custom domains.
+# free tier: 1 site max, 200-byte storage cap, no webdav, 0 custom domains,
+# 1 form. Trusted, because forms need a trusted tier when accounts are on.
 # Written to a mounted file to avoid shell JSON-quoting issues (this is the
 # documented production approach via SITEBIN_TIERS_FILE).
-$tiers = '[{"id":"free","label":"Free","max_site_bytes":200,"max_files":5,"max_sites":1,"webdav":false,"custom_domains":0,"max_expiry_days":7,"max_forms":1}]'
+$tiers = '[{"id":"free","label":"Free","max_site_bytes":200,"max_files":5,"max_sites":1,"webdav":false,"custom_domains":0,"max_expiry_days":7,"max_forms":1,"trusted":true}]'
 [IO.File]::WriteAllText((Join-Path $work "tiers.json"), $tiers)
 $workDocker = ($work -replace '\\', '/')
 

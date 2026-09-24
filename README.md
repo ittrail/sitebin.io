@@ -503,6 +503,8 @@ submissions. Then paste its snippet into any page:
   stop a form at any time, and only their own click re-activates it.
 - With accounts, a tier's `max_forms` caps the forms **per site** (0 or absent
   means none). A smaller plan pauses the newest forms and never deletes them.
+  Forms also need a tier with `"trusted": true` when accounts are enabled: an
+  untrusted site is served with `form-action 'none'`, so it has no forms.
 
 ### View access modes
 

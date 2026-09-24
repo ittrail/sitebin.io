@@ -172,6 +172,10 @@ origin, and the core mails them to a recipient. Read
   from `meta.json` and never ask the extension. With a provider, an unstamped
   site has **0** forms (never the community default of 10), and every
   constructor of `store.Quota` must pass `Forms`, or `ApplyQuota` resets it.
+  With accounts enabled, forms also need a trusted tier: a site without the
+  trust marker has a cap of 0 whatever its stamp, because its CSP
+  (`form-action 'none'`) leaves a form nothing to serve but a phishing page's
+  own script.
 - **Nothing is stored or logged.** Submissions are mailed synchronously (a
   failure is a 502 the visitor can retry) and never written down. Logs carry
   site, key, size and file count, never values, filenames or the recipient.

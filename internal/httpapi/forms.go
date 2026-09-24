@@ -73,7 +73,17 @@ const confirmNotSent = "the confirmation email could not be sent; the form stays
 func (a *API) baseURL() string { return a.cfg.SiteURL(a.cfg.BaseDomain) }
 
 // formsLimit is the site's forms cap: the stamped value, else the instance's.
+//
+// With accounts enabled, an untrusted site has none. Caddy serves it with
+// form-action 'none' and connect-src 'self', so a plain HTML form there
+// cannot post at all, and the only caller left would be a script on the page
+// — a phishing drop feeding its own confirmed form. The check is a stat of
+// the trust marker, not a question to the extension, so it is fine on the
+// submission path. Without accounts every site is created trusted.
 func (a *API) formsLimit(site *store.Site) int {
+	if p, ok := ext.Get(); ok && p.AccountsEnabled() && !a.st.Trusted(site) {
+		return 0
+	}
 	if site.Meta.QuotaForms != nil {
 		return *site.Meta.QuotaForms
 	}

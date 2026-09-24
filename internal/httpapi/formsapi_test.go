@@ -167,7 +167,8 @@ func TestFormsCapFromTheEnvironment(t *testing.T) {
 // the feature ships.
 func TestFormsCapIsZeroForAnUnstampedSiteWithAProvider(t *testing.T) {
 	e, _ := formsEnv(t, nil)
-	ext.Register(&fakeProvider{enabled: true})
+	// Trusted, so the 0 comes from the missing stamp and not from the trust rule.
+	ext.Register(&fakeProvider{enabled: true, grant: ext.CreateGrant{Trusted: true}})
 	defer ext.Reset()
 	id, pw, _ := newFormSite(t, e)
 	w, out := e.formsCall(t, "GET", id, pw, "", nil)
@@ -179,10 +180,64 @@ func TestFormsCapIsZeroForAnUnstampedSiteWithAProvider(t *testing.T) {
 	}
 }
 
+// An untrusted site is served with form-action 'none' and connect-src 'self':
+// a plain HTML form on it cannot post, and the only thing a form would still
+// serve is a phishing drop's own fetch. With accounts enabled, a site without
+// the trust marker has no forms, whatever its stamp says.
+func TestFormsNeedATrustedSiteWithAccounts(t *testing.T) {
+	e, rs := formsEnv(t, nil)
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1", grant: ext.CreateGrant{MaxForms: intp(1), Trusted: false}})
+	defer ext.Reset()
+	id, pw, viewID := newFormSite(t, e)
+	site, _ := e.st.ByViewID(viewID)
+	if e.st.Trusted(site) || site.Meta.QuotaForms == nil || *site.Meta.QuotaForms != 1 {
+		t.Fatal("precondition: an owned site stamped with 1 form and no trust marker")
+	}
+	w, _ := e.formsCall(t, "POST", id, pw, "", map[string]any{"name": "A", "recipient": "a@example.com"})
+	if w.Code != 403 || !strings.Contains(w.Body.String(), "includes no forms") {
+		t.Fatalf("add on an untrusted site = %d %s, want 403 naming no forms", w.Code, w.Body)
+	}
+	if _, out := e.formsCall(t, "GET", id, pw, "", nil); out.Limit != 0 {
+		t.Errorf("listing limit = %d, want 0 on an untrusted site", out.Limit)
+	}
+
+	// A form that got in anyway (through the store here; a tier that lost its
+	// trust in real life) is paused, for a plain post and a script's alike.
+	f, err := e.st.AddForm(site, store.Form{Name: "A", Recipient: "a@example.com", Captcha: true}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f, err = e.st.ConfirmForm(site, f.Key, f.Recipient, f.Seq); err != nil {
+		t.Fatal(err)
+	}
+	if w := submit(t, e, viewHost(site), f.Key, "message=hi", nil); w.Code != 403 || !strings.Contains(w.Body.String(), "paused") {
+		t.Errorf("submit on an untrusted site = %d, want 403 paused", w.Code)
+	}
+	if w := submit(t, e, viewHost(site), f.Key, "message=hi", map[string]string{"Accept": "application/json"}); w.Code != 403 {
+		t.Errorf("JSON submit on an untrusted site = %d, want 403", w.Code)
+	}
+	if w := get(t, e, viewHost(site), "/_sitebin/forms/"+f.Key+"/challenge", nil); w.Code != 404 {
+		t.Errorf("challenge on an untrusted site = %d, want 404", w.Code)
+	}
+	if rs.count() != 0 {
+		t.Errorf("an untrusted site sent %d mails", rs.count())
+	}
+}
+
+func TestFormsOnATrustedSiteWithAccounts(t *testing.T) {
+	e, _ := formsEnv(t, nil)
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1", grant: ext.CreateGrant{MaxForms: intp(1), Trusted: true}})
+	defer ext.Reset()
+	id, pw, _ := newFormSite(t, e)
+	if w, _ := e.formsCall(t, "POST", id, pw, "", map[string]any{"name": "A", "recipient": "a@example.com"}); w.Code != 201 {
+		t.Fatalf("add on a trusted site = %d %s, want 201", w.Code, w.Body)
+	}
+}
+
 // A Pro site created before forms existed has no stamp; its plan is asked once.
 func TestFormsCapIsStampedFromThePlanWhenFirstNeeded(t *testing.T) {
 	e, _ := formsEnv(t, nil)
-	fp := &fakeProvider{enabled: true, owner: "acct-1", quota: ext.CreateGrant{MaxForms: intp(1)}, quotaOK: true}
+	fp := &fakeProvider{enabled: true, owner: "acct-1", grant: ext.CreateGrant{Trusted: true}, quota: ext.CreateGrant{MaxForms: intp(1)}, quotaOK: true}
 	ext.Register(fp)
 	defer ext.Reset()
 	id, pw, viewID := newFormSite(t, e)
@@ -206,7 +261,7 @@ func TestFormsCapIsStampedFromThePlanWhenFirstNeeded(t *testing.T) {
 
 func TestFormsPlanLookupErrorRefusesTheAdd(t *testing.T) {
 	e, rs := formsEnv(t, nil)
-	ext.Register(&fakeProvider{enabled: true, owner: "acct-1", quotaErr: errors.New("paygate down")})
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1", grant: ext.CreateGrant{Trusted: true}, quotaErr: errors.New("paygate down")})
 	defer ext.Reset()
 	id, pw, viewID := newFormSite(t, e)
 	if w, _ := e.formsCall(t, "POST", id, pw, "", map[string]any{"name": "A", "recipient": "a@example.com"}); w.Code != 503 {
