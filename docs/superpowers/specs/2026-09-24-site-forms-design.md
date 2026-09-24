@@ -715,6 +715,15 @@ with this block, this block is what the code does.
   Reply-To points back into the recipient's own domain is the classic
   business-email-compromise pattern — and it is exactly what every site owner
   produces the first time they test their own form with their own address.
+- **The machine-readable copy is `submission.txt`, not `submission.json`.**
+  Same JSON document (version 1), byte for byte, still always the last
+  attachment — only the filename and the declared content type change, to
+  `text/plain; charset=utf-8`. Why: a live test submission on 2026-09-24 to
+  `office@ittrail.at` had Outlook (Microsoft 365) block the attachment as
+  "potentially unsafe" ("Outlook hat den Zugriff auf die folgenden potenziell
+  unsicheren Anlagen blockiert: submission.json"). Not a double extension
+  (`submission.json.txt`): that pattern is itself a phishing signal mail
+  filters look for.
 
 ## Decisions taken without asking
 

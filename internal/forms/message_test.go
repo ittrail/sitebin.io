@@ -121,7 +121,7 @@ func TestSubmissionMailStructureAndHeaders(t *testing.T) {
 	for _, l := range leaves {
 		kinds = append(kinds, l.mediaType+" "+l.filename)
 	}
-	want := []string{"text/plain ", "text/html ", "application/pdf cv.pdf", "application/json submission.json"}
+	want := []string{"text/plain ", "text/html ", "application/pdf cv.pdf", "text/plain submission.txt"}
 	if strings.Join(kinds, "|") != strings.Join(want, "|") {
 		t.Fatalf("parts = %q, want %q", kinds, want)
 	}
@@ -200,10 +200,10 @@ func TestSubmissionJSON(t *testing.T) {
 		j.At != "2026-09-24T10:15:00Z" || len(j.Fields) != 3 || j.Fields[2].Value != "Hallo,\nzweite Zeile <b>fett</b>" ||
 		len(j.Files) != 1 || j.Files[0].Size != 13 || j.Files[0].SHA256 != hex.EncodeToString(sum[:]) ||
 		j.Files[0].ContentType != "application/pdf" || j.Files[0].Field != "cv" {
-		t.Errorf("submission.json = %+v", j)
+		t.Errorf("submission.txt = %+v", j)
 	}
 	if strings.Contains(string(leaves[3].body), `\u003c`) {
-		t.Error("submission.json HTML-escapes values; a machine reader wants them verbatim")
+		t.Error("submission.txt HTML-escapes values; a machine reader wants them verbatim")
 	}
 }
 
@@ -296,7 +296,7 @@ func TestReplyToNeedsExactlyOneAddress(t *testing.T) {
 // business-email-compromise pattern, and it is exactly what every site owner
 // produces the first time they test their own form with their own address.
 // The submitted address still appears as an ordinary field in both mail
-// parts and in submission.json -- only the header and the "reply directly"
+// parts and in submission.txt -- only the header and the "reply directly"
 // hint are suppressed.
 func TestReplyToSuppressedWhenTheSubmitterSharesTheRecipientsDomain(t *testing.T) {
 	for _, email := range []string{"office@example.com", "colleague@EXAMPLE.com"} {
@@ -319,7 +319,7 @@ func TestReplyToSuppressedWhenTheSubmitterSharesTheRecipientsDomain(t *testing.T
 			t.Errorf("email %q: the submitted address is missing from the text part:\n%s", email, text)
 		}
 		if !strings.Contains(string(leaves[3].body), email) {
-			t.Errorf("email %q: the submitted address is missing from submission.json", email)
+			t.Errorf("email %q: the submitted address is missing from submission.txt", email)
 		}
 	}
 	// A different domain is unaffected.

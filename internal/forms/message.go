@@ -152,7 +152,13 @@ func BuildSubmission(in SubmissionMail) (Mail, error) {
 	for _, f := range in.Sub.Files {
 		atts = append(atts, attachment{name: f.Filename, contentType: f.ContentType, data: f.Data})
 	}
-	atts = append(atts, attachment{name: "submission.json", contentType: "application/json", data: js})
+	// Named and typed as text, not JSON: Microsoft 365 Outlook blocks a
+	// .json attachment as "potentially unsafe". The bytes are still the
+	// JSON document (submissionJSON below) -- only the filename and the
+	// declared content type change, so the non-ASCII in it stays readable
+	// when a client renders the part directly. Keep this a single
+	// extension: "submission.json.txt" is itself a phishing signal.
+	atts = append(atts, attachment{name: "submission.txt", contentType: "text/plain; charset=utf-8", data: js})
 	data, err := compose(hs, submissionText(v), html.String(), atts)
 	return Mail{From: in.From, To: in.Recipient, Data: data}, err
 }
@@ -308,7 +314,19 @@ func compose(hs []header, text, html string, atts []attachment) ([]byte, error) 
 	}
 	for _, a := range atts {
 		name := safeFilename(a.name)
-		ct := mime.FormatMediaType(a.contentType, map[string]string{"name": name})
+		// a.contentType may already carry its own parameters (submission.txt's
+		// "text/plain; charset=utf-8"): FormatMediaType rejects a mediatype
+		// argument with a ";" in it and silently answers "", so parse first and
+		// merge "name" into whatever params came with it.
+		base, params, err := mime.ParseMediaType(a.contentType)
+		if err != nil {
+			base, params = a.contentType, nil
+		}
+		if params == nil {
+			params = map[string]string{}
+		}
+		params["name"] = name
+		ct := mime.FormatMediaType(base, params)
 		if ct == "" {
 			ct = mime.FormatMediaType("application/octet-stream", map[string]string{"name": name})
 		}
