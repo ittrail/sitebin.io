@@ -723,7 +723,11 @@ with this block, this block is what the code does.
   "potentially unsafe" ("Outlook hat den Zugriff auf die folgenden potenziell
   unsicheren Anlagen blockiert: submission.json"). Not a double extension
   (`submission.json.txt`): that pattern is itself a phishing signal mail
-  filters look for.
+  filters look for. The same change fixed `compose`: `mime.FormatMediaType`
+  answers `""` for a type that already carries parameters, so every upload
+  whose `mime.TypeByExtension` type has a `charset` (`.txt`, `.html`, `.css`,
+  …) had gone out as `application/octet-stream`. Parameters are now parsed
+  and `name` merged into them.
 
 ## Decisions taken without asking
 
