@@ -102,6 +102,82 @@ func TestCaptchaRefusesJunk(t *testing.T) {
 	}
 }
 
+// Release undoes exactly the spend Verify recorded, so a later refusal for a
+// reason that has nothing to do with the captcha (an empty form, a rate
+// limit, a failed send) does not force a reload for a fresh challenge.
+func TestCaptchaVerifyReleaseVerify(t *testing.T) {
+	c := fastCaptcha(capSecret)
+	ch, _ := c.Challenge("site1", "form1")
+	field := solve(t, ch)
+	if err := c.Verify(field, "site1", "form1"); err != nil {
+		t.Fatalf("first verify: %v", err)
+	}
+	if err := c.Verify(field, "site1", "form1"); !errors.Is(err, ErrCaptcha) {
+		t.Fatal("a solution was accepted twice without a Release between them")
+	}
+	c.Release(field)
+	if err := c.Verify(field, "site1", "form1"); err != nil {
+		t.Fatalf("verify after Release: %v", err)
+	}
+	// And it is spent again, same as any other verify.
+	if err := c.Verify(field, "site1", "form1"); !errors.Is(err, ErrCaptcha) {
+		t.Fatal("the re-verified solution was not spent")
+	}
+}
+
+// Release only ever undoes a spend Verify made. Junk that doesn't decode, and
+// a signature Verify never recorded (including one that was never spent
+// because Verify refused it first), are both harmless no-ops.
+func TestCaptchaReleaseOfJunkOrUnknownSignatureIsHarmless(t *testing.T) {
+	c := fastCaptcha(capSecret)
+	testMode := base64.StdEncoding.EncodeToString([]byte(`{"challenge":null,"solution":null,"test":true}`))
+	for _, junk := range []string{"", "%%%not-base64", base64.StdEncoding.EncodeToString([]byte("{}")), testMode} {
+		c.Release(junk) // must not panic
+	}
+	// A genuine, still-fresh (never verified) solution: Release must leave it
+	// alone rather than, say, spending it.
+	ch, _ := c.Challenge("site1", "form1")
+	field := solve(t, ch)
+	c.Release(field)
+	if err := c.Verify(field, "site1", "form1"); err != nil {
+		t.Fatalf("a harmless Release made a fresh solution unusable: %v", err)
+	}
+}
+
+// Release must never itself become a way to pass Verify: it does no
+// verification of its own, only map bookkeeping, so a forged solution or one
+// solved for a different form stays refused after Release is called on it.
+func TestCaptchaReleaseDoesNotLetAForgedOrOtherFormPayloadPassVerify(t *testing.T) {
+	c := fastCaptcha(capSecret)
+
+	// A forged derived key: never verified, so never spent. Release is a
+	// no-op, and Verify must still refuse it afterwards.
+	ch, _ := c.Challenge("site1", "form1")
+	var p map[string]any
+	raw, _ := base64.StdEncoding.DecodeString(solve(t, ch))
+	json.Unmarshal(raw, &p)
+	p["solution"].(map[string]any)["derivedKey"] = strings.Repeat("00", 32)
+	forged, _ := json.Marshal(p)
+	forgedField := base64.StdEncoding.EncodeToString(forged)
+	c.Release(forgedField)
+	if err := c.Verify(forgedField, "site1", "form1"); !errors.Is(err, ErrCaptcha) {
+		t.Error("Release made a forged solution acceptable")
+	}
+
+	// A genuine solution for form2: calling Release on it must not make it
+	// acceptable for form1, and must leave it usable on its own form2 once
+	// (Release is a no-op on a never-spent signature either way).
+	ch2, _ := c.Challenge("site1", "form2")
+	field2 := solve(t, ch2)
+	c.Release(field2)
+	if err := c.Verify(field2, "site1", "form1"); !errors.Is(err, ErrCaptcha) {
+		t.Error("Release let another form's solution pass on a mismatched form")
+	}
+	if err := c.Verify(field2, "site1", "form2"); err != nil {
+		t.Errorf("Release harmed a legitimate, still-unspent solution: %v", err)
+	}
+}
+
 func TestCaptchaChallengeShape(t *testing.T) {
 	ch, _ := NewCaptcha([]byte(capSecret)).Challenge("site1", "form1")
 	b, _ := json.Marshal(ch)

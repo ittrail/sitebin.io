@@ -691,9 +691,16 @@ with this block, this block is what the code does.
   or `quota_forms`, and drops both on its next `meta.json` write. Once
   customers have forms, do not roll back past this feature, or restore
   `meta.json` from the pre-rollback backup.
-- **The captcha solution is spent before sending.** A visitor who retries
-  after a 502 on a captcha form needs a fresh challenge, which means reloading
-  the page. This is accepted for v1.
+- **The captcha solution is released on every refusal after it, not just spent
+  before sending.** `Captcha.Release` undoes exactly the spend `Verify`
+  recorded; `submitForm` calls it before answering the empty-form 400, the
+  per-form 429, a mail-build 500 and an SMTP 502 — every check that still runs
+  after the captcha and can refuse a submission whose solution already
+  verified. A retry with the browser's re-posted `altcha` field then works
+  without reloading for a fresh challenge, as long as the solution has not
+  expired. Only a real send leaves the solution spent, so replaying it is
+  still refused. This replaces the original v1 acceptance of the reload
+  requirement, which the operator asked to fix once it was live.
 
 ## Decisions taken without asking
 

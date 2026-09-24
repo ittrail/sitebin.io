@@ -110,11 +110,22 @@ func (a *API) submitForm(w http.ResponseWriter, r *http.Request) {
 		fail(403, "The captcha was not solved. Please go back and try again.")
 		return
 	}
+	// From here the captcha (if any) is verified and spent. Every refusal
+	// below has nothing to do with the captcha itself, so it releases the
+	// solution: the browser's retry re-posts the same altcha field, and it
+	// must still work. Only a real send leaves it spent.
+	release := func() {
+		if f.Captcha {
+			a.forms.captcha.Release(sub.Control["altcha"])
+		}
+	}
 	if !sub.HasContent() {
+		release()
 		fail(400, "The form was empty.")
 		return
 	}
 	if !a.forms.perForm.Allow(site.ViewID + "/" + f.Key) {
+		release()
 		fail(429, tooManyMessages)
 		return
 	}
@@ -132,6 +143,7 @@ func (a *API) submitForm(w http.ResponseWriter, r *http.Request) {
 		Sub:       sub,
 	})
 	if err != nil {
+		release()
 		a.log.Error("form mail not built", "id", site.ViewID, "form", f.Key, "err", err)
 		fail(500, "The message could not be sent.")
 		return
@@ -139,6 +151,7 @@ func (a *API) submitForm(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), formSendTimeout)
 	defer cancel()
 	if err := a.forms.send.Send(ctx, m); err != nil {
+		release()
 		a.log.Error("form mail not sent", "id", site.ViewID, "form", f.Key, "err", redact(err, f.Recipient))
 		fail(502, "The message could not be sent right now. Please try again in a moment.")
 		return

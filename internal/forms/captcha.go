@@ -120,6 +120,28 @@ func (c *Captcha) Verify(field, viewID, formKey string) error {
 	return nil
 }
 
+// Release undoes exactly the spend a prior Verify recorded for field, so a
+// later refusal that has nothing to do with the captcha (an empty form, a
+// rate limit, a failed send) does not force the visitor to reload for a
+// fresh challenge. It decodes field exactly as Verify does; a field that
+// does not decode, or a signature that was never spent, is a no-op. Release
+// does no verification of its own — it only ever removes a map entry Verify
+// put there, so it can never make an unverified or forged payload
+// acceptable.
+func (c *Captcha) Release(field string) {
+	raw, err := base64.StdEncoding.DecodeString(field)
+	if field == "" || err != nil {
+		return
+	}
+	var p altcha.Payload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.used, p.Challenge.Signature)
+}
+
 // spend records a verified challenge until it expires and reports whether it
 // was fresh. A restart forgets them, which reopens at most a 5-minute window.
 func (c *Captcha) spend(sig string, exp time.Time) bool {

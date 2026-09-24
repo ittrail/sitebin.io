@@ -367,6 +367,73 @@ func TestSubmitCaptcha(t *testing.T) {
 	}
 }
 
+// A captcha solution is only spent once it actually carries a message to the
+// recipient. Every later refusal releases it, so the visitor's browser can
+// re-post the same solved field without a fresh challenge.
+func TestSubmitCaptchaReleasedOnEmptyForm(t *testing.T) {
+	e, rs := formsEnv(t, nil)
+	site, f := activeForm(t, e, store.Form{Captcha: true})
+	field := solvedAltcha(t, e, site, f)
+	if w := submit(t, e, viewHost(site), f.Key, "message=+&altcha="+field, nil); w.Code != 400 {
+		t.Fatalf("empty form with a solved captcha = %d, want 400", w.Code)
+	}
+	if w := submit(t, e, viewHost(site), f.Key, "message=hi&altcha="+field, nil); w.Code != 303 || rs.count() != 1 {
+		t.Fatalf("retry with the same solution and real content = %d mails=%d, want 303 and mailed", w.Code, rs.count())
+	}
+}
+
+func TestSubmitCaptchaReleasedOnSMTPFailure(t *testing.T) {
+	e, rs := formsEnv(t, nil)
+	site, f := activeForm(t, e, store.Form{Captcha: true})
+	field := solvedAltcha(t, e, site, f)
+	rs.err = fmt.Errorf("550 5.1.1 <office@example.com>: Recipient address rejected")
+	if w := submit(t, e, viewHost(site), f.Key, "message=hi&altcha="+field, nil); w.Code != 502 {
+		t.Fatalf("SMTP failure = %d, want 502", w.Code)
+	}
+	rs.err = nil
+	if w := submit(t, e, viewHost(site), f.Key, "message=hi&altcha="+field, nil); w.Code != 303 || rs.count() != 1 {
+		t.Fatalf("retry once SMTP recovers = %d mails=%d, want 303 and mailed", w.Code, rs.count())
+	}
+}
+
+// The per-form hourly bucket is a real, separate refusal (429), not a captcha
+// one, so its solution must be released too. The bucket itself cannot be
+// un-spent inside a test, so this asserts the release directly against the
+// captcha: Verify on the same solution succeeds again once the 429 has run.
+func TestSubmitCaptchaReleasedOnPerFormLimit(t *testing.T) {
+	e, rs := formsEnv(t, map[string]string{"SITEBIN_FORMS_PER_FORM_HOUR": "1"})
+	site, f := activeForm(t, e, store.Form{Captcha: true})
+	field1 := solvedAltcha(t, e, site, f)
+	if w := submit(t, e, viewHost(site), f.Key, "message=hi&altcha="+field1, nil); w.Code != 303 || rs.count() != 1 {
+		t.Fatalf("first real submission = %d mails=%d, want 303", w.Code, rs.count())
+	}
+	field2 := solvedAltcha(t, e, site, f)
+	if w := submit(t, e, viewHost(site), f.Key, "message=hi&altcha="+field2, nil); w.Code != 429 {
+		t.Fatalf("second submission, over the per-form limit, = %d, want 429", w.Code)
+	}
+	raw, err := url.QueryUnescape(field2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.api.forms.captcha.Verify(raw, site.ViewID, f.Key); err != nil {
+		t.Errorf("the second solution was not released on the 429: %v", err)
+	}
+}
+
+// A successful send is the one refusal-free path, and it is the only one
+// that must keep the solution spent: replaying it must still be refused.
+func TestSubmitCaptchaSuccessKeepsTheSolutionSpent(t *testing.T) {
+	e, rs := formsEnv(t, nil)
+	site, f := activeForm(t, e, store.Form{Captcha: true})
+	field := solvedAltcha(t, e, site, f)
+	if w := submit(t, e, viewHost(site), f.Key, "message=hi&altcha="+field, nil); w.Code != 303 || rs.count() != 1 {
+		t.Fatalf("submit = %d mails=%d, want 303", w.Code, rs.count())
+	}
+	if w := submit(t, e, viewHost(site), f.Key, "message=hi&altcha="+field, nil); w.Code != 403 {
+		t.Fatalf("replay after a successful send = %d, want 403: a spent solution must stay spent", w.Code)
+	}
+}
+
 func TestSubmitSMTPFailureIs502(t *testing.T) {
 	e, rs := formsEnv(t, nil)
 	var logs bytes.Buffer
