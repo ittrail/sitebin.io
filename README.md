@@ -125,6 +125,14 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | `SITEBIN_CLEANUP_INTERVAL` | `10m` | Expiry sweep interval. |
 | `SITEBIN_PUBLIC_ADDR` | `:8080` | Address of the Go backend listener that Caddy proxies. Change it only if `8080` is taken inside the container. |
 | `SITEBIN_INTERNAL_ADDR` | `:9000` | Address of the authz / `tls-check` / health listener. It is **never proxied publicly**; do not expose it. |
+| `SITEBIN_FORMS_SMTP_HOST` | — | SMTP server for [forms](#forms). Unset: the instance has no forms. Separate from the account mailer's `SITEBIN_SMTP_*`. |
+| `SITEBIN_FORMS_SMTP_PORT` | `587` | |
+| `SITEBIN_FORMS_SMTP_USER` / `SITEBIN_FORMS_SMTP_PASS` | — | Optional SMTP AUTH (PLAIN; sent only over TLS, or to localhost). |
+| `SITEBIN_FORMS_SMTP_FROM` | — | **Required** with the host. A bare address such as `forms@example.com`; each form supplies the display name. SPF/DKIM for its domain must cover the SMTP server. |
+| `SITEBIN_FORMS_SMTP_TLS` | `false` | Implicit TLS (port 465). Otherwise STARTTLS whenever the server offers it. |
+| `SITEBIN_FORMS_MAX_PER_SITE` | `10` (community) / `0` (with accounts) | Forms per site when no plan says otherwise. With accounts, a tier's `max_forms` decides. |
+| `SITEBIN_FORMS_MAX_FILES` / `SITEBIN_FORMS_MAX_FILE_BYTES` | `5` / `2097152` | Attachments per submission, and bytes per attachment. `0` files turns attachments off. |
+| `SITEBIN_FORMS_PER_IP_HOUR` / `SITEBIN_FORMS_PER_FORM_HOUR` | `10` / `60` | Submissions per visitor IP (all forms) and per form. |
 
 A tier's `max_expiry_days` works the same way per site and adds one rule:
 while a site **owned by an account** stays under a cap, every content change
@@ -223,6 +231,19 @@ curl -X POST -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
 curl -X DELETE -H "X-Edit-Password: $PW" \
      https://sitebin.example.com/api/sites/$EDIT_ID/domains/docs.client.com
 
+# forms: list / add / change / delete / resend the recipient's confirmation
+curl -H "X-Edit-Password: $PW" "https://sitebin.example.com/api/sites/$EDIT_ID/forms"
+curl -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
+     -d '{"name":"Contact","recipient":"office@example.com","captcha":true}' \
+     https://sitebin.example.com/api/sites/$EDIT_ID/forms
+curl -X PUT -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
+     -d '{"redirect":"/thanks.html"}' \
+     https://sitebin.example.com/api/sites/$EDIT_ID/forms/$KEY
+curl -X DELETE -H "X-Edit-Password: $PW" \
+     https://sitebin.example.com/api/sites/$EDIT_ID/forms/$KEY
+curl -X POST -H "X-Edit-Password: $PW" \
+     https://sitebin.example.com/api/sites/$EDIT_ID/forms/$KEY/confirmation
+
 # container sites (Enterprise): start / stop / restart, and a service's log
 curl -X POST -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/containers/restart
 curl -H "X-Edit-Password: $PW" "https://sitebin.example.com/api/sites/$EDIT_ID/containers/app/logs?tail=200"
@@ -296,6 +317,7 @@ require stdio) can bridge with `npx mcp-remote https://…/mcp --header …`.
 | `delete_file` / `delete_site` | Remove a file, or the whole site |
 | `add_domain` / `remove_domain` | Custom domains *(Enterprise)* |
 | `download_site` | The site as a zip, attached as a resource |
+| `list_forms` / `add_form` / `update_form` / `remove_form` / `resend_form_confirmation` | Email forms; a new form works once its recipient confirms |
 
 **Authentication** mirrors the API exactly:
 
@@ -335,8 +357,8 @@ without the ability to publish:
 
 | Scope | Tools |
 |---|---|
-| `sitebin:sites:read` | `list_sites`, `get_site`, `list_files`, `read_file`, `download_site` |
-| `sitebin:sites:write` | `create_site`, `update_site`, `write_files`, `delete_file`, `delete_site`, `add_domain`, `remove_domain` |
+| `sitebin:sites:read` | `list_sites`, `get_site`, `list_files`, `read_file`, `download_site`, `list_forms` |
+| `sitebin:sites:write` | `create_site`, `update_site`, `write_files`, `delete_file`, `delete_site`, `add_domain`, `remove_domain`, `add_form`, `update_form`, `remove_form`, `resend_form_confirmation` |
 
 Account API tokens keep working unchanged with OAuth enabled — they carry no
 scopes and grant everything their account can do, exactly as before.
@@ -441,6 +463,46 @@ origin — set `SITEBIN_EMBED_ORIGINS=https://your-site.com` (or `*`) so the
 create endpoint answers with CORS headers. This is an
 [Enterprise](#editions) capability; the community edition ignores the
 variable (same-origin use and iframes work everywhere).
+
+### Forms
+
+A site's pages can post plain HTML forms to Sitebin, which mails each
+submission to one recipient: no backend, and no script unless you want a
+captcha. Add a form on the edit page (or with the API or MCP). Its recipient
+gets **one email to confirm**; until they click it, the form refuses
+submissions. Then paste its snippet into any page:
+
+```html
+<form action="/_sitebin/forms/k7f3m2q9xaw4npd6" method="post">
+  <label>Name <input name="name" required></label>
+  <label>Email <input name="email" type="email" required></label>
+  <label>Message <textarea name="message" required></textarea></label>
+  <input name="_gotcha" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px">
+  <button type="submit">Send</button>
+</form>
+```
+
+- The form posts to its own site's origin (view host or custom domain), so no
+  CORS is involved and a key works only on the site it belongs to.
+- `email` becomes the mail's `Reply-To`, and `_subject` its subject. Fields
+  starting with `_` are never forwarded. `_gotcha` is a honeypot: fill it and
+  nothing is sent, while the bot is told it worked.
+- **Captcha:** switch it on and the snippet gains
+  `<altcha-widget challenge="/_sitebin/forms/<key>/challenge">` plus
+  `<script type="module" src="/_sitebin/altcha.js">`, an ALTCHA proof of work
+  served by Sitebin itself. A page with its own strict CSP needs
+  `worker-src blob:`.
+- **Attachments:** switch them on and the form posts `multipart/form-data`.
+  Executables are refused.
+- Every mail has an HTML and a text part, the attachments, and
+  `submission.json`: the fields in form order, the files' sizes and SHA-256
+  hashes, and the form and site.
+- Without JavaScript the browser is sent to the form's thank-you path (or a
+  default page). Send `Accept: application/json` to get `{"ok":true}` instead.
+- Each mail carries a stop link and `List-Unsubscribe`: the recipient can
+  stop a form at any time, and only their own click re-activates it.
+- With accounts, a tier's `max_forms` caps the forms **per site** (0 or absent
+  means none). A smaller plan pauses the newest forms and never deletes them.
 
 ### View access modes
 
@@ -993,9 +1055,9 @@ claim ticket stays the only thing that confers ownership.
 
 Note that an unlimited tier needs explicit large caps, not zeros:
 `max_site_bytes: 0` and `max_files: 0` fall back to the instance globals, and
-`custom_domains: 0` means *no* custom domains, and `max_containers: 0` and
-`max_zones: 0` mean none. Only `max_sites: 0` and `max_expiry_days: 0` mean
-unlimited.
+`custom_domains: 0` means *no* custom domains, and `max_containers: 0`,
+`max_zones: 0` and `max_forms: 0` mean none. Only `max_sites: 0` and
+`max_expiry_days: 0` mean unlimited.
 
 A tier's `price` maps it to provider price IDs, e.g. a tier with
 `"price":{"stripe":"price_123","paddle":"pri_456","display":"€9/mo"}` becomes a

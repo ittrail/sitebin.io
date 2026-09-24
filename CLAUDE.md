@@ -21,14 +21,15 @@ docker build --build-arg EDITION=enterprise -t sitebin:latest-ee .   # enterpris
 ```
 
 **`e2e.ps1` is not the full E2E.** It is the core HTTP suite and references no
-other script; there is no aggregate entry point. A full pass is all ten run
+other script; there is no aggregate entry point. A full pass is all eleven run
 by hand: `e2e.ps1`, `spa.ps1`, `paths.ps1`, `ftp.ps1`, `mcp.ps1` (community
-image), `accounts.ps1`, `tiers.ps1`, `containers.ps1` (enterprise image; the
+image), `forms.ps1` (community image; pulls `axllent/mailpit` as its SMTP
+server), `accounts.ps1`, `tiers.ps1`, `containers.ps1` (enterprise image; the
 last drives the host's real Docker Engine and pulls images), `license.ps1`, and
 `consent.ps1` -- the last of which is the only one that needs a **running SaaS
 Stack** (the stack's consent gate, the OIDC issuer/discovery split, and the
 `consents` declaration; see `docs/superpowers/specs/2026-09-01-consent-gate-through-the-stack-design.md`).
-`e2e/stack/verify.ps1` is the eleventh, run against the compose container in
+`e2e/stack/verify.ps1` is the twelfth, run against the compose container in
 `e2e/stack/` rather than one it starts itself: the registration the stack
 holds, the stack-hosted self-service links, and a signed GDPR export and
 deletion.
@@ -50,7 +51,8 @@ file for the half that does need a running SaaS Stack.
 - `cmd/sitebin` — entrypoint and the supervisor that runs Caddy alongside the Go
   server.
 - `internal/` — the MIT core: `config`, `ids`, `auth`, `store`, `viewer`,
-  `caddygen`, `httpapi`, `mcp`, `cleanup`, `ftp`, `supervisor`, and `ext`.
+  `caddygen`, `httpapi`, `mcp`, `cleanup`, `ftp`, `forms`, `supervisor`, and
+  `ext`.
 - `ee/` — the enterprise extension (`account`, `authn`, `billing`, `containers`,
   `eeconfig`, `licensing`, `session`, `smtp`). **ELv2, not MIT.**
 - `web/` — embedded UI, vendored viewer libraries, `static/embed.js`.
@@ -151,6 +153,32 @@ The third site mode (`store.ModeContainer`) runs the project its
   links out of the data root. Any new code that touches site files must go
   through `store.OpenContentRoot` or the store — never `os.Open` on a joined
   path.
+
+## Site forms
+
+A site's pages post plain HTML forms to `/_sitebin/forms/<key>` on their own
+origin, and the core mails them to a recipient. Read
+`docs/superpowers/specs/2026-09-24-site-forms-design.md` first.
+
+- **All core, own mailer.** `internal/forms` is pure logic (rules, tokens,
+  parser, MIME, SMTP, captcha); `internal/httpapi` wires it. The forms mailer
+  (`SITEBIN_FORMS_SMTP_*`) is deliberately separate from `ee/smtp`: the two
+  send different mail to different people.
+- **The recipient consents, by POST.** A form is `pending` until its
+  recipient confirms; GET on a confirm or stop link only ever shows a button,
+  because mail scanners fetch every link. `seq` moves on a recipient change
+  and on a stop, and that is what kills older confirmation links.
+- **The cap is stamped, like custom_domains.** Submissions read `quota_forms`
+  from `meta.json` and never ask the extension. With a provider, an unstamped
+  site has **0** forms (never the community default of 10), and every
+  constructor of `store.Quota` must pass `Forms`, or `ApplyQuota` resets it.
+- **Nothing is stored or logged.** Submissions are mailed synchronously (a
+  failure is a 502 the visitor can retry) and never written down. Logs carry
+  site, key, size and file count, never values, filenames or the recipient.
+- **ALTCHA traps.** Always pass `DeriveKey` to `VerifySolution` (without it
+  the library accepts on the signature alone), and keep the replay memory
+  (the library has none). The widget is `web/vendor/altcha.min.js`; bump it
+  and the Go library together.
 
 ## Tiers, quotas and lifetimes
 
