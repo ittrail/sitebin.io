@@ -101,7 +101,15 @@ func (s *SMTPSender) Send(ctx context.Context, m Mail) error {
 	if err := w.Close(); err != nil {
 		return fmt.Errorf("smtp DATA: %w", err)
 	}
-	return c.Quit()
+	// w.Close reads the server's response to DATA's closing "."; once that
+	// succeeded, the server has accepted the message. QUIT is a courtesy
+	// that says the connection is done, and its failure says nothing about
+	// the message already accepted. Reporting it as a failed send would be a
+	// false 502 that invites a retry -- and now that a 502 releases the
+	// captcha (Captcha.Release), that retry would resend and duplicate a
+	// message the server already has.
+	c.Quit()
+	return nil
 }
 
 // heloName greets with the sender's own domain; "localhost", net/smtp's

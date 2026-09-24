@@ -484,7 +484,9 @@ submissions. Then paste its snippet into any page:
 
 - The form posts to its own site's origin (view host or custom domain), so no
   CORS is involved and a key works only on the site it belongs to.
-- `email` becomes the mail's `Reply-To`, and `_subject` its subject. Fields
+- `email` becomes the mail's `Reply-To`, unless it is in the recipient's own
+  domain (Microsoft 365 quarantines that as phishing), in which case the
+  address only appears in the body. `_subject` becomes its subject. Fields
   starting with `_` are never forwarded. `_gotcha` is a honeypot: fill it and
   nothing is sent, while the bot is told it worked.
 - **Captcha:** switch it on and the snippet gains

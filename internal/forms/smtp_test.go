@@ -16,6 +16,7 @@ type fakeSMTP struct {
 	offerAuth bool
 	rcptReply string // "" = 250
 	silent    bool   // accept the connection and never greet
+	quitFails bool   // close the connection on QUIT instead of replying 221
 
 	mu             sync.Mutex
 	from, to, auth string
@@ -91,6 +92,10 @@ func (f *fakeSMTP) serve(c net.Conn) {
 			f.data = string(b)
 			tp.PrintfLine("250 queued")
 		case up == "QUIT":
+			if f.quitFails {
+				f.mu.Unlock()
+				return // close without a reply: the client sees QUIT fail
+			}
 			tp.PrintfLine("221 bye")
 			f.mu.Unlock()
 			return
@@ -151,6 +156,26 @@ func TestSMTPSenderReportsARefusedRecipient(t *testing.T) {
 	err := (&SMTPSender{Host: host, Port: port}).Send(context.Background(), testMail)
 	if err == nil || !strings.Contains(err.Error(), "RCPT") {
 		t.Fatalf("err = %v, want a RCPT error", err)
+	}
+}
+
+// The server has already accepted the message once DATA's closing "."
+// succeeded; a QUIT that fails afterwards (here, by dropping the connection
+// instead of answering 221) says nothing about that acceptance and must not
+// be reported as a failed send. Reporting it as one would be a false 502
+// that invites a retry, and since a 502 now releases the form's captcha
+// solution, that retry would resend and duplicate a message the server
+// already has.
+func TestSMTPSenderIgnoresAFailedQuitAfterDataWasAccepted(t *testing.T) {
+	f := &fakeSMTP{quitFails: true}
+	host, port := f.start(t)
+	if err := (&SMTPSender{Host: host, Port: port}).Send(context.Background(), testMail); err != nil {
+		t.Fatalf("a failed QUIT after accepted DATA was reported as a failed send: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !strings.Contains(f.data, "hello") {
+		t.Error("the message was not recorded by the fake server despite Send succeeding")
 	}
 }
 

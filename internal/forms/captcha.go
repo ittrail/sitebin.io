@@ -128,6 +128,14 @@ func (c *Captcha) Verify(field, viewID, formKey string) error {
 // does no verification of its own — it only ever removes a map entry Verify
 // put there, so it can never make an unverified or forged payload
 // acceptable.
+//
+// Caller rule: call Release(field) only after Verify(field, ...) returned
+// nil for this exact field in this same request, at most once, and only
+// when that verified solution did not end up mailed. Because Release does
+// no verification of its own, handing it a field whose solution was never
+// actually spent by this request — one that arrived already used, or one
+// nothing here just verified — silently un-spends whatever signature it
+// happens to decode to, which is someone else's spend, not this caller's.
 func (c *Captcha) Release(field string) {
 	raw, err := base64.StdEncoding.DecodeString(field)
 	if field == "" || err != nil {
