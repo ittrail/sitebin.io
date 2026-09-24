@@ -293,7 +293,7 @@ a:hover { text-decoration: underline; }
 }
 .seg input:focus-visible + span { outline: 2px solid var(--blue); outline-offset: 1px; }
 
-input[type=text], input[type=password], input[type=datetime-local], select {
+input[type=text], input[type=email], input[type=password], input[type=datetime-local], select {
   width: 100%; max-width: 380px;
   background: #0d1322; color: var(--ink);
   border: 1px solid var(--line); border-radius: 10px;
