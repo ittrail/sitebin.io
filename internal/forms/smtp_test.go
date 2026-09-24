@@ -17,10 +17,10 @@ type fakeSMTP struct {
 	rcptReply string // "" = 250
 	silent    bool   // accept the connection and never greet
 
-	mu               sync.Mutex
-	from, to, auth   string
-	helo             string
-	data             string
+	mu             sync.Mutex
+	from, to, auth string
+	helo           string
+	data           string
 }
 
 func (f *fakeSMTP) start(t *testing.T) (string, int) {
