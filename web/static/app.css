@@ -599,3 +599,23 @@ input::placeholder { color: var(--ink-faint); }
   .slab .tray { animation: none; }
   *, *::before, *::after { animation-duration: .01ms !important; animation-delay: 0ms !important; transition-duration: .01ms !important; }
 }
+
+/* ---- forms card ---- */
+.formrow { padding: 14px 0; border-top: 1px dashed var(--line); display: grid; gap: 8px; }
+.formrow:first-child { border-top: 0; padding-top: 4px; }
+.formhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
+.fname { font-weight: 600; }
+.fto { color: var(--ink-dim); font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
+.fstatus {
+  font: 600 11px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase;
+  padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line); color: var(--ink-dim);
+}
+.fstatus.active { color: var(--ok); border-color: rgba(94, 207, 138, .45); }
+.fstatus.pending { color: var(--amber); border-color: rgba(245, 184, 77, .5); border-style: dashed; }
+.fstatus.stopped, .fstatus.paused { color: var(--danger); border-color: rgba(242, 109, 109, .45); }
+.formedit { margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--line); }
+pre.snippet {
+  white-space: pre-wrap; word-break: break-all; font: 12px/1.5 var(--mono);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 12px;
+}
+label.chk { display: inline-flex; gap: 6px; align-items: center; color: var(--ink-dim); font-size: 14px; }

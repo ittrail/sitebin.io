@@ -55,6 +55,7 @@ $("lockform").addEventListener("submit", async (e) => {
     $("lock").classList.add("hidden");
     $("app").classList.remove("hidden");
     render();
+    loadForms();
   } catch (err) {
     $("lockerr").textContent =
       err.status === 429 ? "Too many attempts — wait a moment." : "Wrong password — check your claim ticket.";
@@ -68,6 +69,7 @@ $("lockform").addEventListener("submit", async (e) => {
     $("lock").classList.add("hidden");
     $("app").classList.remove("hidden");
     render();
+    loadForms();
   } catch {
     sessionStorage.removeItem(pwKey);
     sitePw = "";
@@ -603,6 +605,179 @@ $("e-add-domain").addEventListener("click", async () => {
 $("e-domain").addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); $("e-add-domain").click(); }
 });
+
+// ---- forms ----
+
+let formsData = null;
+let editingKey = null;
+
+const FORM_STATUS = {
+  pending: ["Awaiting confirmation", "The recipient has an email with a link to confirm. Until then, submissions are refused."],
+  active: ["Active", ""],
+  stopped: ["Stopped by recipient", "The recipient stopped these emails. Resend the confirmation to ask again."],
+  paused: ["Paused — plan limit", "This site's plan allows fewer forms. It resumes when the plan allows it again."],
+};
+
+async function loadForms() {
+  try {
+    formsData = await api("GET", "/forms");
+  } catch {
+    formsData = null;
+  }
+  renderForms();
+}
+
+function smallButton(label, onClick) {
+  const b = document.createElement("button");
+  b.className = "btn small";
+  b.textContent = label;
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+// armedButton asks for a second click within four seconds before it acts.
+function armedButton(label, armedLabel, onConfirm) {
+  const b = smallButton(label, async () => {
+    if (!b.dataset.armed) {
+      b.dataset.armed = "1";
+      b.textContent = armedLabel;
+      b.classList.add("danger");
+      setTimeout(() => {
+        delete b.dataset.armed;
+        b.textContent = label;
+        b.classList.remove("danger");
+      }, 4000);
+      return;
+    }
+    await onConfirm();
+  });
+  return b;
+}
+
+function showSnippet(row, snippet) {
+  let pre = row.querySelector("pre.snippet");
+  if (!pre) {
+    pre = document.createElement("pre");
+    pre.className = "snippet";
+    row.append(pre);
+  }
+  pre.textContent = snippet;
+}
+
+function renderForms() {
+  const card = $("card-forms");
+  if (!formsData || !formsData.enabled) {
+    card.classList.add("hidden");
+    return;
+  }
+  card.classList.remove("hidden");
+  $("forms-count").textContent = formsData.used + " of " + formsData.limit;
+  $("forms-none").classList.toggle("hidden", formsData.limit > 0 || formsData.forms.length > 0);
+  $("form-edit").classList.toggle("hidden", !editingKey && formsData.forms.length >= formsData.limit);
+  $("f-files-wrap").classList.toggle("hidden", formsData.max_files === 0);
+
+  const rows = $("formrows");
+  rows.innerHTML = "";
+  for (const f of formsData.forms) {
+    const [label, hint] = FORM_STATUS[f.status] || [f.status, ""];
+    const row = document.createElement("div");
+    row.className = "formrow";
+    const head = document.createElement("div");
+    head.className = "formhead";
+    const name = document.createElement("span");
+    name.className = "fname";
+    name.textContent = f.name;
+    const tag = document.createElement("span");
+    tag.className = "fstatus " + f.status;
+    tag.textContent = label;
+    const to = document.createElement("span");
+    to.className = "fto";
+    to.textContent = "→ " + f.recipient;
+    head.append(name, tag, to);
+    row.append(head);
+    if (hint) {
+      const p = document.createElement("div");
+      p.className = "sub";
+      p.textContent = hint;
+      row.append(p);
+    }
+    const actions = document.createElement("div");
+    actions.className = "row";
+    actions.append(
+      smallButton("Copy snippet", async () => {
+        try {
+          await navigator.clipboard.writeText(f.snippet);
+          toast("Snippet copied — paste it into a page");
+        } catch {
+          showSnippet(row, f.snippet);
+        }
+      }),
+      smallButton("Edit", () => startFormEdit(f)),
+    );
+    if (f.status === "pending" || f.status === "stopped") {
+      actions.append(smallButton("Resend confirmation", async () => {
+        try {
+          formsData = await api("POST", "/forms/" + f.key + "/confirmation");
+          renderForms();
+          toast("Confirmation sent to " + f.recipient);
+        } catch (err) { toast(err.message, true); }
+      }));
+    }
+    actions.append(armedButton("Delete", "Click again to delete", async () => {
+      try {
+        await api("DELETE", "/forms/" + f.key);
+        if (editingKey === f.key) resetFormEditor();
+        await loadForms();
+        toast("Deleted " + f.name);
+      } catch (err) { toast(err.message, true); }
+    }));
+    row.append(actions);
+    rows.appendChild(row);
+  }
+}
+
+function startFormEdit(f) {
+  editingKey = f.key;
+  $("f-name").value = f.name;
+  $("f-recipient").value = f.recipient;
+  $("f-captcha").checked = f.captcha;
+  $("f-files").checked = f.files;
+  $("f-redirect").value = f.redirect || "";
+  $("f-save").textContent = "Save form";
+  $("f-cancel").classList.remove("hidden");
+  renderForms();
+  $("f-name").focus();
+}
+
+function resetFormEditor() {
+  editingKey = null;
+  for (const id of ["f-name", "f-recipient", "f-redirect"]) $(id).value = "";
+  $("f-captcha").checked = false;
+  $("f-files").checked = false;
+  $("f-save").textContent = "Add form";
+  $("f-cancel").classList.add("hidden");
+}
+
+$("f-save").addEventListener("click", async () => {
+  const body = {
+    name: $("f-name").value.trim(),
+    recipient: $("f-recipient").value.trim(),
+    captcha: $("f-captcha").checked,
+    files: $("f-files").checked,
+    redirect: $("f-redirect").value.trim(),
+  };
+  const wasEditing = editingKey;
+  try {
+    formsData = wasEditing
+      ? await api("PUT", "/forms/" + wasEditing, body)
+      : await api("POST", "/forms", body);
+    resetFormEditor();
+    renderForms();
+    if (formsData.warnings && formsData.warnings.length) toast(formsData.warnings[0], true);
+    else toast(wasEditing ? "Saved" : "Added — " + body.recipient + " has an email to confirm");
+  } catch (err) { toast(err.message, true); }
+});
+$("f-cancel").addEventListener("click", () => { resetFormEditor(); renderForms(); });
 
 // ---- danger ----
 

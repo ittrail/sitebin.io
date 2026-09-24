@@ -184,6 +184,32 @@
     </div>
   </section>
 
+  <section class="card hidden" id="card-forms">
+    <h3>Forms <span class="count" id="forms-count"></span></h3>
+    <p class="sub hidden" id="forms-none">This site's plan includes no forms.</p>
+    <div id="formrows"></div>
+    <div class="formedit" id="form-edit">
+      <div class="row">
+        <input type="text" id="f-name" placeholder="Form name, e.g. Contact" maxlength="60" style="max-width:220px">
+        <input type="email" id="f-recipient" placeholder="recipient@example.com" style="max-width:260px">
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="chk"><input type="checkbox" id="f-captcha"> Captcha</label>
+        <label class="chk" id="f-files-wrap"><input type="checkbox" id="f-files"> Attachments</label>
+        <input type="text" id="f-redirect" placeholder="Thank-you page, e.g. /thanks.html (optional)" style="max-width:300px">
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn small" id="f-save">Add form</button>
+        <button class="btn small hidden" id="f-cancel">Cancel</button>
+      </div>
+    </div>
+    <div class="dnshint">
+      A form mails what visitors submit to its recipient, who confirms once by email before the form goes live.
+      Paste its snippet into any page of this site: it is plain HTML and needs no script unless the captcha is on.
+      Every mail lays out the fields, carries the attachments, and includes a <code>submission.json</code> for machines.
+    </div>
+  </section>
+
   <section class="card" style="border-color:rgba(242,109,109,.25)">
     <h3 style="color:var(--danger)">Danger zone</h3>
     <div class="row">
