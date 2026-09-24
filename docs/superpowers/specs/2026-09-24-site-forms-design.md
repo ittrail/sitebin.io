@@ -701,6 +701,20 @@ with this block, this block is what the code does.
   expired. Only a real send leaves the solution spent, so replaying it is
   still refused. This replaces the original v1 acceptance of the reload
   requirement, which the operator asked to fix once it was live.
+- **No Reply-To when the submitter's "email" field shares the recipient's own
+  domain.** `replyAddress` now also takes the recipient and compares the two
+  addresses' domains (case-insensitive, the part after the last `@`); on a
+  match it answers `""`, same as an invalid or multi-address field, and the
+  "Reply to this email to answer the sender directly" hint disappears with it
+  (it already keys off whether a Reply-To was produced). The submitted address
+  is unaffected everywhere else — still an ordinary field in both mail parts
+  and in `submission.json`. Why: a live test submission from `noreply@sitebin.io`
+  to `office@ittrail.at` (Microsoft 365) carrying `Reply-To: office@ittrail.at`
+  was quarantined as "Phishing / High confidence" (first contact, advanced
+  filter) although SPF, DKIM and DMARC all passed. An external sender whose
+  Reply-To points back into the recipient's own domain is the classic
+  business-email-compromise pattern — and it is exactly what every site owner
+  produces the first time they test their own form with their own address.
 
 ## Decisions taken without asking
 

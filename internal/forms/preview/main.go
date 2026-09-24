@@ -31,7 +31,7 @@ func main() {
 	sub := &forms.Submission{
 		Fields: []forms.Field{
 			{Name: "name", Value: "Anna Muster"},
-			{Name: "email", Value: "anna@example.com"},
+			{Name: "email", Value: "anna@example.org"},
 			{Name: "phone", Value: "+43 660 1234567"},
 			{Name: "topic", Value: "Hosting"},
 			{Name: "topic", Value: "Domains"},

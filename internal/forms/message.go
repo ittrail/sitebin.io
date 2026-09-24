@@ -109,7 +109,7 @@ func BuildSubmission(in SubmissionMail) (Mail, error) {
 	if s := cleanSubject(in.Sub.Control["_subject"]); s != "" {
 		subject = s
 	}
-	replyTo := replyAddress(in.Sub.Fields)
+	replyTo := replyAddress(in.Sub.Fields, in.Recipient)
 	v := mailView{
 		FormName:  in.FormName,
 		Host:      in.Host,
@@ -412,20 +412,40 @@ func cleanSubject(s string) string {
 	return s
 }
 
-// replyAddress is the submitted "email" field when it is exactly one address.
-// Only the bare address is used; a display name typed into a form is not
-// worth carrying into a header.
-func replyAddress(fields []Field) string {
+// replyAddress is the submitted "email" field when it is exactly one address
+// and its domain differs from recipient's. Only the bare address is used; a
+// display name typed into a form is not worth carrying into a header.
+//
+// A same-domain match is refused rather than merely unhelpful: an external
+// sender whose Reply-To points back into the recipient's own domain is the
+// classic business-email-compromise shape, and it is exactly what every site
+// owner produces testing their own form with their own address. Microsoft
+// 365's advanced phishing filter quarantined a genuine, SPF/DKIM/DMARC-clean
+// submission on exactly this pattern.
+func replyAddress(fields []Field, recipient string) string {
 	for _, f := range fields {
 		if strings.EqualFold(f.Name, "email") {
 			a, err := mail.ParseAddress(strings.TrimSpace(f.Value))
 			if err != nil || strings.ContainsAny(a.Address, "\r\n") {
 				return ""
 			}
+			if strings.EqualFold(addrDomain(a.Address), addrDomain(recipient)) {
+				return ""
+			}
 			return a.Address
 		}
 	}
 	return ""
+}
+
+// addrDomain is the part of an address after its last '@', or "" if there is
+// none.
+func addrDomain(addr string) string {
+	i := strings.LastIndexByte(addr, '@')
+	if i < 0 {
+		return ""
+	}
+	return addr[i+1:]
 }
 
 // safeFilename drops control characters from a filename for the MIME

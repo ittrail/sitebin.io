@@ -137,7 +137,7 @@ Assert "the button confirms" ($r.code -eq 200 -and $r.body.Contains("Confirmed")
 
 Write-Host "== a plain HTML post with an attachment" -ForegroundColor Cyan
 $att = Join-Path $work "hello.txt"; [IO.File]::WriteAllText($att, "hello attachment")
-$r = Req "POST" "$post/$key" @("-F", "name=Anna", "-F", "email=anna@example.test", "-F", "message=Hallo aus dem E2E", "-F", "cv=@$att;filename=hello.txt")
+$r = Req "POST" "$post/$key" @("-F", "name=Anna", "-F", "email=anna@sender.test", "-F", "message=Hallo aus dem E2E", "-F", "cv=@$att;filename=hello.txt")
 Assert "submission answers 303" ($r.code -eq 303) "$($r.code) $($r.body)"
 Assert "303 goes to the thank-you page" ($r.location.EndsWith("/_sitebin/forms/$key/thanks")) "$($r.location)"
 $m = WaitMails "owner@example.test" 2
@@ -145,7 +145,7 @@ Assert "submission mail delivered" ($m.Count -eq 2) "$($m.Count)"
 $subId = ($m | Where-Object { $_.Subject -like "New message*" } | Select-Object -First 1).ID
 $sub = Message $subId
 Assert "From carries the form's name" ($sub.From.Name -eq "Contact" -and $sub.From.Address -eq "forms@localtest.me") "$($sub.From.Name) $($sub.From.Address)"
-Assert "Reply-To is the submitter" ((@($sub.ReplyTo) | ForEach-Object { $_.Address }) -contains "anna@example.test")
+Assert "Reply-To is the submitter" ((@($sub.ReplyTo) | ForEach-Object { $_.Address }) -contains "anna@sender.test")
 Assert "text part has the message" ($sub.Text.Contains("message: Hallo aus dem E2E"))
 Assert "HTML part present" ($sub.HTML.Length -gt 500) "$($sub.HTML.Length)"
 $files = @($sub.Attachments | ForEach-Object { $_.FileName })
@@ -181,7 +181,7 @@ $r = Req "GET" "$origin/api/sites/$edit/forms" $pw
 Assert "the owner sees it stopped" ((($r.body | ConvertFrom-Json).forms[0].status) -eq "stopped")
 
 $logs = (docker logs $name 2>&1 | Out-String)
-Assert "logs carry no submitted value" (-not $logs.Contains("Hallo aus dem E2E") -and -not $logs.Contains("anna@example.test"))
+Assert "logs carry no submitted value" (-not $logs.Contains("Hallo aus dem E2E") -and -not $logs.Contains("anna@sender.test"))
 Assert "logs carry no recipient" (-not $logs.Contains("owner@example.test"))
 
 Cleanup

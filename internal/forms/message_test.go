@@ -22,7 +22,7 @@ func sampleSub() *Submission {
 	return &Submission{
 		Fields: []Field{
 			{"name", "Anna Muster"},
-			{"email", "anna@example.com"},
+			{"email", "anna@example.org"},
 			{"message", "Hallo,\nzweite Zeile <b>fett</b>"},
 		},
 		Control: map[string]string{},
@@ -129,7 +129,7 @@ func TestSubmissionMailStructureAndHeaders(t *testing.T) {
 	if err != nil || from.Name != "Contact" || from.Address != "forms@sitebin.example" {
 		t.Errorf("From = %q", h.Get("From"))
 	}
-	if h.Get("To") != "<office@example.com>" || h.Get("Reply-To") != "<anna@example.com>" {
+	if h.Get("To") != "<office@example.com>" || h.Get("Reply-To") != "<anna@example.org>" {
 		t.Errorf("To %q Reply-To %q", h.Get("To"), h.Get("Reply-To"))
 	}
 	if got := decodeHeader(t, h.Get("Subject")); got != "New message via Contact" {
@@ -269,10 +269,13 @@ func TestSubmissionMailRefusesHeaderInjection(t *testing.T) {
 }
 
 func TestReplyToNeedsExactlyOneAddress(t *testing.T) {
+	// The recipient is office@example.com (sampleIn); every value here uses a
+	// domain other than example.com, so this exercises the "how many
+	// addresses" rule and not the same-domain suppression below.
 	for value, want := range map[string]string{
-		"a@example.com, b@example.com": "",
+		"a@example.org, b@example.org": "",
 		"not an address":               "",
-		"Anna <anna@example.com>":      "<anna@example.com>",
+		"Anna <anna@example.org>":      "<anna@example.org>",
 	} {
 		sub := sampleSub()
 		sub.Fields[1].Value = value
@@ -281,6 +284,59 @@ func TestReplyToNeedsExactlyOneAddress(t *testing.T) {
 		if got := h.Get("Reply-To"); got != want {
 			t.Errorf("email %q: Reply-To = %q, want %q", value, got, want)
 		}
+	}
+}
+
+// A submitter whose "email" field shares the recipient's own domain gets no
+// Reply-To at all. Evidence: a live test submission from noreply@sitebin.io
+// to office@ittrail.at (Microsoft 365) carrying Reply-To: office@ittrail.at
+// was quarantined as "Phishing / High confidence" (first contact, advanced
+// filter) even though SPF, DKIM and DMARC all passed -- a Reply-To back into
+// the recipient's own domain from an external sender is the classic
+// business-email-compromise pattern, and it is exactly what every site owner
+// produces the first time they test their own form with their own address.
+// The submitted address still appears as an ordinary field in both mail
+// parts and in submission.json -- only the header and the "reply directly"
+// hint are suppressed.
+func TestReplyToSuppressedWhenTheSubmitterSharesTheRecipientsDomain(t *testing.T) {
+	for _, email := range []string{"office@example.com", "colleague@EXAMPLE.com"} {
+		sub := sampleSub()
+		sub.Fields[1].Value = email
+		m, err := BuildSubmission(sampleIn(sub))
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, leaves := readMail(t, m)
+		if got := h.Get("Reply-To"); got != "" {
+			t.Errorf("email %q shares the recipient's domain: Reply-To = %q, want none", email, got)
+		}
+		text := strings.ReplaceAll(string(leaves[0].body), "\r\n", "\n")
+		html := string(leaves[1].body)
+		if strings.Contains(text, "Reply to this email") || strings.Contains(html, "Reply to this email") {
+			t.Errorf("email %q: the reply hint is present although Reply-To is suppressed", email)
+		}
+		if !strings.Contains(text, "email: "+email) {
+			t.Errorf("email %q: the submitted address is missing from the text part:\n%s", email, text)
+		}
+		if !strings.Contains(string(leaves[3].body), email) {
+			t.Errorf("email %q: the submitted address is missing from submission.json", email)
+		}
+	}
+	// A different domain is unaffected.
+	sub := sampleSub()
+	sub.Fields[1].Value = "anna@other.example"
+	m, err := BuildSubmission(sampleIn(sub))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, leaves := readMail(t, m)
+	if got := h.Get("Reply-To"); got != "<anna@other.example>" {
+		t.Errorf("a different-domain submitter: Reply-To = %q, want <anna@other.example>", got)
+	}
+	text := strings.ReplaceAll(string(leaves[0].body), "\r\n", "\n")
+	html := string(leaves[1].body)
+	if !strings.Contains(text, "Reply to this email") || !strings.Contains(html, "Reply to this email") {
+		t.Error("a different-domain submitter: the reply hint is missing although Reply-To is set")
 	}
 }
 
