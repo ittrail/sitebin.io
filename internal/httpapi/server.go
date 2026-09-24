@@ -214,6 +214,14 @@ func storeError(w http.ResponseWriter, err error) {
 		writeError(w, 400, "invalid file path")
 	case errors.Is(err, store.ErrBadDomain):
 		writeError(w, 400, err.Error())
+	case errors.Is(err, store.ErrFormNotFound):
+		writeError(w, 404, err.Error())
+	case errors.Is(err, store.ErrTooManyForms):
+		writeError(w, 403, err.Error())
+	case errors.Is(err, store.ErrFormActive):
+		writeError(w, 409, err.Error())
+	case errors.Is(err, store.ErrFormStale):
+		writeError(w, 410, err.Error())
 	default:
 		slog.Error("internal error", "err", err)
 		writeError(w, 500, "internal error")

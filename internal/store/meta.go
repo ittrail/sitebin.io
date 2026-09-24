@@ -53,8 +53,11 @@ type Meta struct {
 	// Container is the desired and observed state of a container-mode site.
 	// Nil on every site that has never been in container mode.
 	Container *ContainerMeta `json:"container,omitempty"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
+	// Forms are the site's email forms, in creation order: the order decides
+	// which forms a smaller plan pauses. See forms.go.
+	Forms     []Form    `json:"forms,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // OriginMCP marks a site created through the MCP server. See Meta.Origin.
@@ -78,6 +81,9 @@ func readMeta(siteDir string) (Meta, error) {
 	}
 	if m.CustomDomains == nil {
 		m.CustomDomains = []string{}
+	}
+	if m.Forms == nil {
+		m.Forms = []Form{}
 	}
 	return m, nil
 }
