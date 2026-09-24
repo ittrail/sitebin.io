@@ -63,6 +63,38 @@ func TestFormsOffOnTheInstance(t *testing.T) {
 	}
 }
 
+// TestFormsOffRefusesEveryWrite: every write route — not just create — must
+// answer 409 while the instance has no forms, including DELETE. A form that
+// predates forms being switched off (or was added directly in the store, as
+// here) must still be refused, and left untouched, by every one of them.
+func TestFormsOffRefusesEveryWrite(t *testing.T) {
+	e := newEnv(t, nil)
+	id, pw, viewID := newFormSite(t, e)
+	site, err := e.st.ByViewID(viewID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := e.st.AddForm(site, store.Form{Name: "A", Recipient: "a@example.com"}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if w, _ := e.formsCall(t, "DELETE", id, pw, "/"+f.Key, nil); w.Code != 409 {
+		t.Errorf("DELETE with forms off = %d, want 409", w.Code)
+	}
+	if w, _ := e.formsCall(t, "PUT", id, pw, "/"+f.Key, map[string]any{"name": "Renamed"}); w.Code != 409 {
+		t.Errorf("PUT with forms off = %d, want 409", w.Code)
+	}
+	if w, _ := e.formsCall(t, "POST", id, pw, "/"+f.Key+"/confirmation", nil); w.Code != 409 {
+		t.Errorf("resend confirmation with forms off = %d, want 409", w.Code)
+	}
+
+	site, _ = e.st.ByViewID(viewID)
+	if _, _, ok := store.FindForm(site.Meta, f.Key); !ok {
+		t.Error("a refused write deleted the form")
+	}
+}
+
 func TestAddFormSendsAConfirmation(t *testing.T) {
 	e, rs := formsEnv(t, nil)
 	id, pw, viewID := newFormSite(t, e)

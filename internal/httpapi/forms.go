@@ -322,6 +322,9 @@ func (a *API) updateForm(ctx context.Context, site *store.Site, key string, in f
 }
 
 func (a *API) deleteForm(site *store.Site, key string) (formsJSON, error) {
+	if a.forms == nil {
+		return formsJSON{}, errFormsOff
+	}
 	if err := a.st.DeleteForm(site, key); err != nil {
 		return formsJSON{}, err
 	}
