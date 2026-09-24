@@ -31,8 +31,9 @@ then on the form's snippet works on the site:
   <input name="name" required>
   <input name="email" type="email" required>
   <textarea name="message"></textarea>
-  <input name="_gotcha" tabindex="-1" autocomplete="off" hidden>
-  <altcha-widget challengeurl="/_sitebin/forms/k7f3m2q9xaw4npd6/challenge"></altcha-widget>
+  <input name="_gotcha" tabindex="-1" autocomplete="off" aria-hidden="true"
+         style="position:absolute;left:-9999px">
+  <altcha-widget challenge="/_sitebin/forms/k7f3m2q9xaw4npd6/challenge"></altcha-widget>
   <button>Send</button>
 </form>
 <script type="module" src="/_sitebin/altcha.js"></script>
@@ -40,7 +41,11 @@ then on the form's snippet works on the site:
 
 The two captcha lines appear only when the form has the captcha on. A form
 with attachments adds `enctype="multipart/form-data"` and a file input. The
-edit page generates the snippet from the form's settings.
+honeypot is moved off-screen rather than marked `hidden`, because form bots
+skip hidden inputs and fill visible-looking ones. The server builds the
+snippet from the form's settings (`forms.Snippet`), and the API and MCP
+return it with every form, so the edit page and an agent paste the same
+thing.
 
 Each submission arrives as one email: from the form's name, replying to the
 submitter, with the fields laid out in the order the form has them, the
@@ -110,7 +115,11 @@ page.
 
 1. Creating a form, changing its recipient, and "resend confirmation" each
    send the recipient a confirmation email, through the forms mailer, in the
-   same design as a submission. It says which site (its public host) wants to
+   same design as a submission. Its `From` display name is `Sitebin`, never
+   the form's name, so the person creating the form does not control who the
+   mail appears to come from. "Resend" on a `stopped` form moves it back to
+   `pending`. On an `active` form it is refused (409), because there is
+   nothing to confirm. It says which site (its public host) wants to
    send which form's submissions to this address. It has one button, and it
    tells anyone not expecting it to ignore the mail.
 2. The link goes to `https://<base domain>/forms/confirm?t=<token>`. That is
@@ -157,12 +166,13 @@ address per day** across the instance. Over either limit the API answers
 
 **Finding the site.** `siteByHost(r.Host)` resolves it, as the unlock endpoint
 does. On a path-view instance (`SITEBIN_VIEW_ACCESS=path|both`) the page lives
-on the main domain, so the form carries the site id in a hidden `_site` field
-(the edit page's snippet adds it there). This is the same shape as the unlock
-form's `site`, underscored because here the name shares a namespace with the
-customer's own fields. Every other `/_sitebin/forms/…` URL on such an instance
-carries it as `?_site=<view id>`: the challenge URL, and the default thank-you
-page the success redirect points at.
+on the main domain, so every `/_sitebin/forms/…` URL there carries the site as
+`?_site=<view id>`: the form's action, the challenge URL, and the default
+thank-you page. The snippet adds it. It is a query parameter rather than a
+body field so the site is known before the body is read, which keeps the
+check order below. `_site` is honoured only on the main domain; on a site's
+own host it is ignored, so it can never point a key at another site. A
+configured thank-you path is prefixed with `/v/<view id>` there.
 
 **Checks, in order — cheap before expensive:**
 
@@ -261,7 +271,9 @@ uppercase stamp — built the way mail clients need it:
 
 The layout is agreed on a rendered preview before it is merged (see Testing).
 
-**Text part.** The same content, readable as plain text. `Label: value` per
+**Text part.** It is built in Go code rather than from a template, because
+`text/template` whitespace control makes an exact plain-text layout fragile.
+It has the same content, readable as plain text. `Label: value` per
 line, and a multi-line value goes under its label, indented. Then the
 attachments, the site, the time, and the stop link.
 
@@ -298,27 +310,46 @@ files. **Never** the field values, the filenames or the recipient.
 ### Captcha (ALTCHA v2)
 
 - **Server:** `github.com/altcha-org/altcha-lib-go/v2` (MIT), which implements
-  the current KDF-based protocol (PBKDF2/SHA-256). The HMAC key is derived from
-  the instance secret under its own purpose label, never the raw secret.
+  the current KDF-based protocol (PBKDF2/SHA-256). It is pinned as
+  `v2.0.0-20260923082747-352eeeca913a`, the commit tagged `v2/v2.2.0`. The tag
+  is named so that Go cannot resolve it, hence the pseudo-version. The module
+  zip carries no licence file, so the attribution ships in
+  `web/vendor/altcha.LICENSE`. The HMAC keys (challenge signature and key
+  signature) are derived from the instance secret under their own purpose
+  labels, never the raw secret.
+- **Mode:** deterministic. The server picks the counter (a random number from
+  1000 to 1999) at cost 1000 and signs the derived key, so the work is
+  predictable and verifying is one HMAC. Measured natively, that is about
+  0.1 ms per derivation, so about 0.2 s single-threaded; the widget spreads
+  it over up to four workers. Two library traps are closed in code:
+  `DeriveKey` is always passed, because without it `VerifySolution` accepts
+  on the signature alone, and replays are refused by us, because the library
+  does not track them.
 - **Challenge:** `GET /_sitebin/forms/{key}/challenge` returns a fresh
   challenge, but only for a form that exists, is active, is not paused, and has
   captcha on; anything else is 404. It is rate-limited per IP in its own bucket
   (see Submitting). It expires after **5 minutes**.
-- **Binding:** the signed part of the challenge names the site and the form. A
-  solution for one form is refused on every other. If the library's `data`
-  field is not covered by its signature, the binding goes into the part that
-  is (the salt or nonce). The first plan task settles which.
+- **Binding:** the challenge's `data` (`{"site": <view id>, "form": <key>}`,
+  ASCII only, because the widget encodes the payload with `btoa`) is covered
+  by the signature. A solution for one form is refused on every other.
 - **Replay:** a verified challenge is remembered in memory until it expires,
   and a second use is refused. A restart forgets them, which allows at most
   one extra use of a challenge that is at most 5 minutes old. That is
   accepted.
-- **Widget:** the ALTCHA widget (MIT) is vendored at a pinned release that
-  speaks the same protocol as the library, with its licence, under
-  `web/static/vendor/altcha/`, and served at `/_sitebin/altcha.js`. Nothing
+- **Widget:** the ALTCHA widget (MIT) is vendored at `altcha@3.2.3`
+  (`dist/main/altcha.min.js`, 115,652 bytes, sha256
+  `102bb89eb6ee4556068e2514880b7755495b23d90438c751809cb4f0ecbd4efb`), the
+  release line that speaks protocol v2. Its element takes `challenge="<url>"`
+  (v3 dropped `challengeurl`) and submits the field `altcha`. It starts its
+  workers from `blob:` URLs and injects a `<style>`; a site with its own
+  strict CSP needs `worker-src blob:`. The docs page says so. It is vendored as `web/vendor/altcha.min.js`
+  next to the other vendored libraries, with its licence alongside as
+  `web/vendor/altcha.LICENSE`, and served at `/_sitebin/altcha.js`. Nothing
   loads from a third party at runtime. Whoever updates one of the two pins
   must check the other.
-- **Cost:** chosen so that a mid-range phone solves it in about a second. The
-  plan measures it; it is a constant, not configuration.
+- **Cost:** a constant, not configuration (see Mode). The rollout checks the
+  solve time on a real phone; if it is well over a second, the constant
+  comes down.
 
 ## Gating and limits
 
@@ -343,10 +374,13 @@ anything on a hot path.
 
 1. `quota_forms` is set → that value.
 2. Unset, the site is **owned**, a provider is registered, and a form is being
-   **added** → ask `QuotaFor(owner)` once and stamp its `MaxForms` if it is
-   non-nil. This is how sites created before this feature get their plan's
-   value. Adding is not a hot path, and an error from `QuotaFor` refuses the
-   add without stamping anything.
+   **added or listed** (edit page, API, MCP) → ask `QuotaFor(owner)` once and
+   stamp its `MaxForms` if it is non-nil. This is how sites created before
+   this feature get their plan's value; without the listing half, a Pro site
+   from before would read "not in your plan" on its edit page until someone
+   tried to add a form anyway. Neither is a hot path. An error from
+   `QuotaFor` refuses an add without stamping anything; a listing then shows
+   the instance value and tries again next time.
 3. Otherwise → the instance value `SITEBIN_FORMS_MAX_PER_SITE`. Its default is
    **10 with no provider and 0 with one**. Without that, every existing Drop
    and Free site on a tiers instance would get 10 forms the moment this ships.
@@ -369,8 +403,9 @@ calls `SiteService.ApplyQuota`, which now carries `MaxForms`.
 Untrusted ones (Drop, Free) keep `form-action 'none'` and have no forms
 anyway. The community build marks every site trusted.
 
-**`SITEBIN_READONLY`** refuses form configuration changes like every other
-site write. Submissions write nothing and keep working.
+**`SITEBIN_READONLY`** is untouched: it disables creating sites, and only
+that, as before. Forms are a site's settings, like its domains and passwords,
+and stay editable; submissions write nothing at all.
 
 ## Configuration
 
@@ -419,8 +454,8 @@ All of it is in the MIT core except the tier field.
 - **`internal/cleanup`:** `reconcile` passes `Forms`.
 - **`ee/`:** `eeconfig.Tier.MaxForms`, and `grantFromTier` sets `MaxForms`.
   Nothing else.
-- **`web/static`:** the Forms section of `edit.html` and `edit.js`, and the
-  vendored widget.
+- **`web/static`:** the Forms section of `edit.html` and `edit.js`.
+- **`web/vendor`:** the vendored widget and its licence.
 - **`internal/caddygen`:** nothing. `/_sitebin/*` is already proxied on every
   content origin, and the main domain is all backend.
 
@@ -438,8 +473,9 @@ password, or an account credential on a site that account owns.
 | `POST /api/sites/{editID}/forms/{key}/confirmation` | Resend, throttled → 202 |
 
 A form in a response has `key`, `name`, `recipient`, `captcha`, `files`,
-`redirect`, `status` (the computed one, so `paused` appears here), and
-`created_at`, `confirmed_at` and `stopped_at`. Tokens never appear.
+`redirect`, `status` (the computed one, so `paused` appears here),
+`created_at`, `confirmed_at`, `stopped_at`, and `snippet`. Tokens never
+appear.
 
 Forms off on the instance → **409** "forms are not enabled on this instance"
 on the writes. The `GET` answers with `enabled:false`.
@@ -499,8 +535,9 @@ In `Sitebin-Website`:
 - **`/docs/api/`:** the endpoints.
 - **`/docs/configuration/`:** the `SITEBIN_FORMS_*` variables.
 - **Privacy policy:** hosted Sitebin now passes form data through to site
-  owners, as their processor. This copy is legal text. It is flagged to the
-  operator, not written here.
+  owners, as their processor. A section is drafted with the rest of the
+  website changes. The operator has it reviewed legally before it is
+  published; it ships with the other website changes, not ahead of them.
 
 ## Testing
 
