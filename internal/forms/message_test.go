@@ -121,7 +121,7 @@ func TestSubmissionMailStructureAndHeaders(t *testing.T) {
 	for _, l := range leaves {
 		kinds = append(kinds, l.mediaType+" "+l.filename)
 	}
-	want := []string{"text/plain ", "text/html ", "application/pdf cv.pdf", "application/json submission.json"}
+	want := []string{"text/plain ", "application/pdf cv.pdf", "application/json submission.json"}
 	if strings.Join(kinds, "|") != strings.Join(want, "|") {
 		t.Fatalf("parts = %q, want %q", kinds, want)
 	}
@@ -146,7 +146,7 @@ func TestSubmissionMailStructureAndHeaders(t *testing.T) {
 	if _, err := h.Date(); err != nil {
 		t.Errorf("Date: %v", err)
 	}
-	if string(leaves[2].body) != "%PDF-1.4 test" {
+	if string(leaves[1].body) != "%PDF-1.4 test" {
 		t.Errorf("attachment bytes changed")
 	}
 }
@@ -155,7 +155,6 @@ func TestSubmissionMailBodies(t *testing.T) {
 	m, _ := BuildSubmission(sampleIn(sampleSub()))
 	_, leaves := readMail(t, m)
 	text := strings.ReplaceAll(string(leaves[0].body), "\r\n", "\n")
-	html := string(leaves[1].body)
 	for _, want := range []string{"name: Anna Muster", "message:\n    Hallo,\n    zweite Zeile <b>fett</b>", "cv.pdf (13 B)", "https://sitebin.example/forms/stop?t=tok"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("text part lacks %q:\n%s", want, text)
@@ -164,41 +163,30 @@ func TestSubmissionMailBodies(t *testing.T) {
 	if i, j, k := strings.Index(text, "name:"), strings.Index(text, "email:"), strings.Index(text, "message:"); !(i < j && j < k) {
 		t.Errorf("fields out of form order:\n%s", text)
 	}
-	if strings.Contains(html, "<b>fett</b>") || !strings.Contains(html, "zweite Zeile &lt;b&gt;fett&lt;/b&gt;") {
-		t.Errorf("HTML part does not escape submitted markup")
-	}
-	if !strings.Contains(html, "Hallo,<br>zweite Zeile") {
-		t.Errorf("HTML part does not keep line breaks")
-	}
-	if !strings.Contains(html, "Reply to this email") || !strings.Contains(text, "Reply to this email") {
+	if !strings.Contains(text, "Reply to this email") {
 		t.Errorf("the reply hint is missing although Reply-To is set")
 	}
 }
 
-// The submission mail's HTML is deliberately plain, and its <head> holds
-// nothing but the charset. Microsoft 365 junked every submission sent in the
-// claim-ticket look (SCL 5, CAT:SPM, with SPF, DKIM and DMARC all passing).
-// Removing any single trait -- the hidden preheader, the zero-size spacers,
-// the uppercase mono labels, the stop link, the <title> and viewport meta --
-// did not help; the filter scores them together. A plain card layout was
-// junked while it kept <title> and viewport, and delivered without them.
-// So none of them comes back.
-func TestSubmissionHTMLIsPlain(t *testing.T) {
+// The submission mail is plain text: no HTML part at all. Live tests
+// against a Microsoft 365 mailbox (spec, Corrections) put every HTML version
+// of it -- the claim-ticket look and three plainer redesigns -- in Junk or,
+// worse, in quarantine, where the recipient never sees it, as soon as the
+// visitor wrote an ordinary request for a quote. The same content as text,
+// with submission.json attached, reached the inbox every time.
+func TestSubmissionMailIsTextOnly(t *testing.T) {
 	m, _ := BuildSubmission(sampleIn(sampleSub()))
-	_, leaves := readMail(t, m)
-	html := strings.ToLower(strings.ReplaceAll(string(leaves[1].body), " ", ""))
-	for _, banned := range []string{"display:none", "font-size:0", "font-size:1px", "opacity:0", "max-height:0",
-		"visibility:hidden", "text-transform", "letter-spacing", "monospace", "dashed", "<title", "name=\"viewport\""} {
-		if strings.Contains(html, banned) {
-			t.Errorf("submission HTML contains %q", banned)
+	h, leaves := readMail(t, m)
+	if mt, _, _ := mime.ParseMediaType(h.Get("Content-Type")); mt != "multipart/mixed" {
+		t.Errorf("top-level type = %q, want multipart/mixed", mt)
+	}
+	for _, l := range leaves {
+		if l.mediaType == "text/html" {
+			t.Errorf("the submission mail has a %s part", l.mediaType)
 		}
 	}
-	body := string(leaves[1].body)
-	for _, want := range []string{"New message via Contact", "Anna Muster", "www.example.com",
-		`<a href="https://sitebin.example/forms/stop?t=tok"`} {
-		if !strings.Contains(body, want) {
-			t.Errorf("submission HTML lacks %q", want)
-		}
+	if _, p, _ := mime.ParseMediaType(leaves[0].header.Get("Content-Type")); leaves[0].mediaType != "text/plain" || p["charset"] != "utf-8" {
+		t.Errorf("first part = %q", leaves[0].header.Get("Content-Type"))
 	}
 }
 
@@ -218,7 +206,7 @@ func TestSubmissionJSON(t *testing.T) {
 			SHA256          string `json:"sha256"`
 		} `json:"files"`
 	}
-	if err := json.Unmarshal(leaves[3].body, &j); err != nil {
+	if err := json.Unmarshal(leaves[2].body, &j); err != nil {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256([]byte("%PDF-1.4 test"))
@@ -229,7 +217,7 @@ func TestSubmissionJSON(t *testing.T) {
 		j.Files[0].ContentType != "application/pdf" || j.Files[0].Field != "cv" {
 		t.Errorf("submission.json = %+v", j)
 	}
-	if strings.Contains(string(leaves[3].body), `\u003c`) {
+	if strings.Contains(string(leaves[2].body), `\u003c`) {
 		t.Error("submission.json HTML-escapes values; a machine reader wants them verbatim")
 	}
 }
@@ -287,8 +275,8 @@ func TestSubmissionMailRefusesHeaderInjection(t *testing.T) {
 			t.Errorf("a header was injected into the %s part: %v", l.mediaType, l.header)
 		}
 	}
-	if leaves[2].filename != "evilX-Injected: 1.pdf" {
-		t.Errorf("attachment filename = %q, want the line break dropped", leaves[2].filename)
+	if leaves[1].filename != "evilX-Injected: 1.pdf" {
+		t.Errorf("attachment filename = %q, want the line break dropped", leaves[1].filename)
 	}
 	if got := decodeHeader(t, h.Get("Subject")); got != "Hi Bcc: x@evil.example" {
 		t.Errorf("Subject = %q, want the line break flattened", got)
@@ -338,14 +326,13 @@ func TestReplyToSuppressedWhenTheSubmitterSharesTheRecipientsDomain(t *testing.T
 			t.Errorf("email %q shares the recipient's domain: Reply-To = %q, want none", email, got)
 		}
 		text := strings.ReplaceAll(string(leaves[0].body), "\r\n", "\n")
-		html := string(leaves[1].body)
-		if strings.Contains(text, "Reply to this email") || strings.Contains(html, "Reply to this email") {
+		if strings.Contains(text, "Reply to this email") {
 			t.Errorf("email %q: the reply hint is present although Reply-To is suppressed", email)
 		}
 		if !strings.Contains(text, "email: "+email) {
 			t.Errorf("email %q: the submitted address is missing from the text part:\n%s", email, text)
 		}
-		if !strings.Contains(string(leaves[3].body), email) {
+		if !strings.Contains(string(leaves[2].body), email) {
 			t.Errorf("email %q: the submitted address is missing from submission.json", email)
 		}
 	}
@@ -361,8 +348,7 @@ func TestReplyToSuppressedWhenTheSubmitterSharesTheRecipientsDomain(t *testing.T
 		t.Errorf("a different-domain submitter: Reply-To = %q, want <anna@other.example>", got)
 	}
 	text := strings.ReplaceAll(string(leaves[0].body), "\r\n", "\n")
-	html := string(leaves[1].body)
-	if !strings.Contains(text, "Reply to this email") || !strings.Contains(html, "Reply to this email") {
+	if !strings.Contains(text, "Reply to this email") {
 		t.Error("a different-domain submitter: the reply hint is missing although Reply-To is set")
 	}
 }

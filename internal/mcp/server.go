@@ -278,7 +278,9 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 	sdk.AddTool(s, &sdk.Tool{
 		Name: "list_forms",
 		Description: "List a site's email forms with their status and the HTML snippet for each. A form mails what visitors " +
-			"submit to one recipient, who confirmed by email.",
+			"submit to one recipient, who confirmed by email. Each submission arrives as a plain-text email (no HTML) from " +
+			"the form's name: the fields in form order, then the visitor's files and a submission.json with the same data " +
+			"attached.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in siteArgs) (*sdk.CallToolResult, *FormsResult, error) {
 		if err := authorize(auth, ScopeRead); err != nil {
@@ -292,7 +294,9 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		Description: "Add an email form to a site. The recipient gets one email to confirm; until they click it the form is " +
 			"pending and refuses every submission, so do not tell the user it works before then. Paste the returned " +
 			"snippet into a page of the site with write_files. Needs an instance with form mail configured; plans limit " +
-			"the forms per site.",
+			"the forms per site. Each submission arrives as a plain-text email, not a designed one: the fields in form " +
+			"order, the visitor's files and a submission.json attached. Tell the user to add the sender address to their " +
+			"contacts or safe senders once confirmed, so a mail filter never holds a message back.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in formArgs) (*sdk.CallToolResult, *FormsResult, error) {
 		if err := authorize(auth, ScopeWrite); err != nil {
 			return nil, nil, err

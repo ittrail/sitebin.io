@@ -100,7 +100,10 @@ type viewField struct {
 
 type viewFile struct{ Name, Size string }
 
-// BuildSubmission builds the mail that forwards one submission.
+// BuildSubmission builds the mail that forwards one submission. It is plain
+// text on purpose, with no HTML part: Microsoft 365 put every HTML version of
+// it in Junk or quarantine once a visitor wrote an ordinary request for a
+// quote, and delivered the same content as text (spec, Corrections).
 func BuildSubmission(in SubmissionMail) (Mail, error) {
 	if err := headerSafe(in.From, in.FormName, in.Recipient, in.SiteID, in.StopURL); err != nil {
 		return Mail{}, err
@@ -123,10 +126,6 @@ func BuildSubmission(in SubmissionMail) (Mail, error) {
 	}
 	for _, f := range in.Sub.Files {
 		v.Files = append(v.Files, viewFile{Name: f.Filename, Size: SizeLabel(int64(len(f.Data)))})
-	}
-	var html bytes.Buffer
-	if err := mailTmpl.ExecuteTemplate(&html, "submission.html", v); err != nil {
-		return Mail{}, err
 	}
 	js, err := submissionJSON(in)
 	if err != nil {
@@ -152,7 +151,7 @@ func BuildSubmission(in SubmissionMail) (Mail, error) {
 		atts = append(atts, attachment{name: f.Filename, contentType: f.ContentType, data: f.Data})
 	}
 	atts = append(atts, attachment{name: "submission.json", contentType: "application/json", data: js})
-	data, err := compose(hs, submissionText(v), html.String(), atts)
+	data, err := compose(hs, submissionText(v), "", atts)
 	return Mail{From: in.From, To: in.Recipient, Data: data}, err
 }
 
@@ -278,32 +277,38 @@ func submissionJSON(in SubmissionMail) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-// compose assembles the MIME tree: multipart/mixed holding a
-// multipart/alternative (text, then HTML: clients show the last one they can
-// render) followed by the attachments.
+// compose assembles the MIME tree: multipart/mixed holding the body, then the
+// attachments. With HTML the body is a multipart/alternative (text, then HTML:
+// clients show the last one they can render); without it, as for the
+// submission mail, it is the text part alone.
 func compose(hs []header, text, html string, atts []attachment) ([]byte, error) {
-	var alt bytes.Buffer
-	altw := multipart.NewWriter(&alt)
-	if err := writeQP(altw, "text/plain; charset=utf-8", text); err != nil {
-		return nil, err
-	}
-	if err := writeQP(altw, "text/html; charset=utf-8", html); err != nil {
-		return nil, err
-	}
-	if err := altw.Close(); err != nil {
-		return nil, err
-	}
-
 	var body bytes.Buffer
 	mixed := multipart.NewWriter(&body)
-	p, err := mixed.CreatePart(textproto.MIMEHeader{
-		"Content-Type": {mime.FormatMediaType("multipart/alternative", map[string]string{"boundary": altw.Boundary()})},
-	})
-	if err != nil {
-		return nil, err
-	}
-	if _, err := p.Write(alt.Bytes()); err != nil {
-		return nil, err
+	if html == "" {
+		if err := writeQP(mixed, "text/plain; charset=utf-8", text); err != nil {
+			return nil, err
+		}
+	} else {
+		var alt bytes.Buffer
+		altw := multipart.NewWriter(&alt)
+		if err := writeQP(altw, "text/plain; charset=utf-8", text); err != nil {
+			return nil, err
+		}
+		if err := writeQP(altw, "text/html; charset=utf-8", html); err != nil {
+			return nil, err
+		}
+		if err := altw.Close(); err != nil {
+			return nil, err
+		}
+		p, err := mixed.CreatePart(textproto.MIMEHeader{
+			"Content-Type": {mime.FormatMediaType("multipart/alternative", map[string]string{"boundary": altw.Boundary()})},
+		})
+		if err != nil {
+			return nil, err
+		}
+		if _, err := p.Write(alt.Bytes()); err != nil {
+			return nil, err
+		}
 	}
 	for _, a := range atts {
 		name := safeFilename(a.name)

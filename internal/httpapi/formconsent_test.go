@@ -76,6 +76,11 @@ func TestConfirmFlow(t *testing.T) {
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "Confirmed") || formStatus(t, e, site, f.Key).Status != store.FormActive {
 		t.Fatalf("POST = %d %s", w.Code, w.Body)
 	}
+	// The one moment the recipient is certainly looking: ask them to trust
+	// the sender, so a filter never quarantines a real message unseen.
+	if !strings.Contains(w.Body.String(), "forms@sitebin.example") || !strings.Contains(w.Body.String(), "safe senders") {
+		t.Errorf("the confirmation page does not name the sender to trust:\n%s", w.Body)
+	}
 	if w = consent(t, e, "POST", "/forms/confirm", tok, false); w.Code != 200 {
 		t.Fatalf("a second click = %d, want 200", w.Code)
 	}

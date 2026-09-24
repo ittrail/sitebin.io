@@ -105,7 +105,8 @@ func (a *API) formConfirm(w http.ResponseWriter, r *http.Request) {
 	default:
 		a.log.Info("form confirmed", "id", site.ViewID, "form", f.Key)
 		a.consentPage(w, 200, "Confirmed",
-			fmt.Sprintf("Messages sent through the form “%s” on %s will now reach you. Every one of them carries a link to stop them.", f.Name, a.formHost(site)),
+			fmt.Sprintf("Messages sent through the form “%s” on %s will now reach you. Every one of them carries a link to stop them. "+
+				"So that your mail filter never holds one back, add %s to your contacts or safe senders.", f.Name, a.formHost(site), a.cfg.FormsSMTP.From),
 			"", "", "")
 	}
 }

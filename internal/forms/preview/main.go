@@ -1,5 +1,6 @@
-// Command preview writes sample form mails as .eml and .html, so their look
-// can be checked in real mail clients before a change ships:
+// Command preview writes sample form mails as .eml plus their readable body
+// (.html for the confirmation mail, .txt for the text-only submission mail),
+// so they can be checked in real mail clients before a change ships:
 //
 //	go run ./internal/forms/preview [-out DIR]
 package main
@@ -65,15 +66,20 @@ func write(dir, name string, m forms.Mail) {
 	if err := os.WriteFile(eml, m.Data, 0o644); err != nil {
 		log.Fatal(err)
 	}
-	html := filepath.Join(dir, name+".html")
-	if err := os.WriteFile(html, htmlPart(m.Data), 0o644); err != nil {
+	// The submission mail is text only; the confirmation mail has HTML.
+	body, ext := part(m.Data, "text/html"), ".html"
+	if body == nil {
+		body, ext = part(m.Data, "text/plain"), ".txt"
+	}
+	view := filepath.Join(dir, name+ext)
+	if err := os.WriteFile(view, body, 0o644); err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("wrote", eml, "and", html)
+	fmt.Println("wrote", eml, "and", view)
 }
 
-// htmlPart digs the decoded text/html part out of a message.
-func htmlPart(data []byte) []byte {
+// part digs the first decoded part of the given media type out of a message.
+func part(data []byte, mediaType string) []byte {
 	msg, err := mail.ReadMessage(bytes.NewReader(data))
 	if err != nil {
 		log.Fatal(err)
@@ -94,7 +100,7 @@ func htmlPart(data []byte) []byte {
 				}
 				continue
 			}
-			if strings.HasPrefix(pct, "text/html") {
+			if strings.HasPrefix(pct, mediaType) {
 				b, _ := io.ReadAll(quotedprintable.NewReader(p))
 				return b
 			}

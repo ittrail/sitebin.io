@@ -715,38 +715,37 @@ with this block, this block is what the code does.
   Reply-To points back into the recipient's own domain is the classic
   business-email-compromise pattern — and it is exactly what every site owner
   produces the first time they test their own form with their own address.
-- **The submission mail's HTML is plain; the claim-ticket look is gone from
-  it.** Live tests to a Microsoft 365 mailbox on 2026-09-24 put every
-  submission in Junk (`SCL:5`, `SFV:SPM`, `CAT:SPM`, `BCL:0`, IP not listed,
-  SPF/DKIM/DMARC/compauth all pass) while the confirmation mail — same
-  sender, same styling family — reached the inbox with `SCL:1`. Bisected with
-  one change per mail, all otherwise byte-identical Sitebin output: without the
-  JSON attachment, without `List-Unsubscribe`, without the random view host
-  (custom domain instead), with the sender name "Sitebin", with English
-  content, without the hidden preheader, without the `font-size:0` spacers,
-  with plain field labels — every one still Junk. The same content as text only,
-  or as bare HTML (paragraphs, bold labels, no CSS), reached the inbox. A
-  first plain redesign was *still* junked while its `<head>` carried `<title>`
-  and a viewport meta; without them it was delivered — and removing them from
-  the ticket template alone did not rescue that one. The filter scores the
-  traits together, so `TestSubmissionHTMLIsPlain` bans all of them: hidden
-  text, zero or 1px fonts, `text-transform`, `letter-spacing`, monospace,
-  dashed borders, `<title>`, viewport meta. The shipped layout — a dark slate
-  header ("Sitebin" in amber, the headline in ivory, the host below) over an
-  ivory card with amber-brown labels above the values and the footer inside
-  the card — was delivered. So was a plainer white card; the same content on
-  a bare white page went to quarantine, and so did a design closer to the
-  ticket (amber stamp with the form name, "New message from <host>" as the
-  headline, solid frame). The submission mail has no preheader at all; the
-  confirmation mail keeps its ticket look, because it is delivered. Tests
-  were run against one Microsoft 365 mailbox, one variant per mail, so read
-  them as "these combinations crossed the threshold", not as a rule set.
+- **The submission mail is plain text — no HTML part at all.** This replaces
+  the "HTML part" section above. Live tests to a Microsoft 365 mailbox on
+  2026-09-24 (one change per mail, otherwise identical Sitebin output) put
+  every submission in the claim-ticket look in Junk (`SCL:5`, `SFV:SPM`,
+  `CAT:SPM`, `BCL:0`, IP not listed, SPF/DKIM/DMARC/compauth all pass), while
+  the confirmation mail — same sender, same styling — got `SCL:1`. None of
+  these alone changed the verdict: the JSON attachment, `List-Unsubscribe`,
+  the random view host, the sender name, the language, the hidden preheader,
+  the `font-size:0` spacers, the mono labels, `<title>` and viewport. Plainer
+  HTML redesigns reached the inbox with a neutral message, but a bare white
+  page, a stamp design, and the best-looking redesign (dark header, ivory
+  card) went to **quarantine** as soon as the visitor wrote an ordinary
+  request for a quote — and quarantine is the one outcome the recipient never
+  sees. The same content as text only reached the inbox every time, with
+  `submission.json` attached as well as without. For a contact form,
+  arriving beats looking good, so the mail is text: `compose` writes the
+  text part straight into `multipart/mixed`, the `submission.html` template
+  is gone, and `TestSubmissionMailIsTextOnly` pins it. The confirmation
+  mail keeps its ticket look, because it is delivered and a form cannot go
+  live without it; it is deliberately left unchanged. The "Confirmed" page
+  instead asks the recipient to add the sender address to their contacts or
+  safe senders — the one moment they are certainly looking. The MCP
+  `list_forms`/`add_form` descriptions say what arrives, so an agent sets the
+  user's expectation. Tests were run against one mailbox; read them as "these
+  combinations crossed the threshold", not as a rule set.
 - **The attachment is `submission.json` again.** An intermediate change
   (`193b882`) renamed it to `submission.txt` because Outlook reported
   `submission.json` as a "potentially unsafe attachment". That diagnosis was
   wrong: Outlook blocks *every* attachment — `.txt` included — on a message in
   the Junk folder, and converts it to plain text with links disabled. In the
-  inbox the `.json` opens. The same intermediate change fixed `compose`, and
+  inbox it is delivered with the mail. The same intermediate change fixed `compose`, and
   that fix stays: `mime.FormatMediaType` answers `""` for a type that already
   carries parameters, so every upload whose `mime.TypeByExtension` type has a
   `charset` (`.txt`, `.html`, `.css`, …) had gone out as

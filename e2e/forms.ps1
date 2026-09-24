@@ -5,7 +5,7 @@
 # Runs Mailpit as the SMTP server on a private Docker network and checks the
 # whole path: a form created over the API, the confirmation mail, confirming
 # through its link (GET shows a button, POST acts), a plain HTML post with an
-# attachment, the delivered mail (From, Reply-To, both parts, submission.json,
+# attachment, the delivered mail (From, Reply-To, text only, submission.json,
 # List-Unsubscribe), the JSON answer, the honeypot, a refused executable, the
 # recipient's one-click stop, and logs free of submitted content. Captcha and
 # plan caps are covered by the Go suite and tiers.ps1.
@@ -147,7 +147,7 @@ $sub = Message $subId
 Assert "From carries the form's name" ($sub.From.Name -eq "Contact" -and $sub.From.Address -eq "forms@localtest.me") "$($sub.From.Name) $($sub.From.Address)"
 Assert "Reply-To is the submitter" ((@($sub.ReplyTo) | ForEach-Object { $_.Address }) -contains "anna@sender.test")
 Assert "text part has the message" ($sub.Text.Contains("message: Hallo aus dem E2E"))
-Assert "HTML part present" ($sub.HTML.Length -gt 500) "$($sub.HTML.Length)"
+Assert "no HTML part: the mail is plain text" ($sub.HTML.Length -eq 0) "$($sub.HTML.Length)"
 $files = @($sub.Attachments | ForEach-Object { $_.FileName })
 Assert "attachment delivered" ($files -contains "hello.txt") "$($files -join ',')"
 Assert "submission.json attached" ($files -contains "submission.json") "$($files -join ',')"

@@ -496,11 +496,12 @@ submissions. Then paste its snippet into any page:
   `worker-src blob:`.
 - **Attachments:** switch them on and the form posts `multipart/form-data`.
   Executables are refused.
-- Every mail has a text part, a deliberately plain HTML part, the
-  attachments, and `submission.json`: the fields in form order, the files'
-  sizes and SHA-256 hashes, and the form and site. The HTML stays plain on
-  purpose -- Microsoft 365 junked the same submission in a richer template
-  and delivered it in this one.
+- Every mail is plain text -- the fields in form order -- with the
+  attachments and `submission.json`: the fields again, the files' sizes and
+  SHA-256 hashes, and the form and site. No HTML on purpose: Microsoft 365
+  junked or quarantined every HTML version once a visitor wrote an ordinary
+  request for a quote, and delivered the text. The confirmation page asks
+  the recipient to add the sender address to their safe senders.
 - Without JavaScript the browser is sent to the form's thank-you path (or a
   default page). Send `Accept: application/json` to get `{"ok":true}` instead.
 - Each mail carries a stop link and `List-Unsubscribe`: the recipient can

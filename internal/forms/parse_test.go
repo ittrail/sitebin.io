@@ -220,8 +220,8 @@ func TestLongNonASCIIFilenameKeepsTheMailWithinLineLimits(t *testing.T) {
 		}
 	}
 	_, leaves := readMail(t, m)
-	if leaves[2].filename != got || string(leaves[2].body) != "%PDF" {
-		t.Fatalf("attachment = %q %q, want %q", leaves[2].filename, leaves[2].body, got)
+	if leaves[1].filename != got || string(leaves[1].body) != "%PDF" {
+		t.Fatalf("attachment = %q %q, want %q", leaves[1].filename, leaves[1].body, got)
 	}
 }
 
@@ -236,8 +236,8 @@ func TestNonASCIIFilenameRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, leaves := readMail(t, m); leaves[2].filename != "Größe.pdf" {
-		t.Fatalf("attachment name = %q, want Größe.pdf", leaves[2].filename)
+	if _, leaves := readMail(t, m); leaves[1].filename != "Größe.pdf" {
+		t.Fatalf("attachment name = %q, want Größe.pdf", leaves[1].filename)
 	}
 }
 
