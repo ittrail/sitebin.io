@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light only">
+<meta name="supported-color-schemes" content="light">
+<title>Confirm form messages</title>
+</head>
+<body style="margin:0;padding:0;background:#eef0f5;-webkit-text-size-adjust:100%;">
+<div style="display:none;font-size:1px;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">{{.Preheader}}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#eef0f5;">
+  <tr>
+    <td align="center" style="padding:28px 12px 36px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;">
+        <tr>
+          <td style="padding:0 6px 12px;font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:11px;line-height:16px;letter-spacing:2px;text-transform:uppercase;color:#6b7386;">Sitebin &middot; confirm recipient</td>
+        </tr>
+        <tr>
+          <td style="background:#fffdf8;border:2px dashed #c9cfdb;border-radius:14px;padding:26px 28px 28px;">
+            <span style="display:inline-block;padding:6px 10px;border:2px solid #d99a26;border-radius:6px;font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:12px;line-height:14px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#a8740f;">{{.FormName}}</span>
+            <div style="margin-top:14px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:20px;line-height:28px;font-weight:600;color:#141a26;">{{.Host}} would like to email you its form messages</div>
+            <div style="margin-top:12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#3a4254;">The form &ldquo;{{.FormName}}&rdquo; on {{.Host}} wants to send the messages people submit to <strong>{{.Recipient}}</strong>. Nothing is sent to you until you agree.</div>
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:22px;">
+              <tr>
+                <td style="border-radius:10px;background:#f5b84d;">
+                  <a href="{{.ConfirmURL}}" style="display:inline-block;padding:13px 22px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:18px;font-weight:700;color:#221902;text-decoration:none;border-radius:10px;">Confirm this address</a>
+                </td>
+              </tr>
+            </table>
+            <div style="margin-top:18px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:20px;color:#7b8497;">The button works for 7 days. If it does not open, copy this link into your browser:<br><a href="{{.ConfirmURL}}" style="color:#7b8497;word-break:break-all;">{{.ConfirmURL}}</a></div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:16px 8px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;line-height:19px;color:#7b8497;">
+            If you did not expect this email, ignore it. Every message you receive later carries a link to stop them.
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+</body>
+</html>

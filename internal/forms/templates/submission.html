@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light only">
+<meta name="supported-color-schemes" content="light">
+<title>{{.FormName}}</title>
+</head>
+<body style="margin:0;padding:0;background:#eef0f5;-webkit-text-size-adjust:100%;">
+<div style="display:none;font-size:1px;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">{{.Preheader}}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#eef0f5;">
+  <tr>
+    <td align="center" style="padding:28px 12px 36px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;">
+        <tr>
+          <td style="padding:0 6px 12px;font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:11px;line-height:16px;letter-spacing:2px;text-transform:uppercase;color:#6b7386;">Sitebin &middot; form message</td>
+        </tr>
+        <tr>
+          <td style="background:#fffdf8;border:2px dashed #c9cfdb;border-radius:14px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td style="padding:26px 28px 20px;">
+                  <span style="display:inline-block;padding:6px 10px;border:2px solid #d99a26;border-radius:6px;font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:12px;line-height:14px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#a8740f;">{{.FormName}}</span>
+                  <div style="margin-top:14px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:20px;line-height:28px;font-weight:600;color:#141a26;">New message from {{.Host}}</div>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:0 28px;"><div style="border-top:2px dashed #dfe3ea;height:0;line-height:0;font-size:0;">&nbsp;</div></td>
+              </tr>
+              {{range .Fields}}
+              <tr>
+                <td style="padding:18px 28px 0;">
+                  <div style="font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:11px;line-height:16px;letter-spacing:1.5px;text-transform:uppercase;color:#7b8497;">{{.Label}}</div>
+                  <div style="margin-top:4px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#141a26;word-break:break-word;overflow-wrap:anywhere;">{{if .Empty}}<span style="color:#b0b7c5;">&mdash;</span>{{else}}{{range $i, $l := .Lines}}{{if $i}}<br>{{end}}{{$l}}{{end}}{{end}}</div>
+                </td>
+              </tr>
+              {{end}}
+              {{if .Files}}
+              <tr>
+                <td style="padding:22px 28px 0;">
+                  <div style="font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:11px;line-height:16px;letter-spacing:1.5px;text-transform:uppercase;color:#7b8497;">Attachments</div>
+                  {{range .Files}}
+                  <div style="margin-top:6px;font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:13px;line-height:20px;color:#141a26;">{{.Name}} <span style="color:#7b8497;">&middot; {{.Size}}</span></div>
+                  {{end}}
+                </td>
+              </tr>
+              {{end}}
+              <tr><td style="padding:0 0 26px;font-size:0;line-height:0;">&nbsp;</td></tr>
+            </table>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:16px 8px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;line-height:19px;color:#7b8497;">
+            Sent {{.At}} through the form &ldquo;{{.FormName}}&rdquo; on {{.Host}}.{{if .ReplyHint}}<br>Reply to this email to answer the sender directly.{{end}}<br>
+            <a href="{{.StopURL}}" style="color:#7b8497;text-decoration:underline;">Stop emails from this form</a>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+</body>
+</html>
