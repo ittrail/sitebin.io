@@ -116,7 +116,6 @@ func BuildSubmission(in SubmissionMail) (Mail, error) {
 		At:        in.At.UTC().Format("2 Jan 2006, 15:04 UTC"),
 		StopURL:   in.StopURL,
 		ReplyHint: replyTo != "",
-		Preheader: preheader(in.Sub.Fields),
 	}
 	for _, f := range in.Sub.Fields {
 		lines := strings.Split(strings.ReplaceAll(f.Value, "\r\n", "\n"), "\n")
@@ -152,13 +151,7 @@ func BuildSubmission(in SubmissionMail) (Mail, error) {
 	for _, f := range in.Sub.Files {
 		atts = append(atts, attachment{name: f.Filename, contentType: f.ContentType, data: f.Data})
 	}
-	// Named and typed as text, not JSON: Microsoft 365 Outlook blocks a
-	// .json attachment as "potentially unsafe". The bytes are still the
-	// JSON document (submissionJSON below) -- only the filename and the
-	// declared content type change, so the non-ASCII in it stays readable
-	// when a client renders the part directly. Keep this a single
-	// extension: "submission.json.txt" is itself a phishing signal.
-	atts = append(atts, attachment{name: "submission.txt", contentType: "text/plain; charset=utf-8", data: js})
+	atts = append(atts, attachment{name: "submission.json", contentType: "application/json", data: js})
 	data, err := compose(hs, submissionText(v), html.String(), atts)
 	return Mail{From: in.From, To: in.Recipient, Data: data}, err
 }
@@ -314,8 +307,8 @@ func compose(hs []header, text, html string, atts []attachment) ([]byte, error) 
 	}
 	for _, a := range atts {
 		name := safeFilename(a.name)
-		// a.contentType may already carry its own parameters (submission.txt's
-		// "text/plain; charset=utf-8"): FormatMediaType rejects a mediatype
+		// a.contentType may already carry its own parameters (an uploaded .txt
+		// is "text/plain; charset=utf-8"): FormatMediaType rejects a mediatype
 		// argument with a ";" in it and silently answers "", so parse first and
 		// merge "name" into whatever params came with it.
 		base, params, err := mime.ParseMediaType(a.contentType)
@@ -500,24 +493,4 @@ func fieldLabel(name string) string {
 		name = string(r[:maxLabelRunes])
 	}
 	return name
-}
-
-// preheader is the line an inbox shows under the subject: the start of the
-// message field if there is one, else of the first field.
-func preheader(fields []Field) string {
-	pick := ""
-	for _, f := range fields {
-		if strings.EqualFold(f.Name, "message") {
-			pick = f.Value
-			break
-		}
-	}
-	if pick == "" && len(fields) > 0 {
-		pick = fields[0].Value
-	}
-	pick = strings.Join(strings.Fields(pick), " ")
-	if r := []rune(pick); len(r) > 110 {
-		pick = string(r[:110]) + "…"
-	}
-	return pick
 }

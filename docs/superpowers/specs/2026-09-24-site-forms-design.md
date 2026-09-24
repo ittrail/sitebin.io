@@ -715,19 +715,33 @@ with this block, this block is what the code does.
   Reply-To points back into the recipient's own domain is the classic
   business-email-compromise pattern — and it is exactly what every site owner
   produces the first time they test their own form with their own address.
-- **The machine-readable copy is `submission.txt`, not `submission.json`.**
-  Same JSON document (version 1), byte for byte, still always the last
-  attachment — only the filename and the declared content type change, to
-  `text/plain; charset=utf-8`. Why: a live test submission on 2026-09-24 to
-  `office@ittrail.at` had Outlook (Microsoft 365) block the attachment as
-  "potentially unsafe" ("Outlook hat den Zugriff auf die folgenden potenziell
-  unsicheren Anlagen blockiert: submission.json"). Not a double extension
-  (`submission.json.txt`): that pattern is itself a phishing signal mail
-  filters look for. The same change fixed `compose`: `mime.FormatMediaType`
-  answers `""` for a type that already carries parameters, so every upload
-  whose `mime.TypeByExtension` type has a `charset` (`.txt`, `.html`, `.css`,
-  …) had gone out as `application/octet-stream`. Parameters are now parsed
-  and `name` merged into them.
+- **The submission mail's HTML is plain; the claim-ticket look is gone from
+  it.** Live tests to a Microsoft 365 mailbox on 2026-09-24 put every
+  submission in Junk (`SCL:5`, `SFV:SPM`, `CAT:SPM`, `BCL:0`, IP not listed,
+  SPF/DKIM/DMARC/compauth all pass) while the confirmation mail — same
+  sender, same styling family — reached the inbox with `SCL:1`. Bisected with
+  one change per mail, all otherwise byte-identical Sitebin output: without the
+  JSON attachment, without `List-Unsubscribe`, without the random view host
+  (custom domain instead), with the sender name "Sitebin", with English
+  content, without the hidden preheader, without the `font-size:0` spacers,
+  with plain field labels — every one still Junk. The same content as text only,
+  or as plain HTML (paragraphs, bold labels, no hidden or decorative CSS),
+  reached the inbox. The filter scores the template's traits together, so
+  `TestSubmissionHTMLIsPlain` bans all of them: hidden text, zero or 1px
+  fonts, `text-transform`, `letter-spacing`, monospace, dashed borders. The
+  submission mail no longer has a preheader at all; the confirmation mail
+  keeps its ticket look, because it is delivered.
+- **The attachment is `submission.json` again.** An intermediate change
+  (`193b882`) renamed it to `submission.txt` because Outlook reported
+  `submission.json` as a "potentially unsafe attachment". That diagnosis was
+  wrong: Outlook blocks *every* attachment — `.txt` included — on a message in
+  the Junk folder, and converts it to plain text with links disabled. In the
+  inbox the `.json` opens. The same intermediate change fixed `compose`, and
+  that fix stays: `mime.FormatMediaType` answers `""` for a type that already
+  carries parameters, so every upload whose `mime.TypeByExtension` type has a
+  `charset` (`.txt`, `.html`, `.css`, …) had gone out as
+  `application/octet-stream`. Parameters are now parsed and `name` merged
+  into them.
 
 ## Decisions taken without asking
 

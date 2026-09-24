@@ -121,7 +121,7 @@ func TestSubmissionMailStructureAndHeaders(t *testing.T) {
 	for _, l := range leaves {
 		kinds = append(kinds, l.mediaType+" "+l.filename)
 	}
-	want := []string{"text/plain ", "text/html ", "application/pdf cv.pdf", "text/plain submission.txt"}
+	want := []string{"text/plain ", "text/html ", "application/pdf cv.pdf", "application/json submission.json"}
 	if strings.Join(kinds, "|") != strings.Join(want, "|") {
 		t.Fatalf("parts = %q, want %q", kinds, want)
 	}
@@ -175,6 +175,31 @@ func TestSubmissionMailBodies(t *testing.T) {
 	}
 }
 
+// The submission mail's HTML is deliberately plain. Microsoft 365 junked
+// every submission sent in the claim-ticket look (SCL 5, CAT:SPM, with SPF,
+// DKIM and DMARC all passing) and delivered the same content as plain text or
+// as plain HTML. Removing any single trait -- the hidden preheader, the
+// zero-size spacers, the uppercase mono labels, the stop link -- did not
+// help; the filter scores them together. So none of them comes back.
+func TestSubmissionHTMLIsPlain(t *testing.T) {
+	m, _ := BuildSubmission(sampleIn(sampleSub()))
+	_, leaves := readMail(t, m)
+	html := strings.ToLower(strings.ReplaceAll(string(leaves[1].body), " ", ""))
+	for _, banned := range []string{"display:none", "font-size:0", "font-size:1px", "opacity:0", "max-height:0",
+		"visibility:hidden", "text-transform", "letter-spacing", "monospace", "dashed"} {
+		if strings.Contains(html, banned) {
+			t.Errorf("submission HTML contains %q", banned)
+		}
+	}
+	body := string(leaves[1].body)
+	for _, want := range []string{"New message via Contact", "Anna Muster", "www.example.com",
+		`<a href="https://sitebin.example/forms/stop?t=tok"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("submission HTML lacks %q", want)
+		}
+	}
+}
+
 func TestSubmissionJSON(t *testing.T) {
 	m, _ := BuildSubmission(sampleIn(sampleSub()))
 	_, leaves := readMail(t, m)
@@ -200,10 +225,10 @@ func TestSubmissionJSON(t *testing.T) {
 		j.At != "2026-09-24T10:15:00Z" || len(j.Fields) != 3 || j.Fields[2].Value != "Hallo,\nzweite Zeile <b>fett</b>" ||
 		len(j.Files) != 1 || j.Files[0].Size != 13 || j.Files[0].SHA256 != hex.EncodeToString(sum[:]) ||
 		j.Files[0].ContentType != "application/pdf" || j.Files[0].Field != "cv" {
-		t.Errorf("submission.txt = %+v", j)
+		t.Errorf("submission.json = %+v", j)
 	}
 	if strings.Contains(string(leaves[3].body), `\u003c`) {
-		t.Error("submission.txt HTML-escapes values; a machine reader wants them verbatim")
+		t.Error("submission.json HTML-escapes values; a machine reader wants them verbatim")
 	}
 }
 
@@ -296,7 +321,7 @@ func TestReplyToNeedsExactlyOneAddress(t *testing.T) {
 // business-email-compromise pattern, and it is exactly what every site owner
 // produces the first time they test their own form with their own address.
 // The submitted address still appears as an ordinary field in both mail
-// parts and in submission.txt -- only the header and the "reply directly"
+// parts and in submission.json -- only the header and the "reply directly"
 // hint are suppressed.
 func TestReplyToSuppressedWhenTheSubmitterSharesTheRecipientsDomain(t *testing.T) {
 	for _, email := range []string{"office@example.com", "colleague@EXAMPLE.com"} {
@@ -319,7 +344,7 @@ func TestReplyToSuppressedWhenTheSubmitterSharesTheRecipientsDomain(t *testing.T
 			t.Errorf("email %q: the submitted address is missing from the text part:\n%s", email, text)
 		}
 		if !strings.Contains(string(leaves[3].body), email) {
-			t.Errorf("email %q: the submitted address is missing from submission.txt", email)
+			t.Errorf("email %q: the submitted address is missing from submission.json", email)
 		}
 	}
 	// A different domain is unaffected.
