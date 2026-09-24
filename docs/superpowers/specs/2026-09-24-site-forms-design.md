@@ -611,6 +611,90 @@ The workspace ship order applies:
      receive, stop.
 3. Push the website repo.
 
+## Corrections (post-implementation)
+
+The final whole-branch review changed these rules after the sections above
+were written. The sections above are left as they were; where they disagree
+with this block, this block is what the code does.
+
+- **Forms need a trusted site when accounts are enabled.** With a provider
+  registered and accounts enabled, `formsLimit` answers 0 for a site without
+  the trust marker, whatever `quota_forms` says. An add is refused with 403
+  ("this site's plan includes no forms"), a submission with 403 (paused), a
+  challenge with 404, and the listing shows limit 0, so the edit page says
+  "not included". Why: an untrusted site is served with `form-action 'none';
+  connect-src 'self'`. A plain HTML form there cannot post at all, so the only
+  thing a form would still serve is a phishing drop's own `fetch` (with
+  `Accept: application/json`) to its confirmed form. "CSP needs no change"
+  above assumed every tier with forms is trusted, and now the code enforces
+  that instead of assuming it. The check stats the marker and never asks the
+  extension, so it is allowed on the submission path. The community build is
+  unchanged, because it marks every site trusted at creation. The hosted Pro
+  and Studio tiers are trusted. **The rollout must confirm `"trusted": true`
+  for every tier with `max_forms > 0`** in `/opt/sitebin/tiers.json`,
+  including the unlimited/admin tier. Otherwise that tier's sites get no forms.
+- **Confirmation throttles also apply per caller and instance-wide.** On top of
+  10 per site and 3 per address per day, confirmation mails are limited to
+  **20 per caller IP per day** (the client IP of the API or MCP request) and
+  **500 per day across the instance**. These are constants, like the other
+  two. The per-address key is lowercased, and a `+tag` in the local part is
+  dropped (`a+x@example.com` counts as `a@example.com`). Why: the per-site
+  and per-address budgets multiplied with the number of sites one person can
+  create, and `victim+N@` gave every variant a fresh budget. The 429 no longer
+  says which throttle refused.
+- **The per-form bucket is charged last.** The per-IP bucket stays at step 3,
+  before the body is read, because cheap checks come before expensive ones.
+  The per-form bucket is charged only after the honeypot, captcha and content
+  checks, just before the mail is built. A honeypot hit still answers like a
+  success and spends only the per-IP bucket. Why: when it was charged at step
+  3, bots from many addresses could use up a form's hourly budget with posts
+  that were never going to be mailed, which locked real visitors out.
+- **Small hardening:**
+  - A submission is refused unless the form's stored status is `active` (403
+    "This form is not active."). The specific pending and stopped messages
+    stay. This fails closed on a status this binary does not know.
+  - In a field's label, control characters become spaces, and the label is
+    capped at 100 runes. Otherwise a field name could put lines of its own,
+    such as a fake stop link, into the text part.
+  - An attachment's filename is capped at 150 UTF-8 bytes rather than 200
+    runes. The tail is kept, cut at a rune boundary, so the extension survives.
+    Why: RFC 2231 writes every non-ASCII byte as `%XX` into a header line that
+    nothing folds, and SMTP refuses lines over 998 octets.
+  - With `SITEBIN_FORMS_MAX_PER_SITE` unset, the default is 0 only when a
+    provider is registered **and** accounts are enabled. An enterprise binary
+    in open mode behaves like the community build and gets 10. Rule 3 of "What
+    a site's cap is" and the configuration table above say "0 with a provider".
+- **The body cap is `fileRoom + 256 KiB + 64 KiB`**, not
+  `max_files × max_file_bytes + 256 KiB` (step 4 above). `fileRoom` is
+  `max_files × max_file_bytes` for a form with attachments on, and 0 when they
+  are off. The 64 KiB is room for multipart headers and boundaries. Why: a
+  form without attachments has no reason to accept megabytes, and the
+  multipart framing needs room of its own.
+- **Using a stop link for a site or form that no longer exists answers 200
+  "Stopped"**, whether through the page's button or the RFC 8058 one-click
+  POST. The goal, no more mail, is already met, and one-click senders expect
+  a 2xx. Only confirm links answer 410 when used on a deleted form. (Opening
+  such a stop link with a GET still shows the "This form no longer exists"
+  page.)
+- **`deleteForm` answers 409 with forms off**, like every other write. It
+  does not delete.
+- **`CleanName` refuses a control character anywhere**, including at the
+  edges. It checks before trimming, so trimming cannot remove one first.
+- **The rate limiters and throttles live in `internal/httpapi`** on
+  `auth.Limiter`, not in `internal/forms` as "Where it lives" lists. They key
+  on the client IP, the site and the caller, which are HTTP and store
+  concerns.
+- **`e2e/tiers.ps1` tests free = 1 form on a trusted tier**, not "Free 0,
+  Pro 1". The script runs one tier, and what it has to prove is that the cap
+  is enforced. The tier is trusted because forms now need that.
+- **Rollback caveat.** A binary older than this feature does not know `forms`
+  or `quota_forms`, and drops both on its next `meta.json` write. Once
+  customers have forms, do not roll back past this feature, or restore
+  `meta.json` from the pre-rollback backup.
+- **The captcha solution is spent before sending.** A visitor who retries
+  after a 502 on a captcha form needs a fresh challenge, which means reloading
+  the page. This is accepted for v1.
+
 ## Decisions taken without asking
 
 - **The mail language is English**, like the account mails. This was offered in
