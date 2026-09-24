@@ -692,3 +692,79 @@ func TestMCPAddDomainReportsPendingVerification(t *testing.T) {
 		t.Error("the result lists an unverified domain as attached")
 	}
 }
+
+// ---- forms over MCP ----
+
+func TestMCPFormsLifecycle(t *testing.T) {
+	e, rs := formsEnv(t, nil)
+	cs := mcpClient(t, e, nil)
+	id, pw := mcpCreate(t, cs, "<h1>hi</h1>")
+	forms := func(res *sdk.CallToolResult) []map[string]any {
+		t.Helper()
+		if res.IsError {
+			t.Fatalf("tool error: %s", mcpText(res))
+		}
+		m, _ := res.StructuredContent.(map[string]any)
+		var out []map[string]any
+		list, _ := m["forms"].([]any)
+		for _, f := range list {
+			out = append(out, f.(map[string]any))
+		}
+		return out
+	}
+	site := map[string]any{"edit_id": id, "edit_password": pw}
+	with := func(extra map[string]any) map[string]any {
+		m := map[string]any{}
+		for k, v := range site {
+			m[k] = v
+		}
+		for k, v := range extra {
+			m[k] = v
+		}
+		return m
+	}
+
+	fs := forms(mcpCall(t, cs, "add_form", with(map[string]any{"form": map[string]any{"name": "Contact", "recipient": "office@example.com", "captcha": true}})))
+	if len(fs) != 1 || fs[0]["status"] != "pending" || !strings.Contains(fs[0]["snippet"].(string), "altcha-widget") || rs.count() != 1 {
+		t.Fatalf("add_form = %v, mails %d", fs, rs.count())
+	}
+	key := fs[0]["key"].(string)
+	fs = forms(mcpCall(t, cs, "update_form", with(map[string]any{"key": key, "form": map[string]any{"name": "Kontakt"}})))
+	if fs[0]["name"] != "Kontakt" {
+		t.Fatalf("update_form = %v", fs)
+	}
+	forms(mcpCall(t, cs, "resend_form_confirmation", with(map[string]any{"key": key})))
+	if rs.count() != 2 {
+		t.Fatalf("resend sent %d mails in total, want 2", rs.count())
+	}
+	if fs = forms(mcpCall(t, cs, "list_forms", site)); len(fs) != 1 {
+		t.Fatalf("list_forms = %v", fs)
+	}
+	if fs = forms(mcpCall(t, cs, "remove_form", with(map[string]any{"key": key}))); len(fs) != 0 {
+		t.Fatalf("remove_form left %v", fs)
+	}
+	res := mcpCall(t, cs, "remove_form", with(map[string]any{"key": key}))
+	if !res.IsError || !strings.Contains(mcpText(res), "list_forms") {
+		t.Fatalf("removing twice = %s", mcpText(res))
+	}
+}
+
+func TestMCPAddFormWithFormsOff(t *testing.T) {
+	e := newEnv(t, nil)
+	cs := mcpClient(t, e, nil)
+	id, pw := mcpCreate(t, cs, "<h1>hi</h1>")
+	res := mcpCall(t, cs, "add_form", map[string]any{"edit_id": id, "edit_password": pw, "form": map[string]any{"name": "A", "recipient": "a@example.com"}})
+	if !res.IsError || !strings.Contains(mcpText(res), "not enabled") {
+		t.Fatalf("add_form with forms off = %s", mcpText(res))
+	}
+}
+
+func TestMCPFormsNeedTheEditPassword(t *testing.T) {
+	e, _ := formsEnv(t, nil)
+	cs := mcpClient(t, e, nil)
+	id, _ := mcpCreate(t, cs, "<h1>hi</h1>")
+	res := mcpCall(t, cs, "list_forms", map[string]any{"edit_id": id})
+	if !res.IsError || !strings.Contains(mcpText(res), "edit_password") {
+		t.Fatalf("list_forms without a password = %s", mcpText(res))
+	}
+}

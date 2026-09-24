@@ -72,6 +72,10 @@ func (o mcpOps) mcpError(err error) error {
 		return errors.New(err.Error())
 	case errors.Is(err, store.ErrBadPath):
 		return errors.New("invalid file path: use a relative path with forward slashes, e.g. assets/app.js")
+	case errors.Is(err, store.ErrFormNotFound):
+		return errors.New("no form with that key on this site — list_forms shows the keys")
+	case errors.Is(err, store.ErrFormActive):
+		return errors.New("this form's recipient has already confirmed; there is nothing to resend")
 	default:
 		o.a.log.Error("mcp internal error", "err", err)
 		return errors.New("internal error")
@@ -403,4 +407,78 @@ func (o mcpOps) DownloadSite(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) 
 		return nil, o.mcpError(err)
 	}
 	return buf.Bytes(), nil
+}
+
+// ---- forms: the same helpers as the JSON API ----
+
+func toFormInput(in mcp.FormInput) formInput {
+	return formInput{Name: in.Name, Recipient: in.Recipient, Captcha: in.Captcha, Files: in.Files, Redirect: in.Redirect}
+}
+
+func toFormsResult(v formsJSON) *mcp.FormsResult {
+	out := &mcp.FormsResult{Enabled: v.Enabled, Limit: v.Limit, Used: v.Used, Forms: make([]mcp.FormResult, 0, len(v.Forms)), Warnings: v.Warnings}
+	for _, f := range v.Forms {
+		out.Forms = append(out.Forms, mcp.FormResult{
+			Key: f.Key, Name: f.Name, Recipient: f.Recipient, Captcha: f.Captcha, Files: f.Files,
+			Redirect: f.Redirect, Status: f.Status, CreatedAt: f.CreatedAt,
+			ConfirmedAt: f.ConfirmedAt, StoppedAt: f.StoppedAt, Snippet: f.Snippet,
+		})
+	}
+	return out
+}
+
+func (o mcpOps) ListForms(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) (*mcp.FormsResult, error) {
+	site, err := o.openSite(auth, ref)
+	if err != nil {
+		return nil, err
+	}
+	return toFormsResult(o.a.listFormsFor(site)), nil
+}
+
+func (o mcpOps) AddForm(ctx context.Context, auth mcp.Auth, ref mcp.SiteRef, in mcp.FormInput) (*mcp.FormsResult, error) {
+	site, err := o.openSite(auth, ref)
+	if err != nil {
+		return nil, err
+	}
+	v, err := o.a.addForm(ctx, site, toFormInput(in))
+	if err != nil {
+		return nil, o.mcpError(err)
+	}
+	return toFormsResult(v), nil
+}
+
+func (o mcpOps) UpdateForm(ctx context.Context, auth mcp.Auth, ref mcp.SiteRef, key string, in mcp.FormInput) (*mcp.FormsResult, error) {
+	site, err := o.openSite(auth, ref)
+	if err != nil {
+		return nil, err
+	}
+	v, err := o.a.updateForm(ctx, site, key, toFormInput(in))
+	if err != nil {
+		return nil, o.mcpError(err)
+	}
+	return toFormsResult(v), nil
+}
+
+func (o mcpOps) RemoveForm(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, key string) (*mcp.FormsResult, error) {
+	site, err := o.openSite(auth, ref)
+	if err != nil {
+		return nil, err
+	}
+	v, err := o.a.deleteForm(site, key)
+	if err != nil {
+		return nil, o.mcpError(err)
+	}
+	return toFormsResult(v), nil
+}
+
+func (o mcpOps) ResendFormConfirmation(ctx context.Context, auth mcp.Auth, ref mcp.SiteRef, key string) (*mcp.FormsResult, error) {
+	site, err := o.openSite(auth, ref)
+	if err != nil {
+		return nil, err
+	}
+	v, err := o.a.resendConfirmation(ctx, site, key)
+	if err != nil {
+		return nil, o.mcpError(err)
+	}
+	return toFormsResult(v), nil
 }

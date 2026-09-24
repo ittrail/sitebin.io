@@ -275,6 +275,63 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		}}}, nil, nil
 	})
 
+	sdk.AddTool(s, &sdk.Tool{
+		Name: "list_forms",
+		Description: "List a site's email forms with their status and the HTML snippet for each. A form mails what visitors " +
+			"submit to one recipient, who confirmed by email.",
+		Annotations: readOnly,
+	}, func(ctx context.Context, _ *sdk.CallToolRequest, in siteArgs) (*sdk.CallToolResult, *FormsResult, error) {
+		if err := authorize(auth, ScopeRead); err != nil {
+			return nil, nil, err
+		}
+		return formsOut(ops.ListForms(ctx, auth, in.ref()))
+	})
+
+	sdk.AddTool(s, &sdk.Tool{
+		Name: "add_form",
+		Description: "Add an email form to a site. The recipient gets one email to confirm; until they click it the form is " +
+			"pending and refuses every submission, so do not tell the user it works before then. Paste the returned " +
+			"snippet into a page of the site with write_files. Needs an instance with form mail configured; plans limit " +
+			"the forms per site.",
+	}, func(ctx context.Context, _ *sdk.CallToolRequest, in formArgs) (*sdk.CallToolResult, *FormsResult, error) {
+		if err := authorize(auth, ScopeWrite); err != nil {
+			return nil, nil, err
+		}
+		return formsOut(ops.AddForm(ctx, auth, in.ref(), in.Form))
+	})
+
+	sdk.AddTool(s, &sdk.Tool{
+		Name: "update_form",
+		Description: "Change a form's name, recipient, captcha, attachments or thank-you page. A new recipient has to " +
+			"confirm by email again before the form works.",
+	}, func(ctx context.Context, _ *sdk.CallToolRequest, in formUpdateArgs) (*sdk.CallToolResult, *FormsResult, error) {
+		if err := authorize(auth, ScopeWrite); err != nil {
+			return nil, nil, err
+		}
+		return formsOut(ops.UpdateForm(ctx, auth, in.ref(), in.Key, in.Form))
+	})
+
+	sdk.AddTool(s, &sdk.Tool{
+		Name:        "remove_form",
+		Description: "Delete a form. Pages that still post to it get an error.",
+		Annotations: destructive,
+	}, func(ctx context.Context, _ *sdk.CallToolRequest, in formKeyArgs) (*sdk.CallToolResult, *FormsResult, error) {
+		if err := authorize(auth, ScopeWrite); err != nil {
+			return nil, nil, err
+		}
+		return formsOut(ops.RemoveForm(ctx, auth, in.ref(), in.Key))
+	})
+
+	sdk.AddTool(s, &sdk.Tool{
+		Name:        "resend_form_confirmation",
+		Description: "Email a form's recipient the confirmation link again, for a form that is pending or that its recipient stopped.",
+	}, func(ctx context.Context, _ *sdk.CallToolRequest, in formKeyArgs) (*sdk.CallToolResult, *FormsResult, error) {
+		if err := authorize(auth, ScopeWrite); err != nil {
+			return nil, nil, err
+		}
+		return formsOut(ops.ResendFormConfirmation(ctx, auth, in.ref(), in.Key))
+	})
+
 	return s
 }
 
@@ -332,6 +389,31 @@ type writeArgs struct {
 
 func (a writeArgs) ref() SiteRef { return SiteRef{EditID: a.EditID, EditPassword: a.EditPassword} }
 
+type formArgs struct {
+	EditID       string    `json:"edit_id" jsonschema:"the site's edit id"`
+	EditPassword string    `json:"edit_password,omitempty" jsonschema:"the site's edit password; not needed with an owning account API token"`
+	Form         FormInput `json:"form" jsonschema:"the form's settings; name and recipient are required"`
+}
+
+func (a formArgs) ref() SiteRef { return SiteRef{EditID: a.EditID, EditPassword: a.EditPassword} }
+
+type formKeyArgs struct {
+	EditID       string `json:"edit_id" jsonschema:"the site's edit id"`
+	EditPassword string `json:"edit_password,omitempty" jsonschema:"the site's edit password; not needed with an owning account API token"`
+	Key          string `json:"key" jsonschema:"the form's key, as list_forms returns it"`
+}
+
+func (a formKeyArgs) ref() SiteRef { return SiteRef{EditID: a.EditID, EditPassword: a.EditPassword} }
+
+type formUpdateArgs struct {
+	EditID       string    `json:"edit_id" jsonschema:"the site's edit id"`
+	EditPassword string    `json:"edit_password,omitempty" jsonschema:"the site's edit password; not needed with an owning account API token"`
+	Key          string    `json:"key" jsonschema:"the form's key, as list_forms returns it"`
+	Form         FormInput `json:"form" jsonschema:"the settings to change; omitted fields are left alone"`
+}
+
+func (a formUpdateArgs) ref() SiteRef { return SiteRef{EditID: a.EditID, EditPassword: a.EditPassword} }
+
 type listResult struct {
 	Sites []SiteSummary `json:"sites"`
 }
@@ -346,8 +428,15 @@ type deleteResult struct {
 }
 
 // out adapts an (*SiteResult, error) pair to the SDK's three-value handler
-// signature, so the twelve tool bodies do not each repeat the same shuffle.
+// signature, so the tool bodies do not each repeat the same shuffle.
 func out(r *SiteResult, err error) (*sdk.CallToolResult, *SiteResult, error) {
+	if err != nil {
+		return nil, nil, err
+	}
+	return nil, r, nil
+}
+
+func formsOut(r *FormsResult, err error) (*sdk.CallToolResult, *FormsResult, error) {
 	if err != nil {
 		return nil, nil, err
 	}

@@ -203,6 +203,40 @@ type CreateInput struct {
 	Domains  []string
 }
 
+// FormInput is a form's settings as add_form and update_form take them. In
+// update_form a field left out is left alone.
+type FormInput struct {
+	Name      *string `json:"name,omitempty" jsonschema:"the form's name, 1-60 characters; recipients see it as the sender of every message"`
+	Recipient *string `json:"recipient,omitempty" jsonschema:"the one email address that receives the submissions; it must confirm by email before the form works"`
+	Captcha   *bool   `json:"captcha,omitempty" jsonschema:"require an ALTCHA proof-of-work captcha; the snippet then includes the widget"`
+	Files     *bool   `json:"files,omitempty" jsonschema:"accept file attachments; the snippet then posts multipart/form-data"`
+	Redirect  *string `json:"redirect,omitempty" jsonschema:"a path on this site to send visitors to after a successful submission, e.g. /thanks.html; empty for the default page"`
+}
+
+// FormResult is one form.
+type FormResult struct {
+	Key         string     `json:"key" jsonschema:"the form's key, part of its action URL"`
+	Name        string     `json:"name"`
+	Recipient   string     `json:"recipient"`
+	Captcha     bool       `json:"captcha"`
+	Files       bool       `json:"files"`
+	Redirect    string     `json:"redirect,omitempty"`
+	Status      string     `json:"status" jsonschema:"pending (the recipient has not confirmed: submissions are refused), active, stopped (the recipient stopped the emails), or paused (beyond the site's plan)"`
+	CreatedAt   time.Time  `json:"created_at"`
+	ConfirmedAt *time.Time `json:"confirmed_at,omitempty"`
+	StoppedAt   *time.Time `json:"stopped_at,omitempty"`
+	Snippet     string     `json:"snippet" jsonschema:"the HTML to paste into a page of this site"`
+}
+
+// FormsResult is what every form tool returns: the site's forms after the call.
+type FormsResult struct {
+	Enabled  bool         `json:"enabled" jsonschema:"whether this instance sends form mail at all"`
+	Limit    int          `json:"limit" jsonschema:"how many forms this site's plan allows"`
+	Used     int          `json:"used"`
+	Forms    []FormResult `json:"forms"`
+	Warnings []string     `json:"warnings,omitempty"`
+}
+
 // Ops is everything internal/mcp needs from the rest of Sitebin. It is
 // implemented by internal/httpapi, which reuses the JSON API's own helpers so
 // no rule is stated twice.
@@ -231,6 +265,12 @@ type Ops interface {
 	AddDomain(ctx context.Context, a Auth, ref SiteRef, domain string) (*SiteResult, error)
 	RemoveDomain(ctx context.Context, a Auth, ref SiteRef, domain string) (*SiteResult, error)
 	DownloadSite(ctx context.Context, a Auth, ref SiteRef) (zip []byte, err error)
+
+	ListForms(ctx context.Context, a Auth, ref SiteRef) (*FormsResult, error)
+	AddForm(ctx context.Context, a Auth, ref SiteRef, in FormInput) (*FormsResult, error)
+	UpdateForm(ctx context.Context, a Auth, ref SiteRef, key string, in FormInput) (*FormsResult, error)
+	RemoveForm(ctx context.Context, a Auth, ref SiteRef, key string) (*FormsResult, error)
+	ResendFormConfirmation(ctx context.Context, a Auth, ref SiteRef, key string) (*FormsResult, error)
 }
 
 // ErrTooLarge reports that a call's content exceeds MaxContentBytes.

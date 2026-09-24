@@ -23,6 +23,8 @@ type fakeOps struct {
 	gotFiles  []DecodedFile
 	gotPath   string
 	gotDomain string
+	gotForm   FormInput
+	gotKey    string
 	replace   bool
 	calls     []string
 
@@ -115,6 +117,39 @@ func (f *fakeOps) DownloadSite(_ context.Context, a Auth, ref SiteRef) ([]byte, 
 	return f.zip, f.err
 }
 
+func (f *fakeOps) forms() *FormsResult {
+	return &FormsResult{Enabled: true, Limit: 1, Forms: []FormResult{}}
+}
+
+func (f *fakeOps) ListForms(_ context.Context, a Auth, ref SiteRef) (*FormsResult, error) {
+	f.note("list_forms", a, ref)
+	return f.forms(), f.err
+}
+
+func (f *fakeOps) AddForm(_ context.Context, a Auth, ref SiteRef, in FormInput) (*FormsResult, error) {
+	f.note("add_form", a, ref)
+	f.gotForm = in
+	return f.forms(), f.err
+}
+
+func (f *fakeOps) UpdateForm(_ context.Context, a Auth, ref SiteRef, key string, in FormInput) (*FormsResult, error) {
+	f.note("update_form", a, ref)
+	f.gotKey, f.gotForm = key, in
+	return f.forms(), f.err
+}
+
+func (f *fakeOps) RemoveForm(_ context.Context, a Auth, ref SiteRef, key string) (*FormsResult, error) {
+	f.note("remove_form", a, ref)
+	f.gotKey = key
+	return f.forms(), f.err
+}
+
+func (f *fakeOps) ResendFormConfirmation(_ context.Context, a Auth, ref SiteRef, key string) (*FormsResult, error) {
+	f.note("resend_form_confirmation", a, ref)
+	f.gotKey = key
+	return f.forms(), f.err
+}
+
 // connect starts the MCP handler over HTTP and returns a connected client
 // session, exercising the real transport rather than calling handlers directly.
 func connect(t *testing.T, ops Ops, header http.Header) *sdk.ClientSession {
@@ -180,6 +215,7 @@ func TestToolCatalog(t *testing.T) {
 		"create_site": true, "list_sites": true, "get_site": true, "update_site": true,
 		"list_files": true, "read_file": true, "write_files": true, "delete_file": true,
 		"delete_site": true, "add_domain": true, "remove_domain": true, "download_site": true,
+		"list_forms": true, "add_form": true, "update_form": true, "remove_form": true, "resend_form_confirmation": true,
 	}
 	got := map[string]bool{}
 	for _, tool := range res.Tools {
@@ -501,18 +537,23 @@ func TestEveryToolIsScoped(t *testing.T) {
 	// rejected by validation before the scope check ever runs, which would make
 	// this test pass for the wrong reason.
 	argsFor := map[string]map[string]any{
-		"create_site":   {"files": []any{}},
-		"list_sites":    {},
-		"get_site":      {"edit_id": "e1"},
-		"update_site":   {"edit_id": "e1", "settings": map[string]any{}},
-		"list_files":    {"edit_id": "e1"},
-		"read_file":     {"edit_id": "e1", "path": "p"},
-		"write_files":   {"edit_id": "e1", "files": []any{}, "replace": true},
-		"delete_file":   {"edit_id": "e1", "path": "p"},
-		"delete_site":   {"edit_id": "e1"},
-		"add_domain":    {"edit_id": "e1", "domain": "d.example.com"},
-		"remove_domain": {"edit_id": "e1", "domain": "d.example.com"},
-		"download_site": {"edit_id": "e1"},
+		"create_site":              {"files": []any{}},
+		"list_sites":               {},
+		"get_site":                 {"edit_id": "e1"},
+		"update_site":              {"edit_id": "e1", "settings": map[string]any{}},
+		"list_files":               {"edit_id": "e1"},
+		"read_file":                {"edit_id": "e1", "path": "p"},
+		"write_files":              {"edit_id": "e1", "files": []any{}, "replace": true},
+		"delete_file":              {"edit_id": "e1", "path": "p"},
+		"delete_site":              {"edit_id": "e1"},
+		"add_domain":               {"edit_id": "e1", "domain": "d.example.com"},
+		"remove_domain":            {"edit_id": "e1", "domain": "d.example.com"},
+		"download_site":            {"edit_id": "e1"},
+		"list_forms":               {"edit_id": "e1"},
+		"add_form":                 {"edit_id": "e1", "form": map[string]any{"name": "A", "recipient": "a@example.com"}},
+		"update_form":              {"edit_id": "e1", "key": "k1", "form": map[string]any{}},
+		"remove_form":              {"edit_id": "e1", "key": "k1"},
+		"resend_form_confirmation": {"edit_id": "e1", "key": "k1"},
 	}
 	for _, tool := range tools.Tools {
 		args, ok := argsFor[tool.Name]
@@ -528,5 +569,20 @@ func TestEveryToolIsScoped(t *testing.T) {
 			t.Errorf("tool %q is not covered by exactly one scope (read refused=%v, write refused=%v)",
 				tool.Name, refusedByRead, refusedByWrite)
 		}
+	}
+}
+
+func TestFormToolsPassTheirArguments(t *testing.T) {
+	ops := &fakeOps{}
+	cs := connect(t, ops, nil)
+	res := call(t, cs, "add_form", map[string]any{"edit_id": "e1", "edit_password": "pw",
+		"form": map[string]any{"name": "Contact", "recipient": "a@example.com", "captcha": true}})
+	if res.IsError || ops.gotRef.EditID != "e1" || ops.gotForm.Name == nil || *ops.gotForm.Name != "Contact" ||
+		ops.gotForm.Captcha == nil || !*ops.gotForm.Captcha || ops.gotForm.Files != nil {
+		t.Fatalf("add_form passed %+v (%s)", ops.gotForm, resultText(res))
+	}
+	call(t, cs, "update_form", map[string]any{"edit_id": "e1", "key": "k9", "form": map[string]any{"recipient": "b@example.com"}})
+	if ops.gotKey != "k9" || ops.gotForm.Recipient == nil || *ops.gotForm.Recipient != "b@example.com" || ops.gotForm.Name != nil {
+		t.Fatalf("update_form passed key %q form %+v", ops.gotKey, ops.gotForm)
 	}
 }
