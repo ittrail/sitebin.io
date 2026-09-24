@@ -566,6 +566,7 @@ func (a *API) createSiteWith(r *http.Request, opts createOpts) (*store.Site, str
 				m.QuotaExpiryDays = grant.MaxExpiryDays
 				m.QuotaDomains = grant.MaxCustomDomain
 				m.QuotaWebDAV = grant.WebDAV
+				m.QuotaForms = grant.MaxForms
 			}
 			return nil
 		}); err != nil {

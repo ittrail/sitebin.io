@@ -171,6 +171,25 @@ func TestStopFormAndReconfirm(t *testing.T) {
 	}
 }
 
+func TestApplyQuotaStampsForms(t *testing.T) {
+	s, site := formSite(t)
+	three := 3
+	if err := s.ApplyQuota(site, Quota{Forms: &three}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if site.Meta.QuotaForms == nil || *site.Meta.QuotaForms != 3 {
+		t.Fatalf("QuotaForms = %v, want 3", site.Meta.QuotaForms)
+	}
+	// ApplyQuota writes every field it is given — which is exactly why every
+	// caller has to pass Forms (see the cleanup and siteservice tests).
+	if err := s.ApplyQuota(site, Quota{}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if site.Meta.QuotaForms != nil {
+		t.Errorf("QuotaForms = %d after a grant without it, want nil", *site.Meta.QuotaForms)
+	}
+}
+
 func TestFindFormAndPaused(t *testing.T) {
 	s, site := formSite(t)
 	a := addForm(t, s, site, "A", "a@example.com")

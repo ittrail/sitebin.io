@@ -129,6 +129,9 @@ type CreateGrant struct {
 	MaxExpiryDays   int
 	MaxCustomDomain *int  // nil = inherit global; value (incl. 0) = explicit cap
 	WebDAV          *bool // nil = inherit global
+	// MaxForms caps the site's email forms (tier max_forms). nil = inherit the
+	// instance default; a value, 0 included, is an explicit cap.
+	MaxForms *int
 	// Trusted exempts the site from the strict content-security headers that
 	// untrusted uploads are served with. Only a tier marked trusted grants it;
 	// anonymous sites never are. The core's default is the opposite of this

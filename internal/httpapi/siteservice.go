@@ -148,5 +148,6 @@ func quotaFromGrant(g ext.CreateGrant) store.Quota {
 		ExpiryDays: g.MaxExpiryDays,
 		Domains:    g.MaxCustomDomain,
 		WebDAV:     g.WebDAV,
+		Forms:      g.MaxForms,
 	}
 }

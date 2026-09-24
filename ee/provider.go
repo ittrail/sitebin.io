@@ -390,6 +390,7 @@ func (p *provider) grantForAccount(acc *account.Account) (ext.CreateGrant, error
 func grantFromTier(owner string, t eeconfig.Tier) ext.CreateGrant {
 	webdav := t.WebDAV
 	domains := t.CustomDomains
+	forms := t.MaxForms
 	return ext.CreateGrant{
 		OwnerAccountID:  owner,
 		MaxSiteBytes:    t.MaxSiteBytes,
@@ -397,6 +398,7 @@ func grantFromTier(owner string, t eeconfig.Tier) ext.CreateGrant {
 		MaxExpiryDays:   t.MaxExpiryDays,
 		MaxCustomDomain: &domains,
 		WebDAV:          &webdav,
+		MaxForms:        &forms,
 		// An anonymous site is never trusted, whatever its tier says: the
 		// anonymous tier is a quota bundle, not a statement about who uploaded.
 		Trusted: t.Trusted && owner != "",

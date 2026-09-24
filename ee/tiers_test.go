@@ -3,6 +3,7 @@
 package ee
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ittrail/sitebin.io/ee/account"
+	"github.com/ittrail/sitebin.io/ee/eeconfig"
 	"github.com/ittrail/sitebin.io/internal/cleanup"
 	"github.com/ittrail/sitebin.io/internal/config"
 	"github.com/ittrail/sitebin.io/internal/ext"
@@ -153,6 +155,23 @@ func TestSelfSelectTier(t *testing.T) {
 	g, ok := sites.quotas["abcdefghijklmnopqrstuvwxyz"]
 	if !ok || g.MaxSiteBytes != 1000 || g.MaxExpiryDays != 7 {
 		t.Fatalf("site not restamped by self-select: %+v", g)
+	}
+}
+
+func TestGrantFromTierCarriesMaxForms(t *testing.T) {
+	g := grantFromTier("acct", eeconfig.Tier{ID: "studio", MaxForms: 10})
+	if g.MaxForms == nil || *g.MaxForms != 10 {
+		t.Fatalf("MaxForms = %v, want 10", g.MaxForms)
+	}
+	// A tier without the field stamps an explicit 0 — "none" — never nil,
+	// which would fall back to the instance default.
+	g = grantFromTier("acct", eeconfig.Tier{ID: "free"})
+	if g.MaxForms == nil || *g.MaxForms != 0 {
+		t.Fatalf("MaxForms = %v for a tier without max_forms, want an explicit 0", g.MaxForms)
+	}
+	var tier eeconfig.Tier
+	if err := json.Unmarshal([]byte(`{"id":"pro","max_forms":1}`), &tier); err != nil || tier.MaxForms != 1 {
+		t.Fatalf("max_forms not parsed: %+v %v", tier, err)
 	}
 }
 

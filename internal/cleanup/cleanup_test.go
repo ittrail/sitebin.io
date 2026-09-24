@@ -476,6 +476,29 @@ func TestSweepAttachesAPendingDomainOnceProven(t *testing.T) {
 	}
 }
 
+func TestSweepReconcileKeepsTheFormsCap(t *testing.T) {
+	ten := 10
+	p := &stubProvider{grant: ext.CreateGrant{MaxExpiryDays: 0, MaxForms: &ten}, ok: true}
+	ext.Register(p)
+	defer ext.Reset()
+	st, err := store.New(t.TempDir(), "sitebin.example", 1<<20, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	site := expiredOwnedSite(t, st, now, "acct-1", 7, true)
+	if _, err := Sweep(st, now); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.ByViewID(site.ViewID)
+	if err != nil {
+		t.Fatalf("site deleted: %v", err)
+	}
+	if got.Meta.QuotaForms == nil || *got.Meta.QuotaForms != 10 {
+		t.Fatalf("QuotaForms = %v after reconcile, want the plan's 10", got.Meta.QuotaForms)
+	}
+}
+
 func TestSweepPurgesReportsOlderThanRetention(t *testing.T) {
 	st, _ := store.New(t.TempDir(), "sitebin.example", 1<<20, 100)
 	now := time.Now()

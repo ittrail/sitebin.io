@@ -190,6 +190,7 @@ func reconcile(st *store.Store, site *store.Site, now time.Time) (keep bool, err
 		ExpiryDays: grant.MaxExpiryDays,
 		Domains:    grant.MaxCustomDomain,
 		WebDAV:     grant.WebDAV,
+		Forms:      grant.MaxForms,
 	}, 0); err != nil {
 		return false, fmt.Errorf("apply quota: %w", err)
 	}

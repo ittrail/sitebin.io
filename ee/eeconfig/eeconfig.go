@@ -109,6 +109,10 @@ type Tier struct {
 	// proven once) the account may hold. 0 / absent means NONE, the same
 	// polarity as custom_domains. Names inside a zone are unlimited.
 	MaxZones int `json:"max_zones,omitempty"`
+	// MaxForms caps each site's email forms. 0 / absent means NONE, the same
+	// polarity as custom_domains: a free tier that forgets the field must not
+	// send mail. Only meaningful with SITEBIN_FORMS_SMTP_HOST set.
+	MaxForms int `json:"max_forms,omitempty"`
 	// Admin marks a tier whose holders may reach the admin console. It is only
 	// half of the gate: the account must ALSO be listed in
 	// SITEBIN_ADMIN_ACCOUNTS. A tier source (PayGate, a stored tier) can

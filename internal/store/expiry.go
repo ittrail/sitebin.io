@@ -75,6 +75,7 @@ type Quota struct {
 	ExpiryDays int
 	Domains    *int
 	WebDAV     *bool
+	Forms      *int
 }
 
 // ApplyQuota restamps a site's per-site caps and reconciles its expiry with the
@@ -119,6 +120,7 @@ func (s *Store) ApplyQuota(site *Site, q Quota, grace time.Duration) error {
 		m.QuotaExpiryDays = q.ExpiryDays
 		m.QuotaDomains = q.Domains
 		m.QuotaWebDAV = q.WebDAV
+		m.QuotaForms = q.Forms
 
 		now := time.Now()
 		if q.ExpiryDays <= 0 {
