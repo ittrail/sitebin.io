@@ -149,6 +149,8 @@ var basePageTmpl = template.Must(template.New("page").Parse(`<!doctype html>
   button:active { transform: none; box-shadow: 0 8px 22px rgba(217,154,38,.3); }
   .err { color: #ff9d9d; font-size: 14px; }
   .code { font: 700 46px/1 ui-monospace, monospace; color: #f5b84d; margin-bottom: 12px; text-shadow: 0 0 32px rgba(245,184,77,.4); }
+  .back { display: inline-block; margin-top: 20px; color: #f5b84d; font-size: 14px; text-decoration: none; }
+  .back:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -169,6 +171,13 @@ var basePageTmpl = template.Must(template.New("page").Parse(`<!doctype html>
     <button type="submit">Unlock site</button>
   </form>
   {{end}}
+  {{if .Action}}
+  <form method="post" action="{{.Action}}">
+    <input type="hidden" name="t" value="{{.Token}}">
+    <button type="submit">{{.Button}}</button>
+  </form>
+  {{end}}
+  {{if .Back}}<a class="back" href="{{.Back}}">&larr; Back</a>{{end}}
 </main>
 </body>
 </html>
@@ -182,6 +191,13 @@ type pageData struct {
 	Redirect string
 	Error    string
 	Site     string // view id (path mode only; empty on subdomains)
+	// Back links to the page a visitor came from (forms' result pages).
+	Back string
+	// Action, Token and Button render a one-button form that POSTs t=Token to
+	// Action: the recipient's confirm and stop pages.
+	Action string
+	Token  string
+	Button string
 }
 
 func (a *API) renderPage(w http.ResponseWriter, status int, d pageData) {

@@ -31,6 +31,7 @@ var testFS = fstest.MapFS{
 	"static/favicon.svg":    {Data: []byte("<svg/>")},
 	"static/embed.js":       {Data: []byte("// sitebin-drop")},
 	"vendor/markdown-it.js": {Data: []byte("// md")},
+	"vendor/altcha.min.js":  {Data: []byte("// altcha")},
 }
 
 type env struct {

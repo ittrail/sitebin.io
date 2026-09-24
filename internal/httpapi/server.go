@@ -122,6 +122,10 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("GET /_sitebin/embed.js", a.embedScript)
 	mux.HandleFunc("POST /_sitebin/unlock", a.unlock)
 	mux.HandleFunc("POST /_sitebin/csp-report", a.handleCSPReport)
+	mux.HandleFunc("POST /_sitebin/forms/{key}", a.submitForm)
+	mux.HandleFunc("GET /_sitebin/forms/{key}/challenge", a.formChallenge)
+	mux.HandleFunc("GET /_sitebin/forms/{key}/thanks", a.formThanks)
+	mux.HandleFunc("GET /_sitebin/altcha.js", a.altchaScript)
 
 	// Enterprise: mount the account dashboard + auth routes when a provider is
 	// active. Guarded so a provider can only ever add routes on the main domain.
