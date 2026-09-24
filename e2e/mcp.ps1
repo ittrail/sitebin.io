@@ -25,7 +25,7 @@ New-Item -ItemType Directory -Force $work | Out-Null
 # Every assertion in this script must run. If one is skipped -- a throw, an
 # early return -- the totals still look healthy, so the count is checked at the
 # end against this number. Update it when you add or remove an assertion.
-$ExpectedAssertions = 37
+$ExpectedAssertions = 42
 $script:pass = 0; $script:fail = 0
 # $c is deliberately untyped. With [bool], PowerShell throws on anything it
 # cannot coerce -- an array from a multi-line command substitution, say -- and a
@@ -142,7 +142,8 @@ $tools = @()
 if ($null -ne $r.msg -and $null -ne $r.msg.result) { $tools = $r.msg.result.tools | ForEach-Object { $_.name } }
 foreach ($t in @("create_site", "list_sites", "get_site", "update_site", "list_files",
         "read_file", "write_files", "delete_file", "delete_site",
-        "add_domain", "remove_domain", "download_site")) {
+        "add_domain", "remove_domain", "download_site",
+        "list_forms", "add_form", "update_form", "remove_form", "resend_form_confirmation")) {
     Assert "tool $t present" ($tools -contains $t)
 }
 

@@ -26,7 +26,7 @@ function JsonBodyT([string]$json) {
 # free tier: 1 site max, 200-byte storage cap, no webdav, 0 custom domains.
 # Written to a mounted file to avoid shell JSON-quoting issues (this is the
 # documented production approach via SITEBIN_TIERS_FILE).
-$tiers = '[{"id":"free","label":"Free","max_site_bytes":200,"max_files":5,"max_sites":1,"webdav":false,"custom_domains":0,"max_expiry_days":7}]'
+$tiers = '[{"id":"free","label":"Free","max_site_bytes":200,"max_files":5,"max_sites":1,"webdav":false,"custom_domains":0,"max_expiry_days":7,"max_forms":1}]'
 [IO.File]::WriteAllText((Join-Path $work "tiers.json"), $tiers)
 $workDocker = ($work -replace '\\', '/')
 
@@ -35,7 +35,9 @@ docker rm -f $name 2>$null | Out-Null; docker volume rm $vol 2>$null | Out-Null
 docker run -d --name $name -p "${Port}:80" -v "${vol}:/data" -v "${workDocker}:/cfg:ro" `
     -e "SITEBIN_BASE_DOMAIN=${base}:$Port" -e "SITEBIN_HTTP_ONLY=true" `
     -e "SITEBIN_ACCOUNT_MODE=tiers" -e "SITEBIN_TIERS_FILE=/cfg/tiers.json" -e "SITEBIN_DEFAULT_TIER=free" `
-    -e "SITEBIN_RATE_AUTH_PER_5MIN=200" $Image | Out-Null
+    -e "SITEBIN_RATE_AUTH_PER_5MIN=200" `
+    -e "SITEBIN_FORMS_SMTP_HOST=127.0.0.1" -e "SITEBIN_FORMS_SMTP_PORT=1" -e "SITEBIN_FORMS_SMTP_FROM=forms@localtest.me" `
+    $Image | Out-Null
 if ($LASTEXITCODE -ne 0) { Write-Host "docker run failed" -ForegroundColor Red; exit 1 }
 
 $up = $false
@@ -66,6 +68,14 @@ if ($site) {
     # custom domain blocked (cap 0)
     $r = Req "POST" "$origin/api/sites/$edit/domains" @("-H", "X-Edit-Password: $($site.edit_password)", "-H", "Content-Type: application/json", "--data", (JsonBodyT '{"domain":"x.example.org"}'))
     Assert "custom domain blocked on free tier" ($r.code -ge 400) "got $($r.code)"
+
+    # forms: the tier allows one per site. The SMTP server is deliberately
+    # unreachable, so the form is created, pending, with a warning.
+    $r = Req "POST" "$origin/api/sites/$edit/forms" @("-H", "X-Edit-Password: $($site.edit_password)", "-H", "Content-Type: application/json", "--data", (JsonBodyT '{"name":"A","recipient":"a@example.test"}'))
+    Assert "first form within max_forms (201)" ($r.code -eq 201) "got $($r.code): $($r.body)"
+    Assert "an unsent confirmation is a warning" ($r.body -match '"warnings"') "$($r.body)"
+    $r = Req "POST" "$origin/api/sites/$edit/forms" @("-H", "X-Edit-Password: $($site.edit_password)", "-H", "Content-Type: application/json", "--data", (JsonBodyT '{"name":"B","recipient":"b@example.test"}'))
+    Assert "second form over max_forms=1 (403)" ($r.code -eq 403) "got $($r.code): $($r.body)"
 }
 
 # second site -> blocked by max_sites=1
