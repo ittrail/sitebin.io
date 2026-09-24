@@ -180,13 +180,15 @@ origin, and the core mails them to a recipient. Read
 - **Nothing is stored or logged.** Submissions are mailed synchronously (a
   failure is a 502 the visitor can retry) and never written down. Logs carry
   site, key, size and file count, never values, filenames or the recipient.
-- **The submission mail stays plain.** Its HTML is paragraphs and bold
-  labels, with no hidden preheader, no zero-size spacers, no uppercase or
-  monospace styling: Microsoft 365 junked every submission sent in the
-  claim-ticket look and delivered the same content in plain HTML, and no
-  single trait was to blame (spec, Corrections). `TestSubmissionHTMLIsPlain`
-  guards it. Do not bring the ticket look back to this mail; the
-  confirmation mail keeps it because it is delivered.
+- **The submission mail stays plain.** A dark header over an ivory card,
+  no hidden preheader, no zero-size spacers, no uppercase or monospace
+  styling, and a `<head>` with nothing but the charset (no `<title>`, no
+  viewport): Microsoft 365 junked every submission in the claim-ticket look,
+  and even a plain layout while it kept `<title>` and viewport; no single
+  trait was to blame (spec, Corrections). `TestSubmissionHTMLIsPlain`
+  guards it. Do not bring the ticket look back to this mail, and re-test
+  against a Microsoft 365 mailbox before changing its layout; the
+  confirmation mail keeps the ticket look because it is delivered.
 - **ALTCHA traps.** Always pass `DeriveKey` to `VerifySolution` (without it
   the library accepts on the signature alone), and keep the replay memory
   (the library has none). The widget is `web/vendor/altcha.min.js`; bump it

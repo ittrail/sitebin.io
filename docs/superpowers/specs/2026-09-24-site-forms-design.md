@@ -725,12 +725,22 @@ with this block, this block is what the code does.
   (custom domain instead), with the sender name "Sitebin", with English
   content, without the hidden preheader, without the `font-size:0` spacers,
   with plain field labels — every one still Junk. The same content as text only,
-  or as plain HTML (paragraphs, bold labels, no hidden or decorative CSS),
-  reached the inbox. The filter scores the template's traits together, so
-  `TestSubmissionHTMLIsPlain` bans all of them: hidden text, zero or 1px
-  fonts, `text-transform`, `letter-spacing`, monospace, dashed borders. The
-  submission mail no longer has a preheader at all; the confirmation mail
-  keeps its ticket look, because it is delivered.
+  or as bare HTML (paragraphs, bold labels, no CSS), reached the inbox. A
+  first plain redesign was *still* junked while its `<head>` carried `<title>`
+  and a viewport meta; without them it was delivered — and removing them from
+  the ticket template alone did not rescue that one. The filter scores the
+  traits together, so `TestSubmissionHTMLIsPlain` bans all of them: hidden
+  text, zero or 1px fonts, `text-transform`, `letter-spacing`, monospace,
+  dashed borders, `<title>`, viewport meta. The shipped layout — a dark slate
+  header ("Sitebin" in amber, the headline in ivory, the host below) over an
+  ivory card with amber-brown labels above the values and the footer inside
+  the card — was delivered. So was a plainer white card; the same content on
+  a bare white page went to quarantine, and so did a design closer to the
+  ticket (amber stamp with the form name, "New message from <host>" as the
+  headline, solid frame). The submission mail has no preheader at all; the
+  confirmation mail keeps its ticket look, because it is delivered. Tests
+  were run against one Microsoft 365 mailbox, one variant per mail, so read
+  them as "these combinations crossed the threshold", not as a rule set.
 - **The attachment is `submission.json` again.** An intermediate change
   (`193b882`) renamed it to `submission.txt` because Outlook reported
   `submission.json` as a "potentially unsafe attachment". That diagnosis was

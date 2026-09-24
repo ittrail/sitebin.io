@@ -175,18 +175,20 @@ func TestSubmissionMailBodies(t *testing.T) {
 	}
 }
 
-// The submission mail's HTML is deliberately plain. Microsoft 365 junked
-// every submission sent in the claim-ticket look (SCL 5, CAT:SPM, with SPF,
-// DKIM and DMARC all passing) and delivered the same content as plain text or
-// as plain HTML. Removing any single trait -- the hidden preheader, the
-// zero-size spacers, the uppercase mono labels, the stop link -- did not
-// help; the filter scores them together. So none of them comes back.
+// The submission mail's HTML is deliberately plain, and its <head> holds
+// nothing but the charset. Microsoft 365 junked every submission sent in the
+// claim-ticket look (SCL 5, CAT:SPM, with SPF, DKIM and DMARC all passing).
+// Removing any single trait -- the hidden preheader, the zero-size spacers,
+// the uppercase mono labels, the stop link, the <title> and viewport meta --
+// did not help; the filter scores them together. A plain card layout was
+// junked while it kept <title> and viewport, and delivered without them.
+// So none of them comes back.
 func TestSubmissionHTMLIsPlain(t *testing.T) {
 	m, _ := BuildSubmission(sampleIn(sampleSub()))
 	_, leaves := readMail(t, m)
 	html := strings.ToLower(strings.ReplaceAll(string(leaves[1].body), " ", ""))
 	for _, banned := range []string{"display:none", "font-size:0", "font-size:1px", "opacity:0", "max-height:0",
-		"visibility:hidden", "text-transform", "letter-spacing", "monospace", "dashed"} {
+		"visibility:hidden", "text-transform", "letter-spacing", "monospace", "dashed", "<title", "name=\"viewport\""} {
 		if strings.Contains(html, banned) {
 			t.Errorf("submission HTML contains %q", banned)
 		}
