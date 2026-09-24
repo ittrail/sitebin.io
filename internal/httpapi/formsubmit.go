@@ -19,7 +19,10 @@ import (
 // own origin under /_sitebin/, which Caddy proxies here without the authz
 // subrequest on every content origin (view hosts and custom domains alike).
 
-const noForm = "There is no form at this address."
+const (
+	noForm          = "There is no form at this address."
+	tooManyMessages = "Too many messages were sent through this form. Please try again later."
+)
 
 // formSite resolves the site a /_sitebin/forms request is for, and whether it
 // was addressed through a path view (?_site= on the main domain). _site is
@@ -72,8 +75,11 @@ func (a *API) submitForm(w http.ResponseWriter, r *http.Request) {
 		fail(403, "This form no longer accepts messages.")
 		return
 	}
-	if !a.forms.perIP.Allow(clientIP(r)) || !a.forms.perForm.Allow(site.ViewID+"/"+f.Key) {
-		fail(429, "Too many messages were sent through this form. Please try again later.")
+	// The per-IP bucket is spent first, before any body is read. The per-form
+	// one is spent only on a message about to be mailed (below): otherwise a
+	// botnet's honeypot hits and failed captchas would lock out real people.
+	if !a.forms.perIP.Allow(clientIP(r)) {
+		fail(429, tooManyMessages)
 		return
 	}
 	var fileRoom int64
@@ -102,6 +108,10 @@ func (a *API) submitForm(w http.ResponseWriter, r *http.Request) {
 	}
 	if !sub.HasContent() {
 		fail(400, "The form was empty.")
+		return
+	}
+	if !a.forms.perForm.Allow(site.ViewID + "/" + f.Key) {
+		fail(429, tooManyMessages)
 		return
 	}
 	now := time.Now()

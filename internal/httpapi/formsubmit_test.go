@@ -172,6 +172,73 @@ func TestSubmitRateLimits(t *testing.T) {
 	}
 }
 
+// solvedAltcha fetches a challenge for f and solves it, returning the value of
+// the altcha field, URL-encoded.
+func solvedAltcha(t *testing.T, e *env, site *store.Site, f store.Form) string {
+	t.Helper()
+	w := get(t, e, viewHost(site), "/_sitebin/forms/"+f.Key+"/challenge", nil)
+	if w.Code != 200 {
+		t.Fatalf("challenge = %d", w.Code)
+	}
+	var ch altcha.Challenge
+	if err := json.Unmarshal(w.Body.Bytes(), &ch); err != nil {
+		t.Fatal(err)
+	}
+	sol, err := altcha.SolveChallenge(altcha.SolveChallengeOptions{Challenge: ch, DeriveKey: altcha.DeriveKeyPBKDF2()})
+	if err != nil || sol == nil {
+		t.Fatalf("solve: %v", err)
+	}
+	payload, _ := json.Marshal(map[string]any{"challenge": map[string]any{"parameters": ch.Parameters, "signature": ch.Signature}, "solution": sol})
+	return url.QueryEscape(base64.StdEncoding.EncodeToString(payload))
+}
+
+// Bots must not drain a form's budget: honeypot hits, failed captchas and
+// empty posts, from as many addresses as a botnet likes, are answered before
+// the per-form bucket is charged. Only a message that is really mailed counts.
+func TestSubmitPerFormBudgetIsSpentOnlyOnRealMessages(t *testing.T) {
+	e, rs := formsEnv(t, map[string]string{"SITEBIN_FORMS_PER_FORM_HOUR": "2"})
+	site, f := activeForm(t, e, store.Form{Captcha: true})
+	ip := 0
+	next := func() map[string]string {
+		ip++
+		return map[string]string{"X-Forwarded-For": fmt.Sprintf("198.51.100.%d", ip)}
+	}
+	for i := 0; i < 3; i++ {
+		if w := submit(t, e, viewHost(site), f.Key, "message=buy+now&_gotcha=x", next()); w.Code != 303 {
+			t.Fatalf("honeypot %d = %d, want the success look-alike", i+1, w.Code)
+		}
+		if w := submit(t, e, viewHost(site), f.Key, "message=buy+now", next()); w.Code != 403 {
+			t.Fatalf("no captcha %d = %d, want 403", i+1, w.Code)
+		}
+	}
+	if w := submit(t, e, viewHost(site), f.Key, "message=+&altcha="+solvedAltcha(t, e, site, f), next()); w.Code != 400 {
+		t.Fatalf("empty post = %d, want 400", w.Code)
+	}
+	for i := 0; i < 2; i++ {
+		if w := submit(t, e, viewHost(site), f.Key, "message=hi&altcha="+solvedAltcha(t, e, site, f), next()); w.Code != 303 {
+			t.Fatalf("real message %d = %d, want 303: the bots drained the form", i+1, w.Code)
+		}
+	}
+	if w := submit(t, e, viewHost(site), f.Key, "message=hi&altcha="+solvedAltcha(t, e, site, f), next()); w.Code != 429 {
+		t.Fatalf("3rd real message = %d, want 429 from the per-form bucket", w.Code)
+	}
+	if rs.count() != 2 {
+		t.Errorf("mails = %d, want 2", rs.count())
+	}
+}
+
+// The per-IP bucket stays first, and a honeypot hit still spends it.
+func TestSubmitHoneypotStillSpendsThePerIPBudget(t *testing.T) {
+	e, rs := formsEnv(t, map[string]string{"SITEBIN_FORMS_PER_IP_HOUR": "2"})
+	site, f := activeForm(t, e, store.Form{})
+	for i := 0; i < 2; i++ {
+		submit(t, e, viewHost(site), f.Key, "message=buy+now&_gotcha=x", nil)
+	}
+	if w := submit(t, e, viewHost(site), f.Key, "message=hi", nil); w.Code != 429 || rs.count() != 0 {
+		t.Fatalf("after 2 honeypot hits from one IP = %d (mails %d), want 429", w.Code, rs.count())
+	}
+}
+
 // Review Focus 3.
 func TestSubmitOnCustomDomain(t *testing.T) {
 	e, rs := formsEnv(t, nil)
