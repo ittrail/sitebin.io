@@ -12,7 +12,7 @@ func TestCleanName(t *testing.T) {
 			t.Errorf("CleanName(%q) = %q, %v", ok, got, err)
 		}
 	}
-	for _, bad := range []string{"", "   ", strings.Repeat("a", 61), "Contact\r\nBcc: x@evil.example", "a\x00b", "tab\there"} {
+	for _, bad := range []string{"", "   ", strings.Repeat("a", 61), "Contact\r\nBcc: x@evil.example", "a\x00b", "tab\there", "Contact\r\n", "\tContact"} {
 		if _, err := CleanName(bad); !errors.Is(err, ErrBadName) {
 			t.Errorf("CleanName(%q) accepted", bad)
 		}

@@ -33,8 +33,11 @@ func hasControl(s string) bool { return strings.IndexFunc(s, unicode.IsControl) 
 // than stripped: a stripped name would silently differ from what the owner
 // typed.
 func CleanName(s string) (string, error) {
+	if hasControl(s) {
+		return "", ErrBadName
+	}
 	s = strings.TrimSpace(s)
-	if n := utf8.RuneCountInString(s); n == 0 || n > MaxNameRunes || !utf8.ValidString(s) || hasControl(s) {
+	if n := utf8.RuneCountInString(s); n == 0 || n > MaxNameRunes || !utf8.ValidString(s) {
 		return "", ErrBadName
 	}
 	return s, nil
