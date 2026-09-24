@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/mail"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -96,6 +97,33 @@ type Config struct {
 	// the <sitebin-drop> embed component ("*" allows any). Honored only in
 	// the enterprise edition; empty means same-origin only.
 	EmbedOrigins []string
+
+	// Forms (SITEBIN_FORMS_*): email form submissions for hosted sites. See
+	// docs/superpowers/specs/2026-09-24-site-forms-design.md. FormsSMTP nil
+	// means the instance has no forms at all.
+	FormsSMTP *FormsSMTP
+	// FormsMaxPerSite is the forms cap for a site with no stamped
+	// quota_forms. Nil means unset: httpapi then uses 10 with no extension
+	// provider and 0 with one, so existing sites on a tiers instance do not
+	// all gain forms the day this ships.
+	FormsMaxPerSite   *int
+	FormsMaxFiles     int   // attachments per submission; 0 = none instance-wide
+	FormsMaxFileBytes int64 // bytes per attachment
+	FormsPerIPHour    int   // submissions per client IP per hour, all forms
+	FormsPerFormHour  int   // submissions per form per hour
+}
+
+// FormsSMTP is the forms mailer's server (SITEBIN_FORMS_SMTP_*). It is
+// deliberately separate from the enterprise account mailer (SITEBIN_SMTP_*):
+// the two send different mail to different people and may use different
+// accounts.
+type FormsSMTP struct {
+	Host string
+	Port int
+	User string
+	Pass string
+	From string // a bare address; each form supplies the display name
+	TLS  bool   // implicit TLS (port 465); otherwise STARTTLS when offered
 }
 
 // Custom-domain verification modes.
@@ -248,6 +276,37 @@ func Load(getenv func(string) string) (Config, error) {
 	if cfg.ZoneNamesPerHour < 0 {
 		return cfg, fmt.Errorf("SITEBIN_ZONE_NAMES_PER_HOUR must not be negative")
 	}
+	if cfg.FormsSMTP, err = formsSMTP(getenv); err != nil {
+		return cfg, err
+	}
+	if v := strings.TrimSpace(getenv("SITEBIN_FORMS_MAX_PER_SITE")); v != "" {
+		n, perr := strconv.Atoi(v)
+		if perr != nil || n < 0 {
+			return cfg, fmt.Errorf("SITEBIN_FORMS_MAX_PER_SITE: %q is not a non-negative integer", v)
+		}
+		cfg.FormsMaxPerSite = &n
+	}
+	if cfg.FormsMaxFiles, err = intVar(getenv, "SITEBIN_FORMS_MAX_FILES", 5); err != nil {
+		return cfg, err
+	}
+	if cfg.FormsMaxFiles < 0 {
+		return cfg, fmt.Errorf("SITEBIN_FORMS_MAX_FILES must not be negative")
+	}
+	if cfg.FormsMaxFileBytes, err = int64Var(getenv, "SITEBIN_FORMS_MAX_FILE_BYTES", 2<<20); err != nil {
+		return cfg, err
+	}
+	if cfg.FormsMaxFileBytes <= 0 {
+		return cfg, fmt.Errorf("SITEBIN_FORMS_MAX_FILE_BYTES must be positive")
+	}
+	if cfg.FormsPerIPHour, err = intVar(getenv, "SITEBIN_FORMS_PER_IP_HOUR", 10); err != nil {
+		return cfg, err
+	}
+	if cfg.FormsPerFormHour, err = intVar(getenv, "SITEBIN_FORMS_PER_FORM_HOUR", 60); err != nil {
+		return cfg, err
+	}
+	if cfg.FormsPerIPHour < 1 || cfg.FormsPerFormHour < 1 {
+		return cfg, fmt.Errorf("SITEBIN_FORMS_PER_IP_HOUR and SITEBIN_FORMS_PER_FORM_HOUR must be at least 1")
+	}
 	// No fallback to the sign-in issuer. Inheriting it would turn /mcp into a
 	// bearer-only endpoint on every instance that merely configured SSO, and
 	// callers authenticating per-tool with an edit password would start getting
@@ -356,6 +415,37 @@ func boolVar(getenv func(string) string, name string, def bool) (bool, error) {
 		return false, nil
 	}
 	return def, fmt.Errorf("%s: cannot parse %q as bool", name, v)
+}
+
+// formsSMTP reads SITEBIN_FORMS_SMTP_*. It returns nil and no error when the
+// host is unset: that is how an instance runs without forms.
+func formsSMTP(getenv func(string) string) (*FormsSMTP, error) {
+	host := strings.TrimSpace(getenv("SITEBIN_FORMS_SMTP_HOST"))
+	if host == "" {
+		return nil, nil
+	}
+	s := &FormsSMTP{Host: host, User: getenv("SITEBIN_FORMS_SMTP_USER"), Pass: getenv("SITEBIN_FORMS_SMTP_PASS")}
+	var err error
+	if s.Port, err = intVar(getenv, "SITEBIN_FORMS_SMTP_PORT", 587); err != nil {
+		return nil, err
+	}
+	if s.Port < 1 || s.Port > 65535 {
+		return nil, fmt.Errorf("SITEBIN_FORMS_SMTP_PORT: %d is not a port", s.Port)
+	}
+	if s.TLS, err = boolVar(getenv, "SITEBIN_FORMS_SMTP_TLS", false); err != nil {
+		return nil, err
+	}
+	from := strings.TrimSpace(getenv("SITEBIN_FORMS_SMTP_FROM"))
+	if from == "" {
+		return nil, fmt.Errorf("SITEBIN_FORMS_SMTP_FROM is required when SITEBIN_FORMS_SMTP_HOST is set")
+	}
+	// A bare address only: the display name is each form's own, and the
+	// address must be exactly what SPF/DKIM cover.
+	if a, perr := mail.ParseAddress(from); perr != nil || a.Name != "" || a.Address != from {
+		return nil, fmt.Errorf("SITEBIN_FORMS_SMTP_FROM: %q must be a bare address such as forms@example.com; each form supplies the display name", from)
+	}
+	s.From = from
+	return s, nil
 }
 
 func intVar(getenv func(string) string, name string, def int) (int, error) {

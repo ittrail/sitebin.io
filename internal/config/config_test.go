@@ -408,3 +408,103 @@ func TestZoneNamesPerHour(t *testing.T) {
 		}
 	}
 }
+
+func formsBase() map[string]string {
+	return map[string]string{"SITEBIN_BASE_DOMAIN": "sitebin.example", "SITEBIN_HTTP_ONLY": "true"}
+}
+
+func TestFormsOffByDefault(t *testing.T) {
+	cfg, err := Load(env(formsBase()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.FormsSMTP != nil {
+		t.Errorf("FormsSMTP = %+v, want nil: forms are off until SITEBIN_FORMS_SMTP_HOST is set", cfg.FormsSMTP)
+	}
+	if cfg.FormsMaxPerSite != nil {
+		t.Errorf("FormsMaxPerSite = %d, want unset", *cfg.FormsMaxPerSite)
+	}
+	if cfg.FormsMaxFiles != 5 || cfg.FormsMaxFileBytes != 2097152 || cfg.FormsPerIPHour != 10 || cfg.FormsPerFormHour != 60 {
+		t.Errorf("defaults = files %d, bytes %d, ip %d, form %d", cfg.FormsMaxFiles, cfg.FormsMaxFileBytes, cfg.FormsPerIPHour, cfg.FormsPerFormHour)
+	}
+}
+
+func TestFormsSMTPFullySet(t *testing.T) {
+	vars := formsBase()
+	for k, v := range map[string]string{
+		"SITEBIN_FORMS_SMTP_HOST":      "smtp.example.com",
+		"SITEBIN_FORMS_SMTP_PORT":      "465",
+		"SITEBIN_FORMS_SMTP_USER":      "u",
+		"SITEBIN_FORMS_SMTP_PASS":      "p",
+		"SITEBIN_FORMS_SMTP_FROM":      "forms@example.com",
+		"SITEBIN_FORMS_SMTP_TLS":       "true",
+		"SITEBIN_FORMS_MAX_PER_SITE":   "0",
+		"SITEBIN_FORMS_MAX_FILES":      "0",
+		"SITEBIN_FORMS_MAX_FILE_BYTES": "1000",
+		"SITEBIN_FORMS_PER_IP_HOUR":    "3",
+		"SITEBIN_FORMS_PER_FORM_HOUR":  "4",
+	} {
+		vars[k] = v
+	}
+	cfg, err := Load(env(vars))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := FormsSMTP{Host: "smtp.example.com", Port: 465, User: "u", Pass: "p", From: "forms@example.com", TLS: true}
+	if cfg.FormsSMTP == nil || *cfg.FormsSMTP != want {
+		t.Errorf("FormsSMTP = %+v, want %+v", cfg.FormsSMTP, want)
+	}
+	// An explicit 0 is a decision ("no forms here"), not "unset".
+	if cfg.FormsMaxPerSite == nil || *cfg.FormsMaxPerSite != 0 {
+		t.Errorf("FormsMaxPerSite = %v, want an explicit 0", cfg.FormsMaxPerSite)
+	}
+	if cfg.FormsMaxFiles != 0 || cfg.FormsMaxFileBytes != 1000 || cfg.FormsPerIPHour != 3 || cfg.FormsPerFormHour != 4 {
+		t.Errorf("limits = %d %d %d %d", cfg.FormsMaxFiles, cfg.FormsMaxFileBytes, cfg.FormsPerIPHour, cfg.FormsPerFormHour)
+	}
+}
+
+func TestFormsSMTPDefaults(t *testing.T) {
+	vars := formsBase()
+	vars["SITEBIN_FORMS_SMTP_HOST"] = "smtp.example.com"
+	vars["SITEBIN_FORMS_SMTP_FROM"] = "forms@example.com"
+	cfg, err := Load(env(vars))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.FormsSMTP.Port != 587 || cfg.FormsSMTP.TLS {
+		t.Errorf("port %d tls %v, want 587 and STARTTLS", cfg.FormsSMTP.Port, cfg.FormsSMTP.TLS)
+	}
+}
+
+func TestFormsConfigRefusals(t *testing.T) {
+	withHost := func(extra map[string]string) map[string]string {
+		m := map[string]string{"SITEBIN_FORMS_SMTP_HOST": "smtp.example.com", "SITEBIN_FORMS_SMTP_FROM": "forms@example.com"}
+		for k, v := range extra {
+			m[k] = v
+		}
+		return m
+	}
+	cases := map[string]map[string]string{
+		"from missing":            {"SITEBIN_FORMS_SMTP_HOST": "smtp.example.com"},
+		"from with display name":  withHost(map[string]string{"SITEBIN_FORMS_SMTP_FROM": "Forms <forms@example.com>"}),
+		"from in angle brackets":  withHost(map[string]string{"SITEBIN_FORMS_SMTP_FROM": "<forms@example.com>"}),
+		"from not an address":     withHost(map[string]string{"SITEBIN_FORMS_SMTP_FROM": "forms"}),
+		"port out of range":       withHost(map[string]string{"SITEBIN_FORMS_SMTP_PORT": "99999"}),
+		"tls not a bool":          withHost(map[string]string{"SITEBIN_FORMS_SMTP_TLS": "maybe"}),
+		"negative per-site":       {"SITEBIN_FORMS_MAX_PER_SITE": "-1"},
+		"per-site not a number":   {"SITEBIN_FORMS_MAX_PER_SITE": "ten"},
+		"negative max files":      {"SITEBIN_FORMS_MAX_FILES": "-1"},
+		"zero file bytes":         {"SITEBIN_FORMS_MAX_FILE_BYTES": "0"},
+		"zero per-ip":             {"SITEBIN_FORMS_PER_IP_HOUR": "0"},
+		"zero per-form":           {"SITEBIN_FORMS_PER_FORM_HOUR": "0"},
+	}
+	for name, extra := range cases {
+		vars := formsBase()
+		for k, v := range extra {
+			vars[k] = v
+		}
+		if _, err := Load(env(vars)); err == nil {
+			t.Errorf("%s: accepted, want a startup error", name)
+		}
+	}
+}
