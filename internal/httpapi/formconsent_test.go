@@ -143,6 +143,18 @@ func TestStopOneClick(t *testing.T) {
 	}
 }
 
+// RFC 8058's one-click POST can only ever stop. The same shape aimed at a
+// confirm link (the token in the URL, List-Unsubscribe=One-Click as the body)
+// is what a scanner imitating it would send, and it confirms nothing.
+func TestConfirmIgnoresAOneClickShapedPost(t *testing.T) {
+	e, _ := formsEnv(t, nil)
+	site, f := pendingForm(t, e)
+	w := consent(t, e, "POST", "/forms/confirm", confirmTok(e, site, f), true)
+	if w.Code != 400 || formStatus(t, e, site, f.Key).Status != store.FormPending {
+		t.Fatalf("one-click-shaped confirm = %d, status %s; want 400 and still pending", w.Code, formStatus(t, e, site, f.Key).Status)
+	}
+}
+
 func TestStopLinkOfAFormerRecipientChangesNothing(t *testing.T) {
 	e, _ := formsEnv(t, nil)
 	site, f := activeForm(t, e, store.Form{})

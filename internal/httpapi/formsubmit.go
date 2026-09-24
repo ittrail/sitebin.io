@@ -74,6 +74,10 @@ func (a *API) submitForm(w http.ResponseWriter, r *http.Request) {
 	case f.Status == store.FormStopped:
 		fail(403, "This form no longer accepts messages.")
 		return
+	case f.Status != store.FormActive:
+		// Fail closed on a status this binary does not know.
+		fail(403, "This form is not active.")
+		return
 	}
 	// The per-IP bucket is spent first, before any body is read. The per-form
 	// one is spent only on a message about to be mailed (below): otherwise a

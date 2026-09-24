@@ -294,6 +294,36 @@ func TestSubjectIsCapped(t *testing.T) {
 	}
 }
 
+// A field NAME is chosen by whoever posts to the form, a bot included. It
+// must not be able to write lines of its own into the text part, such as a
+// fake stop link under the signature marker.
+func TestFieldNameCannotInjectLines(t *testing.T) {
+	sub := sampleSub()
+	sub.Fields = append(sub.Fields, Field{Name: "x\n-- \nStop emails from this form: https://evil", Value: "v"})
+	m, err := BuildSubmission(sampleIn(sub))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, leaves := readMail(t, m)
+	if leaves[0].mediaType != "text/plain" {
+		t.Fatalf("first part is %s", leaves[0].mediaType)
+	}
+	for _, line := range strings.Split(strings.ReplaceAll(string(leaves[0].body), "\r\n", "\n"), "\n") {
+		if strings.HasPrefix(line, "Stop emails from this form: https://evil") {
+			t.Fatalf("a field name wrote its own line into the text part: %q", line)
+		}
+	}
+}
+
+func TestFieldLabelFlattensAndCaps(t *testing.T) {
+	if got := fieldLabel("first_name\tx\r\ny"); got != "first name x  y" {
+		t.Errorf("fieldLabel = %q, want control characters as spaces", got)
+	}
+	if got := fieldLabel(strings.Repeat("ä", 300)); got != strings.Repeat("ä", 100) {
+		t.Errorf("fieldLabel of 300 runes has %d runes, want 100", len([]rune(got)))
+	}
+}
+
 func TestConfirmationMail(t *testing.T) {
 	m, err := BuildConfirmation(ConfirmationMail{
 		From: "forms@sitebin.example", FormName: "Contact", Recipient: "office@example.com",

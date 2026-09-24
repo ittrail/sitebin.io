@@ -763,7 +763,9 @@ $("f-save").addEventListener("click", async () => {
     name: $("f-name").value.trim(),
     recipient: $("f-recipient").value.trim(),
     captcha: $("f-captcha").checked,
-    files: $("f-files").checked,
+    // With attachments off instance-wide the box is hidden, and a stale tick
+    // in it would make every save a 400.
+    files: formsData.max_files === 0 ? false : $("f-files").checked,
     redirect: $("f-redirect").value.trim(),
   };
   const wasEditing = editingKey;

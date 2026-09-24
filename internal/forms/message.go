@@ -444,8 +444,25 @@ func safeFilename(s string) string {
 	return s
 }
 
-// fieldLabel turns a field name into a label: first_name → first name.
-func fieldLabel(name string) string { return strings.NewReplacer("_", " ", "-", " ").Replace(name) }
+const maxLabelRunes = 100
+
+// fieldLabel turns a field name into a label: first_name → first name. The
+// name is whatever the poster sent, so control characters become spaces (a
+// line break must not start a line of its own in the text part) and the
+// label is capped.
+func fieldLabel(name string) string {
+	name = strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsControl(r), r == '_', r == '-':
+			return ' '
+		}
+		return r
+	}, name)
+	if r := []rune(name); len(r) > maxLabelRunes {
+		name = string(r[:maxLabelRunes])
+	}
+	return name
+}
 
 // preheader is the line an inbox shows under the subject: the start of the
 // message field if there is one, else of the first field.

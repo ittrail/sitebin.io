@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http/httptest"
 	"net/mail"
@@ -140,6 +141,20 @@ func TestSubmitPausedAndExpired(t *testing.T) {
 	e.st.Update(site, func(m *store.Meta) error { m.QuotaForms = nil; m.ExpiresAt = &past; return nil })
 	if w := submit(t, e, viewHost(site), f.Key, "message=hi", nil); w.Code != 410 {
 		t.Errorf("expired site = %d, want 410", w.Code)
+	}
+}
+
+// A status this binary does not know (written by a newer one, or by hand) is
+// refused rather than treated as active.
+func TestSubmitRefusesAnUnknownStatus(t *testing.T) {
+	e, rs := formsEnv(t, nil)
+	site, f := activeForm(t, e, store.Form{})
+	if err := e.st.Update(site, func(m *store.Meta) error { m.Forms[0].Status = "archived"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	w := submit(t, e, viewHost(site), f.Key, "message=hi", nil)
+	if w.Code != 403 || !strings.Contains(w.Body.String(), "This form is not active.") || rs.count() != 0 {
+		t.Fatalf("unknown status = %d (mails %d): %s", w.Code, rs.count(), w.Body)
 	}
 }
 
@@ -354,10 +369,21 @@ func TestSubmitCaptcha(t *testing.T) {
 
 func TestSubmitSMTPFailureIs502(t *testing.T) {
 	e, rs := formsEnv(t, nil)
+	var logs bytes.Buffer
+	e.api.log = slog.New(slog.NewTextHandler(&logs, nil))
 	rs.err = fmt.Errorf("550 5.1.1 <office@example.com>: Recipient address rejected")
 	site, f := activeForm(t, e, store.Form{})
-	if w := submit(t, e, viewHost(site), f.Key, "message=hi", nil); w.Code != 502 {
+	if w := submit(t, e, viewHost(site), f.Key, "message=unmistakable-value-4711", nil); w.Code != 502 {
 		t.Fatalf("SMTP failure = %d, want 502", w.Code)
+	}
+	if !strings.Contains(logs.String(), "form mail not sent") {
+		t.Fatalf("the failure was not logged:\n%s", &logs)
+	}
+	// Neither the recipient (the SMTP server quoted it) nor what was typed.
+	for _, secret := range []string{"office@example.com", "unmistakable-value-4711"} {
+		if strings.Contains(logs.String(), secret) {
+			t.Errorf("the log holds %q:\n%s", secret, &logs)
+		}
 	}
 }
 

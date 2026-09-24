@@ -10,6 +10,7 @@ import (
 	"net/textproto"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func urlencoded(body string) *http.Request {
@@ -191,6 +192,52 @@ func TestParseFilenameAndType(t *testing.T) {
 	f := sub.Files[0]
 	if f.Field != "cv" || f.Filename != "Lebenslauf.pdf" || f.ContentType != "application/pdf" || string(f.Data) != "%PDF" {
 		t.Errorf("file = %+v", f)
+	}
+}
+
+// RFC 2231 spells a non-ASCII filename out as %XX triplets, in a header line
+// nothing folds, and SMTP refuses a line over 998 octets. The name is capped
+// in bytes, keeping its tail so the extension survives.
+func TestLongNonASCIIFilenameKeepsTheMailWithinLineLimits(t *testing.T) {
+	name := strings.Repeat("€", 196) + ".pdf" // 200 runes, 592 bytes
+	sub, err := Parse(multipartReq(mpart{name: "cv", filename: name, body: "%PDF", file: true}), withFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := sub.Files[0].Filename
+	if len(got) > 150 || !utf8.ValidString(got) || !strings.HasSuffix(name, got) || !strings.HasSuffix(got, ".pdf") {
+		t.Fatalf("filename = %q (%d bytes), want a valid tail of at most 150 bytes", got, len(got))
+	}
+	in := sampleIn(sampleSub())
+	in.Sub.Files = sub.Files
+	m, err := BuildSubmission(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, line := range strings.Split(string(m.Data), "\r\n") {
+		if len(line) > 998 {
+			t.Fatalf("line %d of the message is %d octets, over SMTP's 998", i+1, len(line))
+		}
+	}
+	_, leaves := readMail(t, m)
+	if leaves[2].filename != got || string(leaves[2].body) != "%PDF" {
+		t.Fatalf("attachment = %q %q, want %q", leaves[2].filename, leaves[2].body, got)
+	}
+}
+
+func TestNonASCIIFilenameRoundTrips(t *testing.T) {
+	sub, err := Parse(multipartReq(mpart{name: "cv", filename: "Größe.pdf", body: "%PDF", file: true}), withFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := sampleIn(sampleSub())
+	in.Sub.Files = sub.Files
+	m, err := BuildSubmission(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, leaves := readMail(t, m); leaves[2].filename != "Größe.pdf" {
+		t.Fatalf("attachment name = %q, want Größe.pdf", leaves[2].filename)
 	}
 }
 

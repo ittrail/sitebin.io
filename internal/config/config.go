@@ -103,9 +103,9 @@ type Config struct {
 	// means the instance has no forms at all.
 	FormsSMTP *FormsSMTP
 	// FormsMaxPerSite is the forms cap for a site with no stamped
-	// quota_forms. Nil means unset: httpapi then uses 10 with no extension
-	// provider and 0 with one, so existing sites on a tiers instance do not
-	// all gain forms the day this ships.
+	// quota_forms. Nil means unset: httpapi then uses 10 without accounts
+	// (no extension, or one in open mode) and 0 with them, so existing sites
+	// on a tiers instance do not all gain forms the day this ships.
 	FormsMaxPerSite   *int
 	FormsMaxFiles     int   // attachments per submission; 0 = none instance-wide
 	FormsMaxFileBytes int64 // bytes per attachment

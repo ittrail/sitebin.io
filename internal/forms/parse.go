@@ -21,7 +21,10 @@ const (
 	// value together.
 	MaxTextBytes = 256 << 10
 
-	maxFilenameRunes = 200
+	// maxFilenameBytes caps a filename in UTF-8 bytes, not runes: RFC 2231
+	// writes every non-ASCII byte as a %XX triplet into a header line nothing
+	// folds, and SMTP refuses a line over 998 octets.
+	maxFilenameBytes = 150
 )
 
 // Field is one submitted name/value pair, in the order the form sent it.
@@ -238,7 +241,7 @@ func (s *Submission) add(name, value string) error {
 
 // cleanFilename keeps only the last path element (old browsers sent
 // C:\fakepath\...), drops control characters, and keeps the tail of an
-// overlong name so its extension survives.
+// overlong name, cut at a rune boundary, so its extension survives.
 func cleanFilename(s string) string {
 	if i := strings.LastIndexAny(s, `/\`); i >= 0 {
 		s = s[i+1:]
@@ -250,8 +253,12 @@ func cleanFilename(s string) string {
 		return r
 	}, strings.ToValidUTF8(s, "\uFFFD"))
 	s = strings.TrimSpace(s)
-	if r := []rune(s); len(r) > maxFilenameRunes {
-		s = string(r[len(r)-maxFilenameRunes:])
+	if len(s) > maxFilenameBytes {
+		i := len(s) - maxFilenameBytes
+		for i < len(s) && !utf8.RuneStart(s[i]) {
+			i++
+		}
+		s = s[i:]
 	}
 	if s == "" || s == "." || s == ".." {
 		s = "attachment"

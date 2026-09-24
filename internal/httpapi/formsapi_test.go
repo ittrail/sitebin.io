@@ -172,10 +172,10 @@ func TestFormsCapFromTheEnvironment(t *testing.T) {
 	}
 }
 
-// With a provider, a site without a stamped cap has none. Without this rule
-// every Drop and Free site on the hosted instance would gain 10 forms the day
-// the feature ships.
-func TestFormsCapIsZeroForAnUnstampedSiteWithAProvider(t *testing.T) {
+// With accounts enabled, a site without a stamped cap has none. Without this
+// rule every Drop and Free site on the hosted instance would gain 10 forms the
+// day the feature ships.
+func TestFormsCapIsZeroForAnUnstampedSiteWithAccounts(t *testing.T) {
 	e, _ := formsEnv(t, nil)
 	// Trusted, so the 0 comes from the missing stamp and not from the trust rule.
 	ext.Register(&fakeProvider{enabled: true, grant: ext.CreateGrant{Trusted: true}})
@@ -241,6 +241,21 @@ func TestFormsOnATrustedSiteWithAccounts(t *testing.T) {
 	id, pw, _ := newFormSite(t, e)
 	if w, _ := e.formsCall(t, "POST", id, pw, "", map[string]any{"name": "A", "recipient": "a@example.com"}); w.Code != 201 {
 		t.Fatalf("add on a trusted site = %d %s, want 201", w.Code, w.Body)
+	}
+}
+
+// An enterprise binary with accounts off has no tiers to stamp a cap from, and
+// every site it makes is trusted: it behaves like the community build.
+func TestFormsCapInOpenModeIsTheCommunityDefault(t *testing.T) {
+	e, _ := formsEnv(t, nil)
+	ext.Register(&fakeProvider{enabled: false})
+	defer ext.Reset()
+	id, pw, _ := newFormSite(t, e)
+	if w, out := e.formsCall(t, "GET", id, pw, "", nil); w.Code != 200 || out.Limit != 10 {
+		t.Fatalf("GET = %d limit=%d, want the community default of 10", w.Code, out.Limit)
+	}
+	if w, _ := e.formsCall(t, "POST", id, pw, "", map[string]any{"name": "A", "recipient": "a@example.com"}); w.Code != 201 {
+		t.Fatalf("POST = %d %s, want 201", w.Code, w.Body)
 	}
 }
 

@@ -31,8 +31,8 @@ const (
 	confirmInstancePerDay  = 500
 	formSendTimeout        = 30 * time.Second
 	// formsDefaultNoProvider is the cap of a site with no stamped quota on an
-	// instance with no extension, unless SITEBIN_FORMS_MAX_PER_SITE says
-	// otherwise.
+	// instance without accounts (no extension, or one in open mode), unless
+	// SITEBIN_FORMS_MAX_PER_SITE says otherwise.
 	formsDefaultNoProvider = 10
 )
 
@@ -82,6 +82,10 @@ func (a *API) baseURL() string { return a.cfg.SiteURL(a.cfg.BaseDomain) }
 
 // formsLimit is the site's forms cap: the stamped value, else the instance's.
 //
+// Accounts, not the mere presence of an extension, decide both rules below:
+// an enterprise binary in open mode has no tiers to stamp a cap from, marks
+// every site trusted, and so behaves like the community build.
+//
 // With accounts enabled, an untrusted site has none. Caddy serves it with
 // form-action 'none' and connect-src 'self', so a plain HTML form there
 // cannot post at all, and the only caller left would be a script on the page
@@ -89,7 +93,9 @@ func (a *API) baseURL() string { return a.cfg.SiteURL(a.cfg.BaseDomain) }
 // the trust marker, not a question to the extension, so it is fine on the
 // submission path. Without accounts every site is created trusted.
 func (a *API) formsLimit(site *store.Site) int {
-	if p, ok := ext.Get(); ok && p.AccountsEnabled() && !a.st.Trusted(site) {
+	p, ok := ext.Get()
+	accounts := ok && p.AccountsEnabled()
+	if accounts && !a.st.Trusted(site) {
 		return 0
 	}
 	if site.Meta.QuotaForms != nil {
@@ -98,7 +104,7 @@ func (a *API) formsLimit(site *store.Site) int {
 	if a.cfg.FormsMaxPerSite != nil {
 		return *a.cfg.FormsMaxPerSite
 	}
-	if _, ok := ext.Get(); ok {
+	if accounts {
 		// Fail closed: with accounts in play, a site nobody stamped gets no
 		// forms rather than the community build's generous default.
 		return 0
