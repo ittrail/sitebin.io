@@ -28,6 +28,10 @@ func (a *API) pageBadLink(w http.ResponseWriter) {
 	a.consentPage(w, 400, "This link is not valid", "It may be incomplete, or older than 7 days. Ask the site's owner to send a new one.", "", "", "")
 }
 
+func (a *API) pageBadStopLink(w http.ResponseWriter) {
+	a.consentPage(w, 400, "This link is not valid", "It may be incomplete. Every message from the form carries a working one.", "", "", "")
+}
+
 func (a *API) pageFormGone(w http.ResponseWriter) {
 	a.consentPage(w, 410, "This form no longer exists", "Its owner deleted it. Nothing will be sent to you.", "", "", "")
 }
@@ -114,7 +118,7 @@ func (a *API) formStopPage(w http.ResponseWriter, r *http.Request) {
 	tok := r.URL.Query().Get("t")
 	c, ok := a.forms.links.ParseStop(tok, time.Now())
 	if !ok {
-		a.consentPage(w, 400, "This link is not valid", "It may be incomplete. Every message from the form carries a working one.", "", "", "")
+		a.pageBadStopLink(w)
 		return
 	}
 	site, f, ok := a.consentForm(c.ViewID, c.Key)
@@ -143,13 +147,15 @@ func (a *API) formStop(w http.ResponseWriter, r *http.Request) {
 	}
 	c, ok := a.forms.links.ParseStop(tok, time.Now())
 	if !ok {
-		a.consentPage(w, 400, "This link is not valid", "It may be incomplete. Every message from the form carries a working one.", "", "", "")
+		a.pageBadStopLink(w)
 		return
 	}
 	stopped := func(name, host string) {
-		a.consentPage(w, 200, "Stopped",
-			fmt.Sprintf("You will not receive messages from the form “%s” on %s anymore. The site's owner can ask you to confirm again.", name, host),
-			"", "", "")
+		msg := "You will not receive messages from this form anymore."
+		if name != "" {
+			msg = fmt.Sprintf("You will not receive messages from the form “%s” on %s anymore. The site's owner can ask you to confirm again.", name, host)
+		}
+		a.consentPage(w, 200, "Stopped", msg, "", "", "")
 	}
 	site, err := a.st.ByViewID(c.ViewID)
 	if err != nil {

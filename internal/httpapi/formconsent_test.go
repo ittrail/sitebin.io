@@ -158,6 +158,24 @@ func TestStopLinkOfAFormerRecipientChangesNothing(t *testing.T) {
 	}
 }
 
+// Fix round 1: a stop link for a form the owner already deleted must not read
+// back an empty-quoted form name.
+func TestStopAfterFormDeletedReadsCleanly(t *testing.T) {
+	e, _ := formsEnv(t, nil)
+	site, f := activeForm(t, e, store.Form{})
+	tok := stopTok(e, site, f.Key, f.Recipient)
+	if err := e.st.DeleteForm(site, f.Key); err != nil {
+		t.Fatal(err)
+	}
+	w := consent(t, e, "POST", "/forms/stop", tok, false)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "Stopped") {
+		t.Fatalf("stop after delete = %d %s", w.Code, w.Body)
+	}
+	if strings.Contains(w.Body.String(), "“”") {
+		t.Errorf("body reads an empty-quoted form name: %s", w.Body)
+	}
+}
+
 func TestConsentPagesNeedForms(t *testing.T) {
 	e := newEnv(t, nil)
 	if w := consent(t, e, "GET", "/forms/confirm", "x", false); w.Code != 404 {
