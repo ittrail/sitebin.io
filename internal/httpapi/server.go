@@ -127,6 +127,11 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("GET /_sitebin/forms/{key}/thanks", a.formThanks)
 	mux.HandleFunc("GET /_sitebin/altcha.js", a.altchaScript)
 
+	mux.HandleFunc("GET /forms/confirm", a.formConfirmPage)
+	mux.HandleFunc("POST /forms/confirm", a.formConfirm)
+	mux.HandleFunc("GET /forms/stop", a.formStopPage)
+	mux.HandleFunc("POST /forms/stop", a.formStop)
+
 	// Enterprise: mount the account dashboard + auth routes when a provider is
 	// active. Guarded so a provider can only ever add routes on the main domain.
 	if p, ok := ext.Get(); ok {
