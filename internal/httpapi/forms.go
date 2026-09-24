@@ -20,12 +20,16 @@ import (
 // docs/superpowers/specs/2026-09-24-site-forms-design.md.
 
 const (
-	// Confirmation mails are throttled per site and per address. Constants,
-	// not configuration: they protect the instance's mail reputation, not a
-	// plan.
-	confirmPerSitePerDay = 10
-	confirmPerAddrPerDay = 3
-	formSendTimeout      = 30 * time.Second
+	// Confirmation mails are throttled per site, per address, per caller and
+	// across the instance. Constants, not configuration: they protect the
+	// instance's mail reputation, not a plan. The per-caller and instance
+	// ceilings are what stop the first two from multiplying with the number
+	// of sites one person can make.
+	confirmPerSitePerDay   = 10
+	confirmPerAddrPerDay   = 3
+	confirmPerCallerPerDay = 20
+	confirmInstancePerDay  = 500
+	formSendTimeout        = 30 * time.Second
 	// formsDefaultNoProvider is the cap of a site with no stamped quota on an
 	// instance with no extension, unless SITEBIN_FORMS_MAX_PER_SITE says
 	// otherwise.
@@ -35,14 +39,16 @@ const (
 // formsState exists only when SITEBIN_FORMS_SMTP_HOST is set; API.forms is
 // nil otherwise, and every forms route answers as if there were no forms.
 type formsState struct {
-	send        forms.Sender
-	links       forms.Links
-	captcha     *forms.Captcha
-	perIP       *auth.Limiter // submissions per client IP, all forms
-	perForm     *auth.Limiter // submissions per form
-	challenges  *auth.Limiter // captcha challenges per client IP
-	confirmSite *auth.Limiter // confirmation mails per site
-	confirmAddr *auth.Limiter // confirmation mails per address
+	send            forms.Sender
+	links           forms.Links
+	captcha         *forms.Captcha
+	perIP           *auth.Limiter // submissions per client IP, all forms
+	perForm         *auth.Limiter // submissions per form
+	challenges      *auth.Limiter // captcha challenges per client IP
+	confirmSite     *auth.Limiter // confirmation mails per site
+	confirmAddr     *auth.Limiter // confirmation mails per address (confirmAddrKey)
+	confirmCaller   *auth.Limiter // confirmation mails per caller IP
+	confirmInstance *auth.Limiter // confirmation mails, all of them
 }
 
 func newFormsState(cfg config.Config, secret []byte) *formsState {
@@ -51,20 +57,22 @@ func newFormsState(cfg config.Config, secret []byte) *formsState {
 	}
 	s := cfg.FormsSMTP
 	return &formsState{
-		send:        &forms.SMTPSender{Host: s.Host, Port: s.Port, User: s.User, Pass: s.Pass, ImplicitTLS: s.TLS, Timeout: formSendTimeout},
-		links:       forms.NewLinks(secret),
-		captcha:     forms.NewCaptcha(secret),
-		perIP:       auth.NewLimiter(float64(cfg.FormsPerIPHour), cfg.FormsPerIPHour),
-		perForm:     auth.NewLimiter(float64(cfg.FormsPerFormHour), cfg.FormsPerFormHour),
-		challenges:  auth.NewLimiter(float64(3*cfg.FormsPerIPHour), 3*cfg.FormsPerIPHour),
-		confirmSite: auth.NewLimiter(confirmPerSitePerDay/24.0, confirmPerSitePerDay),
-		confirmAddr: auth.NewLimiter(confirmPerAddrPerDay/24.0, confirmPerAddrPerDay),
+		send:            &forms.SMTPSender{Host: s.Host, Port: s.Port, User: s.User, Pass: s.Pass, ImplicitTLS: s.TLS, Timeout: formSendTimeout},
+		links:           forms.NewLinks(secret),
+		captcha:         forms.NewCaptcha(secret),
+		perIP:           auth.NewLimiter(float64(cfg.FormsPerIPHour), cfg.FormsPerIPHour),
+		perForm:         auth.NewLimiter(float64(cfg.FormsPerFormHour), cfg.FormsPerFormHour),
+		challenges:      auth.NewLimiter(float64(3*cfg.FormsPerIPHour), 3*cfg.FormsPerIPHour),
+		confirmSite:     auth.NewLimiter(confirmPerSitePerDay/24.0, confirmPerSitePerDay),
+		confirmAddr:     auth.NewLimiter(confirmPerAddrPerDay/24.0, confirmPerAddrPerDay),
+		confirmCaller:   auth.NewLimiter(confirmPerCallerPerDay/24.0, confirmPerCallerPerDay),
+		confirmInstance: auth.NewLimiter(confirmInstancePerDay/24.0, confirmInstancePerDay),
 	}
 }
 
 var (
 	errFormsOff         = &apiError{409, "forms are not enabled on this instance"}
-	errConfirmThrottled = &apiError{429, "too many confirmation emails for this site or address today — try again tomorrow"}
+	errConfirmThrottled = &apiError{429, "too many confirmation emails today — try again tomorrow"}
 	errPlanUnknown      = &apiError{503, "this site's plan could not be determined right now — try again shortly"}
 )
 
@@ -240,14 +248,37 @@ func (a *API) cleanFormInput(in formInput, create bool) (store.FormPatch, error)
 	return p, nil
 }
 
-func (a *API) allowConfirmation(site *store.Site, addr string) bool {
-	return a.forms.confirmSite.Allow(site.ViewID) && a.forms.confirmAddr.Allow(strings.ToLower(addr))
+// allowConfirmation spends one confirmation mail from every throttle that
+// covers it: the site, the address, the caller (the client IP of the API or
+// MCP request) and the instance.
+func (a *API) allowConfirmation(site *store.Site, addr, caller string) bool {
+	return a.forms.confirmSite.Allow(site.ViewID) &&
+		a.forms.confirmAddr.Allow(confirmAddrKey(addr)) &&
+		a.forms.confirmCaller.Allow(caller) &&
+		a.forms.confirmInstance.Allow("all")
+}
+
+// confirmAddrKey is the per-address throttle's key: lowercased, with a +tag
+// in the local part dropped, so victim+1@, victim+2@ and Victim@ share the
+// one mailbox's budget.
+func confirmAddrKey(addr string) string {
+	addr = strings.ToLower(addr)
+	at := strings.LastIndexByte(addr, '@')
+	if at < 0 {
+		return addr
+	}
+	local, domain := addr[:at], addr[at:]
+	if i := strings.IndexByte(local, '+'); i > 0 {
+		local = local[:i]
+	}
+	return local + domain
 }
 
 // addForm creates a pending form and mails its recipient. The cap and the
 // mail throttles are checked first, so a refusal creates nothing; a mail that
-// fails after the form exists is a warning, and the owner can resend.
-func (a *API) addForm(ctx context.Context, site *store.Site, in formInput) (formsJSON, error) {
+// fails after the form exists is a warning, and the owner can resend. caller
+// is the client IP the request came from.
+func (a *API) addForm(ctx context.Context, site *store.Site, in formInput, caller string) (formsJSON, error) {
 	if a.forms == nil {
 		return formsJSON{}, errFormsOff
 	}
@@ -262,7 +293,7 @@ func (a *API) addForm(ctx context.Context, site *store.Site, in formInput) (form
 	if len(site.Meta.Forms) >= limit {
 		return formsJSON{}, &apiError{403, tooManyFormsMsg(limit)}
 	}
-	if !a.allowConfirmation(site, *p.Recipient) {
+	if !a.allowConfirmation(site, *p.Recipient, caller) {
 		return formsJSON{}, errConfirmThrottled
 	}
 	spec := store.Form{Name: *p.Name, Recipient: *p.Recipient}
@@ -302,7 +333,7 @@ func tooManyFormsMsg(limit int) string {
 
 // updateForm changes settings. A new recipient is throttled like a new form,
 // goes back to pending and gets its own confirmation mail.
-func (a *API) updateForm(ctx context.Context, site *store.Site, key string, in formInput) (formsJSON, error) {
+func (a *API) updateForm(ctx context.Context, site *store.Site, key string, in formInput, caller string) (formsJSON, error) {
 	if a.forms == nil {
 		return formsJSON{}, errFormsOff
 	}
@@ -314,7 +345,7 @@ func (a *API) updateForm(ctx context.Context, site *store.Site, key string, in f
 	if !ok {
 		return formsJSON{}, store.ErrFormNotFound
 	}
-	if p.Recipient != nil && *p.Recipient != cur.Recipient && !a.allowConfirmation(site, *p.Recipient) {
+	if p.Recipient != nil && *p.Recipient != cur.Recipient && !a.allowConfirmation(site, *p.Recipient, caller) {
 		return formsJSON{}, errConfirmThrottled
 	}
 	f, changed, err := a.st.UpdateForm(site, key, p)
@@ -345,7 +376,7 @@ func (a *API) deleteForm(site *store.Site, key string) (formsJSON, error) {
 // resendConfirmation mails the recipient again, for a pending form or one the
 // recipient stopped. A mail that fails here is an error: sending it is the
 // whole request.
-func (a *API) resendConfirmation(ctx context.Context, site *store.Site, key string) (formsJSON, error) {
+func (a *API) resendConfirmation(ctx context.Context, site *store.Site, key, caller string) (formsJSON, error) {
 	if a.forms == nil {
 		return formsJSON{}, errFormsOff
 	}
@@ -356,7 +387,7 @@ func (a *API) resendConfirmation(ctx context.Context, site *store.Site, key stri
 	if cur.Status == store.FormActive {
 		return formsJSON{}, store.ErrFormActive
 	}
-	if !a.allowConfirmation(site, cur.Recipient) {
+	if !a.allowConfirmation(site, cur.Recipient, caller) {
 		return formsJSON{}, errConfirmThrottled
 	}
 	f, err := a.st.RequestConfirmation(site, key)

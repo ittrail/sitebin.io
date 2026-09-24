@@ -749,6 +749,38 @@ func TestMCPFormsLifecycle(t *testing.T) {
 	}
 }
 
+// The adapter hands the MCP caller's IP to the confirmation throttle, for
+// every tool that mails a recipient.
+func TestMCPFormsConfirmationsAreThrottledPerCaller(t *testing.T) {
+	e, rs := formsEnv(t, nil)
+	const ip = "203.0.113.9"
+	cs := mcpClient(t, e, http.Header{"X-Forwarded-For": {ip}})
+	id, pw := mcpCreate(t, cs, "<h1>hi</h1>")
+	site := map[string]any{"edit_id": id, "edit_password": pw}
+	res := mcpCall(t, cs, "add_form", map[string]any{"edit_id": id, "edit_password": pw, "form": map[string]any{"name": "A", "recipient": "a@example.com"}})
+	if res.IsError {
+		t.Fatalf("add_form = %s", mcpText(res))
+	}
+	key := res.StructuredContent.(map[string]any)["forms"].([]any)[0].(map[string]any)["key"].(string)
+	for e.api.forms.confirmCaller.Allow(ip) { // spend the rest of this caller's day
+	}
+	for name, args := range map[string]map[string]any{
+		"add_form":                 {"form": map[string]any{"name": "B", "recipient": "b@example.com"}},
+		"update_form":              {"key": key, "form": map[string]any{"recipient": "c@example.com"}},
+		"resend_form_confirmation": {"key": key},
+	} {
+		for k, v := range site {
+			args[k] = v
+		}
+		if res := mcpCall(t, cs, name, args); !res.IsError || !strings.Contains(mcpText(res), "too many confirmation") {
+			t.Errorf("%s after the caller's budget is spent = %s, want the throttle", name, mcpText(res))
+		}
+	}
+	if rs.count() != 1 {
+		t.Errorf("mails = %d, want only the first", rs.count())
+	}
+}
+
 func TestMCPAddFormWithFormsOff(t *testing.T) {
 	e := newEnv(t, nil)
 	cs := mcpClient(t, e, nil)

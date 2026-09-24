@@ -30,6 +30,13 @@ type formsResp struct {
 
 func (e *env) formsCall(t *testing.T, method, editID, pw, path string, body any) (*httptest.ResponseRecorder, formsResp) {
 	t.Helper()
+	return e.formsCallFrom(t, "", method, editID, pw, path, body)
+}
+
+// formsCallFrom is formsCall from another client IP (the X-Forwarded-For entry
+// Caddy would append); "" keeps the harness's own address.
+func (e *env) formsCallFrom(t *testing.T, ip, method, editID, pw, path string, body any) (*httptest.ResponseRecorder, formsResp) {
+	t.Helper()
 	var rdr io.Reader
 	if body != nil {
 		b, _ := json.Marshal(body)
@@ -38,6 +45,9 @@ func (e *env) formsCall(t *testing.T, method, editID, pw, path string, body any)
 	req := httptest.NewRequest(method, "/api/sites/"+editID+"/forms"+path, rdr)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Sec-Fetch-Site", "same-origin") // the edit page's own fetch
+	if ip != "" {
+		req.Header.Set("X-Forwarded-For", ip)
+	}
 	w := e.public(t, authed(req, pw))
 	var out formsResp
 	json.Unmarshal(w.Body.Bytes(), &out)
@@ -336,6 +346,118 @@ func TestConfirmationMailsAreThrottledPerAddress(t *testing.T) {
 	_, out := e.formsCall(t, "GET", id, pw, "", nil)
 	if len(out.Forms) != 3 {
 		t.Errorf("a throttled add still created a form: %d forms", len(out.Forms))
+	}
+}
+
+// Each confirmation throttle is tested with distinct sites and addresses
+// wherever the others would otherwise trip first.
+
+func TestConfirmationMailsAreThrottledPerSite(t *testing.T) {
+	e, rs := formsEnv(t, map[string]string{"SITEBIN_FORMS_MAX_PER_SITE": "20"})
+	id, pw, _ := newFormSite(t, e)
+	for i := 0; i < 10; i++ {
+		if w, _ := e.formsCall(t, "POST", id, pw, "", map[string]any{"name": "F", "recipient": fmt.Sprintf("s%d@example.com", i)}); w.Code != 201 {
+			t.Fatalf("form %d = %d %s", i+1, w.Code, w.Body)
+		}
+	}
+	w, _ := e.formsCall(t, "POST", id, pw, "", map[string]any{"name": "F", "recipient": "s10@example.com"})
+	if w.Code != 429 || rs.count() != 10 {
+		t.Fatalf("11th confirmation on one site today = %d (mails %d), want 429 and nothing sent", w.Code, rs.count())
+	}
+}
+
+func TestConfirmationMailsAreThrottledPerAddressAcrossSites(t *testing.T) {
+	e, rs := formsEnv(t, nil)
+	idA, pwA, _ := newFormSite(t, e)
+	idB, pwB, _ := newFormSite(t, e)
+	for i := 0; i < 3; i++ {
+		if w, _ := e.formsCall(t, "POST", idA, pwA, "", map[string]any{"name": "F", "recipient": "same@example.com"}); w.Code != 201 {
+			t.Fatalf("form %d on site A = %d", i+1, w.Code)
+		}
+	}
+	if w, _ := e.formsCall(t, "POST", idB, pwB, "", map[string]any{"name": "F", "recipient": "same@example.com"}); w.Code != 429 || rs.count() != 3 {
+		t.Fatalf("4th mail to one address, from another site = %d (mails %d), want 429", w.Code, rs.count())
+	}
+	if w, _ := e.formsCall(t, "POST", idB, pwB, "", map[string]any{"name": "F", "recipient": "other@example.com"}); w.Code != 201 {
+		t.Fatalf("site B to another address = %d, want 201", w.Code)
+	}
+}
+
+// victim+1@, victim+2@ ... reach one mailbox, so they share one budget.
+func TestConfirmationThrottleIgnoresPlusTagsAndCase(t *testing.T) {
+	e, rs := formsEnv(t, nil)
+	idA, pwA, _ := newFormSite(t, e)
+	idB, pwB, _ := newFormSite(t, e)
+	for i, c := range []struct{ id, pw, to string }{
+		{idA, pwA, "anna+1@example.com"},
+		{idB, pwB, "Anna+2@Example.com"},
+		{idA, pwA, "anna@example.com"},
+	} {
+		if w, _ := e.formsCall(t, "POST", c.id, c.pw, "", map[string]any{"name": "F", "recipient": c.to}); w.Code != 201 {
+			t.Fatalf("mail %d (%s) = %d", i+1, c.to, w.Code)
+		}
+	}
+	if w, _ := e.formsCall(t, "POST", idB, pwB, "", map[string]any{"name": "F", "recipient": "anna+3@example.com"}); w.Code != 429 || rs.count() != 3 {
+		t.Fatalf("4th mail to anna+tag@ = %d (mails %d), want 429", w.Code, rs.count())
+	}
+}
+
+// One caller spreading over many sites and addresses is still one caller.
+// Adds, a recipient change and a resend all draw on the same budget.
+func TestConfirmationMailsAreThrottledPerCaller(t *testing.T) {
+	e, rs := formsEnv(t, nil)
+	var sites [3]struct{ id, pw string }
+	for i := range sites {
+		sites[i].id, sites[i].pw, _ = newFormSite(t, e)
+	}
+	n := 0
+	add := func(s int) formsResp {
+		t.Helper()
+		w, out := e.formsCall(t, "POST", sites[s].id, sites[s].pw, "", map[string]any{"name": "F", "recipient": fmt.Sprintf("c%d@example.com", n)})
+		if w.Code != 201 {
+			t.Fatalf("confirmation %d = %d %s", rs.count()+1, w.Code, w.Body)
+		}
+		n++
+		return out
+	}
+	for i := 0; i < 7; i++ {
+		add(0)
+		add(1)
+	}
+	var out formsResp
+	for i := 0; i < 4; i++ {
+		out = add(2)
+	}
+	if w, _ := e.formsCall(t, "PUT", sites[2].id, sites[2].pw, "/"+out.Forms[0].Key, map[string]any{"recipient": "c-changed@example.com"}); w.Code != 200 {
+		t.Fatalf("recipient change = %d %s", w.Code, w.Body)
+	}
+	if w, _ := e.formsCall(t, "POST", sites[2].id, sites[2].pw, "/"+out.Forms[1].Key+"/confirmation", nil); w.Code != 202 {
+		t.Fatalf("resend = %d %s", w.Code, w.Body)
+	}
+	if rs.count() != 20 {
+		t.Fatalf("precondition: 20 confirmations sent, got %d", rs.count())
+	}
+	body := map[string]any{"name": "F", "recipient": "c-last@example.com"}
+	if w, _ := e.formsCall(t, "POST", sites[2].id, sites[2].pw, "", body); w.Code != 429 || rs.count() != 20 {
+		t.Fatalf("21st confirmation from one IP = %d (mails %d), want 429", w.Code, rs.count())
+	}
+	if w, _ := e.formsCallFrom(t, "203.0.113.7", "POST", sites[2].id, sites[2].pw, "", body); w.Code != 201 {
+		t.Fatalf("the same add from another IP = %d %s, want 201", w.Code, w.Body)
+	}
+}
+
+// The instance-wide ceiling holds however the load is spread. Checked on the
+// throttle itself: 500 forms through the API would test the store, not this.
+func TestConfirmationMailsAreThrottledInstanceWide(t *testing.T) {
+	e, _ := formsEnv(t, nil)
+	for i := 0; i < confirmInstancePerDay; i++ {
+		site := &store.Site{ViewID: fmt.Sprintf("site%d", i)}
+		if !e.api.allowConfirmation(site, fmt.Sprintf("a%d@example.com", i), fmt.Sprintf("caller%d", i)) {
+			t.Fatalf("confirmation %d refused, want %d allowed per day", i+1, confirmInstancePerDay)
+		}
+	}
+	if e.api.allowConfirmation(&store.Site{ViewID: "fresh"}, "fresh@example.com", "fresh-caller") {
+		t.Fatalf("confirmation %d allowed, want the instance ceiling to refuse it", confirmInstancePerDay+1)
 	}
 }
 

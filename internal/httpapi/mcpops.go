@@ -440,7 +440,7 @@ func (o mcpOps) AddForm(ctx context.Context, auth mcp.Auth, ref mcp.SiteRef, in 
 	if err != nil {
 		return nil, err
 	}
-	v, err := o.a.addForm(ctx, site, toFormInput(in))
+	v, err := o.a.addForm(ctx, site, toFormInput(in), auth.ClientIP)
 	if err != nil {
 		return nil, o.mcpError(err)
 	}
@@ -452,7 +452,7 @@ func (o mcpOps) UpdateForm(ctx context.Context, auth mcp.Auth, ref mcp.SiteRef, 
 	if err != nil {
 		return nil, err
 	}
-	v, err := o.a.updateForm(ctx, site, key, toFormInput(in))
+	v, err := o.a.updateForm(ctx, site, key, toFormInput(in), auth.ClientIP)
 	if err != nil {
 		return nil, o.mcpError(err)
 	}
@@ -476,7 +476,7 @@ func (o mcpOps) ResendFormConfirmation(ctx context.Context, auth mcp.Auth, ref m
 	if err != nil {
 		return nil, err
 	}
-	v, err := o.a.resendConfirmation(ctx, site, key)
+	v, err := o.a.resendConfirmation(ctx, site, key, auth.ClientIP)
 	if err != nil {
 		return nil, o.mcpError(err)
 	}
