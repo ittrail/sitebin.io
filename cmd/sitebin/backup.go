@@ -217,7 +217,7 @@ func (a *archiver) add(r *os.Root, name, rel string, seenAsDir bool) error {
 		if errors.Is(err, fs.ErrNotExist) {
 			return skip()
 		}
-		if errors.Is(err, fs.ErrPermission) && inSiteContent(rel) {
+		if inSiteContent(rel) && (errors.Is(err, fs.ErrPermission) || parentSwapped(r, name)) {
 			a.skip(rel, err)
 			return skip()
 		}
@@ -310,6 +310,20 @@ func (a *archiver) add(r *os.Root, name, rel string, seenAsDir bool) error {
 		afterDirCheck(rel)
 	}
 	return nil
+}
+
+// parentSwapped reports whether the folder holding name is no longer a real
+// folder of r — a container swapped it for a link (which the root refuses to
+// follow out) or a file while the walk was still inside it. That is what makes
+// an entry's Lstat fail with an escape or ENOTDIR error; any other failure
+// with the parent intact is a real read error.
+func parentSwapped(r *os.Root, name string) bool {
+	dir := path.Dir(name)
+	if dir == "." {
+		return false
+	}
+	fi, err := r.Lstat(dir)
+	return err != nil || !fi.IsDir()
 }
 
 // copyPadded copies exactly n bytes of r to w — the size the tar header

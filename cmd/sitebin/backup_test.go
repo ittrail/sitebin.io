@@ -436,3 +436,50 @@ func TestBackupSiteContentNeverLeavesTheSite(t *testing.T) {
 		t.Errorf("the other site itself was not backed up: %q %v", b, err)
 	}
 }
+
+// A container swaps a folder the walk has already listed while the walk is
+// still inside it: the next entry's Lstat fails through the swapped parent.
+// That is what a container did, so it is skipped — one site must not abort
+// the backup of every other.
+func TestBackupSkipsAFolderSwappedWhileInsideIt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("links are the production platform's")
+	}
+	for _, kind := range []string{"link-out", "file"} {
+		t.Run(kind, func(t *testing.T) {
+			src := t.TempDir()
+			files := filepath.Join(src, "sites", "abc", "files")
+			os.MkdirAll(filepath.Join(files, "b"), 0o755)
+			os.WriteFile(filepath.Join(files, "b", "1.txt"), []byte("one"), 0o644)
+			os.WriteFile(filepath.Join(files, "b", "2.txt"), []byte("two"), 0o644)
+			os.MkdirAll(filepath.Join(src, "sites", "xyz", "files"), 0o755)
+			os.WriteFile(filepath.Join(src, "sites", "xyz", "files", "other.txt"), []byte("other"), 0o644)
+			outside := t.TempDir()
+			real := openForBackup
+			openForBackup = func(r *os.Root, name string) (*os.File, error) {
+				f, err := real(r, name)
+				if name == "b/1.txt" {
+					os.RemoveAll(filepath.Join(files, "b"))
+					if kind == "link-out" {
+						os.Symlink(outside, filepath.Join(files, "b"))
+					} else {
+						os.WriteFile(filepath.Join(files, "b"), []byte("now a file"), 0o644)
+					}
+				}
+				return f, err
+			}
+			defer func() { openForBackup = real }()
+			archive := filepath.Join(t.TempDir(), "backup.tar.gz")
+			if err := backupData(src, archive); err != nil {
+				t.Fatalf("one site's container aborted the whole backup: %v", err)
+			}
+			dst := t.TempDir()
+			if err := restoreData(dst, archive); err != nil {
+				t.Fatalf("restore: %v", err)
+			}
+			if b, err := os.ReadFile(filepath.Join(dst, "sites", "xyz", "files", "other.txt")); err != nil || string(b) != "other" {
+				t.Errorf("the other site was not backed up: %q %v", b, err)
+			}
+		})
+	}
+}

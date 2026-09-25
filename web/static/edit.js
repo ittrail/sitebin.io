@@ -423,6 +423,7 @@ let dirTruncated = false; // the server cut a huge folder
 let dirLoaded = false;
 let dirShowAll = false;
 let dirSeq = 0;           // the latest listing asked for; older answers are dropped
+let dirWanted = "";       // the folder that latest listing asked for
 let dirFocus = null;      // what to focus after the next render: "crumb" or "more"
 
 function joinPath(dir, name) { return dir ? dir + "/" + name : name; }
@@ -443,6 +444,7 @@ function syncHash() {
 
 async function loadDir(dir) {
   const seq = ++dirSeq;
+  dirWanted = dir;
   let d;
   try {
     d = await api("GET", "/dir?path=" + encodeURIComponent(dir));
@@ -451,6 +453,7 @@ async function loadDir(dir) {
     // The folder is gone (deleted, replaced): show the nearest one that is left.
     if (err.status === 404 && dir) return loadDir(parentOf(dir));
     toast(err.message, true);
+    dirFocus = null; // nothing new was shown; a later render must not move focus
     // Nothing shown yet (a reload of a folder that cannot be opened): show
     // the top. Otherwise stay where we are, and say so in the URL.
     if (!dirLoaded && dir) return loadDir("");
@@ -481,7 +484,10 @@ function renderDropHint() {
   $("drop-into").textContent = cwd && !$("replace-all").checked ? " into " + cwd + "/" : "";
 }
 
-function refreshDir() { return loadDir(cwd); }
+// refreshDir reloads the folder last asked for — not only the one shown, so
+// a mutation finishing while a folder click is still loading does not undo
+// the click.
+function refreshDir() { return loadDir(dirWanted); }
 
 window.addEventListener("popstate", () => { if (site) loadDir(dirFromHash()); });
 
