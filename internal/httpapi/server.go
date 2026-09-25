@@ -262,13 +262,16 @@ func storeError(w http.ResponseWriter, err error) {
 	}
 }
 
-// withEditAuth authenticates edit operations: the edit id in the path plus
-// the edit password from X-Edit-Password (or Basic auth), rate limited and
-// cached to keep Argon2 work off the hot path.
 // tokenOwns reports whether the request carries an account API token whose
 // account owns this site. The ownership check lives here, in the core, because
 // the core is the side that holds the site's metadata; the extension only says
 // which account the token belongs to.
+//
+// An OAuth access token never counts, whatever the extension hands back. Its
+// audience is the MCP resource, and this API has no scope check to hold it
+// to what it was granted: honoured here, a read-only grant could overwrite
+// and delete sites. MCP reads its credentials in mcpOps.Authenticate, never
+// through this.
 func (a *API) tokenOwns(r *http.Request, site *store.Site) bool {
 	if site.Meta.OwnerAccountID == "" {
 		return false // an anonymous site belongs to no account, so no token owns it
@@ -278,7 +281,7 @@ func (a *API) tokenOwns(r *http.Request, site *store.Site) bool {
 		return false
 	}
 	cred, ok := p.BearerCredential(r)
-	return ok && cred.AccountID == site.Meta.OwnerAccountID
+	return ok && !cred.OAuth && cred.AccountID == site.Meta.OwnerAccountID
 }
 
 // sessionHeader marks a request from Sitebin's own edit page that asks for
@@ -326,6 +329,9 @@ func (a *API) sessionProvider() (ext.SessionAccounts, bool) {
 	return sa, ok
 }
 
+// withEditAuth authenticates edit operations: the edit id in the path plus
+// the edit password from X-Edit-Password (or Basic auth), rate limited and
+// cached to keep Argon2 work off the hot path.
 func (a *API) withEditAuth(next func(http.ResponseWriter, *http.Request, *store.Site)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// An upload token opens exactly one route, which withUploadAuth
