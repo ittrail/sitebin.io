@@ -252,6 +252,18 @@ second copy of the rule.
   "everything".
 - **The audience check is not optional.** It is the only thing stopping a token
   minted for another resource server on the same issuer from working here.
+- **Upload tokens (`sbu_`) are memory-only and single-site.** `open_upload`
+  issues them (`internal/httpapi/uploadtokens.go`); only `/dav/{editID}/` and
+  `POST /api/sites/{editID}/files` accept them, and `withEditAuth` refuses any
+  `sbu_` credential before password work. A `sbu_` credential is never tried
+  as an edit password or account token — keep `uploadCredential` the single
+  place that recognises one. Idle 5 min from the END of the last request,
+  60 min absolute. Read `docs/superpowers/specs/2026-09-25-mcp-upload-tokens-design.md`.
+- **A replace is staged (`store.Replacement`).** `?replace=true` and
+  `write_files` with `replace` write into `<site>/.replace-*` and commit only
+  when complete and within the caps; never call `ClearFiles` before an upload
+  again. The commit empties and refills the content directory in place — it
+  must never rename it, because container bind mounts point into it.
 
 Read `docs/superpowers/specs/2026-08-28-mcp-server-design.md` and
 `2026-08-29-mcp-oauth-resource-server-design.md`.
