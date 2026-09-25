@@ -25,7 +25,7 @@ New-Item -ItemType Directory -Force $work | Out-Null
 # Every assertion in this script must run. If one is skipped -- a throw, an
 # early return -- the totals still look healthy, so the count is checked at the
 # end against this number. Update it when you add or remove an assertion.
-$ExpectedAssertions = 42
+$ExpectedAssertions = 53
 $script:pass = 0; $script:fail = 0
 # $c is deliberately untyped. With [bool], PowerShell throws on anything it
 # cannot coerce -- an array from a multi-line command substitution, say -- and a
@@ -117,6 +117,7 @@ docker volume rm $vol 2>$null | Out-Null
 docker run -d --name $name -p "${Port}:80" -v "${vol}:/data" `
     -e "SITEBIN_BASE_DOMAIN=${base}:$Port" -e "SITEBIN_HTTP_ONLY=true" `
     -e "SITEBIN_RATE_AUTH_PER_5MIN=200" `
+    -e "SITEBIN_MAX_SITE_BYTES=12582912" `
     $Image | Out-Null
 if ($LASTEXITCODE -ne 0) { Write-Host "docker run failed" -ForegroundColor Red; exit 1 }
 
@@ -142,7 +143,7 @@ $tools = @()
 if ($null -ne $r.msg -and $null -ne $r.msg.result) { $tools = $r.msg.result.tools | ForEach-Object { $_.name } }
 foreach ($t in @("create_site", "list_sites", "get_site", "update_site", "list_files",
         "read_file", "write_files", "delete_file", "delete_site",
-        "add_domain", "remove_domain", "download_site",
+        "add_domain", "remove_domain", "download_site", "open_upload",
         "list_forms", "add_form", "update_form", "remove_form", "resend_form_confirmation")) {
     Assert "tool $t present" ($tools -contains $t)
 }
@@ -211,6 +212,47 @@ $r = CallTool "write_files" @{
     files   = @(@{ path = "index.html"; text = "<h1>replaced</h1>" })
 }
 Assert "replace emptied the site first" (-not (ToolIsError $r) -and (ToolStruct $r).file_count -eq 1) (ToolText $r)
+
+Write-Host "== large files through open_upload" -ForegroundColor Cyan
+$r = CallTool "open_upload" @{ edit_id = $editID; edit_password = $pw }
+Assert "open_upload succeeded" (-not (ToolIsError $r)) (ToolText $r)
+$up = ToolStruct $r
+$tok = ""; if ($null -ne $up) { $tok = $up.token }
+Assert "the token is an upload token" ($tok -match '^sbu_[0-9A-Za-z]{40}$') "$tok"
+Assert "upload and WebDAV URLs returned" ($null -ne $up -and $up.upload_url -match "/api/sites/$editID/files$" -and $up.webdav_url -match "/dav/$editID/$") "$($up.upload_url) $($up.webdav_url)"
+
+# 9 MiB: above the 8 MiB a tool call may carry.
+$big = Join-Path $work "big.bin"
+[IO.File]::WriteAllBytes($big, (New-Object byte[] (9MB)))
+$r2 = Req "POST" "$origin/api/sites/$editID/files" @("-H", "Authorization: Bearer $tok", "-F", "files=@$big;filename=media/big.bin")
+Assert "a 9 MiB file uploads with the token" ($r2.code -eq 200) "$($r2.code) $($r2.body)"
+$bigURL = ($viewURL.TrimEnd("/")) + "/media/big.bin"
+$got = & curl.exe -s -o NUL -w "%{size_download}" $bigURL
+Assert "the big file serves in full" ([int64]$got -eq 9MB) "$got"
+
+# The site's own WebDAV toggle is off (create_site never set it).
+$small = Join-Path $work "dav.txt"
+[IO.File]::WriteAllText($small, "dav-ok")
+$r2 = Req "PUT" "$origin/dav/$editID/dav.txt" @("-H", "Authorization: Bearer $tok", "--data-binary", "@$small")
+Assert "WebDAV PUT with the token and the toggle off" ($r2.code -eq 201) "$($r2.code) $($r2.body)"
+Assert "the WebDAV file serves" ((Req "GET" (($viewURL.TrimEnd("/")) + "/dav.txt")).body -match "dav-ok")
+
+$r2 = Req "GET" "$origin/api/sites/$editID" @("-H", "Authorization: Bearer $tok")
+Assert "the token is refused on the settings route" ($r2.code -eq 403) "$($r2.code) $($r2.body)"
+
+# A replace that does not fit leaves the site as it was. 13 MiB of zeros zips
+# to almost nothing, so only the extraction can notice -- after the old files
+# would already have been deleted by the old code.
+$zipSrc = Join-Path $work "toobig"
+New-Item -ItemType Directory -Force $zipSrc | Out-Null
+[IO.File]::WriteAllBytes((Join-Path $zipSrc "huge.bin"), (New-Object byte[] (13MB)))
+$zipFile = Join-Path $work "toobig.zip"
+if (Test-Path $zipFile) { Remove-Item $zipFile }
+Compress-Archive -Path (Join-Path $zipSrc "huge.bin") -DestinationPath $zipFile
+$r2 = Req "POST" "$origin/api/sites/$editID/files?replace=true" @("-H", "Authorization: Bearer $tok", "-F", "zip=@$zipFile")
+Assert "an over-cap replace is refused" ($r2.code -ge 400) "$($r2.code) $($r2.body)"
+$got = & curl.exe -s -o NUL -w "%{size_download}" $bigURL
+Assert "the site still serves what it had" ([int64]$got -eq 9MB) "$got"
 
 Write-Host "== custom domains are enterprise-only here" -ForegroundColor Cyan
 $r = CallTool "add_domain" @{ edit_id = $editID; edit_password = $pw; domain = "docs.example.com" }
