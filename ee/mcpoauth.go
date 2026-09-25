@@ -4,11 +4,13 @@ package ee
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 
@@ -28,10 +30,17 @@ type mcpOAuth struct {
 	issuer   string
 	resource string
 	accounts accountLookup
+	// now is the clock the discovery retry is measured on; a field so a test
+	// can move it.
+	now func() time.Time
 
-	once     sync.Once
-	initErr  error
+	// mu guards the lazily discovered verifier and the last failed attempt.
+	// A failure is remembered only to space out retries, never as the answer
+	// until restart.
+	mu       sync.Mutex
 	verifier *oidc.IDTokenVerifier
+	lastTry  time.Time
+	lastErr  error
 }
 
 // accountLookup turns an OIDC subject into a Sitebin account id. It is a
@@ -45,27 +54,56 @@ func newMCPOAuth(issuer, resource string, accounts accountLookup) *mcpOAuth {
 	if strings.TrimSpace(issuer) == "" {
 		return nil
 	}
-	return &mcpOAuth{issuer: issuer, resource: resource, accounts: accounts}
+	return &mcpOAuth{issuer: issuer, resource: resource, accounts: accounts, now: time.Now}
 }
 
-// init resolves the issuer's metadata and key set, once and lazily.
+const (
+	// discoveryTimeout bounds one discovery on its own clock. It never runs
+	// under a caller's request context: a client that hangs up during the
+	// very first MCP call must not decide whether OAuth works for everyone
+	// after it.
+	discoveryTimeout = 10 * time.Second
+	// discoveryRetry is the least time between two attempts after a failure,
+	// so an issuer that is restarting is not asked again by every request
+	// that arrives meanwhile.
+	discoveryRetry = 10 * time.Second
+)
+
+// tokenVerifier resolves the issuer's metadata and key set lazily, and
+// retries after a failure.
 //
 // Lazily because startup must not depend on the issuer being reachable: an
 // authorization server that is briefly down should make MCP OAuth calls fail,
-// not stop Sitebin from serving sites.
-func (m *mcpOAuth) init(ctx context.Context) error {
-	m.once.Do(func() {
-		prov, err := oidc.NewProvider(ctx, m.issuer)
-		if err != nil {
-			m.initErr = fmt.Errorf("mcp oauth: discover %s: %w", m.issuer, err)
-			return
-		}
-		// SkipClientIDCheck because the audience this resource server cares
-		// about is its own resource identifier, not a client id — the check
-		// below is the one that matters and it is stricter than the default.
-		m.verifier = prov.Verifier(&oidc.Config{SkipClientIDCheck: true})
-	})
-	return m.initErr
+// not stop Sitebin from serving sites. Retried because the first version
+// cached the first failure until the next restart, which turned a
+// ten-second blip at the wrong moment into an outage.
+//
+// Callers wait on the lock while a discovery runs; they would otherwise all
+// fail, or all ask the issuer at once.
+func (m *mcpOAuth) tokenVerifier() (*oidc.IDTokenVerifier, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.verifier != nil {
+		return m.verifier, nil
+	}
+	now := m.now()
+	if !m.lastTry.IsZero() && now.Sub(m.lastTry) < discoveryRetry {
+		return nil, m.lastErr
+	}
+	m.lastTry = now
+	ctx, cancel := context.WithTimeout(context.Background(), discoveryTimeout)
+	defer cancel()
+	prov, err := oidc.NewProvider(ctx, m.issuer)
+	if err != nil {
+		m.lastErr = fmt.Errorf("mcp oauth: discover %s: %w", m.issuer, err)
+		slog.Error("mcp oauth: issuer unavailable; retrying on a request at least 10s from now", "issuer", m.issuer, "err", err)
+		return nil, m.lastErr
+	}
+	// SkipClientIDCheck because the audience this resource server cares
+	// about is its own resource identifier, not a client id — the check in
+	// Verify is the one that matters and it is stricter than the default.
+	m.verifier = prov.Verifier(&oidc.Config{SkipClientIDCheck: true})
+	return m.verifier, nil
 }
 
 // Verify checks an access token and returns the credential it grants.
@@ -74,12 +112,12 @@ func (m *mcpOAuth) init(ctx context.Context) error {
 // caller: a resource server that distinguishes "expired" from "wrong audience"
 // from "unknown account" for an unauthenticated caller is an oracle.
 func (m *mcpOAuth) Verify(ctx context.Context, raw string) (ext.Credential, bool) {
-	if err := m.init(ctx); err != nil {
-		slog.Error("mcp oauth: issuer unavailable", "issuer", m.issuer, "err", err)
-		return ext.Credential{}, false
+	v, err := m.tokenVerifier()
+	if err != nil {
+		return ext.Credential{}, false // logged where the attempt failed
 	}
 
-	tok, err := m.verifier.Verify(ctx, raw)
+	tok, err := v.Verify(ctx, raw)
 	if err != nil {
 		return ext.Credential{}, false
 	}
@@ -87,8 +125,25 @@ func (m *mcpOAuth) Verify(ctx context.Context, raw string) (ext.Credential, bool
 	var claims struct {
 		Audience audience `json:"aud"`
 		Scope    string   `json:"scope"`
+		Type     *string  `json:"typ"`
 	}
 	if err := tok.Claims(&claims); err != nil {
+		return ext.Credential{}, false
+	}
+
+	// Only access tokens. The go-oidc verifier checks what an ID token and an
+	// access token share — signature, issuer, expiry — and so accepts both;
+	// a Keycloak ID token carrying the resource in its audience used to pass
+	// here. Keycloak marks its tokens in the `typ` claim, and an RFC 9068
+	// issuer in the JOSE header, so a token either one marks as something
+	// else is refused. The header is read after the signature check, which
+	// covers it.
+	if claims.Type != nil && !strings.EqualFold(*claims.Type, "Bearer") {
+		slog.Info("mcp oauth: token refused: not an access token", "typ", *claims.Type)
+		return ext.Credential{}, false
+	}
+	if typ, ok := headerType(raw); !ok {
+		slog.Info("mcp oauth: token refused: not an access token", "header_typ", typ)
 		return ext.Credential{}, false
 	}
 
@@ -111,6 +166,36 @@ func (m *mcpOAuth) Verify(ctx context.Context, raw string) (ext.Credential, bool
 	}
 
 	return ext.Credential{AccountID: accountID, Scopes: parseScopes(claims.Scope), OAuth: true}, true
+}
+
+// headerType reports the JOSE header's `typ` and whether it is one an access
+// token carries: absent, JWT (what Keycloak writes), or RFC 9068's at+jwt,
+// with or without its media-type prefix. Anything else — an ID token's or a
+// logout token's type, say — is refused, and so is a header that cannot be
+// read.
+func headerType(raw string) (string, bool) {
+	head, _, ok := strings.Cut(raw, ".")
+	if !ok {
+		return "", false
+	}
+	b, err := base64.RawURLEncoding.DecodeString(head)
+	if err != nil {
+		return "", false
+	}
+	var h struct {
+		Typ *string `json:"typ"`
+	}
+	if err := json.Unmarshal(b, &h); err != nil {
+		return "", false
+	}
+	if h.Typ == nil {
+		return "", true
+	}
+	switch strings.ToLower(*h.Typ) {
+	case "jwt", "at+jwt", "application/at+jwt":
+		return *h.Typ, true
+	}
+	return *h.Typ, false
 }
 
 // audience decodes the `aud` claim, which JSON-encodes as either a string or an

@@ -271,3 +271,114 @@ func TestAccountTokenIsHonouredEverywhere(t *testing.T) {
 		}
 	}
 }
+
+// The audience check is the one that makes a shared authorization server safe
+// to share: a token minted for another resource is worth nothing here.
+func TestMCPOAuthRefusesAnotherAudience(t *testing.T) {
+	ti := newTestIssuer(t)
+	m := newMCPOAuth(ti.URL(), testResource, knownSubject(testSubject, "acct-1"))
+	tok := ti.sign(t, func(c map[string]any) { c["aud"] = []string{"https://other.example/mcp", "account"} }, nil)
+	if _, ok := m.Verify(context.Background(), tok); ok {
+		t.Fatal("a token for another resource was accepted")
+	}
+}
+
+// Only access tokens. A Keycloak ID token carries typ "ID" and can carry the
+// resource in its audience, and it used to pass.
+func TestMCPOAuthAcceptsOnlyAccessTokens(t *testing.T) {
+	ti := newTestIssuer(t)
+	m := newMCPOAuth(ti.URL(), testResource, knownSubject(testSubject, "acct-1"))
+	cases := []struct {
+		name   string
+		claims func(map[string]any)
+		header map[string]any
+		want   bool
+	}{
+		{"keycloak access token", nil, nil, true},
+		{"typ claim in lower case", func(c map[string]any) { c["typ"] = "bearer" }, nil, true},
+		{"no typ claim", func(c map[string]any) { delete(c, "typ") }, nil, true},
+		{"ID token", func(c map[string]any) { c["typ"] = "ID" }, nil, false},
+		{"refresh token", func(c map[string]any) { c["typ"] = "Refresh" }, nil, false},
+		{"empty typ claim", func(c map[string]any) { c["typ"] = "" }, nil, false},
+		{"RFC 9068 header", nil, map[string]any{"typ": "at+jwt"}, true},
+		{"RFC 9068 media type", nil, map[string]any{"typ": "application/at+jwt"}, true},
+		{"header typ in upper case", nil, map[string]any{"typ": "AT+JWT"}, true},
+		{"no header typ", nil, map[string]any{"typ": nil}, true},
+		{"logout token header", nil, map[string]any{"typ": "logout+jwt"}, false},
+		{"ID token header", nil, map[string]any{"typ": "id_token+jwt"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if _, ok := m.Verify(context.Background(), ti.sign(t, c.claims, c.header)); ok != c.want {
+				t.Fatalf("accepted = %v, want %v", ok, c.want)
+			}
+		})
+	}
+}
+
+func TestMCPOAuthRefusesAnExpiredToken(t *testing.T) {
+	ti := newTestIssuer(t)
+	m := newMCPOAuth(ti.URL(), testResource, knownSubject(testSubject, "acct-1"))
+	tok := ti.sign(t, func(c map[string]any) { c["exp"] = time.Now().Add(-time.Minute).Unix() }, nil)
+	if _, ok := m.Verify(context.Background(), tok); ok {
+		t.Fatal("an expired token was accepted")
+	}
+}
+
+// An issuer that is down at the first MCP call must not leave OAuth broken
+// until the next restart: discovery is retried, at most every ten seconds.
+func TestMCPOAuthRetriesAFailedDiscovery(t *testing.T) {
+	ti := newTestIssuer(t)
+	m := newMCPOAuth(ti.URL(), testResource, knownSubject(testSubject, "acct-1"))
+	now := time.Now()
+	m.now = func() time.Time { return now }
+	tok := ti.sign(t, nil, nil)
+
+	ti.down.Store(true)
+	if _, ok := m.Verify(context.Background(), tok); ok {
+		t.Fatal("a token was accepted with the issuer down")
+	}
+	ti.down.Store(false)
+
+	// Inside the retry floor the failure stands; the issuer is not hammered
+	// by every request while it restarts.
+	now = now.Add(5 * time.Second)
+	if _, ok := m.Verify(context.Background(), tok); ok {
+		t.Fatal("discovery was retried inside ten seconds")
+	}
+	if n := ti.discoveries.Load(); n != 1 {
+		t.Fatalf("%d discoveries inside the retry floor, want 1", n)
+	}
+
+	now = now.Add(6 * time.Second)
+	if _, ok := m.Verify(context.Background(), tok); !ok {
+		t.Fatal("the issuer is back, but the token is still refused")
+	}
+	if n := ti.discoveries.Load(); n != 2 {
+		t.Errorf("%d discoveries, want 2", n)
+	}
+	// Once discovered, it stays discovered.
+	if _, ok := m.Verify(context.Background(), tok); !ok || ti.discoveries.Load() != 2 {
+		t.Errorf("a later call rediscovered the issuer (%d)", ti.discoveries.Load())
+	}
+}
+
+// Discovery runs under its own timeout, not the first caller's context: a
+// client that hung up during the very first call must not break OAuth for
+// everyone after it.
+func TestMCPOAuthCancelledFirstCallDoesNotPoisonLaterOnes(t *testing.T) {
+	ti := newTestIssuer(t)
+	m := newMCPOAuth(ti.URL(), testResource, knownSubject(testSubject, "acct-1"))
+	tok := ti.sign(t, nil, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	m.Verify(ctx, tok) // whatever it answers, it answers only for itself
+
+	if _, ok := m.Verify(context.Background(), tok); !ok {
+		t.Fatal("a cancelled first call poisoned the verifier")
+	}
+	if n := ti.discoveries.Load(); n != 1 {
+		t.Errorf("%d discoveries, want 1: the cancelled call should have discovered under its own context", n)
+	}
+}
