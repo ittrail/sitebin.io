@@ -1,7 +1,7 @@
 # Upload tokens: large files outside the MCP call
 
 **Date:** 2026-09-25
-**Status:** draft — awaiting review
+**Status:** implemented
 
 ## Problem
 
@@ -319,3 +319,24 @@ Replacing with nothing still empties the site, as before.
   `open_upload`, covers it.
 - Making the durations configurable.
 - Revoking upload tokens when the account token that issued them is revoked.
+
+## Corrections (post-implementation)
+
+Review made these rulings while the branch was being finished. The sections
+above are left as they were; where they disagree with this block, this block
+is what the code does.
+
+- **An `sbu_` credential is refused on every password path, not only the API
+  routes.** `verifyEditIP` returns failure for it before the verify cache, the
+  limiters and Argon2, so MCP `edit_password` and FTP never hash it or spend a
+  rate-limit slot on it either — not just the JSON API and WebDAV routes the
+  body above describes. MCP `openSite` answers an `sbu_` edit_password with a
+  message saying what the token is for, rather than the generic wrong-password
+  refusal.
+- **Container bind mounts point INTO the content directory
+  (`files/<folder>`), not at it.** The staged replace still never renames the
+  content directory itself — that part was right — but the folders a running
+  container has bind-mounted live one level inside it. As before with
+  `ClearFiles`, a replace swaps those folders out from under the mount, so a
+  running container keeps serving the old ones until its compose file or
+  restart sequence picks up the change.
