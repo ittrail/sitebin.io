@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/ittrail/sitebin.io/internal/ext"
@@ -415,6 +416,41 @@ func (o mcpOps) DownloadSite(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) 
 		return nil, o.mcpError(err)
 	}
 	return buf.Bytes(), nil
+}
+
+// OpenUpload issues an upload token for a site the caller may write to. The
+// authority check is openSite — the one write_files uses — so whoever may
+// write files through MCP may open an upload, and nobody else.
+func (o mcpOps) OpenUpload(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) (*mcp.UploadResult, error) {
+	site, err := o.openSite(auth, ref)
+	if err != nil {
+		return nil, err
+	}
+	secret, expires, err := o.a.uploads.issue(site.ViewID, site.EditID)
+	if err != nil {
+		return nil, err // errTooManyUploads says what to do
+	}
+	o.a.log.Info("upload token issued", "id", site.ViewID, "token", secret[:10])
+
+	res := &mcp.UploadResult{
+		EditID:             site.EditID,
+		ViewURL:            o.a.cfg.ViewURL(site.Meta.ID),
+		Token:              secret,
+		UploadURL:          o.a.cfg.FilesURL(site.EditID),
+		IdleTimeoutSeconds: int(uploadTokenIdle / time.Second),
+		ExpiresAt:          expires,
+	}
+	h := "-H 'Authorization: Bearer " + secret + "'"
+	res.Examples = []string{
+		"curl " + h + " -F 'zip=@dist.zip' '" + res.UploadURL + "?replace=true'",
+		"curl " + h + " -F 'files=@video.mp4;filename=media/video.mp4' '" + res.UploadURL + "'",
+	}
+	// With WebDAV off instance-wide the route is a 404, so it is not offered.
+	if o.a.cfg.WebDAVAllowed {
+		res.WebDAVURL = o.a.cfg.DAVURL(site.EditID)
+		res.Examples = append(res.Examples, "curl "+h+" -T big.bin '"+res.WebDAVURL+"big.bin'")
+	}
+	return res, nil
 }
 
 // ---- forms: the same helpers as the JSON API ----

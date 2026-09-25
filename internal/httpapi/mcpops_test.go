@@ -814,3 +814,131 @@ func TestMCPFormsNeedTheEditPassword(t *testing.T) {
 		t.Fatalf("list_forms without a password = %s", mcpText(res))
 	}
 }
+
+func TestMCPOpenUploadThenUploadOverHTTP(t *testing.T) {
+	e := newEnv(t, nil)
+	cs := mcpClient(t, e, nil)
+	editID, pw := mcpCreate(t, cs, "<h1>small</h1>")
+
+	res := mcpCall(t, cs, "open_upload", map[string]any{"edit_id": editID, "edit_password": pw})
+	if res.IsError {
+		t.Fatalf("open_upload: %s", mcpText(res))
+	}
+	var up mcp.UploadResult
+	raw, _ := json.Marshal(res.StructuredContent)
+	if err := json.Unmarshal(raw, &up); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(up.Token, "sbu_") {
+		t.Fatalf("token = %q", up.Token)
+	}
+	if !strings.HasSuffix(up.UploadURL, "/api/sites/"+editID+"/files") {
+		t.Errorf("upload_url = %q", up.UploadURL)
+	}
+	if !strings.HasSuffix(up.WebDAVURL, "/dav/"+editID+"/") {
+		t.Errorf("webdav_url = %q", up.WebDAVURL)
+	}
+	if up.IdleTimeoutSeconds != int(uploadTokenIdle/time.Second) {
+		t.Errorf("idle_timeout_seconds = %d", up.IdleTimeoutSeconds)
+	}
+	if d := time.Until(up.ExpiresAt); d < 59*time.Minute || d > 61*time.Minute {
+		t.Errorf("expires_at = %v", up.ExpiresAt)
+	}
+	if len(up.Examples) != 3 {
+		t.Fatalf("examples = %v", up.Examples)
+	}
+	for _, ex := range up.Examples {
+		if !strings.HasPrefix(ex, "curl ") || !strings.Contains(ex, up.Token) {
+			t.Errorf("example is not ready to run: %q", ex)
+		}
+	}
+
+	// The token works with a plain HTTP client, for a file larger than any
+	// tool call may carry.
+	big := strings.Repeat("x", mcp.MaxContentBytes+1)
+	body, ct := uploadBody(t, nil, map[string]string{"big.txt": big})
+	req := bearer(httptest.NewRequest("POST", "/api/sites/"+editID+"/files", body), up.Token)
+	req.Header.Set("Content-Type", ct)
+	if w := e.public(t, req); w.Code != 200 {
+		t.Fatalf("upload with the issued token: %d %s", w.Code, w.Body)
+	}
+	site, _ := e.st.ByEditID(editID)
+	files, err := e.st.ListFiles(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got int64 = -1
+	for _, f := range files {
+		if f.Path == "big.txt" {
+			got = f.Size
+		}
+	}
+	if got != int64(len(big)) {
+		t.Fatalf("big.txt: %d bytes stored, want %d", got, len(big))
+	}
+}
+
+func TestMCPOpenUploadWithoutWebDAVOffersOnlyTheAPI(t *testing.T) {
+	e := newEnv(t, map[string]string{"SITEBIN_WEBDAV_ENABLED": "false"})
+	cs := mcpClient(t, e, nil)
+	editID, pw := mcpCreate(t, cs, "x")
+	res := mcpCall(t, cs, "open_upload", map[string]any{"edit_id": editID, "edit_password": pw})
+	m, _ := res.StructuredContent.(map[string]any)
+	if res.IsError || m == nil {
+		t.Fatalf("open_upload: %s", mcpText(res))
+	}
+	if v, ok := m["webdav_url"]; ok {
+		t.Errorf("webdav_url offered with WebDAV off: %v", v)
+	}
+	if ex, _ := m["examples"].([]any); len(ex) != 2 {
+		t.Errorf("examples = %v", m["examples"])
+	}
+}
+
+func TestMCPOpenUploadNeedsTheSitesAuthority(t *testing.T) {
+	e := newEnv(t, nil)
+	cs := mcpClient(t, e, nil)
+	editID, _ := mcpCreate(t, cs, "x")
+	res := mcpCall(t, cs, "open_upload", map[string]any{"edit_id": editID, "edit_password": "wrong"})
+	if !res.IsError {
+		t.Fatal("open_upload with a wrong password issued a token")
+	}
+	if n := len(e.api.uploads.m); n != 0 {
+		t.Fatalf("%d tokens issued", n)
+	}
+}
+
+func TestMCPOpenUploadWithAnOwningAccountToken(t *testing.T) {
+	e := newEnv(t, nil)
+	ext.Register(&fakeProvider{
+		enabled: true,
+		owner:   "acct-1",
+		bearer:  map[string]string{"sbp_a": "acct-1", "sbp_b": "acct-2"},
+	})
+	defer ext.Reset()
+
+	owner := mcpClient(t, e, http.Header{"Authorization": {"Bearer sbp_a"}})
+	editID, _ := mcpCreate(t, owner, "x")
+	if res := mcpCall(t, owner, "open_upload", map[string]any{"edit_id": editID}); res.IsError {
+		t.Fatalf("owning token: %s", mcpText(res))
+	}
+	other := mcpClient(t, e, http.Header{"Authorization": {"Bearer sbp_b"}})
+	if res := mcpCall(t, other, "open_upload", map[string]any{"edit_id": editID}); !res.IsError {
+		t.Fatal("another account's token opened an upload")
+	}
+}
+
+func TestMCPDeleteSiteRevokesUploadTokens(t *testing.T) {
+	e := newEnv(t, nil)
+	cs := mcpClient(t, e, nil)
+	editID, pw := mcpCreate(t, cs, "x")
+	if res := mcpCall(t, cs, "open_upload", map[string]any{"edit_id": editID, "edit_password": pw}); res.IsError {
+		t.Fatalf("open_upload: %s", mcpText(res))
+	}
+	if res := mcpCall(t, cs, "delete_site", map[string]any{"edit_id": editID, "edit_password": pw}); res.IsError {
+		t.Fatalf("delete_site: %s", mcpText(res))
+	}
+	if n := len(e.api.uploads.m); n != 0 {
+		t.Fatalf("%d upload tokens outlived their site", n)
+	}
+}

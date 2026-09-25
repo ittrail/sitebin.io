@@ -76,7 +76,7 @@ func TestDecodeFilesCapIsCumulative(t *testing.T) {
 	}
 	// The message has to route the agent somewhere it can succeed, or the
 	// agent will simply retry the same call.
-	for _, want := range []string{"write_files", "WebDAV", "zip"} {
+	for _, want := range []string{"write_files", "open_upload", "zip"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("message does not mention %q: %v", want, err)
 		}
