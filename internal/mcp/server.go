@@ -35,6 +35,18 @@ Sites are public to anyone with the URL. Do not publish secrets, credentials or
 personal data, and do not create pages that imitate another organization's
 sign-in or payment flow.`
 
+// MaxRequestBytes is the most the transport reads of one request body.
+//
+// It must sit ABOVE the content limit, or the content limit is unreachable
+// and callers get a bare 413 instead of the message that tells them to call
+// open_upload. A request carrying MaxContentBytes of files is larger than
+// that on the wire — base64 inflates by a third, and JSON string escaping can
+// add more — so the transport is given twice the room and acts only as a
+// backstop. The SDK's own default is 4 MiB, which is below our content cap and
+// would have made this a silent trap. Exported because the HTTP layer peeks at
+// the same bodies before the SDK does, and must read exactly as far.
+const MaxRequestBytes = 2 * MaxContentBytes
+
 // Info identifies this Sitebin instance to MCP clients.
 type Info struct {
 	// Name is the server name reported at initialize. Clients show it to the
@@ -61,15 +73,7 @@ func NewHandler(ops Ops, info Info) http.Handler {
 	return sdk.NewStreamableHTTPHandler(getServer, &sdk.StreamableHTTPOptions{
 		Stateless: true,
 
-		// The transport limit must sit ABOVE the content limit, or the content
-		// limit is unreachable and callers get a bare 413 instead of the
-		// message that tells them to call open_upload. A
-		// request carrying MaxContentBytes of files is larger than that on the
-		// wire — base64 inflates by a third, and JSON string escaping can add
-		// more — so the transport is given twice the room and acts only as a
-		// backstop. The SDK's own default is 4 MiB, which is below our content
-		// cap and would have made this a silent trap.
-		MaxRequestBodyBytes: 2 * MaxContentBytes,
+		MaxRequestBodyBytes: MaxRequestBytes,
 
 		// The SDK's DNS-rebinding guard refuses any request whose Host is not
 		// a loopback name whenever the listener it arrived on is loopback.

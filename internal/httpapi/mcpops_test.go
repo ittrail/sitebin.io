@@ -607,21 +607,24 @@ func TestMCPProtectedResourceMetadata(t *testing.T) {
 }
 
 // The challenge is what turns a 401 into something a client can act on: it has
-// to name where the metadata lives, or discovery never starts.
+// to name where the metadata lives, or discovery never starts. It names the
+// /mcp-suffixed document, which RFC 9728 pairs with a resource at /mcp.
 func TestMCPUnauthenticatedChallenge(t *testing.T) {
 	e := newEnv(t, oauthEnv())
-	req := httptest.NewRequest("POST", "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize"}`))
+	ext.Register(&fakeProvider{enabled: true})
+	defer ext.Reset()
+	req := httptest.NewRequest("POST", "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_sites","arguments":{}}}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := e.public(t, req)
 
 	if rec.Code != 401 {
-		t.Fatalf("POST /mcp without a credential = %d, want 401", rec.Code)
+		t.Fatalf("list_sites without a credential = %d, want 401", rec.Code)
 	}
 	got := rec.Header().Get("WWW-Authenticate")
 	if !strings.Contains(got, "Bearer") || !strings.Contains(got, "resource_metadata=") {
 		t.Fatalf("WWW-Authenticate = %q", got)
 	}
-	if !strings.Contains(got, "/.well-known/oauth-protected-resource") {
+	if !strings.Contains(got, `"http://sitebin.example/.well-known/oauth-protected-resource/mcp"`) {
 		t.Errorf("challenge does not point at the metadata: %q", got)
 	}
 }
@@ -660,8 +663,8 @@ func TestMCPUnknownCredentialRefused(t *testing.T) {
 	}
 }
 
-// An OAuth credential carrying scopes reaches the tools with them, so the
-// per-tool checks in internal/mcp have something to enforce.
+// An OAuth credential without the scope a tool needs is stopped at the door
+// with the step-up 403, before any tool runs and before anything is created.
 func TestMCPOAuthScopesReachTheTools(t *testing.T) {
 	e := newEnv(t, oauthEnv())
 	ext.Register(&fakeProvider{
@@ -669,16 +672,18 @@ func TestMCPOAuthScopesReachTheTools(t *testing.T) {
 		owner:   "acct-1",
 		bearer:  map[string]string{"jwt-ish": "acct-1"},
 		scopes:  map[string][]string{"jwt-ish": {mcp.ScopeRead}},
+		oauth:   map[string]bool{"jwt-ish": true},
 	})
 	defer ext.Reset()
 
 	cs := mcpClient(t, e, http.Header{"Authorization": {"Bearer jwt-ish"}})
-	res := mcpCall(t, cs, "create_site", map[string]any{"files": []any{}})
-	if !res.IsError {
+	if _, err := cs.CallTool(context.Background(), &sdk.CallToolParams{
+		Name: "create_site", Arguments: map[string]any{"files": []any{}},
+	}); err == nil {
 		t.Fatal("a read-only OAuth credential must not create sites")
 	}
-	if !strings.Contains(mcpText(res), mcp.ScopeWrite) {
-		t.Errorf("refusal does not name the missing scope: %s", mcpText(res))
+	if sites, _ := e.st.AllSites(); len(sites) != 0 {
+		t.Errorf("the refused create left %d site(s) behind", len(sites))
 	}
 }
 

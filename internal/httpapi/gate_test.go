@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ittrail/sitebin.io/internal/ext"
@@ -31,6 +33,23 @@ type fakeProvider struct {
 	scopes   map[string][]string
 	quotaOK  bool
 	quotaErr error
+	// oauth marks a token secret as an OAuth access token rather than an
+	// account API token. The fake hands it out on every route, marker or not,
+	// so a test proves the core refuses it outside /mcp on its own.
+	oauth map[string]bool
+	// ownerFromBearer makes AuthorizeCreate name the owner from the bearer the
+	// way the extension's accountForAPI does — an account token anywhere, an
+	// OAuth token only on a request that came through /mcp — so the core's
+	// half of that rule, carrying the marker to the extension, is testable.
+	ownerFromBearer bool
+
+	// bearerCalls counts BearerCredential lookups, so a test can see a
+	// credential verified once per request. The markers record whether each
+	// lookup and each create came through /mcp.
+	bearerCalls  atomic.Int32
+	mu           sync.Mutex
+	bearerSawMCP []bool
+	createSawMCP []bool
 }
 
 func (f *fakeProvider) Name() string          { return "fake" }
@@ -44,26 +63,50 @@ func (f *fakeProvider) CustomDomainsAllowed() error {
 	return errors.New("custom domains are not available on this instance")
 }
 func (f *fakeProvider) EmbedOriginsAllowed() bool { return f.embedOK }
-func (f *fakeProvider) AuthorizeCreate(*http.Request) (ext.CreateGrant, error) {
+func (f *fakeProvider) AuthorizeCreate(r *http.Request) (ext.CreateGrant, error) {
+	f.mu.Lock()
+	f.createSawMCP = append(f.createSawMCP, ext.IsMCPCaller(r.Context()))
+	f.mu.Unlock()
 	g := f.grant
+	if f.ownerFromBearer {
+		g.OwnerAccountID = ""
+		secret := fakeBearer(r)
+		if id, ok := f.bearer[secret]; ok && (!f.oauth[secret] || ext.IsMCPCaller(r.Context())) {
+			g.OwnerAccountID = id
+		}
+		return g, f.rejErr
+	}
 	if g.OwnerAccountID == "" {
 		g.OwnerAccountID = f.owner
 	}
 	return g, f.rejErr
 }
-func (f *fakeProvider) BearerCredential(r *http.Request) (ext.Credential, bool) {
+
+// fakeBearer extracts an Authorization: Bearer secret, or "".
+func fakeBearer(r *http.Request) string {
 	h := r.Header.Get("Authorization")
 	if len(h) < 7 || !strings.EqualFold(h[:7], "bearer ") {
+		return ""
+	}
+	return strings.TrimSpace(h[7:])
+}
+
+func (f *fakeProvider) BearerCredential(r *http.Request) (ext.Credential, bool) {
+	f.bearerCalls.Add(1)
+	f.mu.Lock()
+	f.bearerSawMCP = append(f.bearerSawMCP, ext.IsMCPCaller(r.Context()))
+	f.mu.Unlock()
+	secret := fakeBearer(r)
+	if secret == "" {
 		return ext.Credential{}, false
 	}
-	secret := strings.TrimSpace(h[7:])
 	id, ok := f.bearer[secret]
 	if !ok {
 		return ext.Credential{}, false
 	}
 	// scopes lets a test present an OAuth-shaped credential; an absent entry
 	// means an account API token, which carries none.
-	return ext.Credential{AccountID: id, Scopes: f.scopes[secret]}, true
+	return ext.Credential{AccountID: id, Scopes: f.scopes[secret], OAuth: f.oauth[secret]}, true
 }
 
 func (f *fakeProvider) AccountSiteIDs(accountID string) ([]string, bool) {

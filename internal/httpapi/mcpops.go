@@ -36,6 +36,11 @@ type mcpOps struct{ a *API }
 // That asymmetry is deliberate and errs strict: a session cookie is a person
 // at a keyboard, and an agent should be holding a token it was given on
 // purpose, not riding someone's browser login.
+//
+// With OAuth on, the lazy challenge in front of /mcp has already resolved any
+// bearer and left the credential in the request context; it is taken from
+// there rather than verified a second time. Without it — OAuth off, or no
+// bearer sent — the bearer is resolved here, as it always was.
 func (o mcpOps) Authenticate(r *http.Request) mcp.Auth {
 	auth := mcp.Auth{ClientIP: clientIP(r), Request: r}
 	p, ok := ext.Get()
@@ -43,9 +48,14 @@ func (o mcpOps) Authenticate(r *http.Request) mcp.Auth {
 		return auth // community build: no accounts, no tokens, fully open
 	}
 	auth.AccountsEnabled = p.AccountsEnabled()
-	if cred, ok := p.BearerCredential(r); ok {
+	cred, ok := ext.CredentialFrom(r.Context())
+	if !ok {
+		cred, ok = p.BearerCredential(r)
+	}
+	if ok {
 		auth.AccountID = cred.AccountID
 		auth.Scopes = cred.Scopes
+		auth.OAuth = cred.OAuth
 	}
 	return auth
 }
