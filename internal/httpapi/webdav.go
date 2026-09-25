@@ -41,8 +41,9 @@ var davMutating = map[string]bool{
 }
 
 // webdav serves /dav/{editID}/... — a network-drive view of the site's own
-// files, gated by the edit password over HTTP Basic auth. Write access equals
-// full edit rights, exactly like the API.
+// files, gated by the edit password over HTTP Basic auth, or by an upload
+// token from open_upload. Write access equals full edit rights, exactly like
+// the API.
 func (a *API) webdav(w http.ResponseWriter, r *http.Request) {
 	if !a.cfg.WebDAVAllowed {
 		writeError(w, 404, "WebDAV is disabled on this instance")
@@ -51,25 +52,43 @@ func (a *API) webdav(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/dav/")
 	editID, sub, _ := strings.Cut(rest, "/")
 	site, err := a.st.ByEditID(editID)
-	if err != nil || !site.Meta.WebDAVEnabled {
+	if err != nil {
 		writeError(w, 404, "not found")
 		return
 	}
 
-	_, pw, ok := r.BasicAuth()
-	if !ok || pw == "" {
-		w.Header().Set("WWW-Authenticate", `Basic realm="Sitebin WebDAV (password = edit password)"`)
-		writeError(w, 401, "authentication required")
-		return
-	}
-	switch a.verifyEdit(r, site, pw) {
-	case verifyThrottled:
-		writeError(w, 429, "too many password attempts")
-		return
-	case verifyFailed:
-		w.Header().Set("WWW-Authenticate", `Basic realm="Sitebin WebDAV (password = edit password)"`)
-		writeError(w, 401, "wrong edit password")
-		return
+	// An upload token opens the tree whatever the site's WebDAV toggle says:
+	// it is an agent's upload channel, not the site's network drive, and it
+	// grants nothing write_files does not. It is answered only as a token — a
+	// bad one is a 401, never a fall-through to the edit password.
+	if secret := uploadCredential(r); secret != "" {
+		end, ok := a.uploads.begin(secret, editID)
+		if !ok {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Sitebin WebDAV (password = edit password)"`)
+			writeError(w, 401, msgUploadTokenRefused)
+			return
+		}
+		defer end()
+	} else {
+		if !site.Meta.WebDAVEnabled {
+			writeError(w, 404, "not found")
+			return
+		}
+		_, pw, ok := r.BasicAuth()
+		if !ok || pw == "" {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Sitebin WebDAV (password = edit password)"`)
+			writeError(w, 401, "authentication required")
+			return
+		}
+		switch a.verifyEdit(r, site, pw) {
+		case verifyThrottled:
+			writeError(w, 429, "too many password attempts")
+			return
+		case verifyFailed:
+			w.Header().Set("WWW-Authenticate", `Basic realm="Sitebin WebDAV (password = edit password)"`)
+			writeError(w, 401, "wrong edit password")
+			return
+		}
 	}
 
 	// The API is an account feature, and WebDAV must not be a back door
