@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 
+	"github.com/ittrail/sitebin.io/ee/account"
 	"github.com/ittrail/sitebin.io/internal/ext"
 )
 
@@ -30,6 +32,14 @@ type mcpOAuth struct {
 	issuer   string
 	resource string
 	accounts accountLookup
+	// consent reports whether the token's subject has accepted every document
+	// the platform and Sitebin currently require. nil where no stack is
+	// registered: such an instance has no gate to ask about.
+	consent consentCheck
+	// provision creates the account for a subject that has none. nil where
+	// no stack is registered, which keeps the old rule there: an unknown
+	// subject is refused.
+	provision accountProvision
 	// now is the clock the discovery retry is measured on; a field so a test
 	// can move it.
 	now func() time.Time
@@ -47,6 +57,14 @@ type mcpOAuth struct {
 // function rather than the store itself so the verifier can be tested without
 // one, and so the store's own types do not leak in here.
 type accountLookup func(subject string) (accountID string, ok bool)
+
+// consentCheck is the consent lock (see mcpconsent.go), a function for the
+// same reason accountLookup is one.
+type consentCheck func(ctx context.Context, subject string) bool
+
+// accountProvision creates the account for a subject that has never signed
+// in here, the way a first browser sign-in does, and returns its id.
+type accountProvision func(subject, email string, emailVerified bool) (accountID string, err error)
 
 // newMCPOAuth returns a verifier, or nil when no issuer is configured — which
 // is the normal case and must stay entirely inert.
@@ -123,9 +141,11 @@ func (m *mcpOAuth) Verify(ctx context.Context, raw string) (ext.Credential, bool
 	}
 
 	var claims struct {
-		Audience audience `json:"aud"`
-		Scope    string   `json:"scope"`
-		Type     *string  `json:"typ"`
+		Audience      audience `json:"aud"`
+		Scope         string   `json:"scope"`
+		Type          *string  `json:"typ"`
+		Email         string   `json:"email"`
+		EmailVerified flexBool `json:"email_verified"`
 	}
 	if err := tok.Claims(&claims); err != nil {
 		return ext.Credential{}, false
@@ -156,16 +176,78 @@ func (m *mcpOAuth) Verify(ctx context.Context, raw string) (ext.Credential, bool
 		return ext.Credential{}, false
 	}
 
-	accountID, ok := m.accounts(tok.Subject)
-	if !ok {
-		// A valid token for somebody who has never signed in here. Refusing is
-		// right: creating an account from a token would let any user of a
-		// shared issuer materialise a Sitebin account without ever visiting it.
-		slog.Info("mcp oauth: no account for subject", "subject", tok.Subject)
+	// The consent gate is never bypassed: a person with a required document
+	// outstanding gets no token Sitebin honours, whether they have an account
+	// here or not. The refusal is a 401, so the client signs in again, is
+	// steered through the gate, and the next token works.
+	if m.consent != nil && !m.consent(ctx, tok.Subject) {
 		return ext.Credential{}, false
 	}
 
+	accountID, ok := m.accounts(tok.Subject)
+	if !ok {
+		accountID, ok = m.provisionAccount(tok.Subject, claims.Email, bool(claims.EmailVerified))
+		if !ok {
+			return ext.Credential{}, false
+		}
+	}
+
 	return ext.Credential{AccountID: accountID, Scopes: parseScopes(claims.Scope), OAuth: true}, true
+}
+
+// provisionAccount creates the account for a valid token whose subject has
+// never signed in here.
+//
+// Only where a stack is registered. There the consent check has just
+// established that the person passed the gate, and the gate is what a first
+// browser sign-in would have shown them — so the account is created exactly
+// as that sign-in creates it, and a newcomer no longer loops on 401s. Without
+// a stack there is no gate and no stack identity to trust, and refusing stays
+// right: creating an account from a token would let any user of a shared
+// issuer materialise a Sitebin account without ever visiting it.
+func (m *mcpOAuth) provisionAccount(subject, email string, verified bool) (string, bool) {
+	if m.provision == nil {
+		slog.Info("mcp oauth: no account for subject", "subject", subject)
+		return "", false
+	}
+	if strings.TrimSpace(email) == "" {
+		// The stack's MCP scopes carry the email; a token without one is not
+		// what the stack issues for this resource, and an account needs one.
+		slog.Info("mcp oauth: no account for subject, and the token carries no email to create one with", "subject", subject)
+		return "", false
+	}
+	id, err := m.provision(subject, email, verified)
+	if err != nil {
+		if errors.Is(err, account.ErrEmailTaken) {
+			slog.Warn("mcp oauth: the token's email belongs to an account that signs in another way; not creating a second one", "subject", subject)
+		} else {
+			slog.Error("mcp oauth: could not create the account for a new subject", "subject", subject, "err", err)
+		}
+		return "", false
+	}
+	return id, true
+}
+
+// flexBool reads a JSON boolean, or the strings "true" and "false" that some
+// issuers send for email_verified. Anything else is false: a claim that does
+// not say "verified" plainly verifies nothing, and it must not make the whole
+// token unreadable either.
+type flexBool bool
+
+func (b *flexBool) UnmarshalJSON(data []byte) error {
+	var v any
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	switch t := v.(type) {
+	case bool:
+		*b = flexBool(t)
+	case string:
+		*b = flexBool(strings.EqualFold(t, "true"))
+	default:
+		*b = false
+	}
+	return nil
 }
 
 // headerType reports the JOSE header's `typ` and whether it is one an access

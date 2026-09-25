@@ -114,6 +114,13 @@ func (p *provider) Init(h ext.Host) error {
 		}
 		return acc.ID, true
 	})
+	// Where the instance is registered with a stack, a token is honoured only
+	// for a person who passed its consent gate, and such a person's first
+	// token creates their account. See mcpconsent.go.
+	if p.mcpOAuth != nil && cfg.StackRegistration != nil {
+		p.mcpOAuth.consent = newStackConsent(cfg.StackRegistration).complete
+		p.mcpOAuth.provision = p.provisionFromToken
+	}
 	if cfg.EmailEnabled() {
 		p.mailer = smtp.New(*cfg.SMTP)
 	}
@@ -678,6 +685,24 @@ func (p *provider) restampSites(acc *account.Account, t eeconfig.Tier) error {
 	}
 	slog.Info("restamp sites: applied new tier caps", "account", acc.ID, "tier", t.ID, "sites", stamped)
 	return nil
+}
+
+// provisionFromToken creates the account for a stack user whose first
+// contact with this instance is an MCP access token, exactly as their first
+// browser sign-in would have (linkOrCreateOAuth): the generic OIDC identity,
+// the token's email and its verification, the tier for new accounts. The
+// verifier calls it only after the stack confirmed the person's consent.
+func (p *provider) provisionFromToken(subject, email string, emailVerified bool) (string, error) {
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, subject, email, emailVerified, p.tierForNewAccount())
+	if err != nil {
+		// Two first requests at once: the other one created it a moment ago.
+		if existing, lookupErr := p.accounts.ByOAuth(account.OIDCProv, subject); lookupErr == nil {
+			return existing.ID, nil
+		}
+		return "", err
+	}
+	slog.Info("mcp oauth: account created on the first use of an access token", "account", acc.ID, "subject", subject)
+	return acc.ID, nil
 }
 
 // tierForNewAccount returns the tier id a new account starts on.

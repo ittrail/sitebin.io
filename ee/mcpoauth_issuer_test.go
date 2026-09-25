@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -380,5 +381,224 @@ func TestMCPOAuthCancelledFirstCallDoesNotPoisonLaterOnes(t *testing.T) {
 	}
 	if n := ti.discoveries.Load(); n != 1 {
 		t.Errorf("%d discoveries, want 1: the cancelled call should have discovered under its own context", n)
+	}
+}
+
+// ---- consent and auto-provision, in the verifier ----
+
+// accountsMap is an account lookup a test can grow, standing in for the store.
+type accountsMap struct {
+	mu   sync.Mutex
+	subs map[string]string
+}
+
+func (a *accountsMap) lookup(sub string) (string, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	id, ok := a.subs[sub]
+	return id, ok
+}
+
+type provisionCall struct {
+	subject, email string
+	verified       bool
+}
+
+// A token whose subject has an outstanding document is refused, account or
+// not: the gate is never bypassed.
+func TestMCPOAuthRefusesWithoutConsent(t *testing.T) {
+	ti := newTestIssuer(t)
+	m := newMCPOAuth(ti.URL(), testResource, knownSubject(testSubject, "acct-1"))
+	var asked []string
+	complete := false
+	m.consent = func(_ context.Context, sub string) bool { asked = append(asked, sub); return complete }
+	tok := ti.sign(t, nil, nil)
+
+	if _, ok := m.Verify(context.Background(), tok); ok {
+		t.Fatal("a token was accepted with consent outstanding")
+	}
+	complete = true
+	if _, ok := m.Verify(context.Background(), tok); !ok {
+		t.Fatal("a token was refused with consent complete")
+	}
+	if len(asked) != 2 || asked[0] != testSubject {
+		t.Errorf("consent asked for %v", asked)
+	}
+}
+
+// A newcomer with complete consent gets the account a first browser sign-in
+// would have created, once, instead of a 401 loop.
+func TestMCPOAuthProvisionsANewcomerOnce(t *testing.T) {
+	ti := newTestIssuer(t)
+	accts := &accountsMap{subs: map[string]string{}}
+	m := newMCPOAuth(ti.URL(), testResource, accts.lookup)
+	m.consent = func(context.Context, string) bool { return true }
+	var calls []provisionCall
+	m.provision = func(sub, email string, verified bool) (string, error) {
+		calls = append(calls, provisionCall{sub, email, verified})
+		accts.mu.Lock()
+		accts.subs[sub] = "acct-new"
+		accts.mu.Unlock()
+		return "acct-new", nil
+	}
+	tok := ti.sign(t, nil, nil)
+
+	for i := 0; i < 2; i++ {
+		cred, ok := m.Verify(context.Background(), tok)
+		if !ok || cred.AccountID != "acct-new" || !cred.OAuth {
+			t.Fatalf("call %d: %+v, %v", i, cred, ok)
+		}
+	}
+	if len(calls) != 1 || calls[0] != (provisionCall{testSubject, "agent-owner@example.com", true}) {
+		t.Errorf("provision calls = %+v", calls)
+	}
+}
+
+func TestMCPOAuthProvisionRefusals(t *testing.T) {
+	ti := newTestIssuer(t)
+	cases := []struct {
+		name    string
+		claims  func(map[string]any)
+		consent bool
+		err     error
+		wantRun bool
+	}{
+		{"no email claim", func(c map[string]any) { delete(c, "email") }, true, nil, false},
+		{"blank email claim", func(c map[string]any) { c["email"] = "  " }, true, nil, false},
+		{"consent outstanding", nil, false, nil, false},
+		{"email belongs to another account", nil, true, account.ErrEmailTaken, true},
+		{"store failure", nil, true, fmt.Errorf("disk full"), true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := newMCPOAuth(ti.URL(), testResource, knownSubject("someone-else", "acct-1"))
+			m.consent = func(context.Context, string) bool { return c.consent }
+			ran := false
+			m.provision = func(string, string, bool) (string, error) {
+				ran = true
+				if c.err != nil {
+					return "", c.err
+				}
+				return "acct-new", nil
+			}
+			if _, ok := m.Verify(context.Background(), ti.sign(t, c.claims, nil)); ok {
+				t.Fatal("the token was accepted")
+			}
+			if ran != c.wantRun {
+				t.Errorf("provision ran = %v, want %v", ran, c.wantRun)
+			}
+		})
+	}
+}
+
+// email_verified arrives as a boolean from Keycloak and as a string from some
+// other issuers; either is read, and neither fails the token.
+func TestMCPOAuthReadsEmailVerifiedEitherWay(t *testing.T) {
+	ti := newTestIssuer(t)
+	for _, v := range []any{true, "true", false, "false"} {
+		accts := &accountsMap{subs: map[string]string{}}
+		m := newMCPOAuth(ti.URL(), testResource, accts.lookup)
+		m.consent = func(context.Context, string) bool { return true }
+		var got provisionCall
+		m.provision = func(sub, email string, verified bool) (string, error) {
+			got = provisionCall{sub, email, verified}
+			return "acct-new", nil
+		}
+		if _, ok := m.Verify(context.Background(), ti.sign(t, func(c map[string]any) { c["email_verified"] = v }, nil)); !ok {
+			t.Fatalf("email_verified=%#v: refused", v)
+		}
+		if want := v == true || v == "true"; got.verified != want {
+			t.Errorf("email_verified=%#v read as %v", v, got.verified)
+		}
+	}
+}
+
+// ---- consent and auto-provision, wired into the provider ----
+
+// stackStub answers the registration and hands consent questions to consent.
+func stackStub(consent *consentStack) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/consent/status") {
+			consent.srv.Config.Handler.ServeHTTP(w, r)
+			return
+		}
+		w.Write([]byte(`{}`))
+	})
+}
+
+func TestProviderProvisionsAStackUserFromAToken(t *testing.T) {
+	ti := newTestIssuer(t)
+	consent := newConsentStack(t)
+	p, _ := setupMCPOAuthInstance(t, ti, stackStub(consent))
+	tok := ti.sign(t, nil, nil)
+
+	cred, ok := p.BearerCredential(bearerRequest(tok, true))
+	if !ok {
+		t.Fatal("a newcomer with complete consent was refused")
+	}
+	acc, err := p.accounts.ByOAuth(account.OIDCProv, testSubject)
+	if err != nil || acc.ID != cred.AccountID {
+		t.Fatalf("the account was not created under the subject: %v, %v", acc, err)
+	}
+	if acc.Email != "agent-owner@example.com" || !acc.EmailVerified {
+		t.Errorf("account email = %q verified=%v", acc.Email, acc.EmailVerified)
+	}
+	again, ok := p.BearerCredential(bearerRequest(tok, true))
+	if !ok || again.AccountID != acc.ID {
+		t.Errorf("the second call got %+v, %v", again, ok)
+	}
+}
+
+func TestProviderRefusesATokenWithConsentOutstanding(t *testing.T) {
+	ti := newTestIssuer(t)
+	consent := newConsentStack(t)
+	consent.answer(200, outstandingBody)
+	p, _ := setupMCPOAuthInstance(t, ti, stackStub(consent))
+	tok := ti.sign(t, nil, nil)
+
+	if _, ok := p.BearerCredential(bearerRequest(tok, true)); ok {
+		t.Fatal("a token was honoured with consent outstanding")
+	}
+	if _, err := p.accounts.ByOAuth(account.OIDCProv, testSubject); err == nil {
+		t.Error("an account was created for someone who has not consented")
+	}
+	// An existing account is held to the same gate.
+	if _, err := p.accounts.CreateOAuth(account.OIDCProv, testSubject, "agent-owner@example.com", true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p.BearerCredential(bearerRequest(tok, true)); ok {
+		t.Fatal("an existing account's token was honoured with consent outstanding")
+	}
+	consent.answer(500, `{}`)
+	if _, ok := p.BearerCredential(bearerRequest(tok, true)); ok {
+		t.Fatal("a token was honoured while the stack could not answer")
+	}
+}
+
+// Without stack registration there is no gate to ask about and no stack
+// identity to trust: an unknown subject is refused, as it always was.
+func TestProviderWithoutAStackRefusesAnUnknownSubject(t *testing.T) {
+	ti := newTestIssuer(t)
+	t.Setenv("SITEBIN_ACCOUNT_MODE", "accounts")
+	t.Setenv("SITEBIN_OAUTH_OIDC_ISSUER", ti.URL())
+	t.Setenv("SITEBIN_OAUTH_OIDC_CLIENT_ID", "sitebin-app")
+	p := newProvider()
+	if err := p.Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}, mcpIssuer: ti.URL()}); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	tok := ti.sign(t, nil, nil)
+	if _, ok := p.BearerCredential(bearerRequest(tok, true)); ok {
+		t.Fatal("an unknown subject was honoured without a stack")
+	}
+	if _, err := p.accounts.ByOAuth(account.OIDCProv, testSubject); err == nil {
+		t.Fatal("an account was created without a stack")
+	}
+	// A known one works, with no consent to ask about.
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, testSubject, "agent-owner@example.com", true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cred, ok := p.BearerCredential(bearerRequest(tok, true)); !ok || cred.AccountID != acc.ID {
+		t.Fatalf("a known subject without a stack = %+v, %v", cred, ok)
 	}
 }
