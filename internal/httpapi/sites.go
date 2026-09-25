@@ -640,6 +640,11 @@ func (a *API) createSiteWith(r *http.Request, opts createOpts) (*store.Site, str
 
 func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 	a.createCORS(w, r)
+	// An upload token belongs to one existing site; it creates nothing.
+	if uploadCredential(r) != "" {
+		writeError(w, 403, msgUploadTokenOnlyUploads)
+		return
+	}
 	if !a.createLimiter.Allow(clientIP(r)) {
 		writeError(w, 429, "site creation rate limit reached, try again later")
 		return

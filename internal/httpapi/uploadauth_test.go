@@ -1,8 +1,13 @@
 package httpapi
 
 import (
+	"archive/zip"
+	"bytes"
+	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
 	"strings"
 	"testing"
 	"time"
@@ -147,5 +152,140 @@ func TestUploadTokenKeepsTheSiteQuota(t *testing.T) {
 	req := bearer(httptest.NewRequest("PUT", "/dav/"+editIDFrom(t, c.EditURL)+"/big.txt", strings.NewReader(strings.Repeat("a", 30))), tok)
 	if w := e.public(t, req); w.Code != http.StatusInsufficientStorage {
 		t.Fatalf("over the tier byte quota: %d %s", w.Code, w.Body)
+	}
+}
+
+// uploadBody builds a multipart upload: zipFiles (when non-nil) become one
+// "zip" part holding an archive of them, and each files entry becomes a
+// "files" part whose filename is its path.
+func uploadBody(t *testing.T, zipFiles, files map[string]string) (*bytes.Buffer, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	if zipFiles != nil {
+		var zb bytes.Buffer
+		zw := zip.NewWriter(&zb)
+		for name, content := range zipFiles {
+			f, err := zw.Create(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.Write([]byte(content))
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		h := textproto.MIMEHeader{}
+		h.Set("Content-Disposition", `form-data; name="zip"; filename="site.zip"`)
+		p, _ := mw.CreatePart(h)
+		p.Write(zb.Bytes())
+	}
+	for name, content := range files {
+		h := textproto.MIMEHeader{}
+		h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="files"; filename="%s"`, name))
+		p, _ := mw.CreatePart(h)
+		p.Write([]byte(content))
+	}
+	mw.Close()
+	return &buf, mw.FormDataContentType()
+}
+
+func TestUploadTokenReplacesASiteWithAZip(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "old", "old.txt": "x"})
+	tok := uploadTokenFor(t, e, c)
+	body, ct := uploadBody(t, map[string]string{"index.html": "new", "assets/app.js": "js"}, nil)
+	req := bearer(httptest.NewRequest("POST", "/api/sites/"+editIDFrom(t, c.EditURL)+"/files?replace=true", body), tok)
+	req.Header.Set("Content-Type", ct)
+	if w := e.public(t, req); w.Code != 200 {
+		t.Fatalf("zip upload with a token: %d %s", w.Code, w.Body)
+	}
+	site, _ := e.st.ByViewID(c.ID)
+	files, _ := e.st.ListFiles(site)
+	got := map[string]bool{}
+	for _, f := range files {
+		got[f.Path] = true
+	}
+	if len(files) != 2 || !got["index.html"] || !got["assets/app.js"] {
+		t.Fatalf("after replace: %+v", files)
+	}
+}
+
+func TestUploadTokenStoresAFileAtANestedPath(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	tok := uploadTokenFor(t, e, c)
+	body, ct := uploadBody(t, nil, map[string]string{"media/video.mp4": "frames"})
+	req := bearer(httptest.NewRequest("POST", "/api/sites/"+editIDFrom(t, c.EditURL)+"/files", body), tok)
+	req.Header.Set("Content-Type", ct)
+	if w := e.public(t, req); w.Code != 200 {
+		t.Fatalf("nested upload: %d %s", w.Code, w.Body)
+	}
+	site, _ := e.st.ByViewID(c.ID)
+	if b, err := e.st.ReadContentFile(site, "media/video.mp4"); err != nil || string(b) != "frames" {
+		t.Fatalf("media/video.mp4 = %q, %v", b, err)
+	}
+}
+
+// Review focus 2: a credential presented as an upload token either works as
+// one or fails. A correct edit password riding along does not rescue it.
+func TestBadUploadTokenNeverFallsBackToThePassword(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	body, ct := uploadBody(t, nil, map[string]string{"a.txt": "a"})
+	req := authed(httptest.NewRequest("POST", "/api/sites/"+editIDFrom(t, c.EditURL)+"/files", body), c.EditPassword)
+	req = bearer(req, "sbu_notarealtoken")
+	req.Header.Set("Content-Type", ct)
+	if w := e.public(t, req); w.Code != 401 {
+		t.Fatalf("bad token with a good password alongside: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestUploadTokenIsBoundToOneSiteOverTheAPI(t *testing.T) {
+	e := newEnv(t, nil)
+	a := e.createSite(t, nil, map[string]string{"index.html": "a"})
+	b := e.createSite(t, nil, map[string]string{"index.html": "b"})
+	tok := uploadTokenFor(t, e, a)
+	body, ct := uploadBody(t, nil, map[string]string{"x.txt": "x"})
+	req := bearer(httptest.NewRequest("POST", "/api/sites/"+editIDFrom(t, b.EditURL)+"/files", body), tok)
+	req.Header.Set("Content-Type", ct)
+	if w := e.public(t, req); w.Code != 401 {
+		t.Fatalf("site A's token on site B's upload: %d", w.Code)
+	}
+}
+
+func TestUploadTokenRefusedEverywhereElse(t *testing.T) {
+	e := newEnv(t, map[string]string{"SITEBIN_RATE_AUTH_PER_5MIN": "1"})
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+	tok := uploadTokenFor(t, e, c)
+	for _, rt := range []struct{ method, path, body string }{
+		{"GET", "/api/sites/" + edit, ""},
+		{"PUT", "/api/sites/" + edit, `{"view_password":"x"}`},
+		{"DELETE", "/api/sites/" + edit, ""},
+		{"GET", "/api/sites/" + edit + "/download", ""},
+		{"GET", "/api/sites/" + edit + "/content/index.html", ""},
+		{"DELETE", "/api/sites/" + edit + "/files/index.html", ""},
+		{"POST", "/api/sites/" + edit + "/domains", `{"domain":"d.example.com"}`},
+		{"GET", "/api/sites/" + edit + "/forms", ""},
+		{"POST", "/api/sites", ""},
+	} {
+		req := bearer(httptest.NewRequest(rt.method, rt.path, strings.NewReader(rt.body)), tok)
+		w := e.public(t, req)
+		if w.Code != 403 || !strings.Contains(w.Body.String(), "upload token") {
+			t.Errorf("%s %s with an upload token: %d %s", rt.method, rt.path, w.Code, w.Body)
+		}
+	}
+	// With a rate limit of one attempt, the edit password still verifies: none
+	// of the refusals above reached the rate-limited password path.
+	if w := e.public(t, authed(httptest.NewRequest("GET", "/api/sites/"+edit, nil), c.EditPassword)); w.Code != 200 {
+		t.Fatalf("edit password after the refusals: %d %s", w.Code, w.Body)
+	}
+	site, err := e.st.ByViewID(c.ID)
+	if err != nil {
+		t.Fatal("the site was deleted through an upload token")
+	}
+	if site.Meta.ViewPasswordProtected {
+		t.Error("an upload token changed a setting")
 	}
 }

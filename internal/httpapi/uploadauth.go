@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ittrail/sitebin.io/internal/ids"
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 const (
@@ -32,4 +33,39 @@ func uploadCredential(r *http.Request) string {
 		return pw
 	}
 	return ""
+}
+
+// withUploadAuth guards the one JSON API route an upload token may use,
+// POST /api/sites/{editID}/files. A request presenting a token is answered
+// from the token alone — this site's and live, or a 401 — and anything else
+// goes through withEditAuth unchanged.
+func (a *API) withUploadAuth(next func(http.ResponseWriter, *http.Request, *store.Site)) http.HandlerFunc {
+	editAuth := a.withEditAuth(next)
+	return func(w http.ResponseWriter, r *http.Request) {
+		secret := uploadCredential(r)
+		if secret == "" {
+			editAuth(w, r)
+			return
+		}
+		editID := r.PathValue("editID")
+		site, err := a.st.ByEditID(editID)
+		if err != nil {
+			storeError(w, err)
+			return
+		}
+		end, ok := a.uploads.begin(secret, editID)
+		if !ok {
+			writeError(w, 401, msgUploadTokenRefused)
+			return
+		}
+		defer end()
+		// Tokens are issued only for sites MCP could open, but the rule is
+		// cheap and belongs on every entry: an account-less site on a gated
+		// instance cannot be scripted.
+		if a.gatedAnonymous(site) {
+			writeError(w, 403, "this site was created without an account, so it has no API — create it while signed in at "+a.apiAccountHint()+" to script it")
+			return
+		}
+		next(w, r, site)
+	}
 }

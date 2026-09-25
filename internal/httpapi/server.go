@@ -97,7 +97,7 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("GET /api/sites/{editID}/content/{path...}", a.withEditAuth(a.getFileContent))
 	mux.HandleFunc("PUT /api/sites/{editID}", a.withEditAuth(a.updateSite))
 	mux.HandleFunc("DELETE /api/sites/{editID}", a.withEditAuth(a.deleteSite))
-	mux.HandleFunc("POST /api/sites/{editID}/files", a.withEditAuth(a.uploadFiles))
+	mux.HandleFunc("POST /api/sites/{editID}/files", a.withUploadAuth(a.uploadFiles))
 	mux.HandleFunc("DELETE /api/sites/{editID}/files/{path...}", a.withEditAuth(a.deleteFile))
 	mux.HandleFunc("POST /api/sites/{editID}/domains", a.withEditAuth(a.addDomain))
 	mux.HandleFunc("DELETE /api/sites/{editID}/domains/{domain}", a.withEditAuth(a.removeDomain))
@@ -268,6 +268,13 @@ func (a *API) tokenOwns(r *http.Request, site *store.Site) bool {
 
 func (a *API) withEditAuth(next func(http.ResponseWriter, *http.Request, *store.Site)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// An upload token opens exactly one route, which withUploadAuth
+		// guards. Everywhere else it is refused before any password work, so
+		// it neither burns the rate limit nor reads as a wrong password.
+		if uploadCredential(r) != "" {
+			writeError(w, 403, msgUploadTokenOnlyUploads)
+			return
+		}
 		editID := r.PathValue("editID")
 		site, err := a.st.ByEditID(editID)
 		if err != nil {
