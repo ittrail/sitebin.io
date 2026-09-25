@@ -735,6 +735,22 @@ func (a *API) getFileContent(w http.ResponseWriter, r *http.Request, site *store
 	w.Write(b)
 }
 
+// listDir answers one folder of the site — its sub-folders and files — for
+// the edit page's folder browser (?path=, "" for the top).
+func (a *API) listDir(w http.ResponseWriter, r *http.Request, site *store.Site) {
+	rel, err := store.CleanDirPath(r.URL.Query().Get("path"))
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	entries, truncated, err := a.st.ListDir(site, rel)
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"path": rel, "entries": entries, "truncated": truncated})
+}
+
 // downloadSite streams the site's content files as a zip.
 func (a *API) downloadSite(w http.ResponseWriter, r *http.Request, site *store.Site) {
 	w.Header().Set("Content-Type", "application/zip")
