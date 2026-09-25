@@ -51,6 +51,7 @@ type API struct {
 	targetLimiter  *auth.Limiter // per target, any source
 	davLockSystems *davLocks
 	uploads        *uploadTokens
+	assets         assetCache
 	csp            *cspAggregator
 	forms          *formsState // nil when the instance has no forms
 }

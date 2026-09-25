@@ -62,3 +62,15 @@ at 2000 and would leave most folders empty.
 - Deleting or renaming whole folders from the page.
 - Paging within a folder.
 - Folder sizes or item counts (they would cost a walk of every sub-tree).
+
+## Corrections (post-implementation)
+
+- **Asset URLs carry the build version.** Verifying the deploy showed the old
+  flat list in a browser that had the page before: `/_sitebin/assets/*` was
+  served unversioned with `max-age=3600`, so after a deploy a browser could run
+  the new page with the old `edit.js` for an hour. The backend's pages now
+  link their assets as `…?v=<version>` (a development build uses one that
+  changes with every start); a versioned asset is cached `immutable`, an
+  unversioned one (enterprise dashboard, viewer wrapper, old links) is
+  `no-cache` with an ETag, so it is revalidated with a 304 instead of kept
+  stale. See `internal/httpapi/assetcache.go`.

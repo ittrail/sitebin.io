@@ -20,7 +20,7 @@ func uiSecurityHeaders(w http.ResponseWriter) {
 }
 
 func (a *API) servePage(w http.ResponseWriter, name string) {
-	b, err := fs.ReadFile(a.webFS, name)
+	b, err := a.versionedPage(name)
 	if err != nil {
 		a.log.Error("missing embedded page", "name", name, "err", err)
 		http.Error(w, "internal error", 500)
@@ -71,7 +71,16 @@ func (a *API) asset(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Cache-Control", "public, max-age=3600")
+	// See assetcache.go: a versioned URL never changes content; an
+	// unversioned one is revalidated.
+	if r.URL.Query().Get("v") != "" {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "no-cache")
+	}
+	if tag := a.assetETag(p); tag != "" {
+		w.Header().Set("ETag", tag)
+	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeFileFS(w, r, a.webFS, p)
 }
