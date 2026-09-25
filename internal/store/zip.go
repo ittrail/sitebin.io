@@ -21,20 +21,42 @@ import (
 // 5,000 entries decompressing to 100 MB each cost 5,000 directory walks and
 // 500 GB of zeros, all inside the site lock.
 func (s *Store) ExtractZip(site *Site, r io.ReaderAt, size int64) error {
-	zr, err := zip.NewReader(r, size)
+	maxBytes, maxFiles := s.EffMaxBytes(site), s.EffMaxFiles(site)
+	entries, err := zipEntries(r, size, maxFiles)
 	if err != nil {
-		return fmt.Errorf("read zip: %w", err)
+		return err
 	}
 	l := s.lockSite(site.ViewID)
 	l.Lock()
 	defer l.Unlock()
-
-	maxBytes, maxFiles := s.EffMaxBytes(site), s.EffMaxFiles(site)
-	type entry struct {
-		f   *zip.File
-		rel string
+	used, count, err := usage(site.ContentDir())
+	if err != nil {
+		return err
 	}
-	entries := make([]entry, 0, len(zr.File))
+	root, err := openContent(site)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	if _, _, err := extractEntries(root, entries, used, count, maxBytes, maxFiles); err != nil {
+		return err
+	}
+	return s.renewExpiryLocked(site)
+}
+
+type zipEntry struct {
+	f   *zip.File
+	rel string
+}
+
+// zipEntries opens an archive and bounds it before anything is written: a
+// symlink, a bad path, a name twice or more entries than maxFiles is refused.
+func zipEntries(r io.ReaderAt, size int64, maxFiles int) ([]zipEntry, error) {
+	zr, err := zip.NewReader(r, size)
+	if err != nil {
+		return nil, fmt.Errorf("read zip: %w", err)
+	}
+	entries := make([]zipEntry, 0, len(zr.File))
 	seen := make(map[string]bool, len(zr.File))
 	for _, f := range zr.File {
 		name := strings.ReplaceAll(f.Name, `\`, "/") // tolerate Windows-built zips
@@ -42,41 +64,42 @@ func (s *Store) ExtractZip(site *Site, r io.ReaderAt, size int64) error {
 			continue // directories materialize via file writes
 		}
 		if f.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("%w: zip entry %q is a symlink", ErrBadPath, f.Name)
+			return nil, fmt.Errorf("%w: zip entry %q is a symlink", ErrBadPath, f.Name)
 		}
 		rel, err := CleanRelPath(name)
 		if err != nil {
-			return fmt.Errorf("zip entry %q: %w", f.Name, err)
+			return nil, fmt.Errorf("zip entry %q: %w", f.Name, err)
 		}
 		if seen[rel] {
-			return fmt.Errorf("%w: zip entry %q appears twice", ErrBadPath, f.Name)
+			return nil, fmt.Errorf("%w: zip entry %q appears twice", ErrBadPath, f.Name)
 		}
 		seen[rel] = true
-		entries = append(entries, entry{f: f, rel: rel})
+		entries = append(entries, zipEntry{f: f, rel: rel})
 	}
 	if len(entries) > maxFiles {
-		return fmt.Errorf("%w: the archive holds %d files, the site allows %d", ErrTooManyFiles, len(entries), maxFiles)
+		return nil, fmt.Errorf("%w: the archive holds %d files, the site allows %d", ErrTooManyFiles, len(entries), maxFiles)
 	}
+	return entries, nil
+}
 
-	dir := site.ContentDir()
-	used, count, err := usage(dir)
-	if err != nil {
-		return err
-	}
+// extractEntries writes validated entries into root, keeping the byte and
+// file budgets in a running counter rather than re-walking the tree per
+// entry. It returns the updated totals.
+func extractEntries(root *os.Root, entries []zipEntry, used int64, count int, maxBytes int64, maxFiles int) (int64, int, error) {
 	for _, e := range entries {
 		rc, err := e.f.Open()
 		if err != nil {
-			return fmt.Errorf("zip entry %q: %w", e.f.Name, err)
+			return used, count, fmt.Errorf("zip entry %q: %w", e.f.Name, err)
 		}
-		written, existing, err := s.writeFileLocked(site, e.rel, rc, used, count, maxBytes, maxFiles)
+		written, existing, err := writeFileIn(root, e.rel, rc, used, count, maxBytes, maxFiles)
 		rc.Close()
 		if err != nil {
-			return fmt.Errorf("zip entry %q: %w", e.f.Name, err)
+			return used, count, fmt.Errorf("zip entry %q: %w", e.f.Name, err)
 		}
 		used += written - existing
 		if existing == 0 {
 			count++
 		}
 	}
-	return s.renewExpiryLocked(site)
+	return used, count, nil
 }

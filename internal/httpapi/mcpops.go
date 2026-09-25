@@ -330,13 +330,26 @@ func (o mcpOps) WriteFiles(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, fi
 		return nil, err
 	}
 	if replace {
-		if err := o.a.st.ClearFiles(site); err != nil {
+		// Staged, like the API's replace: the old files go only once every
+		// new one is written and within the site's caps.
+		rep, err := o.a.st.BeginReplace(site)
+		if err != nil {
 			return nil, o.mcpError(err)
 		}
-	}
-	for _, f := range files {
-		if err := o.a.st.SaveFile(site, f.Path, bytes.NewReader(f.Data)); err != nil {
+		defer rep.Abort()
+		for _, f := range files {
+			if err := rep.SaveFile(f.Path, bytes.NewReader(f.Data)); err != nil {
+				return nil, o.mcpError(err)
+			}
+		}
+		if err := rep.Commit(); err != nil {
 			return nil, o.mcpError(err)
+		}
+	} else {
+		for _, f := range files {
+			if err := o.a.st.SaveFile(site, f.Path, bytes.NewReader(f.Data)); err != nil {
+				return nil, o.mcpError(err)
+			}
 		}
 	}
 	if err := o.a.syncViewerLayout(site); err != nil {

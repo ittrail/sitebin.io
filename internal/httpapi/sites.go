@@ -290,10 +290,26 @@ func partFilename(p *multipart.Part) string {
 	return p.FileName()
 }
 
-// consumeUploads streams a multipart body into the site: "files" parts are
+// uploadSink is where an upload's files go: straight into the live site, or
+// into a staged replacement that reaches the site only once it is complete.
+type uploadSink interface {
+	SaveFile(relPath string, r io.Reader) error
+	ExtractZip(r io.ReaderAt, size int64) error
+}
+
+// liveSink writes into the site as it serves.
+type liveSink struct {
+	st   *store.Store
+	site *store.Site
+}
+
+func (l liveSink) SaveFile(p string, r io.Reader) error    { return l.st.SaveFile(l.site, p, r) }
+func (l liveSink) ExtractZip(r io.ReaderAt, n int64) error { return l.st.ExtractZip(l.site, r, n) }
+
+// consumeUploads streams a multipart body into sink: "files" parts are
 // stored under their filename, "zip" parts are extracted, other parts are
 // collected as form fields and returned.
-func (a *API) consumeUploads(r *http.Request, site *store.Site) (url.Values, error) {
+func (a *API) consumeUploads(r *http.Request, sink uploadSink) (url.Values, error) {
 	mr, err := r.MultipartReader()
 	if err != nil {
 		return nil, &apiError{400, "expected multipart/form-data"}
@@ -314,12 +330,12 @@ func (a *API) consumeUploads(r *http.Request, site *store.Site) (url.Values, err
 				part.Close()
 				continue
 			}
-			if err := a.st.SaveFile(site, name, part); err != nil {
+			if err := sink.SaveFile(name, part); err != nil {
 				part.Close()
 				return fields, err
 			}
 		case "zip":
-			err := a.extractZipPart(site, part)
+			err := a.extractZipPart(sink, part)
 			part.Close()
 			if err != nil {
 				return fields, err
@@ -342,8 +358,8 @@ var zipSpoolSlots = make(chan struct{}, 4)
 
 // extractZipPart spools a zip part to a temp file (zip needs random access)
 // under the data volume — never the container's /tmp, which is unbounded and
-// not what the operator sized — and extracts it into the site.
-func (a *API) extractZipPart(site *store.Site, part io.Reader) error {
+// not what the operator sized — and extracts it into sink.
+func (a *API) extractZipPart(sink uploadSink, part io.Reader) error {
 	zipSpoolSlots <- struct{}{}
 	defer func() { <-zipSpoolSlots }()
 	spool := filepath.Join(a.cfg.DataDir, "tmp")
@@ -364,7 +380,7 @@ func (a *API) extractZipPart(site *store.Site, part io.Reader) error {
 	if n > a.cfg.MaxSiteBytes {
 		return store.ErrTooLarge
 	}
-	return a.st.ExtractZip(site, tmp, n)
+	return sink.ExtractZip(tmp, n)
 }
 
 // pendingDomain is one claimed-but-unproven custom domain and the DNS
@@ -658,7 +674,7 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 			ct := r.Header.Get("Content-Type")
 			switch {
 			case strings.HasPrefix(ct, "multipart/"):
-				fields, err := a.consumeUploads(r, site)
+				fields, err := a.consumeUploads(r, liveSink{st: a.st, site: site})
 				if err != nil {
 					return set, err
 				}
@@ -747,12 +763,24 @@ func (a *API) deleteSite(w http.ResponseWriter, r *http.Request, site *store.Sit
 func (a *API) uploadFiles(w http.ResponseWriter, r *http.Request, site *store.Site) {
 	r.Body = http.MaxBytesReader(w, r.Body, a.cfg.MaxSiteBytes+(10<<20))
 	if r.URL.Query().Get("replace") == "true" {
-		if err := a.st.ClearFiles(site); err != nil {
+		// The old files go only once the new ones are all in and within the
+		// site's caps: a failed, cut-off or over-quota replace leaves the
+		// site exactly as it was.
+		rep, err := a.st.BeginReplace(site)
+		if err != nil {
 			respondErr(w, err)
 			return
 		}
-	}
-	if _, err := a.consumeUploads(r, site); err != nil {
+		defer rep.Abort()
+		if _, err := a.consumeUploads(r, rep); err != nil {
+			respondErr(w, err)
+			return
+		}
+		if err := rep.Commit(); err != nil {
+			respondErr(w, err)
+			return
+		}
+	} else if _, err := a.consumeUploads(r, liveSink{st: a.st, site: site}); err != nil {
 		respondErr(w, err)
 		return
 	}
