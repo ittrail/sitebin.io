@@ -284,6 +284,20 @@ type OperatorAccounts interface {
 	IsOperator(accountID string) bool
 }
 
+// SessionAccounts is implemented by a Provider whose dashboard signs people
+// in with a browser session. OPTIONAL, like OperatorAccounts: without it the
+// per-site API knows no session, only edit passwords and tokens.
+//
+// The core asks it on the per-site API routes so a signed-in owner manages
+// their own sites on the edit page without the site's edit password. The
+// extension answers only WHOSE session this is — signed cookie, live account,
+// current token version, so signing out revokes it. The ownership comparison
+// and the cross-site rule are the core's (httpapi.sessionOwns), exactly as
+// for BearerCredential.
+type SessionAccounts interface {
+	SessionAccount(r *http.Request) (accountID string, ok bool)
+}
+
 // ZoneAccounts is implemented by a Provider whose plans include account
 // zones (a customer's own wildcard zone, proven once; see store/zones.go).
 // OPTIONAL, like ContainerProvider: without it no account can claim a zone.

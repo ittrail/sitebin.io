@@ -85,6 +85,18 @@ Corollaries worth stating, because they have been violated before:
   sweep keeps the site and retries. A site kept too long is recoverable; a
   deleted one is not.
 
+## Who may manage a site
+
+`withEditAuth` (internal/httpapi/server.go) is the one gate for every per-site
+API route. In order: an upload token is refused (it opens only its own route);
+an account API token whose account owns the site; the owner's **browser
+session** (`sessionOwns`, via the optional `ext.SessionAccounts`); the edit
+password. `sessionOwns` is a real CSRF boundary — the session counts only with
+`X-Sitebin-Session: 1` and a same-origin `Sec-Fetch-Site` when one is sent —
+and must never be loosened into `fromOwnBrowser`, which is a forgeable plan
+heuristic. MCP never reads the session, and the dashboard never reads a token.
+See `docs/superpowers/specs/2026-09-25-owner-session-edit-design.md`.
+
 ## Custom domains prove ownership
 
 A custom domain is attached — indexed, served, issued a certificate — only

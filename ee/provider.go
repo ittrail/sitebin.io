@@ -517,6 +517,21 @@ func (p *provider) currentAccount(r *http.Request) (*account.Account, bool) {
 	return acc, true
 }
 
+// SessionAccount implements ext.SessionAccounts: the account whose browser
+// session made the request, by exactly the rule the dashboard trusts — so
+// signing out, which bumps the token version, closes the edit page too. The
+// core compares ownership and enforces the cross-site rule; this only says
+// whose session it is, and like currentAccount it never reads a bearer token.
+func (p *provider) SessionAccount(r *http.Request) (string, bool) {
+	acc, ok := p.currentAccount(r)
+	if !ok {
+		return "", false
+	}
+	return acc.ID, true
+}
+
+var _ ext.SessionAccounts = (*provider)(nil)
+
 // owns reports whether the account owns the given site.
 func (p *provider) owns(acc *account.Account, viewID string) bool {
 	ids, err := p.accounts.ListSiteIDs(acc)

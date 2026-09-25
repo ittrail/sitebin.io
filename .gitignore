@@ -6,3 +6,4 @@
 /e2e/.work/
 /vendor-license-private-key.txt
 /e2e/stack/.env
+/.claude/worktrees/

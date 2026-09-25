@@ -20,16 +20,19 @@
   <span class="spacer"></span>
 </header>
 
-<!-- lock screen -->
-<div class="lockwrap" id="lock">
+<!-- lock screen: hidden until the page knows it is needed — a signed-in
+     owner never sees it -->
+<div class="lockwrap hidden" id="lock">
   <div class="card">
     <h1>Unlock this site</h1>
     <p>Enter the edit password from your claim ticket. It was shown once when the site was published.</p>
     <form id="lockform">
-      <input type="password" id="lockpw" placeholder="Edit password" autocomplete="current-password" autofocus>
+      <input type="password" id="lockpw" placeholder="Edit password" autocomplete="current-password">
       <div class="inline-status err" id="lockerr"></div>
       <button class="btn primary" type="submit">Unlock</button>
     </form>
+    <p class="sub hidden" id="lock-account" style="margin-top:16px">Your own site?
+      <a id="lock-account-link" href="/account">Sign in to your account</a> — its owner opens it here without a password.</p>
   </div>
 </div>
 

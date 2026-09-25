@@ -29,8 +29,16 @@ function toast(msg, isErr) {
   toastTimer = setTimeout(() => el.classList.remove("show"), 3200);
 }
 
+// authHeaders are sent with every API call. X-Sitebin-Session asks the server
+// to honour the browser's account session: a signed-in owner needs no edit
+// password. A page on another origin cannot send this header, which is what
+// makes that safe (see sessionOwns in internal/httpapi/server.go).
+function authHeaders() {
+  return { "X-Edit-Password": sitePw, "X-Sitebin-Session": "1" };
+}
+
 async function api(method, path, body, isForm) {
-  const headers = { "X-Edit-Password": sitePw };
+  const headers = authHeaders();
   if (body && !isForm) headers["Content-Type"] = "application/json";
   const res = await fetch("/api/sites/" + editID + path, {
     method,
@@ -39,11 +47,18 @@ async function api(method, path, body, isForm) {
   });
   let data = {};
   try { data = await res.json(); } catch {}
-  if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { status: res.status });
+  if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { status: res.status, accountURL: data.account_url });
   return data;
 }
 
 // ---- unlock flow ----
+
+function unlock() {
+  $("lock").classList.add("hidden");
+  $("app").classList.remove("hidden");
+  render();
+  loadForms();
+}
 
 $("lockform").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -52,27 +67,31 @@ $("lockform").addEventListener("submit", async (e) => {
   try {
     site = await api("GET", "");
     sessionStorage.setItem(pwKey, sitePw);
-    $("lock").classList.add("hidden");
-    $("app").classList.remove("hidden");
-    render();
-    loadForms();
+    unlock();
   } catch (err) {
     $("lockerr").textContent =
       err.status === 429 ? "Too many attempts — wait a moment." : "Wrong password — check your claim ticket.";
   }
 });
 
+// boot opens the site without asking whenever it can: for its signed-in
+// owner (the session), or with a password this tab already entered. Only
+// otherwise does the lock screen appear.
 (async function boot() {
-  if (!sitePw) return;
   try {
     site = await api("GET", "");
-    $("lock").classList.add("hidden");
-    $("app").classList.remove("hidden");
-    render();
-    loadForms();
-  } catch {
-    sessionStorage.removeItem(pwKey);
-    sitePw = "";
+    unlock();
+  } catch (err) {
+    if (sitePw) {
+      sessionStorage.removeItem(pwKey);
+      sitePw = "";
+    }
+    if (err.accountURL) {
+      $("lock-account-link").href = err.accountURL;
+      $("lock-account").classList.remove("hidden");
+    }
+    $("lock").classList.remove("hidden");
+    $("lockpw").focus();
   }
 })();
 
@@ -421,7 +440,7 @@ $("ct-logs").addEventListener("click", async () => {
   if (!svc) return;
   try {
     const res = await fetch("/api/sites/" + editID + "/containers/" + encodeURIComponent(svc) + "/logs?tail=200", {
-      headers: { "X-Edit-Password": sitePw },
+      headers: authHeaders(),
     });
     const text = await res.text();
     if (!res.ok) {
@@ -525,7 +544,7 @@ let editingPath = null;
 async function openEditor(path) {
   try {
     const res = await fetch("/api/sites/" + editID + "/content/" + encodePath(path), {
-      headers: { "X-Edit-Password": sitePw },
+      headers: authHeaders(),
     });
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
@@ -564,7 +583,7 @@ $("editor-save").addEventListener("click", async () => {
 $("download-zip").addEventListener("click", async () => {
   try {
     const res = await fetch("/api/sites/" + editID + "/download", {
-      headers: { "X-Edit-Password": sitePw },
+      headers: authHeaders(),
     });
     if (!res.ok) throw new Error("download failed (" + res.status + ")");
     const blob = await res.blob();

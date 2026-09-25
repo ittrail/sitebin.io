@@ -273,6 +273,51 @@ func (a *API) tokenOwns(r *http.Request, site *store.Site) bool {
 	return ok && cred.AccountID == site.Meta.OwnerAccountID
 }
 
+// sessionHeader marks a request from Sitebin's own edit page that asks for
+// the browser's account session to be honoured. See sessionOwns.
+const sessionHeader = "X-Sitebin-Session"
+
+// sessionOwns reports whether the account the request's browser session
+// belongs to owns site — the standing an account token has, reached from the
+// owner's own browser. See docs/superpowers/specs/2026-09-25-owner-session-edit-design.md.
+//
+// THIS IS A SECURITY BOUNDARY, unlike fromOwnBrowser. A cookie rides along on
+// any request the browser makes, where an edit password or a bearer token
+// never does, so the session is honoured only on a request carrying
+// sessionHeader: a page on another origin cannot add a custom header without
+// a CORS preflight, and no per-site route answers one. SameSite=Lax alone
+// would not do — the marketing apex serves uploaded content and is same-site
+// with the app — so a Sec-Fetch-Site the browser did send must also say
+// same-origin. Never relax this into fromOwnBrowser's forgeable heuristics.
+func (a *API) sessionOwns(r *http.Request, site *store.Site) bool {
+	if site.Meta.OwnerAccountID == "" {
+		return false // an anonymous site belongs to no account
+	}
+	if r.Header.Get(sessionHeader) != "1" {
+		return false
+	}
+	if s := r.Header.Get("Sec-Fetch-Site"); s != "" && s != "same-origin" {
+		return false
+	}
+	sa, ok := a.sessionProvider()
+	if !ok {
+		return false
+	}
+	id, ok := sa.SessionAccount(r)
+	return ok && id == site.Meta.OwnerAccountID
+}
+
+// sessionProvider returns the extension's session lookup, when there is a
+// provider with accounts enabled that has one.
+func (a *API) sessionProvider() (ext.SessionAccounts, bool) {
+	p, ok := ext.Get()
+	if !ok || !p.AccountsEnabled() {
+		return nil, false
+	}
+	sa, ok := p.(ext.SessionAccounts)
+	return sa, ok
+}
+
 func (a *API) withEditAuth(next func(http.ResponseWriter, *http.Request, *store.Site)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// An upload token opens exactly one route, which withUploadAuth
@@ -295,6 +340,12 @@ func (a *API) withEditAuth(next func(http.ResponseWriter, *http.Request, *store.
 			next(w, r, site)
 			return
 		}
+		// The owner, signed in, on Sitebin's own edit page: the same standing,
+		// through the browser session.
+		if a.sessionOwns(r, site) {
+			next(w, r, site)
+			return
+		}
 		pw := r.Header.Get("X-Edit-Password")
 		if pw == "" {
 			if _, p, ok := r.BasicAuth(); ok {
@@ -302,7 +353,13 @@ func (a *API) withEditAuth(next func(http.ResponseWriter, *http.Request, *store.
 			}
 		}
 		if pw == "" {
-			writeError(w, 401, "edit password required (X-Edit-Password header), or an account API token as Authorization: Bearer")
+			body := map[string]string{"error": "edit password required (X-Edit-Password header), or an account API token as Authorization: Bearer"}
+			// Where accounts sign in, the edit page offers that instead of
+			// the password: the owner's session opens the site.
+			if _, ok := a.sessionProvider(); ok {
+				body["account_url"] = a.apiAccountHint()
+			}
+			writeJSON(w, 401, body)
 			return
 		}
 		switch a.verifyEdit(r, site, pw) {

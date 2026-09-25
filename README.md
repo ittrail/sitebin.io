@@ -165,6 +165,11 @@ Creating a site returns three things, shown **exactly once**:
 - **Edit password** — random secret; only its Argon2id hash is stored, so it
   cannot be recovered. Save it immediately.
 
+On an instance with accounts, a site's owner who is signed in does not need
+the password on the edit page: it opens straight away (see
+[Signed-in owners](#signed-in-owners-enterprise)). The password still works
+everywhere, and stays the credential for WebDAV, FTP and scripts.
+
 ### Site names
 
 A site may carry an optional **name** — a private label of up to 60
@@ -191,8 +196,10 @@ a site without its edit password.
 
 ### API (for scripts and agents)
 
-The only credential is the edit id (in the URL) + the edit password
-(`X-Edit-Password` header). No accounts, no OAuth.
+The credential is the edit id (in the URL) + the edit password
+(`X-Edit-Password` header) — or, on an instance with accounts, an
+[account API token](#account-api-tokens-enterprise) for the sites its account
+owns.
 
 On an instance that runs with accounts (`SITEBIN_ACCOUNT_MODE=accounts|tiers`),
 the API is an account feature: a site created anonymously answers `403` to
@@ -1047,6 +1054,24 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_STACK_CONSENTS` | JSON `consents` list sent with the self-registration below, declaring **this deployment's own consent documents** — its terms of service and its data processing agreement — so the stack's consent gate can ask for each of them inside the sign-in, in this order, after the platform's own: `[{"key":"terms","version":"2026-09-08","url":"https://sitebin.io/terms/","title":{"en":"Sitebin Terms of Service","de":"Sitebin Nutzungsbedingungen"}},{"key":"dpa","version":"2026-09-08","url":"https://sitebin.io/dpa/","title":{"en":"Data Processing Agreement"}}]`. `key`, `version` and `url` are required per document; `title` is an optional `locale → heading` map; `required` defaults to true on the stack, and `false` makes a document that is shown and recorded but does not block (a marketing consent). Sitebin renders no consent screen of its own — declaring this list is the whole integration. `key` is the document's identity for ever; `version` is opaque and **raising it asks every user again for that document**, and it is immutable, so re-declaring one the stack already recorded with different content is refused. Sent as the stack's `consents` block, never its one-document `terms` shorthand. Not hardcoded for the same reason `SITEBIN_STACK_LICENSING` is not: these are one deployment's legal documents and this repo is public. Absent = declare nothing, and the stack keeps whatever it already holds; an empty list is refused at startup. |
 | `SITEBIN_STACK_GDPR_SECRET` | The shared secret the SaaS Stack signs its **GDPR orders** with — delete this user (Art. 17), export this user's data (Art. 20). At least 32 characters; **required whenever `SITEBIN_STACK_URL` is set**, and accepted on its own for an app registered by hand. With it set, `POST /account/gdpr/delete` and `POST /account/gdpr/export` are mounted and declared to the stack as its `gdpr` block; without it neither exists. See [GDPR: the stack orders, Sitebin erases](#gdpr-the-stack-orders-sitebin-erases). |
 | `SITEBIN_STACK_URL` / `_APP_ID` / `_ADMIN_KEY` (or `_ADMIN_KEY_FILE`) | Self-registration against the IT-Trail SaaS Stack. With all three set, the instance announces itself to the stack on every start — its identity, its OIDC callback, its tier catalogue, its consent documents, its GDPR endpoints and its MCP block — so auth, billing, consent and MCP are configured by deploying rather than by hand. `_ADMIN_KEY` is the stack's platform admin key: a master credential, so keep it in a secret store and prefer `_ADMIN_KEY_FILE` (a docker secret or mounted file) so it never sits in the container's environment; the variable is scrubbed from the process environment after it is read. Unset = no self-registration. |
+
+### Signed-in owners *(Enterprise)*
+
+A signed-in account manages the sites it owns on their edit pages without the
+edit password — "Manage" in the dashboard opens the site directly. The
+dashboard could already issue the site a new password, so the prompt protected
+nothing; it only pushed owners into resetting passwords that deploys still use.
+
+The per-site API honours the browser session only when the site's owner is the
+session's account **and** the request carries `X-Sitebin-Session: 1` **and**
+its `Sec-Fetch-Site`, if sent, is `same-origin`. The header is the security
+property: a cookie travels with any request a browser makes, but a page on
+another origin cannot add a custom header without a CORS preflight, which no
+per-site route answers. (`SameSite=Lax` alone would not do: a marketing site on
+the apex is same-site with the app.) It is a browser convenience, not a script
+credential — scripts and agents use an account API token, and MCP never reads
+the session. Signing out ends it at once. Anonymous sites and other accounts'
+sites still ask for the password.
 
 ### Account API tokens *(Enterprise)*
 
