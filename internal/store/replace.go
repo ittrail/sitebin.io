@@ -87,12 +87,16 @@ func (s *Store) releaseReplace(viewID string) {
 // of a site may be in flight at a time — each can stage the site's whole cap
 // on the data volume — so a second is ErrReplaceBusy until the first is
 // committed or aborted.
-func (s *Store) BeginReplace(site *Site) (rep *Replacement, err error) {
+func (s *Store) BeginReplace(site *Site) (*Replacement, error) {
 	if !s.claimReplace(site.ViewID) {
 		return nil, ErrReplaceBusy
 	}
+	// Released on every way out that does not hand a Replacement back —
+	// an error and a panic alike — or the site would answer 409 until a
+	// restart.
+	begun := false
 	defer func() {
-		if err != nil {
+		if !begun {
 			s.releaseReplace(site.ViewID)
 		}
 	}()
@@ -100,9 +104,12 @@ func (s *Store) BeginReplace(site *Site) (rep *Replacement, err error) {
 	if err := os.MkdirAll(tmp, 0o755); err != nil {
 		return nil, err
 	}
-	now := time.Now()
-	removeStaleStaging(tmp, replaceTmpPrefix, now)
-	removeStaleStaging(site.Dir(), replaceStagingPrefix, now)
+	removeStaleStaging(tmp, replaceTmpPrefix, time.Now())
+	// A site's own .replace-* directories — a crashed or failed commit's —
+	// count toward no quota. The claim above proves no commit of this site is
+	// running, so every one of them goes now, whatever its age: failed
+	// commits can never pile up past one.
+	removeCommitLeftovers(site.Dir())
 	dir, err := os.MkdirTemp(tmp, replaceTmpPrefix+site.ViewID+"-*")
 	if err != nil {
 		return nil, err
@@ -112,16 +119,22 @@ func (s *Store) BeginReplace(site *Site) (rep *Replacement, err error) {
 		os.RemoveAll(dir)
 		return nil, err
 	}
-	return &Replacement{
+	rep := &Replacement{
 		s: s, site: site, dir: dir, root: root,
 		maxBytes: s.EffMaxBytes(site), maxFiles: s.EffMaxFiles(site),
-	}, nil
+	}
+	begun = true
+	return rep, nil
 }
 
+// commitRename is os.Rename, swappable so a test can make one of Commit's
+// renames fail.
+var commitRename = os.Rename
+
 // removeStaleStaging deletes the staging directories named prefix* in dir that
-// are older than staleStagingAge: under tmp/ the uploads crashes left (of any
-// site), inside a site folder the commits a crash interrupted. They count
-// toward no quota, so nothing else would ever notice them.
+// are older than staleStagingAge: under tmp/, the uploads crashes left, of any
+// site — a younger one may be another site's upload still streaming. They
+// count toward no quota, so nothing else would ever notice them.
 func removeStaleStaging(dir, prefix string, now time.Time) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -133,6 +146,20 @@ func removeStaleStaging(dir, prefix string, now time.Time) {
 		}
 		if fi, err := e.Info(); err == nil && now.Sub(fi.ModTime()) > staleStagingAge {
 			os.RemoveAll(filepath.Join(dir, e.Name()))
+		}
+	}
+}
+
+// removeCommitLeftovers deletes every .replace-* directory in a site folder.
+// The caller holds the site's one-replace claim.
+func removeCommitLeftovers(siteDir string) {
+	entries, err := os.ReadDir(siteDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), replaceStagingPrefix) {
+			os.RemoveAll(filepath.Join(siteDir, e.Name()))
 		}
 	}
 }
@@ -185,7 +212,10 @@ func (r *Replacement) ExtractZip(ra io.ReaderAt, size int64) error {
 //  3. the staging directory is renamed into the site folder as one unit; if
 //     that fails (a mount that cannot rename across), the site is untouched;
 //  4. only then is the content root emptied — Sitebin's own markers excepted,
-//     as ClearFiles does — and each staged entry renamed into it.
+//     as ClearFiles does — and each staged entry renamed into it. Should one
+//     of those steps fail, the part of the upload not yet in place stays in
+//     the site's .replace-commit-* directory (the error names it; the next
+//     replace of the site removes it) instead of being thrown away.
 //
 // The content directory itself is never renamed or replaced: a container
 // site's bind mounts point INTO it (files/<folder>), and swapping it would
@@ -224,10 +254,19 @@ func (r *Replacement) Commit() error {
 	r.site.Meta = meta
 
 	moved := filepath.Join(r.site.dir, replaceCommitPrefix+randomSuffix())
-	if err := os.Rename(r.dir, moved); err != nil {
+	if err := commitRename(r.dir, moved); err != nil {
 		return fmt.Errorf("commit replacement: %w", err)
 	}
-	defer os.RemoveAll(moved)
+	// Until the live content is touched, the moved staging directory goes
+	// when Commit does. Once clearing has begun it is the only copy of the
+	// part of the upload not yet in place, so a failure from there on keeps
+	// it — until the next replace of the site, which removes it.
+	keep := false
+	defer func() {
+		if !keep {
+			os.RemoveAll(moved)
+		}
+	}()
 	entries, err := os.ReadDir(moved)
 	if err != nil {
 		return fmt.Errorf("commit replacement: %w", err)
@@ -242,15 +281,16 @@ func (r *Replacement) Commit() error {
 			return err
 		}
 	}
+	keep = true
 	if err := clearContentDir(dst); err != nil {
-		return err
+		return fmt.Errorf("commit replacement: %w (the upload is kept in %s)", err, moved)
 	}
 	for _, e := range entries {
-		if err := os.Rename(filepath.Join(moved, e.Name()), filepath.Join(dst, e.Name())); err != nil {
-			return fmt.Errorf("commit replacement: %w", err)
+		if err := commitRename(filepath.Join(moved, e.Name()), filepath.Join(dst, e.Name())); err != nil {
+			return fmt.Errorf("commit replacement: %w (the rest of the upload is kept in %s)", err, moved)
 		}
 	}
-	os.RemoveAll(moved)
+	keep = false
 	return r.s.renewExpiryLocked(r.site)
 }
 

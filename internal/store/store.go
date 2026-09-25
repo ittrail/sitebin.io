@@ -25,6 +25,9 @@ var (
 	ErrTooLarge      = errors.New("site size limit exceeded")
 	ErrTooManyFiles  = errors.New("file count limit exceeded")
 	ErrTooManyDomain = errors.New("custom domain limit exceeded")
+	// ErrBadArchive is an uploaded zip that cannot be read: not a zip at all,
+	// or an entry whose data is damaged. The uploader's mistake, not ours.
+	ErrBadArchive = errors.New("not a valid zip archive")
 )
 
 // maxDomainsPerSite bounds custom domains per site to prevent one site from
@@ -141,6 +144,10 @@ type Store struct {
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex // per view id
+	// statsLocks guard stats.json, per view id, apart from the site lock: a
+	// page view must not wait for an upload that holds the site lock. Lock
+	// order where both are taken (Delete): site lock, then stats lock.
+	statsLocks map[string]*sync.Mutex
 	// replacing holds the view ids with a Replacement in flight, guarded by
 	// mu: one per site at a time. See BeginReplace.
 	replacing map[string]bool
@@ -176,6 +183,7 @@ func New(dataDir, baseDomain string, maxSiteBytes int64, maxFiles int) (*Store, 
 		maxFiles:     maxFiles,
 		reportsN:     -1,
 		locks:        make(map[string]*sync.Mutex),
+		statsLocks:   make(map[string]*sync.Mutex),
 		replacing:    make(map[string]bool),
 	}
 	for _, d := range []string{s.sitesDir(), s.editIndexDir(), s.domainIndexDir()} {
@@ -198,6 +206,17 @@ func (s *Store) lockSite(viewID string) *sync.Mutex {
 	if !ok {
 		l = &sync.Mutex{}
 		s.locks[viewID] = l
+	}
+	return l
+}
+
+func (s *Store) lockStats(viewID string) *sync.Mutex {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	l, ok := s.statsLocks[viewID]
+	if !ok {
+		l = &sync.Mutex{}
+		s.statsLocks[viewID] = l
 	}
 	return l
 }
@@ -348,6 +367,11 @@ func (s *Store) Delete(site *Site) error {
 	l := s.lockSite(site.ViewID)
 	l.Lock()
 	defer l.Unlock()
+	// The stats lock too: a view counted mid-delete would write stats.json
+	// into a folder being removed.
+	sl := s.lockStats(site.ViewID)
+	sl.Lock()
+	defer sl.Unlock()
 
 	meta, err := readMeta(site.dir)
 	if err == nil {
@@ -361,6 +385,7 @@ func (s *Store) Delete(site *Site) error {
 	}
 	s.mu.Lock()
 	delete(s.locks, site.ViewID)
+	delete(s.statsLocks, site.ViewID)
 	s.mu.Unlock()
 	return nil
 }

@@ -859,8 +859,12 @@ the `.secret` that keeps sessions valid across a move).
 backups and a low DNS TTL this alone gives minutes-level recovery:
 
 ```bash
-# continuously (cron) on the primary:
-docker exec sitebin sitebin backup - | ssh backup-host 'cat > sitebin-latest.tar.gz'
+# continuously (cron) on the primary. pipefail, and a temporary name renamed
+# into place, so a backup that fails never replaces the last good one. pipefail
+# needs bash: put SHELL=/bin/bash at the top of the crontab (cron's default
+# /bin/sh may not have it, and the protection would be silently lost):
+set -o pipefail
+docker exec sitebin sitebin backup - | ssh backup-host 'cat > sitebin-latest.tar.gz.part'   && ssh backup-host 'mv sitebin-latest.tar.gz.part sitebin-latest.tar.gz'
 
 # disaster: on any fresh server with Docker
 docker run -d --name sitebin -v sitebin-data:/data … sitebin:latest   # same env as before

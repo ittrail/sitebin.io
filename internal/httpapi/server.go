@@ -236,6 +236,10 @@ func storeError(w http.ResponseWriter, err error) {
 		writeError(w, 409, err.Error())
 	case errors.Is(err, store.ErrBadPath):
 		writeError(w, 400, "invalid file path")
+	case errors.Is(err, store.ErrBadArchive):
+		writeError(w, 400, err.Error())
+	case errors.Is(err, errUploadCutOff):
+		writeError(w, 400, errUploadCutOff.Error())
 	case errors.Is(err, store.ErrBadDomain):
 		writeError(w, 400, err.Error())
 	case errors.Is(err, store.ErrFormNotFound):

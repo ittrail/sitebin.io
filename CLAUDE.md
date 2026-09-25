@@ -281,6 +281,13 @@ second copy of the rule.
   the site folder, and only then empties and refills the content directory in
   place — it must never rename it, because container bind mounts point into
   it. One replace per site at a time: a second is `ErrReplaceBusy` (409).
+  Should the commit fail after clearing began, the rest of the upload stays
+  in `<site>/.replace-commit-*` until the site's next replace, which removes
+  every one of them (the one-replace claim proves no commit is running), so
+  they never pile up. `sitebin backup` skips those and `tmp/`.
+- **`stats.json` has its own per-site lock** (`lockStats`), not the site lock:
+  a page view must never wait for an upload holding the site lock. `Delete`
+  takes the site lock, then the stats lock — keep that order.
 
 Read `docs/superpowers/specs/2026-08-28-mcp-server-design.md` and
 `2026-08-29-mcp-oauth-resource-server-design.md`.

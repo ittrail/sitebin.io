@@ -53,8 +53,8 @@ func TestReplaceUploadWithACorruptZipLeavesTheSiteIntact(t *testing.T) {
 	mw.Close()
 	req := authed(httptest.NewRequest("POST", "/api/sites/"+editIDFrom(t, c.EditURL)+"/files?replace=true", &buf), c.EditPassword)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
-	if w := e.public(t, req); w.Code == 200 {
-		t.Fatalf("a corrupt zip replaced the site: %s", w.Body)
+	if w := e.public(t, req); w.Code != 400 {
+		t.Fatalf("a corrupt zip is the uploader's mistake, want 400: %d %s", w.Code, w.Body)
 	}
 	if got := indexHTML(t, e, c.ID); got != "old" {
 		t.Fatalf("the failed replace touched the site: index.html = %q", got)
@@ -68,8 +68,8 @@ func TestReplaceUploadCutOffMidwayLeavesTheSiteIntact(t *testing.T) {
 	cut := body.Bytes()[:body.Len()-10] // the connection drops before the closing boundary
 	req := authed(httptest.NewRequest("POST", "/api/sites/"+editIDFrom(t, c.EditURL)+"/files?replace=true", bytes.NewReader(cut)), c.EditPassword)
 	req.Header.Set("Content-Type", ct)
-	if w := e.public(t, req); w.Code == 200 {
-		t.Fatalf("a truncated upload replaced the site: %s", w.Body)
+	if w := e.public(t, req); w.Code != 400 {
+		t.Fatalf("a truncated upload is the uploader's problem, want 400: %d %s", w.Code, w.Body)
 	}
 	if got := indexHTML(t, e, c.ID); got != "old" {
 		t.Fatalf("the failed replace touched the site: index.html = %q", got)
@@ -158,5 +158,53 @@ func TestMCPWriteFilesReplaceWhileAnotherIsRunning(t *testing.T) {
 	}
 	if got := indexHTML(t, e, site.ViewID); got != "old" {
 		t.Fatalf("the refused replace touched the site: index.html = %q", got)
+	}
+}
+
+// Outside a replace too: a corrupt zip is a 400, not an internal error.
+func TestUploadOfACorruptZipIsABadRequest(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "old"})
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	h := textproto.MIMEHeader{}
+	h.Set("Content-Disposition", `form-data; name="zip"; filename="site.zip"`)
+	p, _ := mw.CreatePart(h)
+	p.Write([]byte("not a zip archive"))
+	mw.Close()
+	req := authed(httptest.NewRequest("POST", "/api/sites/"+editIDFrom(t, c.EditURL)+"/files", &buf), c.EditPassword)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	w := e.public(t, req)
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "zip") {
+		t.Fatalf("corrupt zip upload: %d %s", w.Code, w.Body)
+	}
+}
+
+// A file part cut off mid-content is a 400, not an internal error.
+func TestUploadCutOffInsideAFileIsABadRequest(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "old"})
+	body, ct := uploadBody(t, nil, map[string]string{"big.txt": strings.Repeat("x", 4096)})
+	cut := body.Bytes()[:body.Len()/2] // the connection drops in the middle of the file
+	req := authed(httptest.NewRequest("POST", "/api/sites/"+editIDFrom(t, c.EditURL)+"/files", bytes.NewReader(cut)), c.EditPassword)
+	req.Header.Set("Content-Type", ct)
+	if w := e.public(t, req); w.Code != 400 {
+		t.Fatalf("cut-off upload: %d %s", w.Code, w.Body)
+	}
+}
+
+// A body cut off inside a plain form field is the uploader's problem too.
+func TestUploadCutOffInsideAFormFieldIsABadRequest(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "old"})
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	mw.WriteField("note", strings.Repeat("n", 4096))
+	mw.Close()
+	cut := buf.Bytes()[:buf.Len()/2]
+	req := authed(httptest.NewRequest("POST", "/api/sites/"+editIDFrom(t, c.EditURL)+"/files", bytes.NewReader(cut)), c.EditPassword)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if w := e.public(t, req); w.Code != 400 {
+		t.Fatalf("cut-off form field: %d %s", w.Code, w.Body)
 	}
 }

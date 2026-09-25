@@ -375,11 +375,47 @@ is what the code does.
   example is then first), and `upload_url`'s description says a replace
   deletes every file and folder of the site first, including a container
   site's data folders.
-- **`RecordView` skips when the site lock is busy.** A streaming WebDAV PUT or
-  live `SaveFile` holds the site lock for the whole upload, and authz counts a
-  view on every HTML navigation, so a long upload stalled page loads. The view
-  counter now only tries the lock: a view during an upload goes uncounted.
-  `RecordCSPViolation` is unchanged.
+- **The view counter has its own lock.** A streaming WebDAV PUT or live
+  `SaveFile` holds the site lock for the whole upload, and authz counts a view
+  on every HTML navigation, so a long upload stalled page loads. A first fix
+  only *tried* the site lock and dropped the view when it was busy — which also
+  dropped views that merely arrived together. `stats.json` now has a per-site
+  stats lock of its own (`RecordView`, `RecordCSPViolation`); `Delete` takes it
+  after the site lock, so no view is written into a folder being removed. Views
+  neither wait for an upload nor get lost.
 - **One request must finish within 10 minutes.** The public server's read
   timeout is 10 minutes; `upload_url` and `webdav_url` say so ("split very
   large uploads"), and so does the README.
+- **A damaged upload is a 400, not a 500.** A zip that is not one, or whose
+  entry fails its checksum or ends early, is `store.ErrBadArchive`; a request
+  body that ends in the middle of a file (`io.ErrUnexpectedEOF`) is "the upload
+  was cut off". Both were answered "internal error" before.
+- **A commit that fails midway keeps the rest of the upload.** Once the live
+  content is being cleared, the `.replace-commit-*` directory is the only copy
+  of whatever is not yet in place; a failure from there on keeps it (the error
+  names it) instead of deleting it. The site's next replace removes every such
+  directory whatever its age — the one-replace claim proves no commit of the
+  site is running — so repeated failures (a folder a container made read-only
+  fails every clear) cannot pile up uncounted copies of the site cap.
+- **The one-replace claim is released on a panic too.** `BeginReplace` releases
+  it on every way out that does not return a `Replacement`, not only on an
+  error return.
+- **Backups leave uploads in flight out.** `sitebin backup` skips `tmp/` (the zip
+  spool and replace staging) and a site's `.replace-*` commit directory (not a
+  user's folder of that name inside `files/`). A file that vanishes between the
+  walk listing it and the backup reading it is skipped; one that shrinks is
+  zero-padded to the size its header promised, as GNU tar does; a file
+  swapped for a link or a FIFO is skipped — opened with
+  `O_NOFOLLOW|O_NONBLOCK` on Linux and checked with `SameFile` — and a
+  directory swapped for a link is not descended into (every skipped
+  directory entry returns `SkipDir`, since the walk trusts its own earlier
+  listing). A small window remains between the callback's check and the
+  walk's own read of a directory; walking each site through `os.OpenRoot`
+  would close it. A file inside a site's `files/` that a container made
+  unreadable is reported and skipped instead of stopping every site's backup.
+  The README's cron recipe now uses `pipefail` (under bash) and a temporary
+  name, so a failed backup never replaces the last good one.
+- **Only a truly damaged zip is a bad archive.** A read error on the server's
+  own spool file stays an internal error (its message names a server path),
+  and "the upload was cut off" is tagged where the request body is read, not
+  inferred from any short read.

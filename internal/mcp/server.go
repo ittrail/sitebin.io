@@ -412,7 +412,7 @@ type writeArgs struct {
 	EditID       string `json:"edit_id" jsonschema:"the site's edit id"`
 	EditPassword string `json:"edit_password,omitempty" jsonschema:"the site's edit password; not needed with an owning account API token"`
 	Files        []File `json:"files" jsonschema:"the files to write"`
-	Replace      bool   `json:"replace,omitempty" jsonschema:"delete every existing file first, so the site ends up containing exactly these files"`
+	Replace      bool   `json:"replace,omitempty" jsonschema:"make the site contain exactly these files; the old ones are removed only once every new one is written"`
 }
 
 func (a writeArgs) ref() SiteRef { return SiteRef{EditID: a.EditID, EditPassword: a.EditPassword} }
