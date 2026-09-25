@@ -11,13 +11,22 @@ import (
 	"time"
 )
 
-func stagingDirs(t *testing.T, site *Site) []string {
+// stagingDirs lists every replace staging directory a site can have: the
+// upload's own under <root>/tmp, and one a commit moved into the site folder.
+func stagingDirs(t *testing.T, s *Store, site *Site) []string {
 	t.Helper()
-	m, err := filepath.Glob(filepath.Join(site.Dir(), replaceStagingPrefix+"*"))
-	if err != nil {
-		t.Fatal(err)
+	var all []string
+	for _, pattern := range []string{
+		filepath.Join(s.Root(), "tmp", "replace-"+site.ViewID+"-*"),
+		filepath.Join(site.Dir(), ".replace-*"),
+	} {
+		m, err := filepath.Glob(pattern)
+		if err != nil {
+			t.Fatal(err)
+		}
+		all = append(all, m...)
 	}
-	return m
+	return all
 }
 
 // fileNames lists a site's content as "a,b/c", sorted.
@@ -74,9 +83,9 @@ func TestReplaceCommitSwapsTheContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !os.SameFile(before, after) {
-		t.Error("the content directory was replaced; a container's bind mount would lose it")
+		t.Error("the content directory was replaced; container bind mounts point into it (files/<folder>), so a commit must empty and refill it, never rename it")
 	}
-	if d := stagingDirs(t, site); len(d) != 0 {
+	if d := stagingDirs(t, s, site); len(d) != 0 {
 		t.Errorf("staging left behind: %v", d)
 	}
 }
@@ -95,7 +104,7 @@ func TestReplaceAbortLeavesTheSiteAsItWas(t *testing.T) {
 	if got := fileNames(t, s, site); got != "old.txt" {
 		t.Fatalf("after Abort: %s", got)
 	}
-	if d := stagingDirs(t, site); len(d) != 0 {
+	if d := stagingDirs(t, s, site); len(d) != 0 {
 		t.Errorf("staging left behind: %v", d)
 	}
 	if err := rep.Commit(); err == nil {
@@ -209,15 +218,163 @@ func TestReplaceInViewerModeLandsInTheRawDir(t *testing.T) {
 func TestBeginReplaceRemovesStaleStaging(t *testing.T) {
 	s := newTestStore(t)
 	site, _, _ := s.Create()
-	stale := filepath.Join(site.Dir(), replaceStagingPrefix+"stale")
-	fresh := filepath.Join(site.Dir(), replaceStagingPrefix+"fresh")
-	for _, d := range []string{stale, fresh} {
+	tmp := filepath.Join(s.Root(), "tmp")
+	// Uploads stage under <root>/tmp, for any site; only a crash in the middle
+	// of a commit leaves one inside a site folder.
+	staleTmp := filepath.Join(tmp, "replace-othersite-1")
+	freshTmp := filepath.Join(tmp, "replace-othersite-2")
+	staleCommit := filepath.Join(site.Dir(), ".replace-commit-1")
+	freshCommit := filepath.Join(site.Dir(), ".replace-commit-2")
+	for _, d := range []string{staleTmp, freshTmp, staleCommit, freshCommit} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 	old := time.Now().Add(-2 * time.Hour)
-	if err := os.Chtimes(stale, old, old); err != nil {
+	for _, d := range []string{staleTmp, staleCommit} {
+		if err := os.Chtimes(d, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rep, err := s.BeginReplace(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rep.Abort()
+	for _, d := range []string{staleTmp, staleCommit} {
+		if _, err := os.Stat(d); !os.IsNotExist(err) {
+			t.Errorf("%s, left by a crash two hours ago, survived", d)
+		}
+	}
+	for _, d := range []string{freshTmp, freshCommit} {
+		if _, err := os.Stat(d); err != nil {
+			t.Errorf("%s, which another upload may still be using, was removed", d)
+		}
+	}
+}
+
+func TestReplaceStagesOutsideTheSiteFolder(t *testing.T) {
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	rep, err := s.BeginReplace(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rep.Abort()
+	if err := rep.SaveFile("index.html", strings.NewReader("new")); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(site.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".replace-") {
+			t.Errorf("a staging directory sits in the site folder while the upload streams: %s", e.Name())
+		}
+	}
+	m, err := filepath.Glob(filepath.Join(s.Root(), "tmp", "replace-"+site.ViewID+"-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m) != 1 {
+		t.Fatalf("staging directories under <root>/tmp: %v", m)
+	}
+	if _, err := os.Stat(filepath.Join(m[0], "index.html")); err != nil {
+		t.Errorf("the staged file is not in %s: %v", m[0], err)
+	}
+	if err := rep.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if d := stagingDirs(t, s, site); len(d) != 0 {
+		t.Errorf("staging left behind: %v", d)
+	}
+}
+
+// A site deleted between the last staged write and Commit: the commit must
+// neither write into what is left of it nor bring its folder back.
+func TestReplaceCommitOnADeletedSiteIsNotFound(t *testing.T) {
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	s.SaveFile(site, "old.txt", strings.NewReader("old"))
+	rep, err := s.BeginReplace(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rep.Abort()
+	if err := rep.SaveFile("new.txt", strings.NewReader("new")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete(site); err != nil {
+		t.Errorf("Delete while a replacement is staging: %v", err)
+	}
+	if err := rep.Commit(); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Commit on a deleted site = %v, want ErrNotFound", err)
+	}
+	if _, err := os.Stat(site.Dir()); !os.IsNotExist(err) {
+		t.Errorf("the deleted site's folder exists after Commit (stat: %v)", err)
+	}
+	if d := stagingDirs(t, s, site); len(d) != 0 {
+		t.Errorf("staging left behind: %v", d)
+	}
+}
+
+func TestReplaceCommitAfterAFailedWriteIsRefused(t *testing.T) {
+	s, err := New(t.TempDir(), "sitebin.example", 10, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	site, _, _ := s.Create()
+	s.SaveFile(site, "index.html", strings.NewReader("old"))
+	rep, err := s.BeginReplace(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rep.Abort()
+	if err := rep.SaveFile("big.txt", strings.NewReader(strings.Repeat("a", 30))); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("over the cap: %v", err)
+	}
+	if err := rep.Commit(); err == nil {
+		t.Error("a replacement with a failed write was committed")
+	}
+	if got := fileNames(t, s, site); got != "index.html" {
+		t.Fatalf("after a refused commit: %s", got)
+	}
+	if b, err := s.ReadContentFile(site, "index.html"); err != nil || string(b) != "old" {
+		t.Fatalf("index.html = %q, %v", b, err)
+	}
+	if d := stagingDirs(t, s, site); len(d) != 0 {
+		t.Errorf("staging left behind: %v", d)
+	}
+}
+
+func TestReplaceCommitAfterAFailedExtractIsRefused(t *testing.T) {
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	s.SaveFile(site, "index.html", strings.NewReader("old"))
+	rep, err := s.BeginReplace(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rep.Abort()
+	junk := []byte("this is not a zip archive")
+	if err := rep.ExtractZip(bytes.NewReader(junk), int64(len(junk))); err == nil {
+		t.Fatal("a corrupt zip was accepted")
+	}
+	if err := rep.Commit(); err == nil {
+		t.Error("a replacement with a failed extract was committed")
+	}
+	if got := fileNames(t, s, site); got != "index.html" {
+		t.Fatalf("after a refused commit: %s", got)
+	}
+}
+
+// Old and new content sharing a directory: the old file in it goes, the new
+// one arrives.
+func TestReplaceIntoASharedDirectoryKeepsOnlyTheNewFiles(t *testing.T) {
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	if err := s.SaveFile(site, "assets/a.js", strings.NewReader("a")); err != nil {
 		t.Fatal(err)
 	}
 	rep, err := s.BeginReplace(site)
@@ -225,10 +382,44 @@ func TestBeginReplaceRemovesStaleStaging(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rep.Abort()
-	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Error("a staging directory a crash left two hours ago survived")
+	if err := rep.SaveFile("assets/b.js", strings.NewReader("b")); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(fresh); err != nil {
-		t.Error("a staging directory another upload may still be using was removed")
+	if err := rep.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if got := fileNames(t, s, site); got != "assets/b.js" {
+		t.Fatalf("after Commit: %s", got)
+	}
+}
+
+// The mode decides where the content lives, and it can change while an upload
+// streams: the commit follows the site as it is when it lands.
+func TestReplaceCommitFollowsAModeChangeDuringTheUpload(t *testing.T) {
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	rep, err := s.BeginReplace(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rep.Abort()
+	if err := rep.SaveFile("doc.md", strings.NewReader("# hi")); err != nil {
+		t.Fatal(err)
+	}
+	other, err := s.ByViewID(site.ViewID) // a second handle, as a concurrent PUT would hold
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Update(other, func(m *Meta) error { m.Mode = ModeViewer; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := rep.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(site.FilesDir(), rawDirName, "doc.md")); err != nil {
+		t.Fatalf("doc.md is not in the viewer's content dir: %v", err)
+	}
+	if site.Meta.Mode != ModeViewer {
+		t.Errorf("the caller's handle still says %q", site.Meta.Mode)
 	}
 }
