@@ -78,6 +78,8 @@ func (o mcpOps) mcpError(err error) error {
 		return errors.New("no form with that key on this site — list_forms shows the keys")
 	case errors.Is(err, store.ErrFormActive):
 		return errors.New("this form's recipient has already confirmed; there is nothing to resend")
+	case errors.Is(err, store.ErrReplaceBusy):
+		return errors.New(msgReplaceBusy)
 	default:
 		o.a.log.Error("mcp internal error", "err", err)
 		return errors.New("internal error")

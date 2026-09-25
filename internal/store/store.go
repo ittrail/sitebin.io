@@ -141,6 +141,9 @@ type Store struct {
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex // per view id
+	// replacing holds the view ids with a Replacement in flight, guarded by
+	// mu: one per site at a time. See BeginReplace.
+	replacing map[string]bool
 }
 
 // Site is a handle to one site. Meta is a snapshot; Update refreshes it.
@@ -173,6 +176,7 @@ func New(dataDir, baseDomain string, maxSiteBytes int64, maxFiles int) (*Store, 
 		maxFiles:     maxFiles,
 		reportsN:     -1,
 		locks:        make(map[string]*sync.Mutex),
+		replacing:    make(map[string]bool),
 	}
 	for _, d := range []string{s.sitesDir(), s.editIndexDir(), s.domainIndexDir()} {
 		if err := os.MkdirAll(d, 0o755); err != nil {

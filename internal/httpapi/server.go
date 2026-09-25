@@ -217,6 +217,10 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
 }
 
+// msgReplaceBusy answers a replace of a site while another is still running,
+// on the API and over MCP alike.
+const msgReplaceBusy = "another replace of this site is still running — wait for it to finish, then try again"
+
 // storeError maps store sentinel errors onto HTTP responses.
 func storeError(w http.ResponseWriter, err error) {
 	switch {
@@ -242,6 +246,8 @@ func storeError(w http.ResponseWriter, err error) {
 		writeError(w, 409, err.Error())
 	case errors.Is(err, store.ErrFormStale):
 		writeError(w, 410, err.Error())
+	case errors.Is(err, store.ErrReplaceBusy):
+		writeError(w, 409, msgReplaceBusy)
 	default:
 		slog.Error("internal error", "err", err)
 		writeError(w, 500, "internal error")

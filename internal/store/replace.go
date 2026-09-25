@@ -34,6 +34,11 @@ const (
 // 10-minute read timeout).
 const staleStagingAge = time.Hour
 
+// ErrReplaceBusy is BeginReplace refusing a second replacement of a site while
+// one is still in flight. Each stages up to the site's full cap on the data
+// volume, so overlapping replaces of one site must not pile up.
+var ErrReplaceBusy = errors.New("another replace of this site is still running")
+
 var (
 	errReplaceFinished = errors.New("this replacement was already committed or aborted")
 	errReplaceFailed   = errors.New("this replacement had a failed write and cannot be committed")
@@ -60,8 +65,37 @@ type Replacement struct {
 
 func (s *Store) tmpDir() string { return filepath.Join(s.root, tmpDirName) }
 
-// BeginReplace starts a replacement of site's content.
-func (s *Store) BeginReplace(site *Site) (*Replacement, error) {
+// claimReplace marks a replacement of viewID as in flight; it reports false
+// when one already is.
+func (s *Store) claimReplace(viewID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.replacing[viewID] {
+		return false
+	}
+	s.replacing[viewID] = true
+	return true
+}
+
+func (s *Store) releaseReplace(viewID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.replacing, viewID)
+}
+
+// BeginReplace starts a replacement of site's content. Only one replacement
+// of a site may be in flight at a time — each can stage the site's whole cap
+// on the data volume — so a second is ErrReplaceBusy until the first is
+// committed or aborted.
+func (s *Store) BeginReplace(site *Site) (rep *Replacement, err error) {
+	if !s.claimReplace(site.ViewID) {
+		return nil, ErrReplaceBusy
+	}
+	defer func() {
+		if err != nil {
+			s.releaseReplace(site.ViewID)
+		}
+	}()
 	tmp := s.tmpDir()
 	if err := os.MkdirAll(tmp, 0o755); err != nil {
 		return nil, err
@@ -161,6 +195,9 @@ func (r *Replacement) Commit() error {
 		return errReplaceFinished
 	}
 	r.finished = true
+	// Released last, once the lock is: a new replacement of the site cannot
+	// begin until this commit, however it ends, is completely over.
+	defer r.s.releaseReplace(r.site.ViewID)
 	// Closed before any rename: Windows refuses to move a directory with an
 	// open handle, and nothing is written to the staging tree from here on.
 	r.root.Close()
@@ -224,8 +261,8 @@ func randomSuffix() string {
 	return hex.EncodeToString(b[:])
 }
 
-// Abort discards the staged files. It is harmless after Commit or a previous
-// Abort, so callers defer it.
+// Abort discards the staged files and lets the next replacement of the site
+// begin. It is harmless after Commit or a previous Abort, so callers defer it.
 func (r *Replacement) Abort() {
 	if r.finished {
 		return
@@ -233,4 +270,5 @@ func (r *Replacement) Abort() {
 	r.finished = true
 	r.root.Close()
 	os.RemoveAll(r.dir)
+	r.s.releaseReplace(r.site.ViewID)
 }

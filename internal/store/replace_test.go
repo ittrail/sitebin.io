@@ -423,3 +423,63 @@ func TestReplaceCommitFollowsAModeChangeDuringTheUpload(t *testing.T) {
 		t.Errorf("the caller's handle still says %q", site.Meta.Mode)
 	}
 }
+
+// beginBusy asserts BeginReplace refuses site because a replacement of it is
+// in flight, cleaning up if it wrongly began one.
+func beginBusy(t *testing.T, s *Store, site *Site, when string) {
+	t.Helper()
+	rep, err := s.BeginReplace(site)
+	if rep != nil {
+		rep.Abort()
+	}
+	if !errors.Is(err, ErrReplaceBusy) {
+		t.Fatalf("BeginReplace %s = %v, want ErrReplaceBusy", when, err)
+	}
+}
+
+func TestBeginReplaceAllowsOneReplacementPerSite(t *testing.T) {
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	first, err := s.BeginReplace(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Abort()
+	beginBusy(t, s, site, "while one is open")
+	again, err := s.ByViewID(site.ViewID) // another request loads its own handle
+	if err != nil {
+		t.Fatal(err)
+	}
+	beginBusy(t, s, again, "through a second handle")
+
+	other, _, _ := s.Create()
+	o, err := s.BeginReplace(other)
+	if err != nil {
+		t.Fatalf("a replace of another site was refused: %v", err)
+	}
+	o.Abort()
+
+	first.Abort()
+	second, err := s.BeginReplace(site)
+	if err != nil {
+		t.Fatalf("BeginReplace after Abort: %v", err)
+	}
+	if err := second.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	second.Abort() // after Commit: must not release anything a second time
+	third, err := s.BeginReplace(site)
+	if err != nil {
+		t.Fatalf("BeginReplace after Commit: %v", err)
+	}
+	beginBusy(t, s, site, "while the third is open") // the stray Abort released nothing
+	third.SaveFile("../escape", strings.NewReader("x"))
+	if err := third.Commit(); err == nil {
+		t.Fatal("a failed replacement was committed")
+	}
+	fourth, err := s.BeginReplace(site)
+	if err != nil {
+		t.Fatalf("BeginReplace after a refused Commit: %v", err)
+	}
+	fourth.Abort()
+}

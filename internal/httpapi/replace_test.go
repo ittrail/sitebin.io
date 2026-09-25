@@ -99,3 +99,64 @@ func TestMCPWriteFilesReplaceOverTheQuotaLeavesTheSiteIntact(t *testing.T) {
 		t.Fatalf("the failed replace touched the site: %q, %v", b, err)
 	}
 }
+
+const replaceBusyMsg = "another replace of this site is still running — wait for it to finish, then try again"
+
+func TestReplaceUploadWhileAnotherIsRunningIsAConflict(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "old"})
+	site, err := e.st.ByViewID(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	running, err := e.st.BeginReplace(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer running.Abort()
+
+	post := func() *httptest.ResponseRecorder {
+		body, ct := uploadBody(t, nil, map[string]string{"index.html": "new"})
+		req := authed(httptest.NewRequest("POST", "/api/sites/"+editIDFrom(t, c.EditURL)+"/files?replace=true", body), c.EditPassword)
+		req.Header.Set("Content-Type", ct)
+		return e.public(t, req)
+	}
+	if w := post(); w.Code != 409 || !strings.Contains(w.Body.String(), replaceBusyMsg) {
+		t.Fatalf("a replace while another is running: %d %s", w.Code, w.Body)
+	}
+	if got := indexHTML(t, e, c.ID); got != "old" {
+		t.Fatalf("the refused replace touched the site: index.html = %q", got)
+	}
+	running.Abort()
+	if w := post(); w.Code != 200 {
+		t.Fatalf("a replace once the other finished: %d %s", w.Code, w.Body)
+	}
+	if got := indexHTML(t, e, c.ID); got != "new" {
+		t.Fatalf("index.html = %q", got)
+	}
+}
+
+func TestMCPWriteFilesReplaceWhileAnotherIsRunning(t *testing.T) {
+	e := newEnv(t, nil)
+	cs := mcpClient(t, e, nil)
+	editID, pw := mcpCreate(t, cs, "old")
+	site, err := e.st.ByEditID(editID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	running, err := e.st.BeginReplace(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer running.Abort()
+	res := mcpCall(t, cs, "write_files", map[string]any{
+		"edit_id": editID, "edit_password": pw, "replace": true,
+		"files": []any{map[string]any{"path": "index.html", "text": "new"}},
+	})
+	if !res.IsError || !strings.Contains(mcpText(res), replaceBusyMsg) {
+		t.Fatalf("write_files replace while another is running: error=%v %s", res.IsError, mcpText(res))
+	}
+	if got := indexHTML(t, e, site.ViewID); got != "old" {
+		t.Fatalf("the refused replace touched the site: index.html = %q", got)
+	}
+}
