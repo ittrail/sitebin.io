@@ -237,6 +237,17 @@ are configured per instance (`SITEBIN_TIERS` / `tiers.json`), not in this repo.
 
 ## The MCP server
 
+> **⚠️ STANDING TASK — CIMD instead of DCR.** Before any work on MCP OAuth,
+> **check the currently released Keycloak version for working Client ID
+> Metadata Document (CIMD) support, and build it in as soon as it works.**
+> The hosted instance's MCP clients still register through the deprecated
+> dynamic client registration, held in check only by the stack's janitor,
+> cap and capacity alert. The checklist, the blocking Keycloak issues and the
+> date of the last check are in the workspace guide
+> (`../CLAUDE.md`, "STANDING TASK"); update the date there when you check.
+> Sitebin's own code needs no change for CIMD — it is a resource server and
+> never sees how a client registered — but its e2e and docs will.
+
 `internal/mcp` is the protocol and the tool catalog; `internal/httpapi/mcpops.go`
 is the adapter that implements `mcp.Ops` over the JSON API's own helpers. The
 split is the point: **no authorization rule is stated twice**. If MCP and the
