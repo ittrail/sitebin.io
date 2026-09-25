@@ -919,3 +919,47 @@ func TestStackAdminKeyFromFile(t *testing.T) {
 		t.Fatal("an unreadable key file was accepted")
 	}
 }
+
+// MCP access tokens are matched to accounts by the sign-in provider's subject,
+// so the MCP issuer has to be the sign-in issuer: a token from another one
+// would be looked up in the wrong namespace.
+func TestCheckMCPOAuthIssuer(t *testing.T) {
+	login := func(issuer string) Config {
+		vars := map[string]string{"SITEBIN_ACCOUNT_MODE": "accounts"}
+		if issuer != "" {
+			vars["SITEBIN_OAUTH_OIDC_ISSUER"] = issuer
+			vars["SITEBIN_OAUTH_OIDC_CLIENT_ID"] = "sitebin-app"
+		}
+		cfg, err := Load(env(vars), noFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	const realm = "https://auth.example.com/realms/saas-stack"
+	cases := []struct {
+		name, login, mcp string
+		ok               bool
+	}{
+		{"MCP OAuth off, no login issuer", "", "", true},
+		{"MCP OAuth off, a login issuer", realm, "", true},
+		{"the same issuer", realm, realm, true},
+		{"trailing slash on the MCP side", realm, realm + "/", true},
+		{"trailing slash on the login side", realm + "/", realm, true},
+		{"surrounding space", realm, "  " + realm + " ", true},
+		{"another realm", realm, "https://auth.example.com/realms/other", false},
+		{"another host", realm, "https://login.example.org/realms/saas-stack", false},
+		{"no login issuer", "", realm, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := login(c.login).CheckMCPOAuthIssuer(c.mcp)
+			if (err == nil) != c.ok {
+				t.Fatalf("CheckMCPOAuthIssuer = %v, want ok=%v", err, c.ok)
+			}
+			if err != nil && (!strings.Contains(err.Error(), "SITEBIN_MCP_OAUTH_ISSUER") || !strings.Contains(err.Error(), "SITEBIN_OAUTH_OIDC_ISSUER")) {
+				t.Errorf("the message does not name both variables: %v", err)
+			}
+		})
+	}
+}

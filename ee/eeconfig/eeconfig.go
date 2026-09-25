@@ -445,6 +445,29 @@ func (c Config) OAuthEnabled() bool {
 	return c.Google != nil || c.Microsoft != nil || c.OIDC != nil
 }
 
+// CheckMCPOAuthIssuer refuses an MCP OAuth issuer that is not the sign-in
+// issuer. It has nothing to say when MCP OAuth is off (an empty issuer).
+//
+// Accounts are found by the sign-in provider's subject index, so a token from
+// any other issuer would be looked up in the wrong namespace — at best an
+// unknown subject, at worst someone else's account on a collision. And the
+// stack's consent gate and account creation from a token both assume the
+// subject is a user of the sign-in realm. The MCP issuer is a core setting the
+// extension cannot see at load time, so the provider asks this at Init.
+func (c Config) CheckMCPOAuthIssuer(mcpIssuer string) error {
+	mcpIssuer = strings.TrimRight(strings.TrimSpace(mcpIssuer), "/")
+	if mcpIssuer == "" {
+		return nil
+	}
+	if c.OIDC == nil {
+		return fmt.Errorf("SITEBIN_MCP_OAUTH_ISSUER is set but SITEBIN_OAUTH_OIDC_ISSUER is not: MCP access tokens are matched to accounts by the sign-in provider's subject, so the two must name the same issuer")
+	}
+	if mcpIssuer != c.OIDC.Issuer {
+		return fmt.Errorf("SITEBIN_MCP_OAUTH_ISSUER (%s) must equal SITEBIN_OAUTH_OIDC_ISSUER (%s): MCP access tokens are matched to accounts by the sign-in provider's subject, so a token from another issuer would name nobody here", mcpIssuer, c.OIDC.Issuer)
+	}
+	return nil
+}
+
 // EmailEnabled reports whether SMTP is configured.
 func (c Config) EmailEnabled() bool { return c.SMTP != nil }
 

@@ -602,3 +602,41 @@ func TestProviderWithoutAStackRefusesAnUnknownSubject(t *testing.T) {
 		t.Fatalf("a known subject without a stack = %+v, %v", cred, ok)
 	}
 }
+
+// ---- the issuer guard ----
+
+// A mismatched MCP issuer stops the start with a message naming both
+// variables; an instance with MCP OAuth unset starts whatever its sign-in is.
+func TestInitRefusesAnMCPIssuerThatIsNotTheLoginIssuer(t *testing.T) {
+	start := func(t *testing.T, loginIssuer, mcpIssuer string) error {
+		t.Setenv("SITEBIN_ACCOUNT_MODE", "accounts")
+		if loginIssuer != "" {
+			t.Setenv("SITEBIN_OAUTH_OIDC_ISSUER", loginIssuer)
+			t.Setenv("SITEBIN_OAUTH_OIDC_CLIENT_ID", "sitebin-app")
+		}
+		return newProvider().Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}, mcpIssuer: mcpIssuer})
+	}
+	const realm = "https://auth.example.com/realms/saas-stack"
+
+	t.Run("mismatch", func(t *testing.T) {
+		err := start(t, realm, "https://auth.example.com/realms/other")
+		if err == nil || !strings.Contains(err.Error(), "SITEBIN_MCP_OAUTH_ISSUER") || !strings.Contains(err.Error(), "SITEBIN_OAUTH_OIDC_ISSUER") {
+			t.Fatalf("Init = %v", err)
+		}
+	})
+	t.Run("no login issuer", func(t *testing.T) {
+		if err := start(t, "", realm); err == nil {
+			t.Fatal("Init accepted an MCP issuer with no sign-in issuer")
+		}
+	})
+	t.Run("the same issuer", func(t *testing.T) {
+		if err := start(t, realm, realm+"/"); err != nil {
+			t.Fatalf("Init: %v", err)
+		}
+	})
+	t.Run("MCP OAuth unset", func(t *testing.T) {
+		if err := start(t, "", ""); err != nil {
+			t.Fatalf("Init: %v", err)
+		}
+	})
+}

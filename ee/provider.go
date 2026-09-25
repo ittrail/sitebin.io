@@ -77,6 +77,12 @@ func (p *provider) Init(h ext.Host) error {
 	// the environment, and a child process or a leaked env dump must not
 	// find it there. (docker inspect still shows it: use the _FILE form.)
 	os.Unsetenv("SITEBIN_STACK_ADMIN_KEY")
+	// The MCP issuer is the core's setting; whether it matches the sign-in
+	// issuer can only be asked here. Refusing to start is the kind answer: a
+	// mismatch would otherwise show up as every OAuth token being refused.
+	if err := cfg.CheckMCPOAuthIssuer(h.MCPOAuthIssuer()); err != nil {
+		return fmt.Errorf("enterprise config: %w", err)
+	}
 
 	// Licensing. It NEVER fails the start: an absent, malformed, unverifiable
 	// or expired key is logged and surfaced in the account UI, and the only
