@@ -359,7 +359,7 @@ func (a *API) consumeUploads(r *http.Request, sink uploadSink) (url.Values, erro
 				return fields, err
 			}
 		default:
-			v, err := io.ReadAll(io.LimitReader(part, 64<<10))
+			v, err := io.ReadAll(io.LimitReader(bodyReader{part}, 64<<10))
 			part.Close()
 			if err != nil {
 				return fields, err

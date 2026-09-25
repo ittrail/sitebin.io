@@ -192,3 +192,19 @@ func TestUploadCutOffInsideAFileIsABadRequest(t *testing.T) {
 		t.Fatalf("cut-off upload: %d %s", w.Code, w.Body)
 	}
 }
+
+// A body cut off inside a plain form field is the uploader's problem too.
+func TestUploadCutOffInsideAFormFieldIsABadRequest(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "old"})
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	mw.WriteField("note", strings.Repeat("n", 4096))
+	mw.Close()
+	cut := buf.Bytes()[:buf.Len()/2]
+	req := authed(httptest.NewRequest("POST", "/api/sites/"+editIDFrom(t, c.EditURL)+"/files", bytes.NewReader(cut)), c.EditPassword)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if w := e.public(t, req); w.Code != 400 {
+		t.Fatalf("cut-off form field: %d %s", w.Code, w.Body)
+	}
+}

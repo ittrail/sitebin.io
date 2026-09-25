@@ -37,6 +37,13 @@ func inFlight(rel string, isDir bool) bool {
 	return isDir && strings.HasPrefix(path.Base(rel), ".replace-") && path.Dir(path.Dir(rel)) == "sites"
 }
 
+// inSiteContent reports whether rel (slash-separated) lies inside a site's
+// files/ — content its owner, or a container, controls.
+func inSiteContent(rel string) bool {
+	parts := strings.SplitN(rel, "/", 4)
+	return len(parts) == 4 && parts[0] == "sites" && parts[2] == "files"
+}
+
 // backupData writes a gzip-compressed tar of root to outPath (or stdout when
 // empty/"-"). Symlinks (the edit/domain indexes) are preserved. Uploads in
 // flight are left out, and a file that disappears while the walk runs — a
@@ -57,16 +64,32 @@ func backupData(root, outPath string) error {
 	defer tw.Close()
 
 	count := 0
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
+		rel, err := filepath.Rel(root, p)
 		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) && p != root {
-				return nil // vanished between being listed and being read
-			}
 			return err
 		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil || rel == "." {
-			return err
+		if walkErr != nil {
+			if errors.Is(walkErr, fs.ErrNotExist) && p != root {
+				return nil // vanished between being listed and being read
+			}
+			if errors.Is(walkErr, fs.ErrPermission) && inSiteContent(filepath.ToSlash(rel)) {
+				fmt.Fprintf(os.Stderr, "skipped %s: %v\n", filepath.ToSlash(rel), walkErr)
+				return nil
+			}
+			return walkErr
+		}
+		if rel == "." {
+			return nil
+		}
+		// A skipped entry the walk saw as a directory must return SkipDir: the
+		// walk trusts its own listing, so a directory swapped for a link since
+		// would otherwise still be descended into — out of the site.
+		skip := func() error {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
 		}
 		if inFlight(filepath.ToSlash(rel), d.IsDir()) {
 			if d.IsDir() {
@@ -101,11 +124,11 @@ func backupData(root, outPath string) error {
 			}
 			if err := linkStaysUnder(root, p, link); err != nil {
 				fmt.Fprintf(os.Stderr, "skipped %s: %v\n", filepath.ToSlash(rel), err)
-				return nil
+				return skip()
 			}
 		case !info.Mode().IsRegular() && !info.IsDir():
 			fmt.Fprintf(os.Stderr, "skipped %s: not a file, directory or link\n", filepath.ToSlash(rel))
-			return nil
+			return skip()
 		}
 		// A regular file is opened before its header is written: if it has
 		// gone, or been swapped for a link or a FIFO since the walk saw it (a
@@ -118,6 +141,13 @@ func backupData(root, outPath string) error {
 			if err != nil {
 				if errors.Is(err, fs.ErrNotExist) {
 					return nil // gone since the walk listed it
+				}
+				// A container runs with Sitebin's uid and can chmod its own
+				// files; one it made unreadable must not stop the backup of
+				// every other site. Reported, skipped.
+				if errors.Is(err, fs.ErrPermission) && inSiteContent(filepath.ToSlash(rel)) {
+					fmt.Fprintf(os.Stderr, "skipped %s: %v\n", filepath.ToSlash(rel), err)
+					return nil
 				}
 				if fi, lerr := os.Lstat(p); lerr != nil || !fi.Mode().IsRegular() {
 					fmt.Fprintf(os.Stderr, "skipped %s: changed while the backup ran\n", filepath.ToSlash(rel))

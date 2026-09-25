@@ -310,3 +310,71 @@ func TestBackupDoesNotFollowAFileSwappedForALink(t *testing.T) {
 		t.Fatal("the backup followed a swapped-in link and stored the secret as the page")
 	}
 }
+
+// A directory swapped for a link while the walk is busy with an earlier
+// sibling: WalkDir still holds the old entry saying "directory" and would
+// descend into the link's target unless the callback says SkipDir.
+func TestBackupDoesNotDescendIntoADirectorySwappedForALink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("links are the production platform's")
+	}
+	src := t.TempDir()
+	outside := t.TempDir()
+	os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("outside secret"), 0o644)
+	files := filepath.Join(src, "sites", "abc", "files")
+	os.MkdirAll(filepath.Join(files, "b"), 0o755)
+	os.WriteFile(filepath.Join(files, "a.txt"), []byte("a"), 0o644)
+	os.WriteFile(filepath.Join(files, "b", "page.html"), []byte("page"), 0o644)
+
+	real := openForBackup
+	openForBackup = func(p string) (*os.File, error) {
+		if p == filepath.Join(files, "a.txt") { // b is swapped while a.txt is being read
+			os.RemoveAll(filepath.Join(files, "b"))
+			if err := os.Symlink(outside, filepath.Join(files, "b")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return real(p)
+	}
+	defer func() { openForBackup = real }()
+
+	archive := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if err := backupData(src, archive); err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	dst := t.TempDir()
+	if err := restoreData(dst, archive); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "sites", "abc", "files", "b", "secret.txt")); err == nil {
+		t.Fatal("the backup descended into a directory swapped for a link and archived what it points at")
+	}
+}
+
+// A file a container made unreadable (chmod 000) inside a customer site must
+// not stop the backup of the whole instance: it is reported and skipped.
+func TestBackupSkipsAnUnreadableFileInsideASite(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("permission bits bind a non-root user on the production platform")
+	}
+	src := t.TempDir()
+	files := filepath.Join(src, "sites", "abc", "files")
+	os.MkdirAll(files, 0o755)
+	os.WriteFile(filepath.Join(src, "sites", "abc", "meta.json"), []byte("{}"), 0o644)
+	locked := filepath.Join(files, "locked.db")
+	os.WriteFile(locked, []byte("x"), 0o644)
+	os.Chmod(locked, 0)
+	defer os.Chmod(locked, 0o644)
+
+	archive := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if err := backupData(src, archive); err != nil {
+		t.Fatalf("an unreadable site file stopped the backup: %v", err)
+	}
+	dst := t.TempDir()
+	if err := restoreData(dst, archive); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "sites", "abc", "meta.json")); err != nil {
+		t.Errorf("the rest of the site was not backed up: %v", err)
+	}
+}

@@ -404,11 +404,17 @@ is what the code does.
   spool and replace staging) and a site's `.replace-*` commit directory (not a
   user's folder of that name inside `files/`). A file that vanishes between the
   walk listing it and the backup reading it is skipped; one that shrinks is
-  zero-padded to the size its header promised, as GNU tar does; one swapped
-  for a link or a FIFO is skipped — opened with `O_NOFOLLOW|O_NONBLOCK` on
-  Linux and checked with `SameFile` — never followed out of the site. The
-  README's cron recipe now uses `pipefail` and a temporary name, so a failed
-  backup never replaces the last good one.
+  zero-padded to the size its header promised, as GNU tar does; a file
+  swapped for a link or a FIFO is skipped — opened with
+  `O_NOFOLLOW|O_NONBLOCK` on Linux and checked with `SameFile` — and a
+  directory swapped for a link is not descended into (every skipped
+  directory entry returns `SkipDir`, since the walk trusts its own earlier
+  listing). A small window remains between the callback's check and the
+  walk's own read of a directory; walking each site through `os.OpenRoot`
+  would close it. A file inside a site's `files/` that a container made
+  unreadable is reported and skipped instead of stopping every site's backup.
+  The README's cron recipe now uses `pipefail` (under bash) and a temporary
+  name, so a failed backup never replaces the last good one.
 - **Only a truly damaged zip is a bad archive.** A read error on the server's
   own spool file stays an internal error (its message names a server path),
   and "the upload was cut off" is tagged where the request body is read, not
