@@ -73,6 +73,7 @@ func NewHandler(ops Ops, info Info) http.Handler {
 	return sdk.NewStreamableHTTPHandler(getServer, &sdk.StreamableHTTPOptions{
 		Stateless: true,
 
+		// See MaxRequestBytes: above the content limit, as a backstop.
 		MaxRequestBodyBytes: MaxRequestBytes,
 
 		// The SDK's DNS-rebinding guard refuses any request whose Host is not
@@ -152,7 +153,7 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 
 	addTool(s, auth, &sdk.Tool{
 		Name:        "list_sites",
-		Description: "List the sites the connected account owns. Requires an account API token.",
+		Description: "List the sites the connected account owns. Requires an account: an account API token, or a connection signed in through OAuth.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, _ noArgs) (*sdk.CallToolResult, *listResult, error) {
 		sites, err := ops.ListSites(ctx, auth)
 		if err != nil {
