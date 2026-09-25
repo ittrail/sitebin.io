@@ -252,10 +252,15 @@ every other tool; in the enterprise build with an account token as well.
   session is refused; the result omits `webdav_url` when WebDAV is off.
 - **Enterprise:** an account token that owns the site opens an upload without
   an edit password; one that does not own it is refused.
+- **Staged replace:** a commit swaps the content and keeps the markers and the
+  content directory itself; an abort, an over-quota zip, a corrupt zip and an
+  over-quota `write_files` replace all leave the old files in place; the new
+  content is counted on its own; stale staging directories are removed.
 - **E2E** (`e2e/mcp.ps1`, community image, ASCII only): `open_upload`, then
   `curl` a 9 MiB file — above the MCP content cap — through the upload URL,
   fetch it back from the view URL, and PUT one through WebDAV on a site whose
-  WebDAV toggle is off.
+  WebDAV toggle is off; then a `replace=true` zip over the site's cap is
+  refused and the site still serves what it had.
 
 ## Docs and rollout
 
@@ -266,6 +271,46 @@ every other tool; in the enterprise build with an account token as well.
   app.sitebin.io, then the website pushed.
 - MCP clients that cache the tool list see the new tool only after
   reconnecting.
+
+## Replace only after the new content is complete
+
+*Added 2026-09-25, at review.* `POST …/files?replace=true` — the command the
+first `open_upload` example hands every agent — emptied the site **before**
+reading the upload (`store.ClearFiles`, then extraction). A zip over the
+site's quota, a corrupt archive or a dropped connection therefore left the
+site empty or half-written. `write_files` with `replace` had the same order.
+Agents will hit this far more often than the deploy script did, so it is fixed
+here.
+
+**The rule: the old files go only once the new ones are all written and
+within the site's caps.** A failed replace leaves the site exactly as it was.
+
+- `store.BeginReplace(site)` creates a staging directory inside the site's
+  folder (`<site>/.replace-<random>`, beside `files/`, so it is on the same
+  filesystem and a rename is cheap). The staged upload is written through an
+  `os.Root` with the same path rules and the same budget code as a live
+  write, but **counted on its own**: the content it replaces is going away,
+  so a site at 90% of its quota can still be replaced by a build of 90%.
+- `Replacement.SaveFile` and `Replacement.ExtractZip` write into the staging
+  directory. Nothing the site serves changes while they run.
+- `Replacement.Commit`, under the site lock, empties the content root —
+  keeping Sitebin's own markers, exactly as `ClearFiles` does — and moves
+  each staged entry into it. The content directory itself is **never
+  renamed or replaced**: a container site's bind mount points at that
+  directory, and swapping it would leave the running container on a deleted
+  one.
+- `Replacement.Abort` removes the staging directory; it is deferred by every
+  caller and harmless after `Commit`.
+- A crash mid-upload leaves a staging directory behind that counts toward no
+  quota. `BeginReplace` removes `.replace-*` directories older than an hour
+  in the same site; deleting the site removes the rest.
+- The window in which a commit can still fail is a set of renames on one
+  filesystem, not a network upload. A failure there is returned as an error.
+
+Callers: the JSON API's `uploadFiles` with `?replace=true` (both `zip` and
+`files` parts — `consumeUploads` writes to an `uploadSink`, which is either
+the live site or a `Replacement`), and MCP `write_files` with `replace`.
+Replacing with nothing still empties the site, as before.
 
 ## Out of scope
 

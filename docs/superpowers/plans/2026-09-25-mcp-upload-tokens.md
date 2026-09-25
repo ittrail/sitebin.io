@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A new MCP tool, `open_upload`, hands an agent a short-lived single-site token so it can upload large files with its own HTTP client (WebDAV or the JSON API's file upload) instead of writing them out as tool arguments.
+**Goal:** A new MCP tool, `open_upload`, hands an agent a short-lived single-site token so it can upload large files with its own HTTP client (WebDAV or the JSON API's file upload) instead of writing them out as tool arguments — and a replace upload only removes the old files once the new ones are complete and within the site's caps.
 
-**Architecture:** An in-memory registry in `internal/httpapi` holds `sha256(secret)` → site, issue time, last use and in-flight count. `open_upload` (MCP, authorized exactly like `write_files`) issues a token; the WebDAV handler and a new `withUploadAuth` wrapper on `POST /api/sites/{editID}/files` accept it; every other edit route refuses any `sbu_` credential before password work. All core (MIT), no `ext` seam change.
+**Architecture:** An in-memory registry in `internal/httpapi` holds `sha256(secret)` → site, issue time, last use and in-flight count. `open_upload` (MCP, authorized exactly like `write_files`) issues a token; the WebDAV handler and a new `withUploadAuth` wrapper on `POST /api/sites/{editID}/files` accept it; every other edit route refuses any `sbu_` credential before password work. A replace upload is staged in `<site>/.replace-*` through `store.Replacement` and committed into the unchanged content directory. All core (MIT), no `ext` seam change.
 
 **Tech Stack:** Go (stdlib `net/http`, `crypto/sha256`), `golang.org/x/net/webdav`, `github.com/modelcontextprotocol/go-sdk/mcp`, PowerShell 5.1 E2E with `curl.exe` and Docker.
 
@@ -25,6 +25,7 @@
 - WebDAV with a token ignores the per-site `webdav_enabled` toggle and the plan's `quota_webdav`, but respects `SITEBIN_WEBDAV_ENABLED=false` (route stays 404, no `webdav_url` offered).
 - Tool name `open_upload` is a contract; it needs scope `sitebin:sites:write`. `create_site`/`write_files` behave exactly as before.
 - Revoked on edit-password rotation and site deletion (the paths that already call `verifyCache.Drop`), and by restart.
+- A replace (`POST …/files?replace=true`, MCP `write_files` with `replace`) removes the old files only after the new content is fully written and within the site's caps, counted on its own; a failed replace leaves the site as it was. The content directory is never renamed (container bind mounts point at it); Sitebin's markers (`.sitebin-spa`, `.sitebin-trusted`) survive, as with `ClearFiles`.
 - `e2e/*.ps1` stay pure ASCII (write `--`, never an em dash).
 - Run both `go test ./...` and `go test -tags ee ./...`, plus `go vet ./...`.
 - Commits: lowercase conventional prefix, subject is a sentence about behaviour, trailer `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`. The website repo is committed but **never pushed** by this plan (ship order).
@@ -1597,7 +1598,827 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 6: Documentation in both repos
+### Task 6: A replace removes the old files only after the new ones are complete
+
+**Files:**
+- Modify: `internal/store/files.go` (`writeFileLocked` ~line 188-245, `ClearFiles` ~line 281-310)
+- Modify: `internal/store/zip.go` (whole `ExtractZip`)
+- Create: `internal/store/replace.go`
+- Create: `internal/store/replace_test.go`
+- Modify: `internal/httpapi/sites.go` (`consumeUploads` ~line 293-336, `extractZipPart` ~line 343-368, `createSite` fill ~line 656, `uploadFiles` ~line 741-758)
+- Modify: `internal/httpapi/mcpops.go` (`WriteFiles`)
+- Create: `internal/httpapi/replace_test.go`
+
+**Interfaces:**
+- Consumes: existing store internals `openContent`, `usage`, `CleanRelPath`, `lockSite`, `renewExpiryLocked`, `EffMaxBytes`, `EffMaxFiles`, markers `SPAMarker`/`TrustedMarker`; store test helpers `newTestStore`, `makeZip(t, files map[string]string, withSymlink bool) []byte`; httpapi test helpers `uploadBody` (Task 3), `newEnv`, `createSite`, `authed`, `editIDFrom`, `fakeProvider`, `mcpClient`, `mcpCreate`, `mcpCall`.
+- Produces:
+  - `func writeFileIn(root *os.Root, rel string, r io.Reader, used int64, count int, maxBytes int64, maxFiles int) (written, existing int64, err error)`
+  - `func clearContentDir(dir string) error`
+  - `type zipEntry struct { f *zip.File; rel string }`, `func zipEntries(r io.ReaderAt, size int64, maxFiles int) ([]zipEntry, error)`, `func extractEntries(root *os.Root, entries []zipEntry, used int64, count int, maxBytes int64, maxFiles int) (int64, int, error)`
+  - `const replaceStagingPrefix = ".replace-"`, `const staleStagingAge = time.Hour`, `var errReplaceFinished`
+  - `type Replacement`, `func (s *Store) BeginReplace(site *Site) (*Replacement, error)`, `func (r *Replacement) SaveFile(relPath string, rd io.Reader) error`, `func (r *Replacement) ExtractZip(ra io.ReaderAt, size int64) error`, `func (r *Replacement) Commit() error`, `func (r *Replacement) Abort()`
+  - in httpapi: `type uploadSink interface { SaveFile(relPath string, r io.Reader) error; ExtractZip(r io.ReaderAt, size int64) error }`, `type liveSink struct { st *store.Store; site *store.Site }`; `consumeUploads(r *http.Request, sink uploadSink)`; `extractZipPart(sink uploadSink, part io.Reader)`
+
+- [ ] **Step 1: Write the failing store tests**
+
+Create `internal/store/replace_test.go`:
+
+```go
+package store
+
+import (
+	"bytes"
+	"errors"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+	"time"
+)
+
+func stagingDirs(t *testing.T, site *Site) []string {
+	t.Helper()
+	m, err := filepath.Glob(filepath.Join(site.Dir(), replaceStagingPrefix+"*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// fileNames lists a site's content as "a,b/c", sorted.
+func fileNames(t *testing.T, s *Store, site *Site) string {
+	t.Helper()
+	files, err := s.ListFiles(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(files))
+	for _, f := range files {
+		names = append(names, f.Path)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ",")
+}
+
+func TestReplaceCommitSwapsTheContent(t *testing.T) {
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	s.SaveFile(site, "old.txt", strings.NewReader("old"))
+	s.SaveFile(site, "dir/older.txt", strings.NewReader("older"))
+	if err := s.SetTrusted(site, true); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(site.ContentDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := s.BeginReplace(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rep.Abort()
+	if err := rep.SaveFile("index.html", strings.NewReader("new")); err != nil {
+		t.Fatal(err)
+	}
+	if got := fileNames(t, s, site); got != "dir/older.txt,old.txt" {
+		t.Fatalf("the site changed before Commit: %s", got)
+	}
+	if err := rep.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := fileNames(t, s, site); got != "index.html" {
+		t.Fatalf("after Commit: %s", got)
+	}
+	if !s.Trusted(site) {
+		t.Error("the trust marker did not survive the replace")
+	}
+	after, err := os.Stat(site.ContentDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Error("the content directory was replaced; a container's bind mount would lose it")
+	}
+	if d := stagingDirs(t, site); len(d) != 0 {
+		t.Errorf("staging left behind: %v", d)
+	}
+}
+
+func TestReplaceAbortLeavesTheSiteAsItWas(t *testing.T) {
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	s.SaveFile(site, "old.txt", strings.NewReader("old"))
+	rep, err := s.BeginReplace(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep.SaveFile("new.txt", strings.NewReader("new"))
+	rep.Abort()
+	rep.Abort() // twice is harmless
+	if got := fileNames(t, s, site); got != "old.txt" {
+		t.Fatalf("after Abort: %s", got)
+	}
+	if d := stagingDirs(t, site); len(d) != 0 {
+		t.Errorf("staging left behind: %v", d)
+	}
+	if err := rep.Commit(); err == nil {
+		t.Error("Commit after Abort succeeded")
+	}
+}
+
+func TestReplaceCountsOnlyTheNewContent(t *testing.T) {
+	s, err := New(t.TempDir(), "sitebin.example", 10, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	site, _, _ := s.Create()
+	if err := s.SaveFile(site, "old.txt", strings.NewReader("12345678")); err != nil {
+		t.Fatal(err)
+	}
+	rep, _ := s.BeginReplace(site)
+	defer rep.Abort()
+	// 9 bytes on top of the old 8 would break the cap of 10; on their own they fit.
+	if err := rep.SaveFile("new.txt", strings.NewReader("123456789")); err != nil {
+		t.Fatalf("the replaced content was counted against the replacement: %v", err)
+	}
+	if err := rep.SaveFile("more.txt", strings.NewReader("12")); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("over the cap within the replacement: %v", err)
+	}
+}
+
+func TestReplaceWithAnOverQuotaZipLeavesTheSiteIntact(t *testing.T) {
+	s, err := New(t.TempDir(), "sitebin.example", 50, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	site, _, _ := s.Create()
+	s.SaveFile(site, "index.html", strings.NewReader("old"))
+	data := makeZip(t, map[string]string{"big.txt": strings.Repeat("A", 500)}, false)
+	rep, _ := s.BeginReplace(site)
+	if err := rep.ExtractZip(bytes.NewReader(data), int64(len(data))); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("zip over the cap: %v", err)
+	}
+	rep.Abort()
+	if got := fileNames(t, s, site); got != "index.html" {
+		t.Fatalf("after a failed replace: %s", got)
+	}
+}
+
+func TestReplaceWithACorruptZipLeavesTheSiteIntact(t *testing.T) {
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	s.SaveFile(site, "index.html", strings.NewReader("old"))
+	rep, _ := s.BeginReplace(site)
+	junk := []byte("this is not a zip archive")
+	if err := rep.ExtractZip(bytes.NewReader(junk), int64(len(junk))); err == nil {
+		t.Fatal("a corrupt zip was accepted")
+	}
+	rep.Abort()
+	if got := fileNames(t, s, site); got != "index.html" {
+		t.Fatalf("after a failed replace: %s", got)
+	}
+}
+
+func TestReplaceZipCommits(t *testing.T) {
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	s.SaveFile(site, "old.txt", strings.NewReader("old"))
+	data := makeZip(t, map[string]string{"index.html": "<p>", "assets/app.js": "js"}, false)
+	rep, _ := s.BeginReplace(site)
+	defer rep.Abort()
+	if err := rep.ExtractZip(bytes.NewReader(data), int64(len(data))); err != nil {
+		t.Fatal(err)
+	}
+	if err := rep.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if got := fileNames(t, s, site); got != "assets/app.js,index.html" {
+		t.Fatalf("after Commit: %s", got)
+	}
+}
+
+func TestReplaceWithNothingEmptiesTheSite(t *testing.T) {
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	s.SaveFile(site, "old.txt", strings.NewReader("old"))
+	rep, _ := s.BeginReplace(site)
+	if err := rep.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if got := fileNames(t, s, site); got != "" {
+		t.Fatalf("after an empty replace: %s", got)
+	}
+}
+
+func TestReplaceInViewerModeLandsInTheRawDir(t *testing.T) {
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	if err := s.Update(site, func(m *Meta) error { m.Mode = ModeViewer; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	rep, _ := s.BeginReplace(site)
+	defer rep.Abort()
+	if err := rep.SaveFile("doc.md", strings.NewReader("# hi")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rep.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(site.ContentDir(), "doc.md")); err != nil {
+		t.Fatalf("doc.md is not in the viewer's content dir: %v", err)
+	}
+}
+
+func TestBeginReplaceRemovesStaleStaging(t *testing.T) {
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	stale := filepath.Join(site.Dir(), replaceStagingPrefix+"stale")
+	fresh := filepath.Join(site.Dir(), replaceStagingPrefix+"fresh")
+	for _, d := range []string{stale, fresh} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := s.BeginReplace(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rep.Abort()
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Error("a staging directory a crash left two hours ago survived")
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Error("a staging directory another upload may still be using was removed")
+	}
+}
+```
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `go test ./internal/store/ -run "Replace"`
+Expected: FAIL to compile — `s.BeginReplace undefined`.
+
+- [ ] **Step 3: Split the write and clear helpers out of their site-bound callers**
+
+In `internal/store/files.go`, turn `writeFileLocked` into a thin wrapper and move its body into `writeFileIn`:
+
+```go
+// writeFileLocked writes one file into the site's content root against a
+// budget the CALLER has measured; see writeFileIn. The caller holds the site
+// lock.
+func (s *Store) writeFileLocked(site *Site, rel string, r io.Reader, used int64, count int, maxBytes int64, maxFiles int) (written, existing int64, err error) {
+	root, err := openContent(site)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer root.Close()
+	return writeFileIn(root, rel, r, used, count, maxBytes, maxFiles)
+}
+
+// writeFileIn writes one file into root against a budget the CALLER has
+// measured: used and count are the totals already in root, maxBytes and
+// maxFiles the site's caps. It returns the bytes written and the size of the
+// file it replaced (0 for a new one), so a caller writing many files can keep
+// the totals current without walking the tree again. root is the live content
+// root or a replacement's staging root; the rules are the same for both.
+func writeFileIn(root *os.Root, rel string, r io.Reader, used int64, count int, maxBytes int64, maxFiles int) (written, existing int64, err error) {
+	dst := filepath.FromSlash(rel)
+	// … the rest of the former writeFileLocked body, unchanged, from
+	// `if fi, err := root.Lstat(dst); err == nil {` to `return written, existing, nil`
+}
+```
+
+(The "…" above is an instruction to move the existing lines verbatim — every line of the old body after `defer root.Close()` — not text to paste.)
+
+Replace `ClearFiles` with:
+
+```go
+// ClearFiles wipes the site's content root.
+func (s *Store) ClearFiles(site *Site) error {
+	l := s.lockSite(site.ViewID)
+	l.Lock()
+	defer l.Unlock()
+	if err := clearContentDir(site.ContentDir()); err != nil {
+		return err
+	}
+	return s.renewExpiryLocked(site)
+}
+
+// clearContentDir empties a content root. The caller holds the site lock.
+func clearContentDir(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, e := range entries {
+		// Sitebin's own markers survive a replace. They are not the caller's
+		// files, and dropping them would silently change how the site is served
+		// — a replace upload would strip the trust marker and harden the site
+		// until the next cleanup sweep put it back, which for a site that
+		// deploys on every push means breaking itself on every push.
+		if e.Name() == SPAMarker || e.Name() == TrustedMarker {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+```
+
+- [ ] **Step 4: Split `ExtractZip` into validate and write**
+
+Replace everything below the `ExtractZip` doc comment in `internal/store/zip.go` (keep the comment) with:
+
+```go
+func (s *Store) ExtractZip(site *Site, r io.ReaderAt, size int64) error {
+	maxBytes, maxFiles := s.EffMaxBytes(site), s.EffMaxFiles(site)
+	entries, err := zipEntries(r, size, maxFiles)
+	if err != nil {
+		return err
+	}
+	l := s.lockSite(site.ViewID)
+	l.Lock()
+	defer l.Unlock()
+	used, count, err := usage(site.ContentDir())
+	if err != nil {
+		return err
+	}
+	root, err := openContent(site)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	if _, _, err := extractEntries(root, entries, used, count, maxBytes, maxFiles); err != nil {
+		return err
+	}
+	return s.renewExpiryLocked(site)
+}
+
+type zipEntry struct {
+	f   *zip.File
+	rel string
+}
+
+// zipEntries opens an archive and bounds it before anything is written: a
+// symlink, a bad path, a name twice or more entries than maxFiles is refused.
+func zipEntries(r io.ReaderAt, size int64, maxFiles int) ([]zipEntry, error) {
+	zr, err := zip.NewReader(r, size)
+	if err != nil {
+		return nil, fmt.Errorf("read zip: %w", err)
+	}
+	entries := make([]zipEntry, 0, len(zr.File))
+	seen := make(map[string]bool, len(zr.File))
+	for _, f := range zr.File {
+		name := strings.ReplaceAll(f.Name, `\`, "/") // tolerate Windows-built zips
+		if strings.HasSuffix(name, "/") {
+			continue // directories materialize via file writes
+		}
+		if f.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("%w: zip entry %q is a symlink", ErrBadPath, f.Name)
+		}
+		rel, err := CleanRelPath(name)
+		if err != nil {
+			return nil, fmt.Errorf("zip entry %q: %w", f.Name, err)
+		}
+		if seen[rel] {
+			return nil, fmt.Errorf("%w: zip entry %q appears twice", ErrBadPath, f.Name)
+		}
+		seen[rel] = true
+		entries = append(entries, zipEntry{f: f, rel: rel})
+	}
+	if len(entries) > maxFiles {
+		return nil, fmt.Errorf("%w: the archive holds %d files, the site allows %d", ErrTooManyFiles, len(entries), maxFiles)
+	}
+	return entries, nil
+}
+
+// extractEntries writes validated entries into root, keeping the byte and
+// file budgets in a running counter rather than re-walking the tree per
+// entry. It returns the updated totals.
+func extractEntries(root *os.Root, entries []zipEntry, used int64, count int, maxBytes int64, maxFiles int) (int64, int, error) {
+	for _, e := range entries {
+		rc, err := e.f.Open()
+		if err != nil {
+			return used, count, fmt.Errorf("zip entry %q: %w", e.f.Name, err)
+		}
+		written, existing, err := writeFileIn(root, e.rel, rc, used, count, maxBytes, maxFiles)
+		rc.Close()
+		if err != nil {
+			return used, count, fmt.Errorf("zip entry %q: %w", e.f.Name, err)
+		}
+		used += written - existing
+		if existing == 0 {
+			count++
+		}
+	}
+	return used, count, nil
+}
+```
+
+Run: `go test ./internal/store/ -run "Zip|SaveFile|Clear"` — Expected: PASS (the refactor changes no behaviour; the Replace tests still do not compile until Step 5 — run with `-run` only after Step 5 if the package fails to build).
+
+- [ ] **Step 5: Implement the replacement**
+
+Create `internal/store/replace.go`:
+
+```go
+package store
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+// replaceStagingPrefix names the staging directories of replace uploads. They
+// sit inside the site's folder beside files/ — the same filesystem as the
+// content — so committing one is a rename, not a copy.
+const replaceStagingPrefix = ".replace-"
+
+// staleStagingAge is how old a staging directory must be before BeginReplace
+// treats it as left behind by a crash; an upload still writing into one is
+// younger than that.
+const staleStagingAge = time.Hour
+
+var errReplaceFinished = errors.New("this replacement was already committed or aborted")
+
+// Replacement stages a replace-all upload. What is written to it counts
+// against the site's caps on its own — the content it replaces is going away —
+// and nothing the site serves changes until Commit. A failed upload is Aborted
+// and the site stays exactly as it was.
+type Replacement struct {
+	s        *Store
+	site     *Site
+	dir      string
+	root     *os.Root
+	used     int64
+	count    int
+	maxBytes int64
+	maxFiles int
+	finished bool
+}
+
+// BeginReplace starts a replacement of site's content.
+func (s *Store) BeginReplace(site *Site) (*Replacement, error) {
+	removeStaleStaging(site.Dir(), time.Now())
+	dir, err := os.MkdirTemp(site.Dir(), replaceStagingPrefix+"*")
+	if err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		os.RemoveAll(dir)
+		return nil, err
+	}
+	return &Replacement{
+		s: s, site: site, dir: dir, root: root,
+		maxBytes: s.EffMaxBytes(site), maxFiles: s.EffMaxFiles(site),
+	}, nil
+}
+
+// removeStaleStaging deletes the staging directories crashed uploads left in
+// siteDir. They count toward no quota, so nothing else would ever notice them.
+func removeStaleStaging(siteDir string, now time.Time) {
+	entries, err := os.ReadDir(siteDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), replaceStagingPrefix) {
+			continue
+		}
+		if fi, err := e.Info(); err == nil && now.Sub(fi.ModTime()) > staleStagingAge {
+			os.RemoveAll(filepath.Join(siteDir, e.Name()))
+		}
+	}
+}
+
+// SaveFile stages one file at relPath, with SaveFile's path and budget rules.
+func (r *Replacement) SaveFile(relPath string, rd io.Reader) error {
+	if r.finished {
+		return errReplaceFinished
+	}
+	rel, err := CleanRelPath(relPath)
+	if err != nil {
+		return err
+	}
+	written, existing, err := writeFileIn(r.root, rel, rd, r.used, r.count, r.maxBytes, r.maxFiles)
+	if err != nil {
+		return err
+	}
+	r.used += written - existing
+	if existing == 0 {
+		r.count++
+	}
+	return nil
+}
+
+// ExtractZip stages an archive's files, with ExtractZip's rules.
+func (r *Replacement) ExtractZip(ra io.ReaderAt, size int64) error {
+	if r.finished {
+		return errReplaceFinished
+	}
+	entries, err := zipEntries(ra, size, r.maxFiles)
+	if err != nil {
+		return err
+	}
+	r.used, r.count, err = extractEntries(r.root, entries, r.used, r.count, r.maxBytes, r.maxFiles)
+	return err
+}
+
+// Commit swaps the staged files in. Under the site lock it empties the content
+// root — Sitebin's own markers excepted, as ClearFiles does — and moves each
+// staged entry into it. The content directory itself is never renamed or
+// replaced: a container site's bind mount points at that directory, and
+// swapping it would leave the running container on a deleted one.
+func (r *Replacement) Commit() error {
+	if r.finished {
+		return errReplaceFinished
+	}
+	r.finished = true
+	r.root.Close()
+	defer os.RemoveAll(r.dir)
+
+	l := r.s.lockSite(r.site.ViewID)
+	l.Lock()
+	defer l.Unlock()
+	dst := r.site.ContentDir()
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	if err := clearContentDir(dst); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(r.dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if err := os.Rename(filepath.Join(r.dir, e.Name()), filepath.Join(dst, e.Name())); err != nil {
+			return fmt.Errorf("commit replacement: %w", err)
+		}
+	}
+	return r.s.renewExpiryLocked(r.site)
+}
+
+// Abort discards the staged files. It is harmless after Commit or a previous
+// Abort, so callers defer it.
+func (r *Replacement) Abort() {
+	if r.finished {
+		return
+	}
+	r.finished = true
+	r.root.Close()
+	os.RemoveAll(r.dir)
+}
+```
+
+- [ ] **Step 6: Run the store suite**
+
+Run: `go test ./internal/store/`
+Expected: PASS — the new Replace tests and every existing test (`TestExtractZip*` pin the refactor).
+
+- [ ] **Step 7: Write the failing httpapi tests**
+
+Create `internal/httpapi/replace_test.go`:
+
+```go
+package httpapi
+
+import (
+	"bytes"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
+	"net/textproto"
+	"strings"
+	"testing"
+
+	"github.com/ittrail/sitebin.io/internal/ext"
+)
+
+func indexHTML(t *testing.T, e *env, viewID string) string {
+	t.Helper()
+	site, err := e.st.ByViewID(viewID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := e.st.ReadContentFile(site, "index.html")
+	if err != nil {
+		return "<missing: " + err.Error() + ">"
+	}
+	return string(b)
+}
+
+func TestReplaceUploadOverTheQuotaLeavesTheSiteIntact(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1", grant: ext.CreateGrant{MaxSiteBytes: 20}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "old"})
+	body, ct := uploadBody(t, map[string]string{"big.txt": strings.Repeat("a", 30)}, nil)
+	req := authed(httptest.NewRequest("POST", "/api/sites/"+editIDFrom(t, c.EditURL)+"/files?replace=true", body), c.EditPassword)
+	req.Header.Set("Content-Type", ct)
+	if w := e.public(t, req); w.Code == 200 {
+		t.Fatalf("an over-quota replace succeeded: %s", w.Body)
+	}
+	if got := indexHTML(t, e, c.ID); got != "old" {
+		t.Fatalf("the failed replace touched the site: index.html = %q", got)
+	}
+}
+
+func TestReplaceUploadWithACorruptZipLeavesTheSiteIntact(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "old"})
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	h := textproto.MIMEHeader{}
+	h.Set("Content-Disposition", `form-data; name="zip"; filename="site.zip"`)
+	p, _ := mw.CreatePart(h)
+	p.Write([]byte("not a zip archive"))
+	mw.Close()
+	req := authed(httptest.NewRequest("POST", "/api/sites/"+editIDFrom(t, c.EditURL)+"/files?replace=true", &buf), c.EditPassword)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if w := e.public(t, req); w.Code == 200 {
+		t.Fatalf("a corrupt zip replaced the site: %s", w.Body)
+	}
+	if got := indexHTML(t, e, c.ID); got != "old" {
+		t.Fatalf("the failed replace touched the site: index.html = %q", got)
+	}
+}
+
+func TestReplaceUploadCutOffMidwayLeavesTheSiteIntact(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "old"})
+	body, ct := uploadBody(t, nil, map[string]string{"index.html": "new", "b.txt": "b"})
+	cut := body.Bytes()[:body.Len()-10] // the connection drops before the closing boundary
+	req := authed(httptest.NewRequest("POST", "/api/sites/"+editIDFrom(t, c.EditURL)+"/files?replace=true", bytes.NewReader(cut)), c.EditPassword)
+	req.Header.Set("Content-Type", ct)
+	if w := e.public(t, req); w.Code == 200 {
+		t.Fatalf("a truncated upload replaced the site: %s", w.Body)
+	}
+	if got := indexHTML(t, e, c.ID); got != "old" {
+		t.Fatalf("the failed replace touched the site: index.html = %q", got)
+	}
+}
+
+func TestMCPWriteFilesReplaceOverTheQuotaLeavesTheSiteIntact(t *testing.T) {
+	e := newEnv(t, nil)
+	ext.Register(&fakeProvider{
+		enabled: true,
+		owner:   "acct-1",
+		bearer:  map[string]string{"sbp_tok": "acct-1"},
+		grant:   ext.CreateGrant{MaxSiteBytes: 20},
+	})
+	defer ext.Reset()
+	cs := mcpClient(t, e, http.Header{"Authorization": {"Bearer sbp_tok"}})
+	editID, _ := mcpCreate(t, cs, "old")
+	res := mcpCall(t, cs, "write_files", map[string]any{
+		"edit_id": editID, "replace": true,
+		"files": []any{map[string]any{"path": "big.txt", "text": strings.Repeat("a", 30)}},
+	})
+	if !res.IsError {
+		t.Fatal("an over-quota replace succeeded")
+	}
+	site, _ := e.st.ByEditID(editID)
+	if b, err := e.st.ReadContentFile(site, "index.html"); err != nil || string(b) != "old" {
+		t.Fatalf("the failed replace touched the site: %q, %v", b, err)
+	}
+}
+```
+
+- [ ] **Step 8: Run them to verify they fail**
+
+Run: `go test ./internal/httpapi/ -run "Replace"`
+Expected: FAIL — `index.html = "<missing: …>"` (the site was emptied before the upload failed); `TestReplaceAllUpload` and `TestMCPWriteFilesReplace` still pass.
+
+- [ ] **Step 9: Route replace uploads through a `Replacement`**
+
+In `internal/httpapi/sites.go`, above `consumeUploads`:
+
+```go
+// uploadSink is where an upload's files go: straight into the live site, or
+// into a staged replacement that reaches the site only once it is complete.
+type uploadSink interface {
+	SaveFile(relPath string, r io.Reader) error
+	ExtractZip(r io.ReaderAt, size int64) error
+}
+
+// liveSink writes into the site as it serves.
+type liveSink struct {
+	st   *store.Store
+	site *store.Site
+}
+
+func (l liveSink) SaveFile(p string, r io.Reader) error      { return l.st.SaveFile(l.site, p, r) }
+func (l liveSink) ExtractZip(r io.ReaderAt, n int64) error { return l.st.ExtractZip(l.site, r, n) }
+```
+
+Change `consumeUploads` to take the sink — signature `func (a *API) consumeUploads(r *http.Request, sink uploadSink) (url.Values, error)`, its doc comment's first line to "consumeUploads streams a multipart body into sink:", `a.st.SaveFile(site, name, part)` → `sink.SaveFile(name, part)`, and `a.extractZipPart(site, part)` → `a.extractZipPart(sink, part)`.
+
+Change `extractZipPart` to `func (a *API) extractZipPart(sink uploadSink, part io.Reader) error`, its comment's "extracts it into the site" → "extracts it into sink", and its last line to `return sink.ExtractZip(tmp, n)`.
+
+In `createSite`'s fill: `fields, err := a.consumeUploads(r, liveSink{st: a.st, site: site})`.
+
+Replace `uploadFiles` with:
+
+```go
+func (a *API) uploadFiles(w http.ResponseWriter, r *http.Request, site *store.Site) {
+	r.Body = http.MaxBytesReader(w, r.Body, a.cfg.MaxSiteBytes+(10<<20))
+	if r.URL.Query().Get("replace") == "true" {
+		// The old files go only once the new ones are all in and within the
+		// site's caps: a failed, cut-off or over-quota replace leaves the
+		// site exactly as it was.
+		rep, err := a.st.BeginReplace(site)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		defer rep.Abort()
+		if _, err := a.consumeUploads(r, rep); err != nil {
+			respondErr(w, err)
+			return
+		}
+		if err := rep.Commit(); err != nil {
+			respondErr(w, err)
+			return
+		}
+	} else if _, err := a.consumeUploads(r, liveSink{st: a.st, site: site}); err != nil {
+		respondErr(w, err)
+		return
+	}
+	if err := a.syncViewerLayout(site); err != nil {
+		respondErr(w, err)
+		return
+	}
+	writeJSON(w, 200, a.sitePayload(site))
+}
+```
+
+In `internal/httpapi/mcpops.go`, replace the body of `WriteFiles` after `openSite` with:
+
+```go
+	if replace {
+		// Staged, like the API's replace: the old files go only once every
+		// new one is written and within the site's caps.
+		rep, err := o.a.st.BeginReplace(site)
+		if err != nil {
+			return nil, o.mcpError(err)
+		}
+		defer rep.Abort()
+		for _, f := range files {
+			if err := rep.SaveFile(f.Path, bytes.NewReader(f.Data)); err != nil {
+				return nil, o.mcpError(err)
+			}
+		}
+		if err := rep.Commit(); err != nil {
+			return nil, o.mcpError(err)
+		}
+	} else {
+		for _, f := range files {
+			if err := o.a.st.SaveFile(site, f.Path, bytes.NewReader(f.Data)); err != nil {
+				return nil, o.mcpError(err)
+			}
+		}
+	}
+	if err := o.a.syncViewerLayout(site); err != nil {
+		return nil, o.mcpError(err)
+	}
+	return o.siteResult(site), nil
+```
+
+- [ ] **Step 10: Run the suites**
+
+Run: `go build ./... && go test ./internal/store/ ./internal/httpapi/`
+Expected: PASS — the new tests, `TestReplaceAllUpload`, `TestMCPWriteFilesReplace`, `TestUploadTokenReplacesASiteWithAZip`, and everything else.
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add internal/store/files.go internal/store/zip.go internal/store/replace.go internal/store/replace_test.go internal/httpapi/sites.go internal/httpapi/mcpops.go internal/httpapi/replace_test.go
+git commit -m "fix: a replace upload removes the old files only once the new ones are complete and within the site's caps
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 7: Documentation in both repos
 
 **Files:**
 - Modify: `Sitebin/README.md` (MCP section, ~lines 322-376)
@@ -1605,7 +2426,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - Modify: `Sitebin-Website/public/docs/mcp/index.html` (tool table ~line 131-152, files paragraph ~line 167-170)
 
 **Interfaces:**
-- Consumes: the finished behaviour from Tasks 1-5 (names, limits, texts).
+- Consumes: the finished behaviour from Tasks 1-6 (names, limits, texts).
 - Produces: nothing code-facing.
 
 - [ ] **Step 1: README — tool table, scopes, the files paragraph**
@@ -1646,6 +2467,13 @@ that is provenance for the admin console and changes nothing about how the
 site is served.
 ```
 
+In the API example block, directly after the line ending `?replace=true" # replace all`, add:
+
+```bash
+# a replace is staged: the old files go only once the upload is complete and
+# within the site's caps -- a failed or cut-off replace leaves the site as it was
+```
+
 - [ ] **Step 2: CLAUDE.md — one bullet in "The MCP server"**
 
 Append to the bullet list of `## The MCP server`:
@@ -1658,13 +2486,18 @@ Append to the bullet list of `## The MCP server`:
   as an edit password or account token — keep `uploadCredential` the single
   place that recognises one. Idle 5 min from the END of the last request,
   60 min absolute. Read `docs/superpowers/specs/2026-09-25-mcp-upload-tokens-design.md`.
+- **A replace is staged (`store.Replacement`).** `?replace=true` and
+  `write_files` with `replace` write into `<site>/.replace-*` and commit only
+  when complete and within the caps; never call `ClearFiles` before an upload
+  again. The commit empties and refills the content directory in place — it
+  must never rename it, because a container's bind mount points at it.
 ```
 
 - [ ] **Step 3: Commit the product repo**
 
 ```bash
 git add README.md CLAUDE.md
-git commit -m "docs: open_upload and the upload token's rules in the README and the repo guide
+git commit -m "docs: open_upload, the upload token's rules and the staged replace in the README and the repo guide
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
@@ -1686,14 +2519,30 @@ One call carries up to 8&nbsp;MiB, but a model writes every byte of an
         instead — if it can make HTTP requests of its own.
 ```
 
+In `C:\Projects\Sitebin-Project\Sitebin-Website\public\docs\api\index.html`, replace the paragraph
+
+```html
+      <p><code>?replace=true</code> swaps out the site's entire content — here
+        with a zip, in one request.</p>
+```
+
+with
+
+```html
+      <p><code>?replace=true</code> swaps out the site's entire content — here
+        with a zip, in one request. The old files go only once the new ones
+        are all in and within the site's limits, so a replace that fails, is
+        cut off or does not fit leaves the site exactly as it was.</p>
+```
+
 Run the link check: `powershell -File scripts/check-links.ps1` (from `Sitebin-Website`). Expected: no broken links.
 
 - [ ] **Step 5: Commit the website repo — do NOT push**
 
 ```bash
 cd /c/Projects/Sitebin-Project/Sitebin-Website
-git add public/docs/mcp/index.html
-git commit -m "content: agents upload large files through open_upload with a short-lived token
+git add public/docs/mcp/index.html public/docs/api/index.html
+git commit -m "content: agents upload large files through open_upload, and a failed replace leaves the site as it was
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
@@ -1702,16 +2551,24 @@ Pushing publishes; per the ship order it waits until the product is deployed and
 
 ---
 
-### Task 7: End-to-end proof and full verification
+### Task 8: End-to-end proof and full verification
 
 **Files:**
-- Modify: `e2e/mcp.ps1` (catalog list ~line 142-146, new section after the "writing" section ~line 214, `$ExpectedAssertions` line 28)
+- Modify: `e2e/mcp.ps1` (first `docker run` ~line 116-119, catalog list ~line 142-146, new section after the "writing" section ~line 214, `$ExpectedAssertions` line 28)
 
 **Interfaces:**
 - Consumes: the running community image built from this branch; `Req`, `CallTool`, `ToolStruct`, `ToolIsError`, `ToolText`, `Assert`, `$origin`, `$viewURL`, `$editID`, `$pw`, `$work` from the script.
 - Produces: nothing.
 
 - [ ] **Step 1: Extend the E2E script (ASCII only)**
+
+In the FIRST `docker run` (the one before "== handshake"), add a 12 MiB site cap after `-e "SITEBIN_RATE_AUTH_PER_5MIN=200" `` ` ``:
+
+```powershell
+    -e "SITEBIN_MAX_SITE_BYTES=12582912" `
+```
+
+(9 MiB fits; the over-cap replace below needs something that does not.)
 
 In the catalog loop, add `"open_upload"` to the list (after `"download_site"`).
 
@@ -1744,9 +2601,23 @@ Assert "the WebDAV file serves" ((Req "GET" (($viewURL.TrimEnd("/")) + "/dav.txt
 
 $r2 = Req "GET" "$origin/api/sites/$editID" @("-H", "Authorization: Bearer $tok")
 Assert "the token is refused on the settings route" ($r2.code -eq 403) "$($r2.code) $($r2.body)"
+
+# A replace that does not fit leaves the site as it was. 13 MiB of zeros zips
+# to almost nothing, so only the extraction can notice -- after the old files
+# would already have been deleted by the old code.
+$zipSrc = Join-Path $work "toobig"
+New-Item -ItemType Directory -Force $zipSrc | Out-Null
+[IO.File]::WriteAllBytes((Join-Path $zipSrc "huge.bin"), (New-Object byte[] (13MB)))
+$zipFile = Join-Path $work "toobig.zip"
+if (Test-Path $zipFile) { Remove-Item $zipFile }
+Compress-Archive -Path (Join-Path $zipSrc "huge.bin") -DestinationPath $zipFile
+$r2 = Req "POST" "$origin/api/sites/$editID/files?replace=true" @("-H", "Authorization: Bearer $tok", "-F", "zip=@$zipFile")
+Assert "an over-cap replace is refused" ($r2.code -ge 400) "$($r2.code) $($r2.body)"
+$got = & curl.exe -s -o NUL -w "%{size_download}" $bigURL
+Assert "the site still serves what it had" ([int64]$got -eq 9MB) "$got"
 ```
 
-Change `$ExpectedAssertions = 42` to `$ExpectedAssertions = 51` (one catalog entry plus eight new assertions).
+Change `$ExpectedAssertions = 42` to `$ExpectedAssertions = 53` (one catalog entry plus ten new assertions).
 
 - [ ] **Step 2: Check the script is pure ASCII**
 
@@ -1768,13 +2639,13 @@ docker build -t sitebin:latest .
 powershell -File e2e/mcp.ps1
 powershell -File e2e/e2e.ps1
 ```
-Expected: `== MCP E2E: 51 passed, 0 failed` and the core E2E all green (it covers WebDAV and the file upload route, both changed).
+Expected: `== MCP E2E: 53 passed, 0 failed` and the core E2E all green (it covers WebDAV, the file upload route and replace-all, all changed).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add e2e/mcp.ps1
-git commit -m "test: the MCP e2e uploads a 9 MiB file and a WebDAV file through open_upload's token
+git commit -m "test: the MCP e2e uploads through open_upload's token and proves an over-cap replace leaves the site intact
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
