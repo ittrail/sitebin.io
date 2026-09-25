@@ -7,8 +7,9 @@ import (
 	"syscall"
 )
 
-// openNoFollow opens p for reading, refusing a link (O_NOFOLLOW) and never
-// blocking on a FIFO (O_NONBLOCK, harmless on a regular file).
-func openNoFollow(p string) (*os.File, error) {
-	return os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+// openInRoot opens name of r for reading, never blocking on a FIFO
+// (O_NONBLOCK, harmless on a regular file). The root keeps the open inside
+// it; a file swapped for a link is caught by the SameFile check after it.
+func openInRoot(r *os.Root, name string) (*os.File, error) {
+	return r.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 }

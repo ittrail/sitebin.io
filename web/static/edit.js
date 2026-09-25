@@ -57,6 +57,7 @@ function unlock() {
   $("lock").classList.add("hidden");
   $("app").classList.remove("hidden");
   render();
+  loadDir(dirFromHash());
   loadForms();
 }
 
@@ -111,62 +112,7 @@ function render() {
   }
   $("site-meta").textContent = meta;
 
-  // files
-  const rows = $("filerows");
-  rows.innerHTML = "";
-  $("file-count").textContent = site.files.length + " file" + (site.files.length === 1 ? "" : "s") +
-    (site.files_truncated ? " shown (the first " + site.files.length + ")" : "");
-  if (!site.files.length) {
-    const tr = document.createElement("tr");
-    const td = document.createElement("td");
-    td.colSpan = 3;
-    td.style.color = "var(--ink-faint)";
-    td.textContent = "No files yet — drop some below.";
-    tr.appendChild(td);
-    rows.appendChild(tr);
-  }
-  for (const f of site.files) {
-    const tr = document.createElement("tr");
-    const p = document.createElement("td");
-    p.className = "fpath";
-    if (site.mode === "container") {
-      // A container site serves its app, not its files: there is no URL.
-      p.textContent = f.path;
-    } else {
-      const link = document.createElement("a");
-      link.href = rawURL(f.path);
-      link.target = "_blank";
-      link.rel = "noopener";
-      link.textContent = f.path;
-      p.appendChild(link);
-    }
-    const s = document.createElement("td");
-    s.className = "fsize";
-    s.textContent = fmtBytes(f.size);
-    const act = document.createElement("td");
-    act.className = "fact";
-    if (isEditable(f.path)) {
-      const ed = document.createElement("button");
-      ed.className = "btn small";
-      ed.textContent = "Edit";
-      ed.addEventListener("click", () => openEditor(f.path));
-      act.appendChild(ed);
-    }
-    const del = document.createElement("button");
-    del.className = "btn small danger";
-    del.textContent = "Delete";
-    del.style.marginLeft = "6px";
-    del.addEventListener("click", async () => {
-      try {
-        site = await api("DELETE", "/files/" + encodePath(f.path));
-        render();
-        toast("Deleted " + f.path);
-      } catch (err) { toast(err.message, true); }
-    });
-    act.appendChild(del);
-    tr.append(p, s, act);
-    rows.appendChild(tr);
-  }
+  renderFiles();
 
   const pct = Math.min(100, (site.usage.bytes / site.usage.max_bytes) * 100);
   $("usage-fill").style.width = pct + "%";
@@ -463,11 +409,242 @@ function rawURL(p) {
   return base + (site.mode === "viewer" ? "/_raw/" : "/") + encodePath(p);
 }
 
+// ---- folder browser ----
+//
+// The Files card shows one folder at a time, from GET /dir: sub-folders
+// first, then files, at most DIR_SHOW of them until "Show more". The folder
+// is kept in the URL fragment, so the browser's back button and a reload
+// work too.
+
+const DIR_SHOW = 15;
+let cwd = "";             // the folder shown, "" for the top
+let dirEntries = [];      // its entries
+let dirTruncated = false; // the server cut a huge folder
+let dirLoaded = false;
+let dirShowAll = false;
+let dirSeq = 0;           // the latest listing asked for; older answers are dropped
+let dirWanted = "";       // the folder that latest listing asked for
+let dirFocus = null;      // what to focus after the next render: "crumb" or "more"
+
+function joinPath(dir, name) { return dir ? dir + "/" + name : name; }
+function parentOf(dir) { return dir.includes("/") ? dir.slice(0, dir.lastIndexOf("/")) : ""; }
+function dirHash(dir) { return dir ? "#dir=" + encodePath(dir) : ""; }
+
+function dirFromHash() {
+  const m = /^#dir=(.*)$/.exec(location.hash);
+  if (!m) return "";
+  try { return decodeURIComponent(m[1]); } catch { return ""; }
+}
+
+// syncHash makes the URL name the folder actually shown.
+function syncHash() {
+  const hash = dirHash(cwd);
+  if (location.hash !== hash) history.replaceState(null, "", location.pathname + location.search + hash);
+}
+
+async function loadDir(dir) {
+  const seq = ++dirSeq;
+  dirWanted = dir;
+  let d;
+  try {
+    d = await api("GET", "/dir?path=" + encodeURIComponent(dir));
+  } catch (err) {
+    if (seq !== dirSeq) return;
+    // The folder is gone (deleted, replaced): show the nearest one that is left.
+    if (err.status === 404 && dir) return loadDir(parentOf(dir));
+    toast(err.message, true);
+    dirFocus = null; // nothing new was shown; a later render must not move focus
+    // Nothing shown yet (a reload of a folder that cannot be opened): show
+    // the top. Otherwise stay where we are, and say so in the URL.
+    if (!dirLoaded && dir) return loadDir("");
+    syncHash();
+    return;
+  }
+  if (seq !== dirSeq) return; // a later click asked for another folder
+  if (d.path !== cwd) dirShowAll = false;
+  cwd = d.path;
+  dirEntries = d.entries || [];
+  dirTruncated = !!d.truncated;
+  dirLoaded = true;
+  syncHash();
+  renderFiles();
+}
+
+function openDir(dir) {
+  const hash = dirHash(dir);
+  if (location.hash !== hash) history.pushState(null, "", location.pathname + location.search + hash);
+  dirShowAll = false;
+  dirFocus = "crumb";
+  loadDir(dir);
+}
+
+// The drop hint names the folder plain files go into; a replace-all acts on
+// the whole site.
+function renderDropHint() {
+  $("drop-into").textContent = cwd && !$("replace-all").checked ? " into " + cwd + "/" : "";
+}
+
+// refreshDir reloads the folder last asked for — not only the one shown, so
+// a mutation finishing while a folder click is still loading does not undo
+// the click.
+function refreshDir() { return loadDir(dirWanted); }
+
+window.addEventListener("popstate", () => { if (site) loadDir(dirFromHash()); });
+
+function renderFiles() {
+  const total = site.usage.files;
+  $("file-count").textContent = total + " file" + (total === 1 ? "" : "s");
+  renderDropHint();
+
+  // Back + breadcrumbs: files / app / node_modules
+  const crumbs = $("crumbs");
+  crumbs.innerHTML = "";
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "btn small";
+  back.textContent = "\u2190 Back";
+  back.disabled = !cwd;
+  back.addEventListener("click", () => openDir(parentOf(cwd)));
+  const trail = document.createElement("span");
+  trail.className = "trail";
+  const parts = cwd ? cwd.split("/") : [];
+  const crumb = (label, dir, here) => {
+    const el = document.createElement(here ? "span" : "button");
+    el.textContent = label;
+    if (here) {
+      el.className = "here";
+      el.setAttribute("aria-current", "location");
+      el.tabIndex = -1; // focusable after navigating, so focus is not lost
+    } else {
+      el.type = "button";
+      el.addEventListener("click", () => openDir(dir));
+    }
+    return el;
+  };
+  trail.appendChild(crumb("files", "", parts.length === 0));
+  parts.forEach((part, i) => {
+    const sep = document.createElement("span");
+    sep.className = "sep";
+    sep.textContent = "/";
+    trail.append(sep, crumb(part, parts.slice(0, i + 1).join("/"), i === parts.length - 1));
+  });
+  crumbs.append(back, trail);
+
+  const rows = $("filerows");
+  rows.innerHTML = "";
+  const note = (text) => {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 3;
+    td.className = "fnote";
+    td.textContent = text;
+    tr.appendChild(td);
+    rows.appendChild(tr);
+    return td;
+  };
+  if (!dirLoaded) { note("Loading\u2026"); return; }
+  if (!dirEntries.length) note(cwd ? "This folder is empty." : "No files yet \u2014 drop some below.");
+  const shown = dirShowAll ? dirEntries : dirEntries.slice(0, DIR_SHOW);
+  const shownRows = shown.map((en) => (en.dir ? dirRow(en) : fileRow(en)));
+  for (const tr of shownRows) rows.appendChild(tr);
+  if (!dirShowAll && dirEntries.length > DIR_SHOW) {
+    const td = note("");
+    td.className = "fmore";
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "linkbtn";
+    more.textContent = "Show " + (dirEntries.length - DIR_SHOW) + " more";
+    more.addEventListener("click", () => { dirShowAll = true; dirFocus = "more"; renderFiles(); });
+    td.appendChild(more);
+  }
+  if (dirTruncated) note("Only the first " + dirEntries.length + " entries of this folder are listed.");
+
+  // Keep keyboard focus where the user is: on the folder just opened, or on
+  // the first row "Show more" revealed.
+  const focus = dirFocus;
+  dirFocus = null;
+  if (focus === "crumb") crumbs.querySelector(".here").focus();
+  if (focus === "more") {
+    const first = shownRows[DIR_SHOW] && shownRows[DIR_SHOW].querySelector("a, button");
+    if (first) first.focus();
+  }
+}
+
+function dirRow(en) {
+  const tr = document.createElement("tr");
+  tr.className = "dirrow";
+  const p = document.createElement("td");
+  p.className = "fpath";
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "dirlink";
+  const icon = document.createElement("span");
+  icon.className = "icon";
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = "\u25B8";
+  open.append(icon, en.name + "/");
+  open.addEventListener("click", () => openDir(joinPath(cwd, en.name)));
+  p.appendChild(open);
+  const s = document.createElement("td");
+  s.className = "fsize";
+  s.textContent = "folder";
+  const act = document.createElement("td");
+  act.className = "fact";
+  tr.append(p, s, act);
+  return tr;
+}
+
+function fileRow(en) {
+  const full = joinPath(cwd, en.name);
+  const tr = document.createElement("tr");
+  const p = document.createElement("td");
+  p.className = "fpath";
+  if (site.mode === "container") {
+    // A container site serves its app, not its files: there is no URL.
+    p.textContent = en.name;
+  } else {
+    const link = document.createElement("a");
+    link.href = rawURL(full);
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = en.name;
+    p.appendChild(link);
+  }
+  const s = document.createElement("td");
+  s.className = "fsize";
+  s.textContent = fmtBytes(en.size || 0);
+  const act = document.createElement("td");
+  act.className = "fact";
+  if (isEditable(full)) {
+    const ed = document.createElement("button");
+    ed.className = "btn small";
+    ed.textContent = "Edit";
+    ed.addEventListener("click", () => openEditor(full));
+    act.appendChild(ed);
+  }
+  const del = document.createElement("button");
+  del.className = "btn small danger";
+  del.textContent = "Delete";
+  del.style.marginLeft = "6px";
+  del.addEventListener("click", async () => {
+    try {
+      site = await api("DELETE", "/files/" + encodePath(full));
+      render();
+      refreshDir();
+      toast("Deleted " + full);
+    } catch (err) { toast(err.message, true); }
+  });
+  act.appendChild(del);
+  tr.append(p, s, act);
+  return tr;
+}
+
 // ---- settings actions ----
 
 async function put(body, okMsg) {
   try {
     site = await api("PUT", "", body);
+    refreshDir();
     render();
     if (okMsg) toast(okMsg);
   } catch (err) {
@@ -524,13 +701,18 @@ $("clear-expiry").addEventListener("click", () => put({ expires_at: null }, "Exp
 
 async function uploadFiles(files, isZip) {
   const fd = new FormData();
+  const replaceAll = $("replace-all").checked;
+  // Plain files land in the folder being shown; a zip and a replace-all act on
+  // the whole site.
+  const into = isZip || replaceAll ? "" : cwd;
   if (isZip) fd.append("zip", files[0], files[0].name);
-  else for (const f of files) fd.append("files", f.file || f, f.path || f.name);
-  const replace = $("replace-all").checked ? "?replace=true" : "";
+  else for (const f of files) fd.append("files", f.file || f, joinPath(into, f.path || f.name));
+  const replace = replaceAll ? "?replace=true" : "";
   try {
     site = await api("POST", "/files" + replace, fd, true);
     $("replace-all").checked = false;
     render();
+    refreshDir();
     toast("Files uploaded");
   } catch (err) { toast(err.message, true); }
 }
@@ -576,6 +758,7 @@ $("editor-save").addEventListener("click", async () => {
     site = await api("POST", "/files", fd, true);
     closeEditor();
     render();
+    refreshDir();
     toast("Saved " + name);
   } catch (err) { toast(err.message, true); }
 });
@@ -600,6 +783,7 @@ $("download-zip").addEventListener("click", async () => {
   }
 });
 
+$("replace-all").addEventListener("change", renderDropHint);
 $("e-pick-files").addEventListener("click", () => $("e-input-files").click());
 $("e-pick-folder").addEventListener("click", () => $("e-input-folder").click());
 $("e-pick-zip").addEventListener("click", () => $("e-input-zip").click());

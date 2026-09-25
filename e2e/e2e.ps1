@@ -187,6 +187,12 @@ if ($site) {
     Assert "edit API accepts password" ($r.code -eq 200)
     Assert "settings never leak hashes" (-not ($r.body -match "argon2"))
 
+    # folder browser: one folder at a time
+    $r = Req "GET" "$origin/api/sites/$edit/dir" @("-H", "X-Edit-Password: $($site.edit_password)")
+    Assert "dir lists the top folder" ($r.code -eq 200 -and $r.body -match '"name":"css","dir":true' -and $r.body -match '"name":"index.html"') "$($r.code) $($r.body)"
+    $r = Req "GET" "$origin/api/sites/$edit/dir?path=css" @("-H", "X-Edit-Password: $($site.edit_password)")
+    Assert "dir lists a sub-folder" ($r.code -eq 200 -and $r.body -match '"name":"style.css"') "$($r.code) $($r.body)"
+
     # upload + delete file via API
     $r = Req "POST" "$origin/api/sites/$edit/files" @("-H", "X-Edit-Password: $($site.edit_password)", "-F", "files=@$fixtures\sample.txt;filename=notes/readme.txt")
     Assert "file upload via API" ($r.code -eq 200)

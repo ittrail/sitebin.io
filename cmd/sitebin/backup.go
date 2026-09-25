@@ -19,11 +19,14 @@ func backup(outPath string) error { return backupData(mustConfig().DataDir, outP
 // restore extracts a backup into the data directory.
 func restore(inPath string) error { return restoreData(mustConfig().DataDir, inPath) }
 
-// openForBackup opens a file for reading without following a link or
-// blocking on a FIFO, where the platform can (see openNoFollow). Swappable so
-// a test can change a file between the walk listing it and the backup reading
-// it.
-var openForBackup = openNoFollow
+// openForBackup opens the file name of root for reading, never blocking on a
+// FIFO where the platform can (see openInRoot). Swappable so a test can change
+// a file between the walk listing it and the backup reading it.
+var openForBackup = openInRoot
+
+// afterDirCheck, when set, runs after an entry was checked to be a directory
+// and before the walk reads it — the window a test uses to swap it.
+var afterDirCheck func(rel string)
 
 // inFlight reports whether rel (slash-separated, relative to the data root)
 // is an upload in progress rather than data: tmp/ (the zip spool and replace
@@ -44,12 +47,27 @@ func inSiteContent(rel string) bool {
 	return len(parts) == 4 && parts[0] == "sites" && parts[2] == "files"
 }
 
+// isSiteFilesDir reports whether rel is a site's files/ directory itself.
+func isSiteFilesDir(rel string) bool {
+	parts := strings.Split(rel, "/")
+	return len(parts) == 3 && parts[0] == "sites" && parts[2] == "files"
+}
+
 // backupData writes a gzip-compressed tar of root to outPath (or stdout when
 // empty/"-"). Symlinks (the edit/domain indexes) are preserved. Uploads in
 // flight are left out, and a file that disappears while the walk runs — a
 // temp file renamed into place — is skipped rather than failing the backup.
+//
+// Everything is read through an os.Root of the data directory, and each
+// site's files/ through an os.Root of its own. Containers write into
+// files/ while the backup runs and can swap any directory or file there for a
+// link at any moment — also in the gap between the walk checking an entry and
+// reading it. Resolving every path through the site's own root means such a
+// link can at worst lead back into the same site's files, never into another
+// site or the instance's secrets.
 func backupData(root, outPath string) error {
 	var w io.Writer = os.Stdout
+	skipRel := ""
 	if outPath != "" && outPath != "-" {
 		f, err := os.Create(outPath)
 		if err != nil {
@@ -57,144 +75,255 @@ func backupData(root, outPath string) error {
 		}
 		defer f.Close()
 		w = f
+		// skip the backup file itself if written inside the data dir
+		absRoot, err1 := filepath.Abs(root)
+		absOut, err2 := filepath.Abs(outPath)
+		if err1 == nil && err2 == nil {
+			if rel, err := filepath.Rel(absRoot, absOut); err == nil &&
+				rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				skipRel = filepath.ToSlash(rel)
+			}
+		}
 	}
 	gz := gzip.NewWriter(w)
 	defer gz.Close()
 	tw := tar.NewWriter(gz)
 	defer tw.Close()
 
-	count := 0
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
+	dataRoot, err := os.OpenRoot(root)
+	if err != nil {
+		return err
+	}
+	defer dataRoot.Close()
+	a := &archiver{root: root, tw: tw}
+	err = fs.WalkDir(dataRoot.FS(), ".", func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			if errors.Is(walkErr, fs.ErrNotExist) && p != root {
+			if p != "." && errors.Is(walkErr, fs.ErrNotExist) {
 				return nil // vanished between being listed and being read
-			}
-			if errors.Is(walkErr, fs.ErrPermission) && inSiteContent(filepath.ToSlash(rel)) {
-				fmt.Fprintf(os.Stderr, "skipped %s: %v\n", filepath.ToSlash(rel), walkErr)
-				return nil
 			}
 			return walkErr
 		}
-		if rel == "." {
+		if p == "." || p == skipRel {
 			return nil
 		}
-		// A skipped entry the walk saw as a directory must return SkipDir: the
-		// walk trusts its own listing, so a directory swapped for a link since
-		// would otherwise still be descended into — out of the site.
-		skip := func() error {
+		if inFlight(p, d.IsDir()) {
 			if d.IsDir() {
 				return fs.SkipDir
 			}
 			return nil
 		}
-		if inFlight(filepath.ToSlash(rel), d.IsDir()) {
-			if d.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				return nil
-			}
-			return err
-		}
-		// skip the backup file itself if written inside the data dir
-		if outPath != "" && p == outPath {
-			return nil
-		}
-		// A container site's folders are written by containers, which can
-		// leave sockets, pipes and links pointing anywhere. A socket would
-		// abort the whole archive (tar has no type for it), and a link out of
-		// the data root would make restore refuse the whole archive. Neither
-		// is content Sitebin manages, so both are left out, and said so.
-		var link string
-		switch {
-		case info.Mode()&os.ModeSymlink != 0:
-			if link, err = os.Readlink(p); err != nil {
-				if errors.Is(err, fs.ErrNotExist) {
-					return nil // an index link removed with its site mid-walk
-				}
+		if d.IsDir() && isSiteFilesDir(p) {
+			if err := a.addSiteContent(dataRoot, p); err != nil {
 				return err
 			}
-			if err := linkStaysUnder(root, p, link); err != nil {
-				fmt.Fprintf(os.Stderr, "skipped %s: %v\n", filepath.ToSlash(rel), err)
-				return skip()
-			}
-		case !info.Mode().IsRegular() && !info.IsDir():
-			fmt.Fprintf(os.Stderr, "skipped %s: not a file, directory or link\n", filepath.ToSlash(rel))
-			return skip()
+			return fs.SkipDir
 		}
-		// A regular file is opened before its header is written: if it has
-		// gone, or been swapped for a link or a FIFO since the walk saw it (a
-		// container can do that), it is skipped — never followed out of the
-		// site, never waited on — instead of leaving a header without its
-		// content in the archive. The size comes from the open file.
-		var f *os.File
-		if info.Mode().IsRegular() {
-			f, err = openForBackup(p)
-			if err != nil {
-				if errors.Is(err, fs.ErrNotExist) {
-					return nil // gone since the walk listed it
-				}
-				// A container runs with Sitebin's uid and can chmod its own
-				// files; one it made unreadable must not stop the backup of
-				// every other site. Reported, skipped.
-				if errors.Is(err, fs.ErrPermission) && inSiteContent(filepath.ToSlash(rel)) {
-					fmt.Fprintf(os.Stderr, "skipped %s: %v\n", filepath.ToSlash(rel), err)
-					return nil
-				}
-				if fi, lerr := os.Lstat(p); lerr != nil || !fi.Mode().IsRegular() {
-					fmt.Fprintf(os.Stderr, "skipped %s: changed while the backup ran\n", filepath.ToSlash(rel))
-					return nil
-				}
-				return fmt.Errorf("back up %s: %w", filepath.ToSlash(rel), err)
-			}
-			defer f.Close()
-			opened, err := f.Stat()
-			if err != nil {
-				return fmt.Errorf("back up %s: %w", filepath.ToSlash(rel), err)
-			}
-			if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
-				fmt.Fprintf(os.Stderr, "skipped %s: changed while the backup ran\n", filepath.ToSlash(rel))
-				return nil
-			}
-			info = opened
-		}
-		hdr, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			return err
-		}
-		hdr.Name = filepath.ToSlash(rel)
-		if link != "" {
-			hdr.Typeflag = tar.TypeSymlink
-			hdr.Linkname = link
-		}
-		if err := tw.WriteHeader(hdr); err != nil {
-			return err
-		}
-		if f != nil {
-			short, err := copyPadded(tw, f, hdr.Size)
-			if err != nil {
-				return fmt.Errorf("back up %s: %w", filepath.ToSlash(rel), err)
-			}
-			if short {
-				fmt.Fprintf(os.Stderr, "%s shrank while it was read; its entry is zero-padded\n", filepath.ToSlash(rel))
-			}
-		}
-		count++
-		return nil
+		return a.add(dataRoot, p, p, d.IsDir())
 	})
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "backed up %d entries from %s\n", count, root)
+	fmt.Fprintf(os.Stderr, "backed up %d entries from %s (%d skipped)\n", a.count, root, a.skipped)
 	return nil
+}
+
+// archiver writes entries into the tar stream.
+type archiver struct {
+	root    string // the data directory, which link targets must stay under
+	tw      *tar.Writer
+	count   int
+	skipped int
+}
+
+// skip reports an entry left out of the archive and counts it; the count is
+// on the backup's last line.
+func (a *archiver) skip(rel string, why any) {
+	a.skipped++
+	fmt.Fprintf(os.Stderr, "skipped %s: %v\n", rel, why)
+}
+
+// addSiteContent archives a site's files/ — the directory rel of dataRoot —
+// through an os.Root of its own (see backupData). What a container did in it —
+// a folder swapped for a link, one it made unreadable — is reported and
+// skipped, so one site cannot stop the backup of every other. Any other error
+// still aborts: a backup that exits 0 must be complete, because the cron
+// recipe keeps the last good one only when a run fails.
+func (a *archiver) addSiteContent(dataRoot *os.Root, rel string) error {
+	if err := a.add(dataRoot, rel, rel, true); err != nil {
+		if err == fs.SkipDir {
+			return nil
+		}
+		return err
+	}
+	siteRoot, err := dataRoot.OpenRoot(rel)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("back up %s: %w", rel, err)
+	}
+	defer siteRoot.Close()
+	return fs.WalkDir(siteRoot.FS(), ".", func(p string, d fs.DirEntry, walkErr error) error {
+		name := rel
+		if p != "." {
+			name = rel + "/" + p
+		}
+		if walkErr != nil {
+			switch {
+			case errors.Is(walkErr, fs.ErrNotExist):
+				return nil // gone since it was listed
+			case p == ".":
+				return fmt.Errorf("back up %s: %w", name, walkErr)
+			case errors.Is(walkErr, fs.ErrPermission):
+				a.skip(name, walkErr)
+				return nil
+			}
+			// A folder a container swapped for a link or a file since it
+			// was checked: the root refused to follow it out, or it is no
+			// folder any more. Anything else is a real read error.
+			if fi, err := siteRoot.Lstat(p); err != nil || !fi.IsDir() {
+				a.skip(name, walkErr)
+				return nil
+			}
+			return fmt.Errorf("back up %s: %w", name, walkErr)
+		}
+		if p == "." {
+			return nil
+		}
+		return a.add(siteRoot, p, name, d.IsDir())
+	})
+}
+
+// add archives the entry name of r under the archive path rel. seenAsDir is
+// what the walk's listing said; the entry is looked at afresh here, and when
+// what it is now differs, the walk is told not to descend.
+//
+// A container site's folders are written by containers, which can leave
+// sockets, pipes and links pointing anywhere. A socket would abort the whole
+// archive (tar has no type for it), and a link out of the data root would make
+// restore refuse the whole archive. Neither is content Sitebin manages, so
+// both are left out, and said so.
+func (a *archiver) add(r *os.Root, name, rel string, seenAsDir bool) error {
+	// A skipped entry the walk saw as a directory must return SkipDir: the
+	// walk trusts its own listing and would otherwise still read it.
+	skip := func() error {
+		if seenAsDir {
+			return fs.SkipDir
+		}
+		return nil
+	}
+	info, err := r.Lstat(name)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return skip()
+		}
+		if inSiteContent(rel) && (errors.Is(err, fs.ErrPermission) || parentSwapped(r, name)) {
+			a.skip(rel, err)
+			return skip()
+		}
+		return fmt.Errorf("back up %s: %w", rel, err)
+	}
+	var link string
+	switch {
+	case info.Mode()&os.ModeSymlink != 0:
+		if link, err = r.Readlink(name); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return skip() // an index link removed with its site mid-walk
+			}
+			if inSiteContent(rel) {
+				// Swapped for something else since the Lstat said link.
+				a.skip(rel, err)
+				return skip()
+			}
+			return fmt.Errorf("back up %s: %w", rel, err)
+		}
+		if err := linkStaysUnder(a.root, filepath.Join(a.root, filepath.FromSlash(rel)), link); err != nil {
+			a.skip(rel, err)
+			return skip()
+		}
+	case !info.Mode().IsRegular() && !info.IsDir():
+		a.skip(rel, "not a file, directory or link")
+		return skip()
+	}
+	// A regular file is opened before its header is written: if it has gone,
+	// or been swapped for a link or a FIFO since it was looked at (a container
+	// can do that), it is skipped — never followed, never waited on — instead
+	// of leaving a header without its content in the archive. The size comes
+	// from the open file.
+	var f *os.File
+	if info.Mode().IsRegular() {
+		f, err = openForBackup(r, name)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil // gone since it was looked at
+			}
+			// A container runs with Sitebin's uid and can chmod its own
+			// files; one it made unreadable must not stop the backup of
+			// every other site. Reported, skipped.
+			if errors.Is(err, fs.ErrPermission) && inSiteContent(rel) {
+				a.skip(rel, err)
+				return nil
+			}
+			if fi, lerr := r.Lstat(name); lerr != nil || !fi.Mode().IsRegular() {
+				a.skip(rel, "changed while the backup ran")
+				return nil
+			}
+			return fmt.Errorf("back up %s: %w", rel, err)
+		}
+		defer f.Close()
+		opened, err := f.Stat()
+		if err != nil {
+			return fmt.Errorf("back up %s: %w", rel, err)
+		}
+		if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+			a.skip(rel, "changed while the backup ran")
+			return nil
+		}
+		info = opened
+	}
+	hdr, err := tar.FileInfoHeader(info, "")
+	if err != nil {
+		return err
+	}
+	hdr.Name = rel
+	if link != "" {
+		hdr.Typeflag = tar.TypeSymlink
+		hdr.Linkname = link
+	}
+	if err := a.tw.WriteHeader(hdr); err != nil {
+		return err
+	}
+	if f != nil {
+		short, err := copyPadded(a.tw, f, hdr.Size)
+		if err != nil {
+			return fmt.Errorf("back up %s: %w", rel, err)
+		}
+		if short {
+			fmt.Fprintf(os.Stderr, "%s shrank while it was read; its entry is zero-padded\n", rel)
+		}
+	}
+	a.count++
+	if !info.IsDir() {
+		return skip() // listed as a directory, but not one any more
+	}
+	if seenAsDir && afterDirCheck != nil {
+		afterDirCheck(rel)
+	}
+	return nil
+}
+
+// parentSwapped reports whether the folder holding name is no longer a real
+// folder of r — a container swapped it for a link (which the root refuses to
+// follow out) or a file while the walk was still inside it. That is what makes
+// an entry's Lstat fail with an escape or ENOTDIR error; any other failure
+// with the parent intact is a real read error.
+func parentSwapped(r *os.Root, name string) bool {
+	dir := path.Dir(name)
+	if dir == "." {
+		return false
+	}
+	fi, err := r.Lstat(dir)
+	return err != nil || !fi.IsDir()
 }
 
 // copyPadded copies exactly n bytes of r to w — the size the tar header

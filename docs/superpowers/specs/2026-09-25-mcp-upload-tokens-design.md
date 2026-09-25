@@ -409,9 +409,15 @@ is what the code does.
   `O_NOFOLLOW|O_NONBLOCK` on Linux and checked with `SameFile` — and a
   directory swapped for a link is not descended into (every skipped
   directory entry returns `SkipDir`, since the walk trusts its own earlier
-  listing). A small window remains between the callback's check and the
-  walk's own read of a directory; walking each site through `os.OpenRoot`
-  would close it. A file inside a site's `files/` that a container made
+  listing). The last window — a directory swapped for a link after it was
+  checked and before the walk reads it — is closed too: the data directory is
+  walked through an `os.Root`, and each site's `files/` through an `os.Root`
+  of its own, so any such link can at worst lead back into the same site's
+  files, never into another site or the instance's secrets. Only what a
+  container can do is skipped inside a site — an entry gone, one made
+  unreadable, one swapped for a link — and counted on the backup's last line;
+  any other read error still aborts, so a backup that exits 0 is complete. A
+  file inside a site's `files/` that a container made
   unreadable is reported and skipped instead of stopping every site's backup.
   The README's cron recipe now uses `pipefail` (under bash) and a temporary
   name, so a failed backup never replaces the last good one.

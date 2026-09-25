@@ -96,6 +96,7 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("GET /api/sites/{editID}", a.withEditAuth(a.getSite))
 	mux.HandleFunc("GET /api/sites/{editID}/download", a.withEditAuth(a.downloadSite))
 	mux.HandleFunc("GET /api/sites/{editID}/content/{path...}", a.withEditAuth(a.getFileContent))
+	mux.HandleFunc("GET /api/sites/{editID}/dir", a.withEditAuth(a.listDir))
 	mux.HandleFunc("PUT /api/sites/{editID}", a.withEditAuth(a.updateSite))
 	mux.HandleFunc("DELETE /api/sites/{editID}", a.withEditAuth(a.deleteSite))
 	mux.HandleFunc("POST /api/sites/{editID}/files", a.withUploadAuth(a.uploadFiles))
@@ -236,6 +237,8 @@ func storeError(w http.ResponseWriter, err error) {
 		writeError(w, 409, err.Error())
 	case errors.Is(err, store.ErrBadPath):
 		writeError(w, 400, "invalid file path")
+	case errors.Is(err, store.ErrUnreadable):
+		writeError(w, 403, err.Error())
 	case errors.Is(err, store.ErrBadArchive):
 		writeError(w, 400, err.Error())
 	case errors.Is(err, errUploadCutOff):
