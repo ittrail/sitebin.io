@@ -739,6 +739,7 @@ func (a *API) deleteSite(w http.ResponseWriter, r *http.Request, site *store.Sit
 		return
 	}
 	a.verifyCache.Drop(site.EditID + ":")
+	a.uploads.revokeSite(site.ViewID)
 	a.log.Info("site deleted", "id", site.ViewID)
 	writeJSON(w, 200, map[string]string{"status": "deleted"})
 }

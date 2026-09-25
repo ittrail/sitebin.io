@@ -367,6 +367,7 @@ func (o mcpOps) DeleteSite(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) er
 		return o.mcpError(err)
 	}
 	o.a.verifyCache.Drop(site.EditID + ":")
+	o.a.uploads.revokeSite(site.ViewID)
 	o.a.log.Info("site deleted", "id", site.ViewID, "via", "mcp")
 	return nil
 }

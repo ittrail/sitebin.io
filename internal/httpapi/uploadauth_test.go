@@ -350,3 +350,60 @@ func TestUploadTokenNeverVerifiesAsAnEditPassword(t *testing.T) {
 		t.Fatalf("verifyEditIP(edit password) after an upload-token attempt = %v, want verifyOK (limiter must not have been spent)", got)
 	}
 }
+
+func TestRotatingTheEditPasswordRevokesUploadTokens(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	tok := uploadTokenFor(t, e, c)
+	if _, err := (siteService{a: e.api}).RotateEditPassword(c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := e.api.uploads.begin(tok, editIDFrom(t, c.EditURL)); ok {
+		t.Fatal("an upload token survived a password rotation")
+	}
+}
+
+func TestDeletingASiteRevokesItsUploadTokens(t *testing.T) {
+	e := newEnv(t, nil)
+	deletes := map[string]func(c createResp){
+		"api": func(c createResp) {
+			e.public(t, authed(httptest.NewRequest("DELETE", "/api/sites/"+editIDFrom(t, c.EditURL), nil), c.EditPassword))
+		},
+		"site service": func(c createResp) {
+			if err := (siteService{a: e.api}).Delete(c.ID); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	for name, del := range deletes {
+		c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+		uploadTokenFor(t, e, c)
+		del(c)
+		for _, tk := range e.api.uploads.m {
+			if tk.viewID == c.ID {
+				t.Errorf("%s delete left an upload token behind", name)
+			}
+		}
+	}
+}
+
+// Review focus 4: a token whose site is gone gets a clean 404, not a 500.
+func TestUploadTokenForADeletedSiteIsANotFound(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+	tok := uploadTokenFor(t, e, c)
+	site, _ := e.st.ByViewID(c.ID)
+	if err := e.st.Delete(site); err != nil { // the cleanup sweep's path: no revocation
+		t.Fatal(err)
+	}
+	if w := e.public(t, bearer(httptest.NewRequest("PUT", "/dav/"+edit+"/x.txt", strings.NewReader("x")), tok)); w.Code != 404 {
+		t.Errorf("WebDAV on a deleted site: %d", w.Code)
+	}
+	body, ct := uploadBody(t, nil, map[string]string{"x.txt": "x"})
+	req := bearer(httptest.NewRequest("POST", "/api/sites/"+edit+"/files", body), tok)
+	req.Header.Set("Content-Type", ct)
+	if w := e.public(t, req); w.Code != 404 {
+		t.Errorf("API upload on a deleted site: %d %s", w.Code, w.Body)
+	}
+}

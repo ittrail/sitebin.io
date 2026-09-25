@@ -118,6 +118,9 @@ func (s siteService) RotateEditPassword(viewID string) (string, error) {
 	}
 	// drop any cached verifications for the old password
 	s.a.verifyCache.Drop(site.EditID + ":")
+	// and every upload token issued under it: rotating is how an owner cuts
+	// off whoever held access
+	s.a.uploads.revokeSite(site.ViewID)
 	return pw, nil
 }
 
@@ -127,6 +130,7 @@ func (s siteService) Delete(viewID string) error {
 		return mapSiteGone(err, viewID)
 	}
 	s.a.verifyCache.Drop(site.EditID + ":")
+	s.a.uploads.revokeSite(site.ViewID)
 	s.a.stopContainersBeforeDelete(site)
 	return s.a.st.Delete(site)
 }
