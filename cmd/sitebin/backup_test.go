@@ -164,3 +164,87 @@ func TestBackupSkipsContainerDebris(t *testing.T) {
 		t.Errorf("a link inside the root was lost: %v", err)
 	}
 }
+
+// tmp/ holds the zip spool and replace staging, and a site folder can hold a
+// commit's .replace-commit-* directory: in-flight uploads, not data. They are
+// left out of the backup — they change under the walk and nothing restores
+// them to any use.
+func TestBackupSkipsUploadsInFlight(t *testing.T) {
+	src := t.TempDir()
+	site := filepath.Join(src, "sites", "abc")
+	for _, d := range []string{
+		filepath.Join(site, "files"),
+		filepath.Join(site, ".replace-commit-1234"),
+		filepath.Join(src, "tmp", "replace-abc-99"),
+	} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(site, "meta.json"), []byte("{}"), 0o644)
+	os.WriteFile(filepath.Join(site, "files", "index.html"), []byte("ok"), 0o644)
+	os.WriteFile(filepath.Join(site, ".replace-commit-1234", "half.html"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(src, "tmp", "replace-abc-99", "part.bin"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(src, "tmp", "sitebin-zip-1"), []byte("x"), 0o644)
+	// a user's own folder that merely shares the name is content, and kept
+	userDir := filepath.Join(site, "files", ".replace-notes")
+	os.MkdirAll(userDir, 0o755)
+	os.WriteFile(filepath.Join(userDir, "n.txt"), []byte("mine"), 0o644)
+
+	archive := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if err := backupData(src, archive); err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	dst := t.TempDir()
+	if err := restoreData(dst, archive); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dst, "sites", "abc", "files", "index.html")); err != nil || string(b) != "ok" {
+		t.Errorf("site content not restored: %q %v", b, err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dst, "sites", "abc", "files", ".replace-notes", "n.txt")); err != nil || string(b) != "mine" {
+		t.Errorf("a user's folder named .replace-* was left out: %q %v", b, err)
+	}
+	for _, gone := range []string{
+		filepath.Join(dst, "tmp"),
+		filepath.Join(dst, "sites", "abc", ".replace-commit-1234"),
+	} {
+		if _, err := os.Lstat(gone); !os.IsNotExist(err) {
+			t.Errorf("%s was archived", gone)
+		}
+	}
+}
+
+// A file that disappears between the walk listing it and the backup reading
+// it — a meta.json.tmp renamed into place, a staging file removed — is
+// skipped; it does not abort the whole backup or corrupt the archive.
+func TestBackupToleratesAFileThatVanishes(t *testing.T) {
+	src := t.TempDir()
+	os.MkdirAll(filepath.Join(src, "sites", "abc"), 0o755)
+	os.WriteFile(filepath.Join(src, "sites", "abc", "meta.json"), []byte("{}"), 0o644)
+	vanishing := filepath.Join(src, "sites", "abc", "meta.json.tmp")
+	os.WriteFile(vanishing, []byte("x"), 0o644)
+
+	openForBackup = func(p string) (*os.File, error) {
+		if p == vanishing {
+			return nil, &os.PathError{Op: "open", Path: p, Err: os.ErrNotExist}
+		}
+		return os.Open(p)
+	}
+	defer func() { openForBackup = os.Open }()
+
+	archive := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if err := backupData(src, archive); err != nil {
+		t.Fatalf("a vanished file aborted the backup: %v", err)
+	}
+	dst := t.TempDir()
+	if err := restoreData(dst, archive); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "sites", "abc", "meta.json")); err != nil {
+		t.Errorf("meta.json not restored: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "sites", "abc", "meta.json.tmp")); !os.IsNotExist(err) {
+		t.Error("the vanished file was archived")
+	}
+}

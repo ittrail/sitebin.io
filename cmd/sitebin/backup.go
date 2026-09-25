@@ -3,10 +3,12 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -17,8 +19,26 @@ func backup(outPath string) error { return backupData(mustConfig().DataDir, outP
 // restore extracts a backup into the data directory.
 func restore(inPath string) error { return restoreData(mustConfig().DataDir, inPath) }
 
+// openForBackup is os.Open, swappable so a test can make a file vanish
+// between the walk listing it and the backup reading it.
+var openForBackup = os.Open
+
+// inFlight reports whether rel (slash-separated, relative to the data root)
+// is an upload in progress rather than data: tmp/ (the zip spool and replace
+// staging) and a site's .replace-* commit directory — directly in the site
+// folder, never a user's own folder of that name inside files/. They change
+// under the walk, and a restore could do nothing with them.
+func inFlight(rel string, isDir bool) bool {
+	if rel == "tmp" {
+		return true
+	}
+	return isDir && strings.HasPrefix(path.Base(rel), ".replace-") && path.Dir(path.Dir(rel)) == "sites"
+}
+
 // backupData writes a gzip-compressed tar of root to outPath (or stdout when
-// empty/"-"). Symlinks (the edit/domain indexes) are preserved.
+// empty/"-"). Symlinks (the edit/domain indexes) are preserved. Uploads in
+// flight are left out, and a file that disappears while the walk runs — a
+// temp file renamed into place — is skipped rather than failing the backup.
 func backupData(root, outPath string) error {
 	var w io.Writer = os.Stdout
 	if outPath != "" && outPath != "-" {
@@ -37,14 +57,26 @@ func backupData(root, outPath string) error {
 	count := 0
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) && p != root {
+				return nil // vanished between being listed and being read
+			}
 			return err
 		}
 		rel, err := filepath.Rel(root, p)
 		if err != nil || rel == "." {
 			return err
 		}
+		if inFlight(filepath.ToSlash(rel), d.IsDir()) {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
 		info, err := d.Info()
 		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
 		// skip the backup file itself if written inside the data dir
@@ -70,6 +102,23 @@ func backupData(root, outPath string) error {
 			fmt.Fprintf(os.Stderr, "skipped %s: not a file, directory or link\n", filepath.ToSlash(rel))
 			return nil
 		}
+		// A regular file is opened before its header is written: if it has
+		// gone by now it is skipped, instead of leaving a header without its
+		// content in the archive. The size comes from the open file.
+		var f *os.File
+		if info.Mode().IsRegular() {
+			f, err = openForBackup(p)
+			if err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					return nil
+				}
+				return err
+			}
+			defer f.Close()
+			if info, err = f.Stat(); err != nil {
+				return err
+			}
+		}
 		hdr, err := tar.FileInfoHeader(info, "")
 		if err != nil {
 			return err
@@ -82,14 +131,8 @@ func backupData(root, outPath string) error {
 		if err := tw.WriteHeader(hdr); err != nil {
 			return err
 		}
-		if info.Mode().IsRegular() {
-			f, err := os.Open(p)
-			if err != nil {
-				return err
-			}
-			_, err = io.Copy(tw, f)
-			f.Close()
-			if err != nil {
+		if f != nil {
+			if _, err := io.CopyN(tw, f, hdr.Size); err != nil {
 				return err
 			}
 		}
