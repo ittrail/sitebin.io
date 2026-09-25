@@ -942,3 +942,38 @@ func TestMCPDeleteSiteRevokesUploadTokens(t *testing.T) {
 		t.Fatalf("%d upload tokens outlived their site", n)
 	}
 }
+
+// A container site's volumes are root folders of its files, and a replace
+// clears every one of them: open_upload must not lead with that command.
+func TestMCPOpenUploadOnAContainerSiteOffersNoReplace(t *testing.T) {
+	e := newEnv(t, nil)
+	cs := mcpClient(t, e, nil)
+	editID, pw := mcpCreate(t, cs, "x")
+	site, err := e.st.ByEditID(editID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.Update(site, func(m *store.Meta) error { m.Mode = store.ModeContainer; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	res := mcpCall(t, cs, "open_upload", map[string]any{"edit_id": editID, "edit_password": pw})
+	if res.IsError {
+		t.Fatalf("open_upload: %s", mcpText(res))
+	}
+	var up mcp.UploadResult
+	raw, _ := json.Marshal(res.StructuredContent)
+	if err := json.Unmarshal(raw, &up); err != nil {
+		t.Fatal(err)
+	}
+	if len(up.Examples) == 0 {
+		t.Fatal("no examples")
+	}
+	for _, ex := range up.Examples {
+		if strings.Contains(ex, "replace=true") {
+			t.Errorf("a container site is offered a replace: %q", ex)
+		}
+	}
+	if !strings.Contains(up.Examples[0], "files=@") {
+		t.Errorf("the single-file example is not first: %q", up.Examples[0])
+	}
+}

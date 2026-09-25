@@ -456,10 +456,13 @@ func (o mcpOps) OpenUpload(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) (*
 		ExpiresAt:          expires,
 	}
 	h := "-H 'Authorization: Bearer " + secret + "'"
-	res.Examples = []string{
-		"curl " + h + " -F 'zip=@dist.zip' '" + res.UploadURL + "?replace=true'",
-		"curl " + h + " -F 'files=@video.mp4;filename=media/video.mp4' '" + res.UploadURL + "'",
+	// A container site's volumes are root folders of its files (db:/var/lib/mysql
+	// is files/db), and a replace clears every one of them, so its first
+	// suggestion is never the command that would wipe its database.
+	if site.Meta.Mode != store.ModeContainer {
+		res.Examples = append(res.Examples, "curl "+h+" -F 'zip=@dist.zip' '"+res.UploadURL+"?replace=true'")
 	}
+	res.Examples = append(res.Examples, "curl "+h+" -F 'files=@video.mp4;filename=media/video.mp4' '"+res.UploadURL+"'")
 	// With WebDAV off instance-wide the route is a 404, so it is not offered.
 	if o.a.cfg.WebDAVAllowed {
 		res.WebDAVURL = o.a.cfg.DAVURL(site.EditID)
