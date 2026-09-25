@@ -1,6 +1,7 @@
 package store
 
 import (
+	"archive/zip"
 	"bytes"
 	"errors"
 	"os"
@@ -482,4 +483,92 @@ func TestBeginReplaceAllowsOneReplacementPerSite(t *testing.T) {
 		t.Fatalf("BeginReplace after a refused Commit: %v", err)
 	}
 	fourth.Abort()
+}
+
+// A commit that fails after the live content was cleared — a rename of one
+// staged entry refusing — keeps the rest of the upload in the site folder
+// for recovery instead of deleting it, and says where it is.
+func TestReplaceCommitThatFailsMidwayKeepsTheRestOfTheUpload(t *testing.T) {
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	s.SaveFile(site, "old.txt", strings.NewReader("old"))
+	rep, err := s.BeginReplace(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rep.Abort()
+	rep.SaveFile("a.txt", strings.NewReader("a"))
+	rep.SaveFile("b.txt", strings.NewReader("b"))
+
+	calls := 0
+	commitRename = func(from, to string) error {
+		calls++
+		if calls == 3 { // 1: the staging dir into the site folder, 2: first entry, 3: second entry
+			return errors.New("injected rename failure")
+		}
+		return os.Rename(from, to)
+	}
+	defer func() { commitRename = os.Rename }()
+
+	err = rep.Commit()
+	if err == nil {
+		t.Fatal("a commit whose rename failed reported success")
+	}
+	kept, _ := filepath.Glob(filepath.Join(site.Dir(), replaceCommitPrefix+"*"))
+	if len(kept) != 1 {
+		t.Fatalf("the rest of the upload was not kept: %v", kept)
+	}
+	if !strings.Contains(err.Error(), kept[0]) {
+		t.Errorf("the error does not say where the rest of the upload is: %v", err)
+	}
+	left, _ := os.ReadDir(kept[0])
+	if len(left) != 1 {
+		t.Errorf("kept dir holds %d entries, want the 1 not yet moved", len(left))
+	}
+	// The site is not blocked: a new replacement can begin and finish.
+	again, err := s.BeginReplace(site)
+	if err != nil {
+		t.Fatalf("BeginReplace after a failed commit: %v", err)
+	}
+	again.SaveFile("index.html", strings.NewReader("recovered"))
+	if err := again.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if got := fileNames(t, s, site); got != "index.html" {
+		t.Errorf("after the recovery replace: %s", got)
+	}
+}
+
+// A zip that is not a zip, or whose data does not match its checksum, is the
+// uploader's mistake: ErrBadArchive, which the API answers with 400.
+func TestCorruptZipIsErrBadArchive(t *testing.T) {
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	junk := []byte("this is not a zip archive")
+	if err := s.ExtractZip(site, bytes.NewReader(junk), int64(len(junk))); !errors.Is(err, ErrBadArchive) {
+		t.Errorf("junk bytes: %v, want ErrBadArchive", err)
+	}
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.CreateHeader(&zip.FileHeader{Name: "a.txt", Method: zip.Store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Write([]byte("hello, stored data"))
+	zw.Close()
+	data := buf.Bytes()
+	i := bytes.Index(data, []byte("hello, stored data"))
+	if i < 0 {
+		t.Fatal("stored data not found in the archive")
+	}
+	data[i] = 'H' // the central directory still reads; the CRC no longer matches
+	if err := s.ExtractZip(site, bytes.NewReader(data), int64(len(data))); !errors.Is(err, ErrBadArchive) {
+		t.Errorf("checksum mismatch: %v, want ErrBadArchive", err)
+	}
+	rep, _ := s.BeginReplace(site)
+	defer rep.Abort()
+	if err := rep.ExtractZip(bytes.NewReader(data), int64(len(data))); !errors.Is(err, ErrBadArchive) {
+		t.Errorf("checksum mismatch in a replace: %v, want ErrBadArchive", err)
+	}
 }

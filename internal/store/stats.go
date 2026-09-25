@@ -47,7 +47,7 @@ func (s *Store) Stats(site *Site) Stats {
 // to MaxBlockedURIs; the count always moves, so volume stays visible after
 // the list is full; the source count keeps its maximum.
 func (s *Store) RecordCSPViolation(site *Site, n int, blocked []string, sources int) {
-	l := s.lockSite(site.ViewID)
+	l := s.lockStats(site.ViewID)
 	l.Lock()
 	defer l.Unlock()
 
@@ -70,7 +70,7 @@ func (s *Store) RecordCSPViolation(site *Site, n int, blocked []string, sources 
 	s.writeStats(site, st)
 }
 
-// writeStats persists stats atomically. Callers hold the site lock.
+// writeStats persists stats atomically. Callers hold the site's stats lock.
 func (s *Store) writeStats(site *Site, st Stats) {
 	b, err := json.Marshal(st)
 	if err != nil {
@@ -84,15 +84,13 @@ func (s *Store) writeStats(site *Site, st Stats) {
 
 // RecordView increments the site's view counter and updates last_seen.
 //
-// It only tries the site lock. The counter is lightweight, and the lock can be
-// held for minutes by a streaming upload (a WebDAV PUT, a live SaveFile) while
-// authz counts a view on every page navigation: a view during an upload goes
-// uncounted rather than making the visitor wait for the upload.
+// It takes the site's stats lock, not the site lock: the site lock can be held
+// for minutes by a streaming upload (a WebDAV PUT, a live SaveFile), and authz
+// counts a view on every page navigation. With a lock of its own the counter
+// neither makes a visitor wait for an upload nor drops the view.
 func (s *Store) RecordView(site *Site) {
-	l := s.lockSite(site.ViewID)
-	if !l.TryLock() {
-		return
-	}
+	l := s.lockStats(site.ViewID)
+	l.Lock()
 	defer l.Unlock()
 
 	var st Stats

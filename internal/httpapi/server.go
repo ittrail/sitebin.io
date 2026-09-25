@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net"
@@ -236,6 +237,12 @@ func storeError(w http.ResponseWriter, err error) {
 		writeError(w, 409, err.Error())
 	case errors.Is(err, store.ErrBadPath):
 		writeError(w, 400, "invalid file path")
+	case errors.Is(err, store.ErrBadArchive):
+		writeError(w, 400, err.Error())
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		// The request body ended in the middle of a file: the upload was cut
+		// off on the way, which is the client's to retry, not a server fault.
+		writeError(w, 400, "the upload was cut off before it was complete — send it again")
 	case errors.Is(err, store.ErrBadDomain):
 		writeError(w, 400, err.Error())
 	case errors.Is(err, store.ErrFormNotFound):

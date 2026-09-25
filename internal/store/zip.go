@@ -2,6 +2,8 @@ package store
 
 import (
 	"archive/zip"
+	"compress/flate"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -54,7 +56,7 @@ type zipEntry struct {
 func zipEntries(r io.ReaderAt, size int64, maxFiles int) ([]zipEntry, error) {
 	zr, err := zip.NewReader(r, size)
 	if err != nil {
-		return nil, fmt.Errorf("read zip: %w", err)
+		return nil, fmt.Errorf("%w: %v", ErrBadArchive, err)
 	}
 	entries := make([]zipEntry, 0, len(zr.File))
 	seen := make(map[string]bool, len(zr.File))
@@ -89,11 +91,14 @@ func extractEntries(root *os.Root, entries []zipEntry, used int64, count int, ma
 	for _, e := range entries {
 		rc, err := e.f.Open()
 		if err != nil {
-			return used, count, fmt.Errorf("zip entry %q: %w", e.f.Name, err)
+			return used, count, fmt.Errorf("%w: zip entry %q: %v", ErrBadArchive, e.f.Name, err)
 		}
 		written, existing, err := writeFileIn(root, e.rel, rc, used, count, maxBytes, maxFiles)
 		rc.Close()
 		if err != nil {
+			if damagedEntry(err) {
+				return used, count, fmt.Errorf("%w: zip entry %q: %v", ErrBadArchive, e.f.Name, err)
+			}
 			return used, count, fmt.Errorf("zip entry %q: %w", e.f.Name, err)
 		}
 		used += written - existing
@@ -102,4 +107,14 @@ func extractEntries(root *os.Root, entries []zipEntry, used int64, count int, ma
 		}
 	}
 	return used, count, nil
+}
+
+// damagedEntry reports whether reading an entry failed because its data is
+// damaged — a checksum mismatch, a corrupt deflate stream, an entry cut short —
+// rather than because of the site's caps or the disk.
+func damagedEntry(err error) bool {
+	var corrupt flate.CorruptInputError
+	return errors.Is(err, zip.ErrChecksum) || errors.Is(err, zip.ErrFormat) ||
+		errors.Is(err, zip.ErrAlgorithm) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.As(err, &corrupt)
 }
