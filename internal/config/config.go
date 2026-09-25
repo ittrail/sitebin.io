@@ -501,6 +501,12 @@ func (c Config) DAVURL(editID string) string {
 	return c.scheme() + "://" + c.BaseDomain + c.portSuffix() + "/dav/" + editID + "/"
 }
 
+// FilesURL returns the JSON API's file-upload URL for an edit id — the route
+// an upload token from open_upload may POST to.
+func (c Config) FilesURL(editID string) string {
+	return c.scheme() + "://" + c.BaseDomain + c.portSuffix() + "/api/sites/" + editID + "/files"
+}
+
 // FTPPort returns the numeric FTP control port parsed from FTPAddr.
 func (c Config) FTPPort() int {
 	_, port, err := net.SplitHostPort(c.FTPAddr)

@@ -83,9 +83,16 @@ func (s *Store) writeStats(site *Site, st Stats) {
 }
 
 // RecordView increments the site's view counter and updates last_seen.
+//
+// It only tries the site lock. The counter is lightweight, and the lock can be
+// held for minutes by a streaming upload (a WebDAV PUT, a live SaveFile) while
+// authz counts a view on every page navigation: a view during an upload goes
+// uncounted rather than making the visitor wait for the upload.
 func (s *Store) RecordView(site *Site) {
 	l := s.lockSite(site.ViewID)
-	l.Lock()
+	if !l.TryLock() {
+		return
+	}
 	defer l.Unlock()
 
 	var st Stats

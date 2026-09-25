@@ -508,3 +508,17 @@ func TestFormsConfigRefusals(t *testing.T) {
 		}
 	}
 }
+
+func TestFilesURLIsTheUploadRouteOnTheMainDomain(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"SITEBIN_BASE_DOMAIN": "app.sitebin.io",
+		"SITEBIN_VIEW_DOMAIN": "sitebin.app",
+		"SITEBIN_HTTP_ONLY":   "true",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.FilesURL("e1"); !strings.HasSuffix(got, "://app.sitebin.io/api/sites/e1/files") {
+		t.Errorf("FilesURL = %q", got)
+	}
+}

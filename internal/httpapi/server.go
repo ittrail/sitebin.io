@@ -20,6 +20,7 @@ import (
 	"github.com/ittrail/sitebin.io/internal/auth"
 	"github.com/ittrail/sitebin.io/internal/config"
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/ids"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
@@ -49,6 +50,7 @@ type API struct {
 	authLimiter    *auth.Limiter // per (ip, target)
 	targetLimiter  *auth.Limiter // per target, any source
 	davLockSystems *davLocks
+	uploads        *uploadTokens
 	csp            *cspAggregator
 	forms          *formsState // nil when the instance has no forms
 }
@@ -75,6 +77,7 @@ func New(cfg config.Config, st *store.Store, secret []byte, webFS fs.FS) (*API, 
 		authLimiter:    auth.NewLimiter(float64(cfg.RateAuthPer5Min)*12, cfg.RateAuthPer5Min), // per-5min → per-hour
 		targetLimiter:  auth.NewLimiter(float64(cfg.RateAuthPer5Min)*12*6, cfg.RateAuthPer5Min*6),
 		davLockSystems: newDavLocks(),
+		uploads:        newUploadTokens(time.Now),
 		forms:          newFormsState(cfg, secret),
 	}, nil
 }
@@ -95,7 +98,7 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("GET /api/sites/{editID}/content/{path...}", a.withEditAuth(a.getFileContent))
 	mux.HandleFunc("PUT /api/sites/{editID}", a.withEditAuth(a.updateSite))
 	mux.HandleFunc("DELETE /api/sites/{editID}", a.withEditAuth(a.deleteSite))
-	mux.HandleFunc("POST /api/sites/{editID}/files", a.withEditAuth(a.uploadFiles))
+	mux.HandleFunc("POST /api/sites/{editID}/files", a.withUploadAuth(a.uploadFiles))
 	mux.HandleFunc("DELETE /api/sites/{editID}/files/{path...}", a.withEditAuth(a.deleteFile))
 	mux.HandleFunc("POST /api/sites/{editID}/domains", a.withEditAuth(a.addDomain))
 	mux.HandleFunc("DELETE /api/sites/{editID}/domains/{domain}", a.withEditAuth(a.removeDomain))
@@ -214,6 +217,10 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
 }
 
+// msgReplaceBusy answers a replace of a site while another is still running,
+// on the API and over MCP alike.
+const msgReplaceBusy = "another replace of this site is still running — wait for it to finish, then try again"
+
 // storeError maps store sentinel errors onto HTTP responses.
 func storeError(w http.ResponseWriter, err error) {
 	switch {
@@ -239,6 +246,8 @@ func storeError(w http.ResponseWriter, err error) {
 		writeError(w, 409, err.Error())
 	case errors.Is(err, store.ErrFormStale):
 		writeError(w, 410, err.Error())
+	case errors.Is(err, store.ErrReplaceBusy):
+		writeError(w, 409, msgReplaceBusy)
 	default:
 		slog.Error("internal error", "err", err)
 		writeError(w, 500, "internal error")
@@ -266,6 +275,13 @@ func (a *API) tokenOwns(r *http.Request, site *store.Site) bool {
 
 func (a *API) withEditAuth(next func(http.ResponseWriter, *http.Request, *store.Site)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// An upload token opens exactly one route, which withUploadAuth
+		// guards. Everywhere else it is refused before any password work, so
+		// it neither burns the rate limit nor reads as a wrong password.
+		if uploadCredential(r) != "" {
+			writeError(w, 403, msgUploadTokenOnlyUploads)
+			return
+		}
 		editID := r.PathValue("editID")
 		site, err := a.st.ByEditID(editID)
 		if err != nil {
@@ -324,6 +340,12 @@ func (a *API) verifyEdit(r *http.Request, site *store.Site, pw string) verifyRes
 // verifyEditIP is verifyEdit keyed by a client IP string (used by non-HTTP
 // callers such as the FTP server).
 func (a *API) verifyEditIP(clientIP string, site *store.Site, pw string) verifyResult {
+	// An upload token is never an edit password; refusing it here keeps it
+	// from spending the password rate limits on any surface — API, WebDAV,
+	// FTP, MCP.
+	if strings.HasPrefix(pw, ids.UploadTokenPrefix) {
+		return verifyFailed
+	}
 	sum := sha256.Sum256([]byte(pw))
 	cacheKey := site.EditID + ":" + hex.EncodeToString(sum[:])
 	if a.verifyCache.Check(cacheKey) {

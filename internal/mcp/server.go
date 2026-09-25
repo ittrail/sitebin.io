@@ -19,6 +19,11 @@ Call create_site with your files to publish a site; the result carries the
 public view_url, an edit_id, and — once, and never again — an edit_password.
 Every other tool addresses a site by its edit_id.
 
+Files travel as tool arguments, which suits pages, styles and scripts. For
+anything larger than a few hundred KB — images, video, a whole build — call
+open_upload and send the files with your own HTTP client, if you can make HTTP
+requests (curl, or code execution with network access).
+
 Authentication: if the connection carries an account API token, sites you
 create belong to that account, list_sites shows them, and you do not need an
 edit_password for any of them. Without a token you must pass the edit_password
@@ -57,7 +62,7 @@ func NewHandler(ops Ops, info Info) http.Handler {
 
 		// The transport limit must sit ABOVE the content limit, or the content
 		// limit is unreachable and callers get a bare 413 instead of the
-		// message that tells them to use WebDAV, FTP or a zip upload. A
+		// message that tells them to call open_upload. A
 		// request carrying MaxContentBytes of files is larger than that on the
 		// wire — base64 inflates by a third, and JSON string escaping can add
 		// more — so the transport is given twice the room and acts only as a
@@ -190,8 +195,9 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 
 	sdk.AddTool(s, &sdk.Tool{
 		Name: "write_files",
-		Description: "Add or overwrite files in a site. With replace set, every existing " +
-			"file is removed first, so the site ends up containing exactly the files you pass.",
+		Description: "Add or overwrite files in a site. With replace set, the site ends up containing " +
+			"exactly the files you pass; the old files are removed only once every new one is written. " +
+			"For files larger than a few hundred KB, use open_upload instead.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in writeArgs) (*sdk.CallToolResult, *SiteResult, error) {
 		if err := authorize(auth, ScopeWrite); err != nil {
 			return nil, nil, err
@@ -274,6 +280,23 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 				Blob:     zip,
 			},
 		}}}, nil, nil
+	})
+
+	sdk.AddTool(s, &sdk.Tool{
+		Name: "open_upload",
+		Description: "Get a short-lived token and URLs to upload files with your own HTTP client, for files " +
+			"too large to pass to write_files (anything beyond a few hundred KB). Only useful if you can run " +
+			"curl or make HTTP requests; otherwise use write_files. The token expires 5 minutes after its " +
+			"last use, and after an hour at the latest; call open_upload again for a new one.",
+	}, func(ctx context.Context, _ *sdk.CallToolRequest, in siteArgs) (*sdk.CallToolResult, *UploadResult, error) {
+		if err := authorize(auth, ScopeWrite); err != nil {
+			return nil, nil, err
+		}
+		r, err := ops.OpenUpload(ctx, auth, in.ref())
+		if err != nil {
+			return nil, nil, err
+		}
+		return nil, r, nil
 	})
 
 	sdk.AddTool(s, &sdk.Tool{

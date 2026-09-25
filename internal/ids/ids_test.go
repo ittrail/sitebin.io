@@ -68,3 +68,23 @@ func TestValidID(t *testing.T) {
 		}
 	}
 }
+
+func TestNewUploadToken(t *testing.T) {
+	a, b := NewUploadToken(), NewUploadToken()
+	if !strings.HasPrefix(a, UploadTokenPrefix) || len(a) != len(UploadTokenPrefix)+40 {
+		t.Fatalf("bad upload token %q", a)
+	}
+	if a == b {
+		t.Fatal("two upload tokens collided")
+	}
+	if UploadTokenPrefix == APITokenPrefix {
+		t.Fatal("upload and API tokens must be told apart by prefix")
+	}
+	// Every credential check recognises an upload token by its prefix, so no
+	// edit password may ever carry it.
+	for i := 0; i < 500; i++ {
+		if strings.HasPrefix(NewEditPassword(), UploadTokenPrefix) {
+			t.Fatal("an edit password carries the upload-token prefix")
+		}
+	}
+}

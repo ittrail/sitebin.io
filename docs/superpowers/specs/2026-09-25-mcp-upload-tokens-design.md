@@ -1,7 +1,7 @@
 # Upload tokens: large files outside the MCP call
 
 **Date:** 2026-09-25
-**Status:** draft — awaiting review
+**Status:** implemented
 
 ## Problem
 
@@ -319,3 +319,67 @@ Replacing with nothing still empties the site, as before.
   `open_upload`, covers it.
 - Making the durations configurable.
 - Revoking upload tokens when the account token that issued them is revoked.
+
+## Corrections (post-implementation)
+
+Review made these rulings while the branch was being finished. The sections
+above are left as they were; where they disagree with this block, this block
+is what the code does.
+
+- **An `sbu_` credential is refused on every password path, not only the API
+  routes.** `verifyEditIP` returns failure for it before the verify cache, the
+  limiters and Argon2, so MCP `edit_password` and FTP never hash it or spend a
+  rate-limit slot on it either — not just the JSON API and WebDAV routes the
+  body above describes. MCP `openSite` answers an `sbu_` edit_password with a
+  message saying what the token is for, rather than the generic wrong-password
+  refusal.
+- **Container bind mounts point INTO the content directory
+  (`files/<folder>`), not at it.** The staged replace still never renames the
+  content directory itself — that part was right — but the folders a running
+  container has bind-mounted live one level inside it. As before with
+  `ClearFiles`, a replace swaps those folders out from under the mount, so a
+  running container keeps serving the old ones until its compose file or
+  restart sequence picks up the change.
+- **The `X-Edit-Password` header also carries a token.** Besides
+  `Authorization: Bearer` and the Basic-auth password, `uploadCredential`
+  recognises an `sbu_` value in `X-Edit-Password` — the header the JSON API's
+  own examples use — and answers it as an upload token, never as a password.
+- **Staging moved out of the site folder** (final review). A replace stages in
+  `<data>/tmp/replace-<viewID>-<random>` (the zip spool's `tmp/`, on the same
+  volume as `sites/`), so nothing is written inside the site folder while the
+  upload streams and a `Store.Delete` can no longer race a staging writer:
+  before, a delete mid-upload half-deleted the site and `Commit` wrote into
+  the orphan, or `Commit` recreated `sites/<id>/files` as an empty orphan.
+  `Commit`, all under the site lock: (a) refuses a replacement that recorded
+  a failed `SaveFile`/`ExtractZip`; (b) answers `ErrNotFound` when the site's
+  `meta.json` is gone, touching nothing; (c) closes the staging root and
+  renames the whole staging directory to `<site>/.replace-commit-<random>` —
+  if that fails the site is untouched; (d) reads it; (e) only then ensures the
+  content directory exists (`os.Mkdir`, never `MkdirAll`), empties it and
+  renames each entry in; (f) removes the moved directory and renews the
+  expiry. It takes the site's mode from `meta.json` at commit time, so a mode
+  switch during the upload lands the files where the site now keeps them.
+  `BeginReplace` sweeps `<data>/tmp/replace-*` (any site) and
+  `<site>/.replace-*` (only an interrupted commit leaves one) older than an
+  hour.
+- **One replace per site at a time.** Each in-flight replace can stage a full
+  site cap on the data volume, so the store keeps the view ids with a
+  replacement in flight; a second `BeginReplace` is `ErrReplaceBusy` until
+  the first is committed or aborted. The API answers `409` and MCP the same
+  sentence: "another replace of this site is still running — wait for it to
+  finish, then try again".
+- **Container sites get no replace example.** A container site's volumes are
+  root folders of its files (`db:/var/lib/mysql` is `files/db`), and a replace
+  clears everything but the two markers. `open_upload` leaves the
+  `?replace=true` example out for a container-mode site (the single-file
+  example is then first), and `upload_url`'s description says a replace
+  deletes every file and folder of the site first, including a container
+  site's data folders.
+- **`RecordView` skips when the site lock is busy.** A streaming WebDAV PUT or
+  live `SaveFile` holds the site lock for the whole upload, and authz counts a
+  view on every HTML navigation, so a long upload stalled page loads. The view
+  counter now only tries the lock: a view during an upload goes uncounted.
+  `RecordCSPViolation` is unchanged.
+- **One request must finish within 10 minutes.** The public server's read
+  timeout is 10 minutes; `upload_url` and `webdav_url` say so ("split very
+  large uploads"), and so does the README.

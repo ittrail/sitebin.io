@@ -232,6 +232,9 @@ curl -X POST -H "X-Edit-Password: $PW" -F "files=@new.html;filename=new.html" \
      "https://sitebin.example.com/api/sites/$EDIT_ID/files"              # add
 curl -X POST -H "X-Edit-Password: $PW" -F "zip=@all.zip" \
      "https://sitebin.example.com/api/sites/$EDIT_ID/files?replace=true" # replace all
+# a replace is staged: the old files go only once the new ones are complete and
+# within the site's caps -- a failed or cut-off replace leaves the site as it was;
+# a second replace of the same site while one is still running gets 409
 curl -X DELETE -H "X-Edit-Password: $PW" \
      https://sitebin.example.com/api/sites/$EDIT_ID/files/js/app.js
 
@@ -330,6 +333,7 @@ require stdio) can bridge with `npx mcp-remote https://…/mcp --header …`.
 | `delete_file` / `delete_site` | Remove a file, or the whole site |
 | `add_domain` / `remove_domain` | Custom domains *(Enterprise)* |
 | `download_site` | The site as a zip, attached as a resource |
+| `open_upload` | A short-lived token and URLs to upload large files with your own HTTP client (WebDAV or the zip/files upload), with ready-to-run `curl` commands |
 | `list_forms` / `add_form` / `update_form` / `remove_form` / `resend_form_confirmation` | Email forms; a new form works once its recipient confirms |
 
 **Authentication** mirrors the API exactly:
@@ -345,10 +349,31 @@ require stdio) can bridge with `npx mcp-remote https://…/mcp --header …`.
   a gated instance.
 
 Files travel as JSON: `{"path": "index.html", "text": "…"}`, or `"base64"` for
-binary. One call carries at most 8 MiB of content — for more than that, use
-WebDAV, FTP or the API's zip upload. Sites created through MCP are recorded in
-`meta.json` as `"origin": "mcp"`; that is provenance for the admin console and
-changes nothing about how the site is served.
+binary. One call carries at most 8 MiB, but a model writes every byte of a tool
+argument out as output tokens, so anything beyond a few hundred KB is
+impractical long before that. For those, **`open_upload`** returns an upload
+token for one site and the URLs to use it on:
+
+- `POST <upload_url>` — the JSON API's file upload: a `zip` part is extracted,
+  each `files` part is stored at the path in its filename, `?replace=true`
+  makes the upload the whole site;
+- `<webdav_url>` — the site's WebDAV tree, whatever the site's own WebDAV
+  toggle says (omitted when `SITEBIN_WEBDAV_ENABLED=false`).
+
+Send the token as `Authorization: Bearer sbu_…` or as the Basic-auth password.
+It opens nothing else: every other API route answers `403`, and it is never
+accepted as a password — not by FTP and not as an MCP `edit_password`. It
+expires five minutes after its last request ends, and an hour after it was
+issued at the latest. One request must finish within 10 minutes (the server's
+read timeout), so split very large uploads across several requests. While one
+replace of a site is running, another is refused with `409`. Rotating the edit
+password or deleting the site revokes the token; so does a restart, since
+tokens are held in memory only. At most five per site are live at once. Design:
+[`docs/superpowers/specs/2026-09-25-mcp-upload-tokens-design.md`](docs/superpowers/specs/2026-09-25-mcp-upload-tokens-design.md).
+
+Sites created through MCP are recorded in `meta.json` as `"origin": "mcp"`;
+that is provenance for the admin console and changes nothing about how the
+site is served.
 
 #### OAuth 2.1 *(optional)*
 
@@ -371,7 +396,7 @@ without the ability to publish:
 | Scope | Tools |
 |---|---|
 | `sitebin:sites:read` | `list_sites`, `get_site`, `list_files`, `read_file`, `download_site`, `list_forms` |
-| `sitebin:sites:write` | `create_site`, `update_site`, `write_files`, `delete_file`, `delete_site`, `add_domain`, `remove_domain`, `add_form`, `update_form`, `remove_form`, `resend_form_confirmation` |
+| `sitebin:sites:write` | `create_site`, `update_site`, `write_files`, `delete_file`, `delete_site`, `add_domain`, `remove_domain`, `add_form`, `update_form`, `remove_form`, `resend_form_confirmation`, `open_upload` |
 
 Account API tokens keep working unchanged with OAuth enabled — they carry no
 scopes and grant everything their account can do, exactly as before.

@@ -185,17 +185,25 @@ func (s *Store) saveFileLocked(site *Site, rel string, r io.Reader) error {
 	return s.renewExpiryLocked(site)
 }
 
-// writeFileLocked writes one file against a budget the CALLER has measured:
-// used and count are the site's current totals, maxBytes and maxFiles its
-// caps. It returns the bytes written and the size of the file it replaced
-// (0 for a new one), so a caller writing many files can keep the totals
-// current without walking the site again. The caller holds the site lock.
+// writeFileLocked writes one file into the site's content root against a
+// budget the CALLER has measured; see writeFileIn. The caller holds the site
+// lock.
 func (s *Store) writeFileLocked(site *Site, rel string, r io.Reader, used int64, count int, maxBytes int64, maxFiles int) (written, existing int64, err error) {
 	root, err := openContent(site)
 	if err != nil {
 		return 0, 0, err
 	}
 	defer root.Close()
+	return writeFileIn(root, rel, r, used, count, maxBytes, maxFiles)
+}
+
+// writeFileIn writes one file into root against a budget the CALLER has
+// measured: used and count are the totals already in root, maxBytes and
+// maxFiles the site's caps. It returns the bytes written and the size of the
+// file it replaced (0 for a new one), so a caller writing many files can keep
+// the totals current without walking the tree again. root is the live content
+// root or a replacement's staging root; the rules are the same for both.
+func writeFileIn(root *os.Root, rel string, r io.Reader, used int64, count int, maxBytes int64, maxFiles int) (written, existing int64, err error) {
 	dst := filepath.FromSlash(rel)
 	if fi, err := root.Lstat(dst); err == nil {
 		if fi.IsDir() {
@@ -278,13 +286,19 @@ func (s *Store) DeleteFile(site *Site, relPath string) error {
 	return s.renewExpiryLocked(site)
 }
 
-// ClearFiles wipes the site's content root (used for replace-all uploads).
+// ClearFiles wipes the site's content root.
 func (s *Store) ClearFiles(site *Site) error {
 	l := s.lockSite(site.ViewID)
 	l.Lock()
 	defer l.Unlock()
+	if err := clearContentDir(site.ContentDir()); err != nil {
+		return err
+	}
+	return s.renewExpiryLocked(site)
+}
 
-	dir := site.ContentDir()
+// clearContentDir empties a content root. The caller holds the site lock.
+func clearContentDir(dir string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -305,7 +319,7 @@ func (s *Store) ClearFiles(site *Site) error {
 			return err
 		}
 	}
-	return s.renewExpiryLocked(site)
+	return nil
 }
 
 // MaxEditableBytes caps files that can be read for in-browser editing.

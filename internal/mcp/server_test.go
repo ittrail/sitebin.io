@@ -150,6 +150,11 @@ func (f *fakeOps) ResendFormConfirmation(_ context.Context, a Auth, ref SiteRef,
 	return f.forms(), f.err
 }
 
+func (f *fakeOps) OpenUpload(_ context.Context, a Auth, ref SiteRef) (*UploadResult, error) {
+	f.note("open_upload", a, ref)
+	return &UploadResult{EditID: ref.EditID, Token: "sbu_test", UploadURL: "https://x.example/api/sites/e1/files", Examples: []string{}}, f.err
+}
+
 // connect starts the MCP handler over HTTP and returns a connected client
 // session, exercising the real transport rather than calling handlers directly.
 func connect(t *testing.T, ops Ops, header http.Header) *sdk.ClientSession {
@@ -216,6 +221,7 @@ func TestToolCatalog(t *testing.T) {
 		"list_files": true, "read_file": true, "write_files": true, "delete_file": true,
 		"delete_site": true, "add_domain": true, "remove_domain": true, "download_site": true,
 		"list_forms": true, "add_form": true, "update_form": true, "remove_form": true, "resend_form_confirmation": true,
+		"open_upload": true,
 	}
 	got := map[string]bool{}
 	for _, tool := range res.Tools {
@@ -246,7 +252,7 @@ func TestInitializeReportsInstructions(t *testing.T) {
 		t.Errorf("ServerInfo.Name = %q", res.ServerInfo.Name)
 	}
 	// The instructions are an agent's only briefing before its first call.
-	for _, want := range []string{"edit_id", "edit_password", "account API token"} {
+	for _, want := range []string{"edit_id", "edit_password", "account API token", "open_upload"} {
 		if !strings.Contains(res.Instructions, want) {
 			t.Errorf("instructions do not mention %q", want)
 		}
@@ -325,7 +331,7 @@ func TestOversizedCallGetsTheHelpfulError(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected a refusal")
 	}
-	if !strings.Contains(resultText(res), "WebDAV") {
+	if !strings.Contains(resultText(res), "open_upload") {
 		t.Errorf("the caller was not told what to do instead: %s", resultText(res))
 	}
 	if len(ops.calls) != 0 {
@@ -520,6 +526,27 @@ func TestRefusedToolNeverReachesOps(t *testing.T) {
 	}
 }
 
+// open_upload hands out a credential with write power — including WebDAV
+// DELETE — so a read-only session must not be able to mint one. This is
+// deliberately a separate, focused test rather than relying on
+// TestEveryToolIsScoped: that test only checks that EXACTLY ONE scope
+// refuses a tool, so it would keep passing even if open_upload were wired to
+// ScopeRead instead of ScopeWrite — it would just count as "the read scope
+// covers it" instead of catching the privilege escalation.
+func TestOpenUploadNeedsWriteScope(t *testing.T) {
+	ops := &fakeOps{auth: Auth{AccountID: "a1", AccountsEnabled: true, Scopes: []string{ScopeRead}}}
+	cs := connect(t, ops, http.Header{"Authorization": {"Bearer x"}})
+	res := call(t, cs, "open_upload", map[string]any{"edit_id": "e1"})
+	if !res.IsError || !strings.Contains(resultText(res), "was not granted") {
+		t.Fatalf("a read-only session opened an upload: %s", resultText(res))
+	}
+	for _, c := range ops.calls {
+		if c == "open_upload" {
+			t.Fatal("Ops was reached despite the missing scope")
+		}
+	}
+}
+
 // Every tool must be covered by exactly one of the two scopes. A tool added
 // without a scope would be callable by any token, which is the failure this
 // pins down.
@@ -554,6 +581,7 @@ func TestEveryToolIsScoped(t *testing.T) {
 		"update_form":              {"edit_id": "e1", "key": "k1", "form": map[string]any{}},
 		"remove_form":              {"edit_id": "e1", "key": "k1"},
 		"resend_form_confirmation": {"edit_id": "e1", "key": "k1"},
+		"open_upload":              {"edit_id": "e1"},
 	}
 	for _, tool := range tools.Tools {
 		args, ok := argsFor[tool.Name]
@@ -584,5 +612,20 @@ func TestFormToolsPassTheirArguments(t *testing.T) {
 	call(t, cs, "update_form", map[string]any{"edit_id": "e1", "key": "k9", "form": map[string]any{"recipient": "b@example.com"}})
 	if ops.gotKey != "k9" || ops.gotForm.Recipient == nil || *ops.gotForm.Recipient != "b@example.com" || ops.gotForm.Name != nil {
 		t.Fatalf("update_form passed key %q form %+v", ops.gotKey, ops.gotForm)
+	}
+}
+
+func TestOpenUploadReachesOps(t *testing.T) {
+	ops := &fakeOps{}
+	cs := connect(t, ops, nil)
+	res := call(t, cs, "open_upload", map[string]any{"edit_id": "e1", "edit_password": "pw"})
+	if res.IsError {
+		t.Fatalf("open_upload: %s", resultText(res))
+	}
+	if ops.gotRef.EditID != "e1" || ops.gotRef.EditPassword != "pw" {
+		t.Errorf("ref = %+v", ops.gotRef)
+	}
+	if !strings.Contains(resultText(res), "sbu_test") {
+		t.Errorf("result does not carry the token: %s", resultText(res))
 	}
 }

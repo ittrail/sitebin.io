@@ -36,6 +36,16 @@ func NewAPIToken() string { return APITokenPrefix + randomString(base62, 40) }
 // APITokenPrefix marks a string as a Sitebin account API token.
 const APITokenPrefix = "sbp_"
 
+// NewUploadToken returns a short-lived upload token: the prefix "sbu_" and a
+// 40-char base62 secret (~238 bits), the strength of an account API token.
+// The prefix is how every credential check recognises one before doing
+// anything else, and how a secret scanner recognises a leaked one.
+func NewUploadToken() string { return UploadTokenPrefix + randomString(base62, 40) }
+
+// UploadTokenPrefix marks a string as a Sitebin upload token. No edit password
+// can start with it: those are base62, which has no underscore.
+const UploadTokenPrefix = "sbu_"
+
 // NewEditPassword returns a 22-char base62 secret (~131 bits).
 func NewEditPassword() string { return randomString(base62, 22) }
 

@@ -240,6 +240,20 @@ type FormsResult struct {
 	Warnings []string     `json:"warnings,omitempty"`
 }
 
+// UploadResult is what open_upload returns: a short-lived credential for one
+// site and where to use it. The examples are the useful part — an agent runs
+// a working command more reliably than it assembles one from a schema.
+type UploadResult struct {
+	EditID             string    `json:"edit_id"`
+	ViewURL            string    `json:"view_url" jsonschema:"the public URL of the site"`
+	Token              string    `json:"token" jsonschema:"send as Authorization: Bearer <token>, or as the password of HTTP Basic auth; never put it in a URL"`
+	UploadURL          string    `json:"upload_url" jsonschema:"POST multipart/form-data here: a zip part is extracted, each files part is stored at the path in its filename; add ?replace=true to make the upload the whole site; a replace deletes every file and folder of the site first, including a container site's data folders; one request must finish within 10 minutes — split very large uploads"`
+	WebDAVURL          string    `json:"webdav_url,omitempty" jsonschema:"the site's WebDAV tree: PUT a file to its path (MKCOL a folder first), PROPFIND to list, DELETE to remove; absent when WebDAV is off on this instance; one request must finish within 10 minutes — split very large uploads"`
+	IdleTimeoutSeconds int       `json:"idle_timeout_seconds" jsonschema:"the token expires this many seconds after its last request ends"`
+	ExpiresAt          time.Time `json:"expires_at" jsonschema:"the token expires at this time however it is used"`
+	Examples           []string  `json:"examples" jsonschema:"ready-to-run curl commands"`
+}
+
 // Ops is everything internal/mcp needs from the rest of Sitebin. It is
 // implemented by internal/httpapi, which reuses the JSON API's own helpers so
 // no rule is stated twice.
@@ -268,6 +282,9 @@ type Ops interface {
 	AddDomain(ctx context.Context, a Auth, ref SiteRef, domain string) (*SiteResult, error)
 	RemoveDomain(ctx context.Context, a Auth, ref SiteRef, domain string) (*SiteResult, error)
 	DownloadSite(ctx context.Context, a Auth, ref SiteRef) (zip []byte, err error)
+	// OpenUpload issues a short-lived upload token for one site, authorized
+	// exactly like WriteFiles.
+	OpenUpload(ctx context.Context, a Auth, ref SiteRef) (*UploadResult, error)
 
 	ListForms(ctx context.Context, a Auth, ref SiteRef) (*FormsResult, error)
 	AddForm(ctx context.Context, a Auth, ref SiteRef, in FormInput) (*FormsResult, error)
@@ -320,7 +337,7 @@ func DecodeFiles(files []File) ([]DecodedFile, error) {
 		}
 		total += len(data)
 		if total > MaxContentBytes {
-			return nil, fmt.Errorf("%w: this call carries more than %d MiB of file content. Split it across several write_files calls, or use WebDAV, FTP or the JSON API's zip upload for a site this size", ErrTooLarge, MaxContentBytes>>20)
+			return nil, fmt.Errorf("%w: this call carries more than %d MiB of file content. Split it across several write_files calls, or call open_upload and send the files with your own HTTP client — a zip for a whole site", ErrTooLarge, MaxContentBytes>>20)
 		}
 		out = append(out, DecodedFile{Path: f.Path, Data: data})
 	}

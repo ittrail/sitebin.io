@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/ids"
 	"github.com/ittrail/sitebin.io/internal/mcp"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
@@ -76,6 +78,8 @@ func (o mcpOps) mcpError(err error) error {
 		return errors.New("no form with that key on this site — list_forms shows the keys")
 	case errors.Is(err, store.ErrFormActive):
 		return errors.New("this form's recipient has already confirmed; there is nothing to resend")
+	case errors.Is(err, store.ErrReplaceBusy):
+		return errors.New(msgReplaceBusy)
 	default:
 		o.a.log.Error("mcp internal error", "err", err)
 		return errors.New("internal error")
@@ -112,6 +116,9 @@ func (o mcpOps) openSite(auth mcp.Auth, ref mcp.SiteRef) (*store.Site, error) {
 			return nil, errors.New("this site is not owned by the connected account: pass its edit_password, or use list_sites to see the sites this token can manage")
 		}
 		return nil, errors.New("edit_password is required for this site — it was returned once by create_site")
+	}
+	if strings.HasPrefix(ref.EditPassword, ids.UploadTokenPrefix) {
+		return nil, errors.New("that is an upload token from open_upload: it works only with your own HTTP client on its upload_url or webdav_url — pass the site's edit_password here, or connect with an account API token")
 	}
 	switch o.a.verifyEditIP(auth.ClientIP, site, ref.EditPassword) {
 	case verifyOK:
@@ -325,13 +332,26 @@ func (o mcpOps) WriteFiles(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, fi
 		return nil, err
 	}
 	if replace {
-		if err := o.a.st.ClearFiles(site); err != nil {
+		// Staged, like the API's replace: the old files go only once every
+		// new one is written and within the site's caps.
+		rep, err := o.a.st.BeginReplace(site)
+		if err != nil {
 			return nil, o.mcpError(err)
 		}
-	}
-	for _, f := range files {
-		if err := o.a.st.SaveFile(site, f.Path, bytes.NewReader(f.Data)); err != nil {
+		defer rep.Abort()
+		for _, f := range files {
+			if err := rep.SaveFile(f.Path, bytes.NewReader(f.Data)); err != nil {
+				return nil, o.mcpError(err)
+			}
+		}
+		if err := rep.Commit(); err != nil {
 			return nil, o.mcpError(err)
+		}
+	} else {
+		for _, f := range files {
+			if err := o.a.st.SaveFile(site, f.Path, bytes.NewReader(f.Data)); err != nil {
+				return nil, o.mcpError(err)
+			}
 		}
 	}
 	if err := o.a.syncViewerLayout(site); err != nil {
@@ -363,6 +383,7 @@ func (o mcpOps) DeleteSite(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) er
 		return o.mcpError(err)
 	}
 	o.a.verifyCache.Drop(site.EditID + ":")
+	o.a.uploads.revokeSite(site.ViewID)
 	o.a.log.Info("site deleted", "id", site.ViewID, "via", "mcp")
 	return nil
 }
@@ -410,6 +431,44 @@ func (o mcpOps) DownloadSite(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) 
 		return nil, o.mcpError(err)
 	}
 	return buf.Bytes(), nil
+}
+
+// OpenUpload issues an upload token for a site the caller may write to. The
+// authority check is openSite — the one write_files uses — so whoever may
+// write files through MCP may open an upload, and nobody else.
+func (o mcpOps) OpenUpload(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) (*mcp.UploadResult, error) {
+	site, err := o.openSite(auth, ref)
+	if err != nil {
+		return nil, err
+	}
+	secret, expires, err := o.a.uploads.issue(site.ViewID, site.EditID)
+	if err != nil {
+		return nil, err // errTooManyUploads says what to do
+	}
+	o.a.log.Info("upload token issued", "id", site.ViewID, "token", secret[:10])
+
+	res := &mcp.UploadResult{
+		EditID:             site.EditID,
+		ViewURL:            o.a.cfg.ViewURL(site.Meta.ID),
+		Token:              secret,
+		UploadURL:          o.a.cfg.FilesURL(site.EditID),
+		IdleTimeoutSeconds: int(uploadTokenIdle / time.Second),
+		ExpiresAt:          expires,
+	}
+	h := "-H 'Authorization: Bearer " + secret + "'"
+	// A container site's volumes are root folders of its files (db:/var/lib/mysql
+	// is files/db), and a replace clears every one of them, so its first
+	// suggestion is never the command that would wipe its database.
+	if site.Meta.Mode != store.ModeContainer {
+		res.Examples = append(res.Examples, "curl "+h+" -F 'zip=@dist.zip' '"+res.UploadURL+"?replace=true'")
+	}
+	res.Examples = append(res.Examples, "curl "+h+" -F 'files=@video.mp4;filename=media/video.mp4' '"+res.UploadURL+"'")
+	// With WebDAV off instance-wide the route is a 404, so it is not offered.
+	if o.a.cfg.WebDAVAllowed {
+		res.WebDAVURL = o.a.cfg.DAVURL(site.EditID)
+		res.Examples = append(res.Examples, "curl "+h+" -T big.bin '"+res.WebDAVURL+"big.bin'")
+	}
+	return res, nil
 }
 
 // ---- forms: the same helpers as the JSON API ----
