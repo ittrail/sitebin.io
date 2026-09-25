@@ -117,6 +117,53 @@ type Credential struct {
 	// scopes, which is what that credential has always meant. Only an OAuth
 	// access token narrows it.
 	Scopes []string
+	// OAuth marks an access token from the configured authorization server,
+	// as opposed to an account API token. Its audience is the MCP resource and
+	// nothing else, so it is honoured only on requests carrying the MCP
+	// marker (WithMCPCaller): the JSON API's owner check never accepts one,
+	// and neither does the extension's account resolution for site creation.
+	// Before this flag existed a read-only token could create, overwrite and
+	// delete sites through /api/*.
+	OAuth bool
+}
+
+// ctxKey is unexported, so no other package can build a key that collides
+// with these: a value under them can only have been put there through the
+// functions below, which is what makes them unforgeable by anything a client
+// sends.
+type ctxKey int
+
+const (
+	mcpCallerKey ctxKey = iota
+	credentialKey
+)
+
+// WithMCPCaller marks a request context as having arrived through the MCP
+// endpoint. The core's /mcp handler sets it on every request, OAuth or not;
+// nothing else may.
+func WithMCPCaller(ctx context.Context) context.Context {
+	return context.WithValue(ctx, mcpCallerKey, true)
+}
+
+// IsMCPCaller reports whether the request came through the MCP endpoint —
+// the only place an OAuth access token may act.
+func IsMCPCaller(ctx context.Context) bool {
+	v, _ := ctx.Value(mcpCallerKey).(bool)
+	return v
+}
+
+// WithCredential records the credential the MCP endpoint already verified
+// for this request, so the tools do not verify the same bearer a second time.
+func WithCredential(ctx context.Context, c Credential) context.Context {
+	return context.WithValue(ctx, credentialKey, c)
+}
+
+// CredentialFrom returns the credential WithCredential recorded. ok=false
+// means none was — the request carried no bearer, or the endpoint did not
+// resolve it (OAuth off), and the caller should resolve it as it always has.
+func CredentialFrom(ctx context.Context) (Credential, bool) {
+	c, ok := ctx.Value(credentialKey).(Credential)
+	return c, ok
 }
 
 // CreateGrant is the result of a successful AuthorizeCreate: who owns the new
