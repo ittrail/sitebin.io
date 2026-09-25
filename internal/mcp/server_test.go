@@ -526,6 +526,27 @@ func TestRefusedToolNeverReachesOps(t *testing.T) {
 	}
 }
 
+// open_upload hands out a credential with write power — including WebDAV
+// DELETE — so a read-only session must not be able to mint one. This is
+// deliberately a separate, focused test rather than relying on
+// TestEveryToolIsScoped: that test only checks that EXACTLY ONE scope
+// refuses a tool, so it would keep passing even if open_upload were wired to
+// ScopeRead instead of ScopeWrite — it would just count as "the read scope
+// covers it" instead of catching the privilege escalation.
+func TestOpenUploadNeedsWriteScope(t *testing.T) {
+	ops := &fakeOps{auth: Auth{AccountID: "a1", AccountsEnabled: true, Scopes: []string{ScopeRead}}}
+	cs := connect(t, ops, http.Header{"Authorization": {"Bearer x"}})
+	res := call(t, cs, "open_upload", map[string]any{"edit_id": "e1"})
+	if !res.IsError || !strings.Contains(resultText(res), "was not granted") {
+		t.Fatalf("a read-only session opened an upload: %s", resultText(res))
+	}
+	for _, c := range ops.calls {
+		if c == "open_upload" {
+			t.Fatal("Ops was reached despite the missing scope")
+		}
+	}
+}
+
 // Every tool must be covered by exactly one of the two scopes. A tool added
 // without a scope would be callable by any token, which is the failure this
 // pins down.
