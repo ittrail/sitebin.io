@@ -233,7 +233,8 @@ curl -X POST -H "X-Edit-Password: $PW" -F "files=@new.html;filename=new.html" \
 curl -X POST -H "X-Edit-Password: $PW" -F "zip=@all.zip" \
      "https://sitebin.example.com/api/sites/$EDIT_ID/files?replace=true" # replace all
 # a replace is staged: the old files go only once the new ones are complete and
-# within the site's caps -- a failed or cut-off replace leaves the site as it was
+# within the site's caps -- a failed or cut-off replace leaves the site as it was;
+# a second replace of the same site while one is still running gets 409
 curl -X DELETE -H "X-Edit-Password: $PW" \
      https://sitebin.example.com/api/sites/$EDIT_ID/files/js/app.js
 
@@ -360,11 +361,14 @@ token for one site and the URLs to use it on:
   toggle says (omitted when `SITEBIN_WEBDAV_ENABLED=false`).
 
 Send the token as `Authorization: Bearer sbu_…` or as the Basic-auth password.
-It opens nothing else — every other route answers `403` — and it expires five
-minutes after its last request ends, and an hour after it was issued at the
-latest. Rotating the edit password or deleting the site revokes it; so does a
-restart, since tokens are held in memory only. At most five per site are live
-at once. Design:
+It opens nothing else: every other API route answers `403`, and it is never
+accepted as a password — not by FTP and not as an MCP `edit_password`. It
+expires five minutes after its last request ends, and an hour after it was
+issued at the latest. One request must finish within 10 minutes (the server's
+read timeout), so split very large uploads across several requests. While one
+replace of a site is running, another is refused with `409`. Rotating the edit
+password or deleting the site revokes the token; so does a restart, since
+tokens are held in memory only. At most five per site are live at once. Design:
 [`docs/superpowers/specs/2026-09-25-mcp-upload-tokens-design.md`](docs/superpowers/specs/2026-09-25-mcp-upload-tokens-design.md).
 
 Sites created through MCP are recorded in `meta.json` as `"origin": "mcp"`;

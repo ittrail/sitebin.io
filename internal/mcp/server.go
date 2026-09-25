@@ -195,8 +195,8 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 
 	sdk.AddTool(s, &sdk.Tool{
 		Name: "write_files",
-		Description: "Add or overwrite files in a site. With replace set, every existing " +
-			"file is removed first, so the site ends up containing exactly the files you pass. " +
+		Description: "Add or overwrite files in a site. With replace set, the site ends up containing " +
+			"exactly the files you pass; the old files are removed only once every new one is written. " +
 			"For files larger than a few hundred KB, use open_upload instead.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in writeArgs) (*sdk.CallToolResult, *SiteResult, error) {
 		if err := authorize(auth, ScopeWrite); err != nil {

@@ -256,14 +256,19 @@ second copy of the rule.
   issues them (`internal/httpapi/uploadtokens.go`); only `/dav/{editID}/` and
   `POST /api/sites/{editID}/files` accept them, and `withEditAuth` refuses any
   `sbu_` credential before password work. A `sbu_` credential is never tried
-  as an edit password or account token — keep `uploadCredential` the single
-  place that recognises one. Idle 5 min from the END of the last request,
-  60 min absolute. Read `docs/superpowers/specs/2026-09-25-mcp-upload-tokens-design.md`.
+  as an edit password (`verifyEditIP` refuses it first); on `/mcp` it is
+  simply not a valid bearer — keep `uploadCredential` the single place that
+  recognises one. Idle 5 min from the END of the last request, 60 min
+  absolute. Read `docs/superpowers/specs/2026-09-25-mcp-upload-tokens-design.md`.
 - **A replace is staged (`store.Replacement`).** `?replace=true` and
-  `write_files` with `replace` write into `<site>/.replace-*` and commit only
+  `write_files` with `replace` stage in `<data>/tmp/replace-<viewID>-*` —
+  never inside the site folder while the upload streams — and commit only
   when complete and within the caps; never call `ClearFiles` before an upload
-  again. The commit empties and refills the content directory in place — it
-  must never rename it, because container bind mounts point into it.
+  again. The commit, under the site lock, refuses a replacement with a failed
+  write, answers `ErrNotFound` for a deleted site, moves the staging dir into
+  the site folder, and only then empties and refills the content directory in
+  place — it must never rename it, because container bind mounts point into
+  it. One replace per site at a time: a second is `ErrReplaceBusy` (409).
 
 Read `docs/superpowers/specs/2026-08-28-mcp-server-design.md` and
 `2026-08-29-mcp-oauth-resource-server-design.md`.
