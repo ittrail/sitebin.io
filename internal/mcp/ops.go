@@ -50,6 +50,10 @@ type Auth struct {
 	// access token narrows what may be called, so the check is a pure addition
 	// rather than a change to anything that worked before.
 	Scopes []string
+	// OAuth marks a session authenticated by an OAuth access token. Its
+	// Scopes then restrict it even when empty — see Allows — so a token whose
+	// issuer granted nothing can do nothing.
+	OAuth bool
 	// ClientIP identifies the caller for rate limiting. It is opaque to this
 	// package, which only carries it: the adapter owns the limiters, because
 	// an agent must not be able to guess an edit password faster than curl.
@@ -82,18 +86,20 @@ var AllScopes = []string{ScopeRead, ScopeWrite}
 //
 // The error names both what was needed and what was granted, because an agent
 // that only learns "denied" will retry the same call, while one that learns it
-// holds read but needs write can say so to its user.
+// holds read but needs write can say so to its user. Only Sitebin's own
+// scopes are named: the rest of a token's scope claim is noise to the agent,
+// and the extension's placeholder for "no scope at all" is not text for
+// anyone.
 func authorize(a Auth, scope string) error {
-	if len(a.Scopes) == 0 {
+	if Allows(a.Scopes, a.OAuth, scope) {
 		return nil
 	}
-	for _, s := range a.Scopes {
-		if s == scope {
-			return nil
-		}
+	held := HeldScopes(a.Scopes)
+	if len(held) == 0 {
+		return fmt.Errorf("this connection was not granted %s (it holds no Sitebin scopes) — reconnect and approve that permission", scope)
 	}
 	return fmt.Errorf("this connection was not granted %s (it holds: %s) — reconnect and approve that permission",
-		scope, strings.Join(a.Scopes, " "))
+		scope, strings.Join(held, " "))
 }
 
 // SiteRef addresses one site. EditPassword may be empty when the session's

@@ -26,9 +26,10 @@ requests (curl, or code execution with network access).
 
 Authentication: if the connection carries an account API token, sites you
 create belong to that account, list_sites shows them, and you do not need an
-edit_password for any of them. Without a token you must pass the edit_password
-returned at creation, and instances that require accounts will refuse to create
-sites at all.
+edit_password for any of them. A connection signed in through OAuth works the
+same way, within the permissions it was granted. Without either you must pass
+the edit_password returned at creation, and instances that require accounts
+will refuse to create sites at all.
 
 Sites are public to anyone with the URL. Do not publish secrets, credentials or
 personal data, and do not create pages that imitate another organization's
@@ -92,6 +93,32 @@ func NewHandler(ops Ops, info Info) http.Handler {
 	})
 }
 
+// addTool registers one tool from the catalog table: its title and hints
+// come from its row, and so does the scope checked before its handler runs.
+// The check stays inside the tool even though the HTTP layer already answers
+// a missing scope with a 403, because that answer depends on parsing the
+// request and this one does not.
+//
+// A tool with no row is a programming error, and panicking makes the first
+// test that builds a server say so.
+func addTool[In, Out any](s *sdk.Server, auth Auth, t *sdk.Tool, h sdk.ToolHandlerFor[In, Out]) {
+	spec, ok := catalog[t.Name]
+	if !ok {
+		panic("mcp: tool " + t.Name + " has no row in the catalog")
+	}
+	t.Title = spec.title
+	hints := spec.annotations
+	hints.Title = spec.title
+	t.Annotations = &hints
+	sdk.AddTool(s, t, func(ctx context.Context, req *sdk.CallToolRequest, in In) (*sdk.CallToolResult, Out, error) {
+		if err := authorize(auth, spec.scope); err != nil {
+			var none Out
+			return nil, none, err
+		}
+		return h(ctx, req, in)
+	})
+}
+
 // newServer builds the tool catalog bound to one caller's identity. Every
 // handler closes over auth, so no tool can be called with an authority other
 // than the one its request carried.
@@ -101,19 +128,13 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		Version: info.Version,
 	}, &sdk.ServerOptions{Instructions: Instructions})
 
-	readOnly := &sdk.ToolAnnotations{ReadOnlyHint: true}
-	destructive := &sdk.ToolAnnotations{DestructiveHint: ptr(true)}
-
-	sdk.AddTool(s, &sdk.Tool{
+	addTool(s, auth, &sdk.Tool{
 		Name: "create_site",
 		Description: "Publish files as a new website and return its public URL. " +
 			"The returned edit_password is shown once and cannot be recovered — " +
 			"record it, unless this connection uses an account API token, in which " +
 			"case the token manages the site instead.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in createArgs) (*sdk.CallToolResult, *SiteResult, error) {
-		if err := authorize(auth, ScopeWrite); err != nil {
-			return nil, nil, err
-		}
 		files, err := DecodeFiles(in.Files)
 		if err != nil {
 			return nil, nil, err
@@ -125,14 +146,10 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		}))
 	})
 
-	sdk.AddTool(s, &sdk.Tool{
+	addTool(s, auth, &sdk.Tool{
 		Name:        "list_sites",
 		Description: "List the sites the connected account owns. Requires an account API token.",
-		Annotations: readOnly,
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, _ noArgs) (*sdk.CallToolResult, *listResult, error) {
-		if err := authorize(auth, ScopeRead); err != nil {
-			return nil, nil, err
-		}
 		sites, err := ops.ListSites(ctx, auth)
 		if err != nil {
 			return nil, nil, err
@@ -140,37 +157,26 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		return nil, &listResult{Sites: sites}, nil
 	})
 
-	sdk.AddTool(s, &sdk.Tool{
+	addTool(s, auth, &sdk.Tool{
 		Name:        "get_site",
 		Description: "Read a site's settings, usage and file list.",
-		Annotations: readOnly,
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in siteArgs) (*sdk.CallToolResult, *SiteResult, error) {
-		if err := authorize(auth, ScopeRead); err != nil {
-			return nil, nil, err
-		}
 		return out(ops.GetSite(ctx, auth, in.ref()))
 	})
 
-	sdk.AddTool(s, &sdk.Tool{
+	addTool(s, auth, &sdk.Tool{
 		Name: "update_site",
 		Description: "Change a site's settings, including its name — a private label the owner sees in the account's " +
 			"site list. Any field you omit is left alone. Setting name to an empty string removes it; setting " +
 			"expires_at to an empty string clears the expiry, where the site's plan allows it.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in updateArgs) (*sdk.CallToolResult, *SiteResult, error) {
-		if err := authorize(auth, ScopeWrite); err != nil {
-			return nil, nil, err
-		}
 		return out(ops.UpdateSite(ctx, auth, in.ref(), in.Settings))
 	})
 
-	sdk.AddTool(s, &sdk.Tool{
+	addTool(s, auth, &sdk.Tool{
 		Name:        "list_files",
 		Description: "List the files in a site with their sizes.",
-		Annotations: readOnly,
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in siteArgs) (*sdk.CallToolResult, *filesResult, error) {
-		if err := authorize(auth, ScopeRead); err != nil {
-			return nil, nil, err
-		}
 		files, err := ops.ListFiles(ctx, auth, in.ref())
 		if err != nil {
 			return nil, nil, err
@@ -178,14 +184,10 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		return nil, &filesResult{Files: files}, nil
 	})
 
-	sdk.AddTool(s, &sdk.Tool{
+	addTool(s, auth, &sdk.Tool{
 		Name:        "read_file",
 		Description: "Read one file from a site. Text files come back as text, binary files as base64.",
-		Annotations: readOnly,
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in pathArgs) (*sdk.CallToolResult, *File, error) {
-		if err := authorize(auth, ScopeRead); err != nil {
-			return nil, nil, err
-		}
 		f, err := ops.ReadFile(ctx, auth, in.ref(), in.Path)
 		if err != nil {
 			return nil, nil, err
@@ -193,15 +195,12 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		return nil, &f, nil
 	})
 
-	sdk.AddTool(s, &sdk.Tool{
+	addTool(s, auth, &sdk.Tool{
 		Name: "write_files",
 		Description: "Add or overwrite files in a site. With replace set, the site ends up containing " +
 			"exactly the files you pass; the old files are removed only once every new one is written. " +
 			"For files larger than a few hundred KB, use open_upload instead.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in writeArgs) (*sdk.CallToolResult, *SiteResult, error) {
-		if err := authorize(auth, ScopeWrite); err != nil {
-			return nil, nil, err
-		}
 		files, err := DecodeFiles(in.Files)
 		if err != nil {
 			return nil, nil, err
@@ -212,63 +211,44 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		return out(ops.WriteFiles(ctx, auth, in.ref(), files, in.Replace))
 	})
 
-	sdk.AddTool(s, &sdk.Tool{
+	addTool(s, auth, &sdk.Tool{
 		Name:        "delete_file",
 		Description: "Delete one file from a site.",
-		Annotations: destructive,
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in pathArgs) (*sdk.CallToolResult, *SiteResult, error) {
-		if err := authorize(auth, ScopeWrite); err != nil {
-			return nil, nil, err
-		}
 		return out(ops.DeleteFile(ctx, auth, in.ref(), in.Path))
 	})
 
-	sdk.AddTool(s, &sdk.Tool{
+	addTool(s, auth, &sdk.Tool{
 		Name:        "delete_site",
 		Description: "Permanently delete a site and all its files. This cannot be undone.",
-		Annotations: destructive,
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in siteArgs) (*sdk.CallToolResult, *deleteResult, error) {
-		if err := authorize(auth, ScopeWrite); err != nil {
-			return nil, nil, err
-		}
 		if err := ops.DeleteSite(ctx, auth, in.ref()); err != nil {
 			return nil, nil, err
 		}
 		return nil, &deleteResult{Status: "deleted", EditID: in.EditID}, nil
 	})
 
-	sdk.AddTool(s, &sdk.Tool{
+	addTool(s, auth, &sdk.Tool{
 		Name: "add_domain",
 		Description: "Attach a custom domain to a site. Enterprise instances only. " +
 			"The domain is attached once its DNS proves it belongs to this site: until then the result lists it under " +
 			"pending_domains with the TXT record (or CNAME) to create. Create the record, then call add_domain again, " +
 			"or wait: the instance re-checks pending domains itself.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in domainArgs) (*sdk.CallToolResult, *SiteResult, error) {
-		if err := authorize(auth, ScopeWrite); err != nil {
-			return nil, nil, err
-		}
 		return out(ops.AddDomain(ctx, auth, in.ref(), in.Domain))
 	})
 
-	sdk.AddTool(s, &sdk.Tool{
+	addTool(s, auth, &sdk.Tool{
 		Name:        "remove_domain",
 		Description: "Detach a custom domain from a site.",
-		Annotations: destructive,
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in domainArgs) (*sdk.CallToolResult, *SiteResult, error) {
-		if err := authorize(auth, ScopeWrite); err != nil {
-			return nil, nil, err
-		}
 		return out(ops.RemoveDomain(ctx, auth, in.ref(), in.Domain))
 	})
 
-	sdk.AddTool(s, &sdk.Tool{
+	addTool(s, auth, &sdk.Tool{
 		Name:        "download_site",
 		Description: "Download a site's files as a zip archive, returned as an attached resource.",
-		Annotations: readOnly,
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in siteArgs) (*sdk.CallToolResult, any, error) {
-		if err := authorize(auth, ScopeRead); err != nil {
-			return nil, nil, err
-		}
 		zip, err := ops.DownloadSite(ctx, auth, in.ref())
 		if err != nil {
 			return nil, nil, err
@@ -282,16 +262,13 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		}}}, nil, nil
 	})
 
-	sdk.AddTool(s, &sdk.Tool{
+	addTool(s, auth, &sdk.Tool{
 		Name: "open_upload",
 		Description: "Get a short-lived token and URLs to upload files with your own HTTP client, for files " +
 			"too large to pass to write_files (anything beyond a few hundred KB). Only useful if you can run " +
 			"curl or make HTTP requests; otherwise use write_files. The token expires 5 minutes after its " +
 			"last use, and after an hour at the latest; call open_upload again for a new one.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in siteArgs) (*sdk.CallToolResult, *UploadResult, error) {
-		if err := authorize(auth, ScopeWrite); err != nil {
-			return nil, nil, err
-		}
 		r, err := ops.OpenUpload(ctx, auth, in.ref())
 		if err != nil {
 			return nil, nil, err
@@ -299,21 +276,17 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		return nil, r, nil
 	})
 
-	sdk.AddTool(s, &sdk.Tool{
+	addTool(s, auth, &sdk.Tool{
 		Name: "list_forms",
 		Description: "List a site's email forms with their status and the HTML snippet for each. A form mails what visitors " +
 			"submit to one recipient, who confirmed by email. Each submission arrives as a plain-text email (no HTML) from " +
 			"the form's name: the fields in form order, then the visitor's files and a submission.json with the same data " +
 			"attached.",
-		Annotations: readOnly,
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in siteArgs) (*sdk.CallToolResult, *FormsResult, error) {
-		if err := authorize(auth, ScopeRead); err != nil {
-			return nil, nil, err
-		}
 		return formsOut(ops.ListForms(ctx, auth, in.ref()))
 	})
 
-	sdk.AddTool(s, &sdk.Tool{
+	addTool(s, auth, &sdk.Tool{
 		Name: "add_form",
 		Description: "Add an email form to a site. The recipient gets one email to confirm; until they click it the form is " +
 			"pending and refuses every submission, so do not tell the user it works before then. Paste the returned " +
@@ -322,41 +295,28 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 			"order, the visitor's files and a submission.json attached. Tell the user to add the sender address to their " +
 			"contacts or safe senders once confirmed, so a mail filter never holds a message back.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in formArgs) (*sdk.CallToolResult, *FormsResult, error) {
-		if err := authorize(auth, ScopeWrite); err != nil {
-			return nil, nil, err
-		}
 		return formsOut(ops.AddForm(ctx, auth, in.ref(), in.Form))
 	})
 
-	sdk.AddTool(s, &sdk.Tool{
+	addTool(s, auth, &sdk.Tool{
 		Name: "update_form",
 		Description: "Change a form's name, recipient, captcha, attachments or thank-you page. A new recipient has to " +
 			"confirm by email again before the form works.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in formUpdateArgs) (*sdk.CallToolResult, *FormsResult, error) {
-		if err := authorize(auth, ScopeWrite); err != nil {
-			return nil, nil, err
-		}
 		return formsOut(ops.UpdateForm(ctx, auth, in.ref(), in.Key, in.Form))
 	})
 
-	sdk.AddTool(s, &sdk.Tool{
+	addTool(s, auth, &sdk.Tool{
 		Name:        "remove_form",
 		Description: "Delete a form. Pages that still post to it get an error.",
-		Annotations: destructive,
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in formKeyArgs) (*sdk.CallToolResult, *FormsResult, error) {
-		if err := authorize(auth, ScopeWrite); err != nil {
-			return nil, nil, err
-		}
 		return formsOut(ops.RemoveForm(ctx, auth, in.ref(), in.Key))
 	})
 
-	sdk.AddTool(s, &sdk.Tool{
+	addTool(s, auth, &sdk.Tool{
 		Name:        "resend_form_confirmation",
 		Description: "Email a form's recipient the confirmation link again, for a form that is pending or that its recipient stopped.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in formKeyArgs) (*sdk.CallToolResult, *FormsResult, error) {
-		if err := authorize(auth, ScopeWrite); err != nil {
-			return nil, nil, err
-		}
 		return formsOut(ops.ResendFormConfirmation(ctx, auth, in.ref(), in.Key))
 	})
 
