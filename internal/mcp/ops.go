@@ -247,7 +247,7 @@ type UploadResult struct {
 	EditID             string    `json:"edit_id"`
 	ViewURL            string    `json:"view_url" jsonschema:"the public URL of the site"`
 	Token              string    `json:"token" jsonschema:"send as Authorization: Bearer <token>, or as the password of HTTP Basic auth; never put it in a URL"`
-	UploadURL          string    `json:"upload_url" jsonschema:"POST multipart/form-data here: a zip part is extracted, each files part is stored at the path in its filename; add ?replace=true to make the upload the whole site; a replace deletes every file and folder of the site first, including a container site's data folders; one request must finish within 10 minutes — split very large uploads"`
+	UploadURL          string    `json:"upload_url" jsonschema:"POST multipart/form-data here: a zip part is extracted, each files part is stored at the path in its filename; add ?replace=true to make the upload the whole site; once the upload is complete, a replace removes every file and folder the upload does not contain, including a container site's data folders; one request must finish within 10 minutes — split very large uploads"`
 	WebDAVURL          string    `json:"webdav_url,omitempty" jsonschema:"the site's WebDAV tree: PUT a file to its path (MKCOL a folder first), PROPFIND to list, DELETE to remove; absent when WebDAV is off on this instance; one request must finish within 10 minutes — split very large uploads"`
 	IdleTimeoutSeconds int       `json:"idle_timeout_seconds" jsonschema:"the token expires this many seconds after its last request ends"`
 	ExpiresAt          time.Time `json:"expires_at" jsonschema:"the token expires at this time however it is used"`
