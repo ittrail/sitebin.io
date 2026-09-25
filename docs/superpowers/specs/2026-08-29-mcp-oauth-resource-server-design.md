@@ -209,3 +209,40 @@ that is configured on the IT-Trail SaaS Stack — client scopes, the audience
 mapper, DCR policies, the onboarding contract — is the stack's own design and
 is deliberately not described here. Sitebin's side is finished when it can
 validate a correct token from any issuer that does those three things.
+
+## Corrections (post-implementation)
+
+*2026-09-25.* This design shipped but was never switched on. An audit before
+switching it on found it unsafe to enable as built;
+[`2026-09-25-mcp-oauth-consent-lazy-auth-design.md`](2026-09-25-mcp-oauth-consent-lazy-auth-design.md)
+is the design that replaced the parts below. Everything else here stands —
+Sitebin is still only a resource server.
+
+- **Authentication, the wrapper.** `auth.RequireBearerToken` refuses every
+  request without a bearer, so turning OAuth on would have removed the
+  edit-password path entirely. It is replaced by a lazy wrapper that reads the
+  JSON-RPC message and challenges only a `tools/call` that needs an account; a
+  missing scope is also an HTTP `403 insufficient_scope`, not only a tool
+  error. The challenge's `ResourceMetadataURL` names the `/mcp`-suffixed
+  document, which RFC 9728 pairs with a resource at `/mcp`.
+- **The seam, "two call sites change".** Handing an OAuth credential to
+  `API.tokenOwns` made it an account token on the JSON API, which has no scope
+  check: a token granted only `sitebin:sites:read` could create, overwrite and
+  delete sites through `/api/*`. `ext.Credential` gained `OAuth bool`, and an
+  OAuth credential is honoured only on a request carrying the MCP marker that
+  `/mcp` alone sets — `tokenOwns` never honours one, and the extension resolves
+  one nowhere else.
+- **Verification.** The go-oidc verifier checks what ID and access tokens
+  share, so a Keycloak ID token with the resource in its audience passed; the
+  `typ` claim and header are now checked. Discovery ran once, under the first
+  caller's request context, and cached its error until restart; it now runs
+  under its own timeout and is retried.
+- **Unknown subjects.** Refusing a valid token for a subject that never signed
+  in here was a 401 loop for every newcomer. On a stack instance the resource
+  server now enforces the stack's consent gate itself, and with that in place
+  the account is created from the token as a first sign-in would.
+- **The issuer default.** The configuration table above says the MCP issuer
+  defaults to `SITEBIN_OAUTH_OIDC_ISSUER`. The code never inherited it (OAuth
+  is opt-in), and it now has to *equal* it: accounts are found by the sign-in
+  provider's subject, so a token from any other issuer would be looked up in
+  the wrong namespace.

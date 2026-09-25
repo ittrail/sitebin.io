@@ -57,10 +57,10 @@ type Config struct {
 	ZoneNamesPerHour int
 	// MCPOAuthIssuer is the authorization server whose access tokens /mcp
 	// accepts. Empty disables OAuth entirely and the endpoint authenticates
-	// exactly as it did before. It is usually the same issuer users sign in
-	// through — the same subject then resolves the same account — but it is
-	// never inherited, because switching /mcp to bearer-only is a decision an
-	// operator has to make rather than acquire.
+	// exactly as it did before. The enterprise extension requires it to be
+	// the issuer users sign in through — the same subject then resolves the
+	// same account — but it is never inherited, because making /mcp an OAuth
+	// resource is a decision an operator has to make rather than acquire.
 	MCPOAuthIssuer string
 	// MCPResource is this server's OAuth resource identifier, the value that
 	// must appear in an access token's audience. It is immutable once
@@ -307,11 +307,11 @@ func Load(getenv func(string) string) (Config, error) {
 	if cfg.FormsPerIPHour < 1 || cfg.FormsPerFormHour < 1 {
 		return cfg, fmt.Errorf("SITEBIN_FORMS_PER_IP_HOUR and SITEBIN_FORMS_PER_FORM_HOUR must be at least 1")
 	}
-	// No fallback to the sign-in issuer. Inheriting it would turn /mcp into a
-	// bearer-only endpoint on every instance that merely configured SSO, and
-	// callers authenticating per-tool with an edit password would start getting
-	// 401 at the door — a shipped, documented flow broken by an upgrade nobody
-	// opted into. OAuth is opt-in, so the variable is opt-in.
+	// No fallback to the sign-in issuer. Inheriting it would make every
+	// instance that merely configured SSO an OAuth resource — publishing
+	// metadata, answering account calls with sign-in challenges, and on a
+	// stack instance asking the stack about consent — through an upgrade
+	// nobody opted into. OAuth is opt-in, so the variable is opt-in.
 	cfg.MCPOAuthIssuer = strings.TrimSpace(getenv("SITEBIN_MCP_OAUTH_ISSUER"))
 	cfg.MCPResource = strings.TrimSpace(getenv("SITEBIN_MCP_OAUTH_RESOURCE"))
 	if cfg.TrackViews, err = boolVar(getenv, "SITEBIN_TRACK_VIEWS", true); err != nil {

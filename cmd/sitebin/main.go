@@ -245,9 +245,9 @@ func serve() error {
 			"passive_ports", fmt.Sprintf("%d-%d", cfg.FTPPasvMin, cfg.FTPPasvMax))
 	}
 	if cfg.MCPEnabled {
-		// Worth its own line: with an issuer set, /mcp stops accepting
-		// credential-less calls, and an operator who cannot see that from the
-		// log will read the resulting 401s as an outage.
+		// Worth its own line: with an issuer set, /mcp answers every call
+		// that needs an account with a 401 sign-in challenge, and an operator
+		// who cannot see that from the log will read those 401s as an outage.
 		slog.Info("mcp server enabled", "path", "/mcp",
 			"oauth", cfg.MCPOAuthIssuer != "", "issuer", cfg.MCPOAuthIssuer)
 	}

@@ -115,7 +115,7 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | `SITEBIN_FTP_PUBLIC_HOST` | base domain | Host advertised for FTP passive mode. |
 | `SITEBIN_FTP_TLS_CERT` / `SITEBIN_FTP_TLS_KEY` | — | Optional PEM cert/key for FTPS (encrypts credentials). |
 | `SITEBIN_MCP_ENABLED` | `true` | Serve the MCP endpoint at `/mcp` for AI agents. See [MCP server](#mcp-server-for-ai-agents). |
-| `SITEBIN_MCP_OAUTH_ISSUER` | — | Authorization server whose access tokens `/mcp` accepts. **Not inherited** from `SITEBIN_OAUTH_OIDC_ISSUER`: switching `/mcp` to bearer-only is a decision, not a side effect of configuring SSO. Empty disables OAuth; the endpoint then authenticates with edit passwords and account tokens only. |
+| `SITEBIN_MCP_OAUTH_ISSUER` | — | Authorization server whose access tokens `/mcp` accepts. **Not inherited** from `SITEBIN_OAUTH_OIDC_ISSUER`, but must equal it when set (the enterprise edition refuses to start otherwise): making `/mcp` an OAuth resource is a decision, not a side effect of configuring SSO. Edit passwords and account tokens keep working either way. See [OAuth 2.1](#oauth-21-optional). |
 | `SITEBIN_MCP_OAUTH_RESOURCE` | `<base>/mcp` | This server's OAuth resource identifier — the value a token's audience must contain. Immutable once published. |
 | `SITEBIN_TRACK_VIEWS` | `true` | Count per-site page views (Accept: text/html) + last-seen. |
 | `SITEBIN_READONLY` | `false` | Freeze new site creation. |
@@ -352,6 +352,9 @@ require stdio) can bridge with `npx mcp-remote https://…/mcp --header …`.
 - **With a token** (`Authorization: Bearer sbp_…`) new sites belong to that
   account and get its tier's quotas, `list_sites` works, and the token stands
   in for the edit password on every site the account owns.
+- **Signed in through OAuth** (where the instance has it on, see
+  [below](#oauth-21-optional)) the connection works like a token, within the
+  scopes it was granted — on `/mcp` only.
 - **Without a token**, per-site tools need the site's `edit_password`, and on an
   instance running with accounts, creating a site is refused — the same rule the
   JSON API applies. A community instance has no accounts and stays fully open.
@@ -390,16 +393,66 @@ site is served.
 
 Bearer tokens work in every client that can set a header. For the connector
 directories at Anthropic and OpenAI, `/mcp` can also be an **OAuth 2.1 protected
-resource**: set `SITEBIN_MCP_OAUTH_ISSUER` to an authorization server and
-Sitebin will publish `/.well-known/oauth-protected-resource`, answer
-unauthenticated calls with a `WWW-Authenticate` challenge pointing at it, and
-accept access tokens that server signed.
+resource**: set `SITEBIN_MCP_OAUTH_ISSUER` to the authorization server and
+Sitebin will publish `/.well-known/oauth-protected-resource` (and the same
+document at `…/oauth-protected-resource/mcp`, both answering CORS preflights),
+challenge the calls that need an account, and accept access tokens that server
+signed.
 
 **Sitebin is a resource server and never an authorization server.** It issues
-no tokens, registers no clients and renders no consent screen — point it at
-whatever issuer you already run. A token is accepted only when its signature,
-issuer and expiry check out, its audience contains this server's resource
-identifier, and its subject matches an account that has signed in here.
+no tokens, registers no clients and renders no consent screen — the issuer does
+all of that. The issuer must be the one users sign in through:
+`SITEBIN_MCP_OAUTH_ISSUER` has to equal `SITEBIN_OAUTH_OIDC_ISSUER` (a trailing
+slash aside), because a token's subject is looked up among the accounts that
+sign-in created; the enterprise edition refuses to start otherwise.
+
+**Three credentials, side by side.** Turning OAuth on removes none of the
+others:
+
+| Credential | Where it works | What it may do |
+|---|---|---|
+| a site's `edit_password`, as a tool argument | that site's tools on `/mcp`, and the site's API, WebDAV and FTP | everything on that one site |
+| an account API token (`sbp_…`) | `/mcp` and the whole JSON API | everything its account may do |
+| an OAuth access token | **`/mcp` only** | what its scopes grant, on its account's sites |
+
+An OAuth access token is refused by every other route: its audience is the MCP
+resource, and the JSON API has no scopes to hold it to.
+
+**Only the calls that need an account are challenged.** An agent can connect,
+initialize and list the tools without any credential, and work on a site by
+passing its `edit_password`. A call that needs an account — `list_sites`, a
+per-site tool without a password, `create_site` on an instance with accounts —
+gets
+
+```
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer resource_metadata="https://sitebin.example.com/.well-known/oauth-protected-resource/mcp", scope="sitebin:sites:read sitebin:sites:write"
+```
+
+which is what makes an MCP client offer the sign-in. A bearer that does not
+check out is a `401` with `error="invalid_token"`; a valid token calling a tool
+whose scope it lacks is a `403` with `error="insufficient_scope"` and a `scope`
+naming what it holds plus what it needs, the signal clients use to ask for more.
+The tools check the scope again themselves.
+
+A token is accepted only when its signature, issuer and expiry check out, it is
+an access token (a `typ` claim other than `Bearer`, or a header `typ` other
+than `JWT` / `at+jwt`, is refused — an ID token does not pass), and its audience
+contains this server's resource identifier.
+
+**On a SaaS-Stack instance** (with `SITEBIN_STACK_*` set) two more rules apply:
+
+- **The consent gate is never bypassed.** Before a token is honoured, Sitebin
+  asks the stack whether its person has accepted every document the platform
+  and Sitebin currently require. Outstanding documents, a stack that cannot
+  answer, or an answer that is not a clear yes all refuse the token (`401`); a
+  yes is remembered for ten minutes, a no never is.
+- **A newcomer gets an account.** A person who passed the gate but has never
+  signed in to Sitebin has their account created from the token — the email
+  and its verification, the tier for new accounts — exactly as a first browser
+  sign-in would. A token without an email is refused.
+
+Without a stack, a token whose subject has never signed in here is refused.
 
 Two scopes carve up the tool surface, so an agent can be given read access
 without the ability to publish:
@@ -410,13 +463,17 @@ without the ability to publish:
 | `sitebin:sites:write` | `create_site`, `update_site`, `write_files`, `delete_file`, `delete_site`, `add_domain`, `remove_domain`, `add_form`, `update_form`, `remove_form`, `resend_form_confirmation`, `open_upload` |
 
 Account API tokens keep working unchanged with OAuth enabled — they carry no
-scopes and grant everything their account can do, exactly as before.
+scopes and grant everything their account can do, exactly as before. Every
+tool carries a title and the read-only, destructive and open-world hints the
+connector directories ask for.
 
 The authorization server has to offer dynamic client registration, PKCE `S256`,
 and tokens whose audience is this server's resource identifier. The IT-Trail
-SaaS Stack does this from an `mcp` block at app onboarding; any other compliant
-issuer works the same way. Design:
-[`docs/superpowers/specs/2026-08-29-mcp-oauth-resource-server-design.md`](docs/superpowers/specs/2026-08-29-mcp-oauth-resource-server-design.md).
+SaaS Stack does this from an `mcp` block at app onboarding, and steers the
+sign-in through its consent gate. Design:
+[`docs/superpowers/specs/2026-09-25-mcp-oauth-consent-lazy-auth-design.md`](docs/superpowers/specs/2026-09-25-mcp-oauth-consent-lazy-auth-design.md),
+which follows
+[`2026-08-29-mcp-oauth-resource-server-design.md`](docs/superpowers/specs/2026-08-29-mcp-oauth-resource-server-design.md).
 
 ### WebDAV (mount a site as a drive)
 
@@ -1099,7 +1156,9 @@ curl -H "Authorization: Bearer $TOKEN" -F "zip=@dist.zip"      "https://app.exam
 ```
 
 The same token authenticates the [MCP server](#mcp-server-for-ai-agents), where
-it also replaces the edit password on the account's sites.
+it also replaces the edit password on the account's sites. The reverse does not
+hold: an [MCP OAuth](#oauth-21-optional) access token works on `/mcp` only, and
+every JSON API route refuses it.
 
 A token acts on **sites, not on the account**: it is refused by the dashboard,
 so it cannot change the plan, rotate passwords or delete the account. It reaches

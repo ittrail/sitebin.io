@@ -44,7 +44,7 @@ test suites run inside the build, as they do for every Sitebin image.
 | `SITEBIN_STACK_LICENSING` | what a licence from this stack is worth | `{"graceMonths":3,"plans":{"team":{"max_custom_domains":25},…}}`; a plan absent from `plans` is unlimited |
 | `SITEBIN_STACK_GDPR_SECRET` | `openssl rand -hex 24` | **required** with `SITEBIN_STACK_*`, at least 32 characters. The stack signs its deletion and export orders with it; the instance declares it with the registration and mounts `/account/gdpr/{delete,export}` only when it is set. |
 | `SITEBIN_STACK_*` | self-registration | all three together or none; `SITEBIN_STACK_ADMIN_KEY` acts on **every** app on the stack, so it belongs only on an instance you operate yourself |
-| `SITEBIN_MCP_OAUTH_ISSUER` | the realm issuer, optional | with it, `/mcp` accepts the stack's access tokens and the registration declares the MCP resource and scopes |
+| `SITEBIN_MCP_OAUTH_ISSUER` | the realm issuer, optional | must equal `SITEBIN_OAUTH_OIDC_ISSUER` or the instance refuses to start. With it, `/mcp` challenges the calls that need an account (edit passwords and `sbp_` tokens keep working), accepts the stack's access tokens only for people who have passed the consent gate -- asking the stack on each new token and creating the account of a newcomer -- and the registration declares the MCP resource and scopes |
 | `SITEBIN_LICENSE_KEY` | leave **empty** here | empty is the point: the instance then collects its licence from PayGate. Setting it wins and turns collection off — that is the air-gapped path. |
 
 One port, everywhere. `SITEBIN_PORT` and the port in `SITEBIN_BASE_DOMAIN` must

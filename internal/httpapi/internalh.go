@@ -108,9 +108,9 @@ func (a *API) tlsCheck(w http.ResponseWriter, r *http.Request) {
 // operator would otherwise have to infer from the environment.
 //
 // MCP and its OAuth mode both change how /mcp answers, and neither was
-// visible from outside the process: an instance where OAuth is on refuses
-// every credential-less call, which looks identical to a broken endpoint.
-// This is the cheapest place to make that answerable.
+// visible from outside the process: an instance where OAuth is on answers
+// every call that needs an account with a 401, which from outside looks much
+// like a broken endpoint. This is the cheapest place to make that answerable.
 func (a *API) health(w http.ResponseWriter, r *http.Request) {
 	payload := map[string]any{
 		"status":  "ok",

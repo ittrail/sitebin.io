@@ -89,9 +89,9 @@ Corollaries worth stating, because they have been violated before:
 
 `withEditAuth` (internal/httpapi/server.go) is the one gate for every per-site
 API route. In order: an upload token is refused (it opens only its own route);
-an account API token whose account owns the site; the owner's **browser
-session** (`sessionOwns`, via the optional `ext.SessionAccounts`); the edit
-password. `sessionOwns` is a real CSRF boundary — the session counts only with
+an account API token whose account owns the site (never an MCP OAuth token);
+the owner's **browser session** (`sessionOwns`, via the optional
+`ext.SessionAccounts`); the edit password. `sessionOwns` is a real CSRF boundary — the session counts only with
 `X-Sitebin-Session: 1` and a same-origin `Sec-Fetch-Site` when one is sent —
 and must never be loosened into `fromOwnBrowser`, which is a forgeable plan
 heuristic. MCP never reads the session, and the dashboard never reads a token.
@@ -256,13 +256,39 @@ second copy of the rule.
   should start to without saying so in the design doc.
 - **OAuth is opt-in and Sitebin is only ever a resource server.** With
   `SITEBIN_MCP_OAUTH_ISSUER` unset, none of it is mounted. Sitebin never issues
-  a token, registers a client or shows a consent screen; it points at any
-  issuer. Do not add an authorization server here — that is what keeps "one
-  container, no dependencies" true.
-- **Empty scopes mean unrestricted**, because that is what an account API token
-  has always granted. An OAuth token with no `scope` claim gets a placeholder
-  that matches nothing, so "the issuer told us nothing" never reads as
-  "everything".
+  a token, registers a client or shows a consent screen; it points at an
+  issuer, which the enterprise edition requires to equal
+  `SITEBIN_OAUTH_OIDC_ISSUER` (accounts are found by the sign-in subject). Do
+  not add an authorization server here — that is what keeps "one container, no
+  dependencies" true.
+- **Three credentials side by side on `/mcp`:** a site's `edit_password`, an
+  account token (`sbp_`), an OAuth access token. OAuth on removes none of
+  them. `mcpLazyAuth` (`internal/httpapi/mcpoauth.go`) peeks at the JSON-RPC
+  body and challenges only a `tools/call` that needs an account (`401` with
+  `resource_metadata` at `…/oauth-protected-resource/mcp`, no `error=`); a bad
+  bearer is `401 invalid_token`, a missing scope `403 insufficient_scope`.
+  What passes anonymously and what scope a tool needs come from the catalog
+  table in `internal/mcp/catalog.go` — add a tool there or it panics at
+  registration. The tools check the scope again: the wrapper is a door, not
+  the lock, and passes what it cannot parse (oversized, batched) to the SDK.
+- **OAuth tokens act on `/mcp` only.** `/mcp` marks every request
+  (`ext.WithMCPCaller`); `ext.Credential.OAuth` is honoured nowhere without
+  that marker — `tokenOwns` never, `accountForAPI` and `BearerCredential` in ee
+  only with it. A read-only token once could `DELETE /api/sites/{id}`. The
+  verified credential rides to the tools in the context (`ext.WithCredential`),
+  so a bearer is verified once per request.
+- **The consent gate is never bypassed** (stack instances only): the verifier
+  asks `{stack}/api/v1/apps/{app}/users/{sub}/consent/status` with the admin
+  key, fails closed, caches only "complete" (10 min), and then creates the
+  account of a newcomer from the token (`provisionFromToken`). Without a stack
+  an unknown subject is refused. Discovery retries (≥10 s apart, own timeout);
+  only access tokens pass (`typ`). Read
+  `docs/superpowers/specs/2026-09-25-mcp-oauth-consent-lazy-auth-design.md`.
+- **Empty scopes mean unrestricted** — for an account API token, which is what
+  it has always granted. An OAuth credential is restricted even with none
+  (`mcp.Allows`), and one with no `scope` claim also gets a placeholder that
+  matches nothing; `mcp.HeldScopes` keeps the placeholder out of anything an
+  agent or a challenge shows.
 - **The audience check is not optional.** It is the only thing stopping a token
   minted for another resource server on the same issuer from working here.
 - **Upload tokens (`sbu_`) are memory-only and single-site.** `open_upload`
@@ -290,8 +316,9 @@ second copy of the rule.
   a page view must never wait for an upload holding the site lock. `Delete`
   takes the site lock, then the stats lock — keep that order.
 
-Read `docs/superpowers/specs/2026-08-28-mcp-server-design.md` and
-`2026-08-29-mcp-oauth-resource-server-design.md`.
+Read `docs/superpowers/specs/2026-08-28-mcp-server-design.md`,
+`2026-08-29-mcp-oauth-resource-server-design.md` and
+`2026-09-25-mcp-oauth-consent-lazy-auth-design.md`.
 
 ## Billing: three backends, one seam
 

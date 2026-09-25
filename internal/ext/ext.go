@@ -104,7 +104,9 @@ type Provider interface {
 	//
 	// The core uses it to let a credential stand in for a site's edit password
 	// on sites that account owns. The ownership comparison belongs to the core,
-	// which is the side that holds the site's metadata.
+	// which is the side that holds the site's metadata. An OAuth access token
+	// is for /mcp alone: the extension resolves one only on a request carrying
+	// the MCP marker, and the core ignores one anywhere else regardless.
 	BearerCredential(r *http.Request) (Credential, bool)
 }
 
