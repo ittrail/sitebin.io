@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"net"
 	"os"
@@ -225,13 +226,14 @@ func TestBackupToleratesAFileThatVanishes(t *testing.T) {
 	vanishing := filepath.Join(src, "sites", "abc", "meta.json.tmp")
 	os.WriteFile(vanishing, []byte("x"), 0o644)
 
+	real := openForBackup
 	openForBackup = func(p string) (*os.File, error) {
 		if p == vanishing {
 			return nil, &os.PathError{Op: "open", Path: p, Err: os.ErrNotExist}
 		}
-		return os.Open(p)
+		return real(p)
 	}
-	defer func() { openForBackup = os.Open }()
+	defer func() { openForBackup = real }()
 
 	archive := filepath.Join(t.TempDir(), "backup.tar.gz")
 	if err := backupData(src, archive); err != nil {
@@ -246,5 +248,65 @@ func TestBackupToleratesAFileThatVanishes(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(dst, "sites", "abc", "meta.json.tmp")); !os.IsNotExist(err) {
 		t.Error("the vanished file was archived")
+	}
+}
+
+// A file that shrinks between the header claiming its size and the copy —
+// a WebDAV PUT truncating it in place, a database checkpoint — must not
+// abort the backup: the entry is padded to the size the header promised.
+func TestCopyPaddedFillsAFileThatShrank(t *testing.T) {
+	var out bytes.Buffer
+	short, err := copyPadded(&out, bytes.NewReader([]byte("abc")), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !short {
+		t.Error("a short read was not reported")
+	}
+	if got := out.Bytes(); !bytes.Equal(got, []byte("abc\x00\x00\x00\x00\x00")) {
+		t.Errorf("padded copy = %q", got)
+	}
+	out.Reset()
+	short, err = copyPadded(&out, bytes.NewReader([]byte("abcdefghij")), 4)
+	if err != nil || short || out.String() != "abcd" {
+		t.Errorf("a file that grew: %q short=%v err=%v", out.String(), short, err)
+	}
+}
+
+// A regular file swapped for a link after the walk saw it must not be
+// followed: the backup would store the link target's content as the file's.
+func TestBackupDoesNotFollowAFileSwappedForALink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("O_NOFOLLOW is the production platform's")
+	}
+	src := t.TempDir()
+	os.MkdirAll(filepath.Join(src, "sites", "abc", "files"), 0o755)
+	secret := filepath.Join(src, ".secret")
+	os.WriteFile(secret, []byte("instance secret"), 0o600)
+	victim := filepath.Join(src, "sites", "abc", "files", "page.html")
+	os.WriteFile(victim, []byte("page"), 0o644)
+
+	real := openForBackup
+	openForBackup = func(p string) (*os.File, error) {
+		if p == victim { // the swap happens between the walk's lstat and the open
+			os.Remove(victim)
+			if err := os.Symlink(secret, victim); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return real(p)
+	}
+	defer func() { openForBackup = real }()
+
+	archive := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if err := backupData(src, archive); err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	dst := t.TempDir()
+	if err := restoreData(dst, archive); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dst, "sites", "abc", "files", "page.html")); err == nil && string(b) == "instance secret" {
+		t.Fatal("the backup followed a swapped-in link and stored the secret as the page")
 	}
 }

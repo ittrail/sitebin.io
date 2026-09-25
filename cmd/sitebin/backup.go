@@ -19,9 +19,11 @@ func backup(outPath string) error { return backupData(mustConfig().DataDir, outP
 // restore extracts a backup into the data directory.
 func restore(inPath string) error { return restoreData(mustConfig().DataDir, inPath) }
 
-// openForBackup is os.Open, swappable so a test can make a file vanish
-// between the walk listing it and the backup reading it.
-var openForBackup = os.Open
+// openForBackup opens a file for reading without following a link or
+// blocking on a FIFO, where the platform can (see openNoFollow). Swappable so
+// a test can change a file between the walk listing it and the backup reading
+// it.
+var openForBackup = openNoFollow
 
 // inFlight reports whether rel (slash-separated, relative to the data root)
 // is an upload in progress rather than data: tmp/ (the zip spool and replace
@@ -92,6 +94,9 @@ func backupData(root, outPath string) error {
 		switch {
 		case info.Mode()&os.ModeSymlink != 0:
 			if link, err = os.Readlink(p); err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					return nil // an index link removed with its site mid-walk
+				}
 				return err
 			}
 			if err := linkStaysUnder(root, p, link); err != nil {
@@ -103,21 +108,33 @@ func backupData(root, outPath string) error {
 			return nil
 		}
 		// A regular file is opened before its header is written: if it has
-		// gone by now it is skipped, instead of leaving a header without its
+		// gone, or been swapped for a link or a FIFO since the walk saw it (a
+		// container can do that), it is skipped — never followed out of the
+		// site, never waited on — instead of leaving a header without its
 		// content in the archive. The size comes from the open file.
 		var f *os.File
 		if info.Mode().IsRegular() {
 			f, err = openForBackup(p)
 			if err != nil {
 				if errors.Is(err, fs.ErrNotExist) {
+					return nil // gone since the walk listed it
+				}
+				if fi, lerr := os.Lstat(p); lerr != nil || !fi.Mode().IsRegular() {
+					fmt.Fprintf(os.Stderr, "skipped %s: changed while the backup ran\n", filepath.ToSlash(rel))
 					return nil
 				}
-				return err
+				return fmt.Errorf("back up %s: %w", filepath.ToSlash(rel), err)
 			}
 			defer f.Close()
-			if info, err = f.Stat(); err != nil {
-				return err
+			opened, err := f.Stat()
+			if err != nil {
+				return fmt.Errorf("back up %s: %w", filepath.ToSlash(rel), err)
 			}
+			if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+				fmt.Fprintf(os.Stderr, "skipped %s: changed while the backup ran\n", filepath.ToSlash(rel))
+				return nil
+			}
+			info = opened
 		}
 		hdr, err := tar.FileInfoHeader(info, "")
 		if err != nil {
@@ -132,8 +149,12 @@ func backupData(root, outPath string) error {
 			return err
 		}
 		if f != nil {
-			if _, err := io.CopyN(tw, f, hdr.Size); err != nil {
-				return err
+			short, err := copyPadded(tw, f, hdr.Size)
+			if err != nil {
+				return fmt.Errorf("back up %s: %w", filepath.ToSlash(rel), err)
+			}
+			if short {
+				fmt.Fprintf(os.Stderr, "%s shrank while it was read; its entry is zero-padded\n", filepath.ToSlash(rel))
 			}
 		}
 		count++
@@ -144,6 +165,28 @@ func backupData(root, outPath string) error {
 	}
 	fmt.Fprintf(os.Stderr, "backed up %d entries from %s\n", count, root)
 	return nil
+}
+
+// copyPadded copies exactly n bytes of r to w — the size the tar header
+// already promised. A file that shrank after its size was read yields fewer;
+// the rest is zero-filled so the archive stays well-formed (what GNU tar does),
+// and short reports it. A file that grew is cut at n.
+func copyPadded(w io.Writer, r io.Reader, n int64) (short bool, err error) {
+	copied, err := io.CopyN(w, r, n)
+	if err == io.EOF {
+		if _, err := io.CopyN(w, zeroReader{}, n-copied); err != nil {
+			return true, err
+		}
+		return true, nil
+	}
+	return false, err
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
 }
 
 // linkStaysUnder refuses a symlink whose target, resolved from the link's own
