@@ -134,3 +134,37 @@ func TestListDirCapsAHugeFolder(t *testing.T) {
 		t.Errorf("%d entries, truncated=%v; want 10, true", len(entries), truncated)
 	}
 }
+
+// A name the API could not address (here a top-level meta.json a container
+// wrote into the content root) is not offered: the page could not open or
+// delete it.
+func TestListDirHidesNamesTheAPICannotAddress(t *testing.T) {
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	s.SaveFile(site, "index.html", strings.NewReader("x"))
+	os.WriteFile(filepath.Join(site.ContentDir(), "meta.json"), []byte("{}"), 0o644)
+	entries, _, err := s.ListDir(site, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := entryNames(entries); got != "index.html" {
+		t.Errorf("root = %s, want meta.json left out", got)
+	}
+}
+
+// A folder a container made unreadable is ErrUnreadable (a 403), not an
+// internal error.
+func TestListDirOfAnUnreadableFolder(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("permission bits bind a non-root user on the production platform")
+	}
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	s.SaveFile(site, "locked/a.txt", strings.NewReader("x"))
+	locked := filepath.Join(site.ContentDir(), "locked")
+	os.Chmod(locked, 0)
+	defer os.Chmod(locked, 0o755)
+	if _, _, err := s.ListDir(site, "locked"); !errors.Is(err, ErrUnreadable) {
+		t.Errorf("unreadable folder: %v, want ErrUnreadable", err)
+	}
+}

@@ -44,7 +44,14 @@ directories and regular files only — links, sockets and pipes a container
 left are not content, exactly as `ListFiles` counts only regular files — and
 leaves out Sitebin's own markers at the top. A folder with more than 10,000
 entries is cut there and says `truncated`. A bad path is a 400, a folder that
-does not exist a 404.
+does not exist (or is a link) a 404, one the server may not read a 403. Names
+the API could not address — a top-level `meta.json` a container wrote, a name
+with a backslash — are left out: the page could neither open nor delete them.
+
+On the page, a folder that fails to load leaves the URL naming the folder
+still shown (and a reload of one falls back to the top); an answer that
+arrives after a later click is dropped; focus moves to the folder just opened,
+or to the first row "Show more" revealed.
 
 Doing this on the server, not by building a tree from the site payload's
 `files`, is what makes a container site fully navigable: that list is capped

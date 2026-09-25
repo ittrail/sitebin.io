@@ -481,17 +481,21 @@ input::placeholder { color: var(--ink-faint); }
   background: none; border: 0; padding: 0; cursor: pointer; text-align: left;
   font: 13.5px var(--mono); color: var(--ink); word-break: break-all;
 }
-.filetable .dirlink::before { content: "\25B8  "; color: var(--amber); }
+.filetable .dirlink .icon { color: var(--amber); margin-right: 7px; }
 .filetable .dirlink:hover { color: var(--amber); }
 .filetable .dirrow .fsize { font-style: italic; }
 
 /* folder browser: Back + breadcrumbs above the file table */
 .crumbs { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: -4px 0 10px; }
-.crumbs .btn[disabled] { opacity: .45; cursor: default; transform: none; box-shadow: none; }
-.crumbs .trail { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; font: 13px var(--mono); }
+.crumbs .trail {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 5px; font: 13px var(--mono);
+  min-width: 0; overflow-wrap: anywhere;
+}
 .crumbs .trail button {
   background: none; border: 0; padding: 0; cursor: pointer; font: inherit; color: var(--amber);
+  text-align: left; overflow-wrap: anywhere;
 }
+.crumbs .trail .here { outline: none; }
 .crumbs .trail button:hover { text-decoration: underline; }
 .crumbs .trail .sep { color: var(--ink-faint); }
 .crumbs .trail .here { color: var(--ink); }

@@ -9,6 +9,10 @@ import (
 	"strings"
 )
 
+// ErrUnreadable is a folder the server may not read — one a container made
+// unreadable, say.
+var ErrUnreadable = errors.New("this folder cannot be read")
+
 // DirEntry is one entry of a folder listing: a sub-folder or a regular file.
 type DirEntry struct {
 	Name string `json:"name"`
@@ -50,6 +54,12 @@ func (s *Store) ListDir(site *Site, relDir string) ([]DirEntry, bool, error) {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, false, ErrNotFound
 		}
+		if fi, lerr := root.Lstat(dir); lerr == nil && fi.Mode()&fs.ModeSymlink != 0 {
+			return nil, false, ErrNotFound // a link, which the root refuses to follow out
+		}
+		if errors.Is(err, fs.ErrPermission) {
+			return nil, false, ErrUnreadable
+		}
 		return nil, false, err
 	}
 	defer f.Close()
@@ -58,25 +68,36 @@ func (s *Store) ListDir(site *Site, relDir string) ([]DirEntry, bool, error) {
 	} else if !fi.IsDir() {
 		return nil, false, ErrNotFound // a file, not a folder
 	}
-	names, err := f.Readdirnames(-1)
+	// ReadDir of a folder opened through the root gets each entry's type
+	// from the listing and its size relative to the open folder, not by
+	// resolving every path again from the top.
+	entries, err := f.ReadDir(-1)
 	if err != nil {
+		if errors.Is(err, fs.ErrPermission) {
+			return nil, false, ErrUnreadable
+		}
 		return nil, false, err
 	}
-	out := make([]DirEntry, 0, len(names))
-	for _, name := range names {
+	out := make([]DirEntry, 0, len(entries))
+	for _, e := range entries {
+		name := e.Name()
 		if dir == "." && (name == SPAMarker || name == TrustedMarker) {
 			continue
 		}
-		// Lstat through the root, never the entry's own Info: that would
-		// resolve the name against the process's working directory.
-		fi, err := root.Lstat(filepath.Join(dir, name))
-		if err != nil {
-			continue // gone since the folder was read
+		// A name the API could not address — one a container made, say a
+		// top-level meta.json or a name with a backslash — is not offered:
+		// the page could neither open nor delete it.
+		if _, err := CleanRelPath(path.Join(rel, name)); err != nil {
+			continue
 		}
-		switch {
-		case fi.IsDir():
+		switch t := e.Type(); {
+		case t.IsDir():
 			out = append(out, DirEntry{Name: name, Dir: true})
-		case fi.Mode().IsRegular():
+		case t.IsRegular():
+			fi, err := e.Info()
+			if err != nil {
+				continue // gone since the folder was read
+			}
 			out = append(out, DirEntry{Name: name, Size: fi.Size()})
 		}
 	}

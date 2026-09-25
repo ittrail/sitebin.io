@@ -34,6 +34,13 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 	os.MkdirAll(filepath.Join(src, "sites", "abc", "files"), 0o755)
 	os.WriteFile(filepath.Join(src, "sites", "abc", "meta.json"), []byte(`{"id":"abc"}`), 0o644)
 	os.WriteFile(filepath.Join(src, "sites", "abc", "files", "index.html"), []byte("hi"), 0o644)
+	// a nested folder, a viewer site's _raw content, and a site with no files/
+	os.MkdirAll(filepath.Join(src, "sites", "abc", "files", "assets", "img"), 0o755)
+	os.WriteFile(filepath.Join(src, "sites", "abc", "files", "assets", "img", "logo.png"), []byte("png"), 0o644)
+	os.MkdirAll(filepath.Join(src, "sites", "view", "files", "_raw"), 0o755)
+	os.WriteFile(filepath.Join(src, "sites", "view", "files", "_raw", "doc.md"), []byte("# doc"), 0o644)
+	os.MkdirAll(filepath.Join(src, "sites", "bare"), 0o755)
+	os.WriteFile(filepath.Join(src, "sites", "bare", "meta.json"), []byte(`{"id":"bare"}`), 0o644)
 	haveSymlink := false
 	if runtime.GOOS != "windows" {
 		os.MkdirAll(filepath.Join(src, "edit-index"), 0o755)
@@ -57,6 +64,15 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dst, "sites", "abc", "meta.json")); err != nil {
 		t.Errorf("meta not restored: %v", err)
+	}
+	for p, want := range map[string]string{
+		"sites/abc/files/assets/img/logo.png": "png",
+		"sites/view/files/_raw/doc.md":        "# doc",
+		"sites/bare/meta.json":                `{"id":"bare"}`,
+	} {
+		if b, err := os.ReadFile(filepath.Join(dst, filepath.FromSlash(p))); err != nil || string(b) != want {
+			t.Errorf("%s not restored: %q %v", p, b, err)
+		}
 	}
 	if haveSymlink {
 		fi, err := os.Lstat(filepath.Join(dst, "edit-index", "e1"))

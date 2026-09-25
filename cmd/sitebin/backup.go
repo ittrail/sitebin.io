@@ -76,8 +76,13 @@ func backupData(root, outPath string) error {
 		defer f.Close()
 		w = f
 		// skip the backup file itself if written inside the data dir
-		if rel, err := filepath.Rel(root, outPath); err == nil && !strings.HasPrefix(rel, "..") {
-			skipRel = filepath.ToSlash(rel)
+		absRoot, err1 := filepath.Abs(root)
+		absOut, err2 := filepath.Abs(outPath)
+		if err1 == nil && err2 == nil {
+			if rel, err := filepath.Rel(absRoot, absOut); err == nil &&
+				rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				skipRel = filepath.ToSlash(rel)
+			}
 		}
 	}
 	gz := gzip.NewWriter(w)
@@ -118,25 +123,31 @@ func backupData(root, outPath string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "backed up %d entries from %s\n", a.count, root)
+	fmt.Fprintf(os.Stderr, "backed up %d entries from %s (%d skipped)\n", a.count, root, a.skipped)
 	return nil
 }
 
 // archiver writes entries into the tar stream.
 type archiver struct {
-	root  string // the data directory, which link targets must stay under
-	tw    *tar.Writer
-	count int
+	root    string // the data directory, which link targets must stay under
+	tw      *tar.Writer
+	count   int
+	skipped int
 }
 
-func skipped(rel string, why any) {
+// skip reports an entry left out of the archive and counts it; the count is
+// on the backup's last line.
+func (a *archiver) skip(rel string, why any) {
+	a.skipped++
 	fmt.Fprintf(os.Stderr, "skipped %s: %v\n", rel, why)
 }
 
 // addSiteContent archives a site's files/ — the directory rel of dataRoot —
-// through an os.Root of its own (see backupData). Anything in it that cannot
-// be read is reported and skipped: one customer's content, or what a
-// container did to it, must not stop the backup of every other site.
+// through an os.Root of its own (see backupData). What a container did in it —
+// a folder swapped for a link, one it made unreadable — is reported and
+// skipped, so one site cannot stop the backup of every other. Any other error
+// still aborts: a backup that exits 0 must be complete, because the cron
+// recipe keeps the last good one only when a run fails.
 func (a *archiver) addSiteContent(dataRoot *os.Root, rel string) error {
 	if err := a.add(dataRoot, rel, rel, true); err != nil {
 		if err == fs.SkipDir {
@@ -146,10 +157,10 @@ func (a *archiver) addSiteContent(dataRoot *os.Root, rel string) error {
 	}
 	siteRoot, err := dataRoot.OpenRoot(rel)
 	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			skipped(rel, err)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
 		}
-		return nil
+		return fmt.Errorf("back up %s: %w", rel, err)
 	}
 	defer siteRoot.Close()
 	return fs.WalkDir(siteRoot.FS(), ".", func(p string, d fs.DirEntry, walkErr error) error {
@@ -158,13 +169,23 @@ func (a *archiver) addSiteContent(dataRoot *os.Root, rel string) error {
 			name = rel + "/" + p
 		}
 		if walkErr != nil {
-			if !errors.Is(walkErr, fs.ErrNotExist) {
-				skipped(name, walkErr)
+			switch {
+			case errors.Is(walkErr, fs.ErrNotExist):
+				return nil // gone since it was listed
+			case p == ".":
+				return fmt.Errorf("back up %s: %w", name, walkErr)
+			case errors.Is(walkErr, fs.ErrPermission):
+				a.skip(name, walkErr)
+				return nil
 			}
-			if p == "." {
-				return fs.SkipDir
+			// A folder a container swapped for a link or a file since it
+			// was checked: the root refused to follow it out, or it is no
+			// folder any more. Anything else is a real read error.
+			if fi, err := siteRoot.Lstat(p); err != nil || !fi.IsDir() {
+				a.skip(name, walkErr)
+				return nil
 			}
-			return nil
+			return fmt.Errorf("back up %s: %w", name, walkErr)
 		}
 		if p == "." {
 			return nil
@@ -196,11 +217,11 @@ func (a *archiver) add(r *os.Root, name, rel string, seenAsDir bool) error {
 		if errors.Is(err, fs.ErrNotExist) {
 			return skip()
 		}
-		if inSiteContent(rel) {
-			skipped(rel, err)
+		if errors.Is(err, fs.ErrPermission) && inSiteContent(rel) {
+			a.skip(rel, err)
 			return skip()
 		}
-		return err
+		return fmt.Errorf("back up %s: %w", rel, err)
 	}
 	var link string
 	switch {
@@ -210,17 +231,18 @@ func (a *archiver) add(r *os.Root, name, rel string, seenAsDir bool) error {
 				return skip() // an index link removed with its site mid-walk
 			}
 			if inSiteContent(rel) {
-				skipped(rel, err)
+				// Swapped for something else since the Lstat said link.
+				a.skip(rel, err)
 				return skip()
 			}
-			return err
+			return fmt.Errorf("back up %s: %w", rel, err)
 		}
 		if err := linkStaysUnder(a.root, filepath.Join(a.root, filepath.FromSlash(rel)), link); err != nil {
-			skipped(rel, err)
+			a.skip(rel, err)
 			return skip()
 		}
 	case !info.Mode().IsRegular() && !info.IsDir():
-		skipped(rel, "not a file, directory or link")
+		a.skip(rel, "not a file, directory or link")
 		return skip()
 	}
 	// A regular file is opened before its header is written: if it has gone,
@@ -239,11 +261,11 @@ func (a *archiver) add(r *os.Root, name, rel string, seenAsDir bool) error {
 			// files; one it made unreadable must not stop the backup of
 			// every other site. Reported, skipped.
 			if errors.Is(err, fs.ErrPermission) && inSiteContent(rel) {
-				skipped(rel, err)
+				a.skip(rel, err)
 				return nil
 			}
 			if fi, lerr := r.Lstat(name); lerr != nil || !fi.Mode().IsRegular() {
-				skipped(rel, "changed while the backup ran")
+				a.skip(rel, "changed while the backup ran")
 				return nil
 			}
 			return fmt.Errorf("back up %s: %w", rel, err)
@@ -254,7 +276,7 @@ func (a *archiver) add(r *os.Root, name, rel string, seenAsDir bool) error {
 			return fmt.Errorf("back up %s: %w", rel, err)
 		}
 		if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
-			skipped(rel, "changed while the backup ran")
+			a.skip(rel, "changed while the backup ran")
 			return nil
 		}
 		info = opened
