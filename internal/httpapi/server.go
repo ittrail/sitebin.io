@@ -182,6 +182,13 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
+// Unwrap hands http.ResponseController the writer underneath, so a handler
+// can still flush through this one. Embedding the interface does not promote
+// Flush, and without this every Flush below was a silent no-op: short
+// responses never noticed, but an MCP subscriptions/listen stream held its
+// first event in the buffer for as long as it stayed open.
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 // ---- helpers ----
 
 // clientIP returns the caller's IP. Behind Caddy the last X-Forwarded-For
