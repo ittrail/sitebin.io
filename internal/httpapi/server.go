@@ -49,6 +49,7 @@ type API struct {
 	authLimiter    *auth.Limiter // per (ip, target)
 	targetLimiter  *auth.Limiter // per target, any source
 	davLockSystems *davLocks
+	uploads        *uploadTokens
 	csp            *cspAggregator
 	forms          *formsState // nil when the instance has no forms
 }
@@ -75,6 +76,7 @@ func New(cfg config.Config, st *store.Store, secret []byte, webFS fs.FS) (*API, 
 		authLimiter:    auth.NewLimiter(float64(cfg.RateAuthPer5Min)*12, cfg.RateAuthPer5Min), // per-5min → per-hour
 		targetLimiter:  auth.NewLimiter(float64(cfg.RateAuthPer5Min)*12*6, cfg.RateAuthPer5Min*6),
 		davLockSystems: newDavLocks(),
+		uploads:        newUploadTokens(time.Now),
 		forms:          newFormsState(cfg, secret),
 	}, nil
 }
