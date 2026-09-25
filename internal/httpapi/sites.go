@@ -290,6 +290,24 @@ func partFilename(p *multipart.Part) string {
 	return p.FileName()
 }
 
+// errUploadCutOff is a request body that ended in the middle of a file: the
+// connection dropped on the way, which is the client's to retry, not a fault
+// of the server. Only bodyReader produces it, so a short read anywhere else
+// can never be mistaken for one.
+var errUploadCutOff = errors.New("the upload was cut off before it was complete — send it again")
+
+// bodyReader reads an upload part and reports the body ending early as
+// errUploadCutOff.
+type bodyReader struct{ r io.Reader }
+
+func (b bodyReader) Read(p []byte) (int, error) {
+	n, err := b.r.Read(p)
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		err = errUploadCutOff
+	}
+	return n, err
+}
+
 // uploadSink is where an upload's files go: straight into the live site, or
 // into a staged replacement that reaches the site only once it is complete.
 type uploadSink interface {
@@ -330,12 +348,12 @@ func (a *API) consumeUploads(r *http.Request, sink uploadSink) (url.Values, erro
 				part.Close()
 				continue
 			}
-			if err := sink.SaveFile(name, part); err != nil {
+			if err := sink.SaveFile(name, bodyReader{part}); err != nil {
 				part.Close()
 				return fields, err
 			}
 		case "zip":
-			err := a.extractZipPart(sink, part)
+			err := a.extractZipPart(sink, bodyReader{part})
 			part.Close()
 			if err != nil {
 				return fields, err

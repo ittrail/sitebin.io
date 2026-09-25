@@ -104,9 +104,12 @@ func (s *Store) BeginReplace(site *Site) (*Replacement, error) {
 	if err := os.MkdirAll(tmp, 0o755); err != nil {
 		return nil, err
 	}
-	now := time.Now()
-	removeStaleStaging(tmp, replaceTmpPrefix, now)
-	removeStaleStaging(site.Dir(), replaceStagingPrefix, now)
+	removeStaleStaging(tmp, replaceTmpPrefix, time.Now())
+	// A site's own .replace-* directories — a crashed or failed commit's —
+	// count toward no quota. The claim above proves no commit of this site is
+	// running, so every one of them goes now, whatever its age: failed
+	// commits can never pile up past one.
+	removeCommitLeftovers(site.Dir())
 	dir, err := os.MkdirTemp(tmp, replaceTmpPrefix+site.ViewID+"-*")
 	if err != nil {
 		return nil, err
@@ -129,9 +132,9 @@ func (s *Store) BeginReplace(site *Site) (*Replacement, error) {
 var commitRename = os.Rename
 
 // removeStaleStaging deletes the staging directories named prefix* in dir that
-// are older than staleStagingAge: under tmp/ the uploads crashes left (of any
-// site), inside a site folder the commits a crash interrupted. They count
-// toward no quota, so nothing else would ever notice them.
+// are older than staleStagingAge: under tmp/, the uploads crashes left, of any
+// site — a younger one may be another site's upload still streaming. They
+// count toward no quota, so nothing else would ever notice them.
 func removeStaleStaging(dir, prefix string, now time.Time) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -143,6 +146,20 @@ func removeStaleStaging(dir, prefix string, now time.Time) {
 		}
 		if fi, err := e.Info(); err == nil && now.Sub(fi.ModTime()) > staleStagingAge {
 			os.RemoveAll(filepath.Join(dir, e.Name()))
+		}
+	}
+}
+
+// removeCommitLeftovers deletes every .replace-* directory in a site folder.
+// The caller holds the site's one-replace claim.
+func removeCommitLeftovers(siteDir string) {
+	entries, err := os.ReadDir(siteDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), replaceStagingPrefix) {
+			os.RemoveAll(filepath.Join(siteDir, e.Name()))
 		}
 	}
 }
@@ -197,8 +214,8 @@ func (r *Replacement) ExtractZip(ra io.ReaderAt, size int64) error {
 //  4. only then is the content root emptied — Sitebin's own markers excepted,
 //     as ClearFiles does — and each staged entry renamed into it. Should one
 //     of those steps fail, the part of the upload not yet in place stays in
-//     the site's .replace-commit-* directory (the error names it; the stale
-//     sweep removes it after staleStagingAge) instead of being thrown away.
+//     the site's .replace-commit-* directory (the error names it; the next
+//     replace of the site removes it) instead of being thrown away.
 //
 // The content directory itself is never renamed or replaced: a container
 // site's bind mounts point INTO it (files/<folder>), and swapping it would
@@ -243,7 +260,7 @@ func (r *Replacement) Commit() error {
 	// Until the live content is touched, the moved staging directory goes
 	// when Commit does. Once clearing has begun it is the only copy of the
 	// part of the upload not yet in place, so a failure from there on keeps
-	// it — the stale sweep removes it after staleStagingAge.
+	// it — until the next replace of the site, which removes it.
 	keep := false
 	defer func() {
 		if !keep {

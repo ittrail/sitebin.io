@@ -220,8 +220,10 @@ func TestBeginReplaceRemovesStaleStaging(t *testing.T) {
 	s := newTestStore(t)
 	site, _, _ := s.Create()
 	tmp := filepath.Join(s.Root(), "tmp")
-	// Uploads stage under <root>/tmp, for any site; only a crash in the middle
-	// of a commit leaves one inside a site folder.
+	// Uploads stage under <root>/tmp, for any site, so only stale ones go
+	// there. A site's own .replace-* directories are left by a crash or a
+	// failed commit, and the one-replace claim proves no commit of the site
+	// is running now: they all go, whatever their age.
 	staleTmp := filepath.Join(tmp, "replace-othersite-1")
 	freshTmp := filepath.Join(tmp, "replace-othersite-2")
 	staleCommit := filepath.Join(site.Dir(), ".replace-commit-1")
@@ -242,15 +244,13 @@ func TestBeginReplaceRemovesStaleStaging(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rep.Abort()
-	for _, d := range []string{staleTmp, staleCommit} {
+	for _, d := range []string{staleTmp, staleCommit, freshCommit} {
 		if _, err := os.Stat(d); !os.IsNotExist(err) {
-			t.Errorf("%s, left by a crash two hours ago, survived", d)
+			t.Errorf("%s survived the next replace of its site", d)
 		}
 	}
-	for _, d := range []string{freshTmp, freshCommit} {
-		if _, err := os.Stat(d); err != nil {
-			t.Errorf("%s, which another upload may still be using, was removed", d)
-		}
+	if _, err := os.Stat(freshTmp); err != nil {
+		t.Errorf("%s, which another site's upload may still be using, was removed", freshTmp)
 	}
 }
 
@@ -525,6 +525,7 @@ func TestReplaceCommitThatFailsMidwayKeepsTheRestOfTheUpload(t *testing.T) {
 	if len(left) != 1 {
 		t.Errorf("kept dir holds %d entries, want the 1 not yet moved", len(left))
 	}
+	commitRename = os.Rename // the recovery replace below runs without the injected failure
 	// The site is not blocked: a new replacement can begin and finish.
 	again, err := s.BeginReplace(site)
 	if err != nil {
@@ -570,5 +571,47 @@ func TestCorruptZipIsErrBadArchive(t *testing.T) {
 	defer rep.Abort()
 	if err := rep.ExtractZip(bytes.NewReader(data), int64(len(data))); !errors.Is(err, ErrBadArchive) {
 		t.Errorf("checksum mismatch in a replace: %v, want ErrBadArchive", err)
+	}
+}
+
+// A kept commit directory counts toward no quota, so failed commits must not
+// pile up: the next replace of the site — which the one-replace claim proves
+// is not racing a commit — removes it whatever its age. Two failures in a row
+// leave at most one.
+func TestFailedCommitsLeaveAtMostOneKeptDirectory(t *testing.T) {
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	defer func() { commitRename = os.Rename }()
+	for i := 0; i < 2; i++ {
+		rep, err := s.BeginReplace(site)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rep.SaveFile("a.txt", strings.NewReader("a"))
+		rep.SaveFile("b.txt", strings.NewReader("b"))
+		calls := 0
+		commitRename = func(from, to string) error {
+			calls++
+			if calls == 3 {
+				return errors.New("injected rename failure")
+			}
+			return os.Rename(from, to)
+		}
+		if err := rep.Commit(); err == nil {
+			t.Fatal("the injected failure did not fail the commit")
+		}
+		commitRename = os.Rename
+	}
+	kept, _ := filepath.Glob(filepath.Join(site.Dir(), replaceCommitPrefix+"*"))
+	if len(kept) != 1 {
+		t.Fatalf("%d kept commit directories after two failures, want 1: %v", len(kept), kept)
+	}
+	rep, err := s.BeginReplace(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rep.Abort()
+	if kept, _ := filepath.Glob(filepath.Join(site.Dir(), replaceCommitPrefix+"*")); len(kept) != 0 {
+		t.Errorf("the next replace left the kept directory: %v", kept)
 	}
 }
