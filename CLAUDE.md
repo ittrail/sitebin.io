@@ -282,8 +282,9 @@ second copy of the rule.
   place — it must never rename it, because container bind mounts point into
   it. One replace per site at a time: a second is `ErrReplaceBusy` (409).
   Should the commit fail after clearing began, the rest of the upload stays
-  in `<site>/.replace-commit-*` for an hour; `sitebin backup` skips those and
-  `tmp/`.
+  in `<site>/.replace-commit-*` until the site's next replace, which removes
+  every one of them (the one-replace claim proves no commit is running), so
+  they never pile up. `sitebin backup` skips those and `tmp/`.
 - **`stats.json` has its own per-site lock** (`lockStats`), not the site lock:
   a page view must never wait for an upload holding the site lock. `Delete`
   takes the site lock, then the stats lock — keep that order.

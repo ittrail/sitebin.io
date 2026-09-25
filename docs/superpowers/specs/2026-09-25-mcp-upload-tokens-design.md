@@ -393,11 +393,23 @@ is what the code does.
 - **A commit that fails midway keeps the rest of the upload.** Once the live
   content is being cleared, the `.replace-commit-*` directory is the only copy
   of whatever is not yet in place; a failure from there on keeps it (the error
-  names it, the stale sweep removes it after an hour) instead of deleting it.
+  names it) instead of deleting it. The site's next replace removes every such
+  directory whatever its age — the one-replace claim proves no commit of the
+  site is running — so repeated failures (a folder a container made read-only
+  fails every clear) cannot pile up uncounted copies of the site cap.
 - **The one-replace claim is released on a panic too.** `BeginReplace` releases
   it on every way out that does not return a `Replacement`, not only on an
   error return.
 - **Backups leave uploads in flight out.** `sitebin backup` skips `tmp/` (the zip
-  spool and replace staging) and a site's `.replace-*` commit directory, and a
-  file that vanishes between the walk listing it and the backup reading it is
-  skipped instead of aborting the whole archive.
+  spool and replace staging) and a site's `.replace-*` commit directory (not a
+  user's folder of that name inside `files/`). A file that vanishes between the
+  walk listing it and the backup reading it is skipped; one that shrinks is
+  zero-padded to the size its header promised, as GNU tar does; one swapped
+  for a link or a FIFO is skipped — opened with `O_NOFOLLOW|O_NONBLOCK` on
+  Linux and checked with `SameFile` — never followed out of the site. The
+  README's cron recipe now uses `pipefail` and a temporary name, so a failed
+  backup never replaces the last good one.
+- **Only a truly damaged zip is a bad archive.** A read error on the server's
+  own spool file stays an internal error (its message names a server path),
+  and "the upload was cut off" is tagged where the request body is read, not
+  inferred from any short read.
