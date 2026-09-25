@@ -4,6 +4,6 @@ package main
 
 import "os"
 
-// openNoFollow is a plain open where the platform has no O_NOFOLLOW; the
-// SameFile check after the open still catches a swapped file.
-func openNoFollow(p string) (*os.File, error) { return os.Open(p) }
+// openInRoot is a plain open inside r where the platform has no O_NONBLOCK;
+// the SameFile check after the open still catches a swapped file.
+func openInRoot(r *os.Root, name string) (*os.File, error) { return r.Open(name) }

@@ -162,7 +162,8 @@ The third site mode (`store.ModeContainer`) runs the project its
   the site tree, so the store, WebDAV (`siteFS`) and FTP (`rootFs`) resolve
   through `os.Root`; listings, ZIP and usage count regular files only; leaving
   container mode purges every link before Caddy serves the tree; backup skips
-  links out of the data root. Any new code that touches site files must go
+  links out of the data root, and walks each site's `files/` through an
+  `os.Root` of its own. Any new code that touches site files must go
   through `store.OpenContentRoot` or the store — never `os.Open` on a joined
   path.
 

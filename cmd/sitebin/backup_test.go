@@ -227,11 +227,11 @@ func TestBackupToleratesAFileThatVanishes(t *testing.T) {
 	os.WriteFile(vanishing, []byte("x"), 0o644)
 
 	real := openForBackup
-	openForBackup = func(p string) (*os.File, error) {
-		if p == vanishing {
-			return nil, &os.PathError{Op: "open", Path: p, Err: os.ErrNotExist}
+	openForBackup = func(r *os.Root, name string) (*os.File, error) {
+		if name == "sites/abc/meta.json.tmp" {
+			return nil, &os.PathError{Op: "open", Path: vanishing, Err: os.ErrNotExist}
 		}
-		return real(p)
+		return real(r, name)
 	}
 	defer func() { openForBackup = real }()
 
@@ -287,14 +287,14 @@ func TestBackupDoesNotFollowAFileSwappedForALink(t *testing.T) {
 	os.WriteFile(victim, []byte("page"), 0o644)
 
 	real := openForBackup
-	openForBackup = func(p string) (*os.File, error) {
-		if p == victim { // the swap happens between the walk's lstat and the open
+	openForBackup = func(r *os.Root, name string) (*os.File, error) {
+		if name == "page.html" { // the swap happens between the lstat and the open
 			os.Remove(victim)
 			if err := os.Symlink(secret, victim); err != nil {
 				t.Fatal(err)
 			}
 		}
-		return real(p)
+		return real(r, name)
 	}
 	defer func() { openForBackup = real }()
 
@@ -327,14 +327,14 @@ func TestBackupDoesNotDescendIntoADirectorySwappedForALink(t *testing.T) {
 	os.WriteFile(filepath.Join(files, "b", "page.html"), []byte("page"), 0o644)
 
 	real := openForBackup
-	openForBackup = func(p string) (*os.File, error) {
-		if p == filepath.Join(files, "a.txt") { // b is swapped while a.txt is being read
+	openForBackup = func(r *os.Root, name string) (*os.File, error) {
+		if name == "a.txt" { // b is swapped while a.txt is being read
 			os.RemoveAll(filepath.Join(files, "b"))
 			if err := os.Symlink(outside, filepath.Join(files, "b")); err != nil {
 				t.Fatal(err)
 			}
 		}
-		return real(p)
+		return real(r, name)
 	}
 	defer func() { openForBackup = real }()
 
@@ -376,5 +376,47 @@ func TestBackupSkipsAnUnreadableFileInsideASite(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dst, "sites", "abc", "meta.json")); err != nil {
 		t.Errorf("the rest of the site was not backed up: %v", err)
+	}
+}
+
+// The last window: a directory swapped for a link AFTER it was checked and
+// before the walk reads it. The link points at another site — inside the data
+// root, so no link check objects to it. Read through the site's own root, it
+// leads nowhere: the other site's files never end up in this site's backup.
+func TestBackupSiteContentNeverLeavesTheSite(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("links are the production platform's")
+	}
+	src := t.TempDir()
+	mine := filepath.Join(src, "sites", "abc", "files")
+	theirs := filepath.Join(src, "sites", "xyz", "files")
+	os.MkdirAll(filepath.Join(mine, "b"), 0o755)
+	os.MkdirAll(theirs, 0o755)
+	os.WriteFile(filepath.Join(mine, "b", "page.html"), []byte("mine"), 0o644)
+	os.WriteFile(filepath.Join(theirs, "secret.txt"), []byte("another customer's"), 0o644)
+
+	afterDirCheck = func(rel string) {
+		if rel == "sites/abc/files/b" {
+			os.RemoveAll(filepath.Join(mine, "b"))
+			if err := os.Symlink(filepath.Join("..", "..", "xyz", "files"), filepath.Join(mine, "b")); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	defer func() { afterDirCheck = nil }()
+
+	archive := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if err := backupData(src, archive); err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	dst := t.TempDir()
+	if err := restoreData(dst, archive); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dst, "sites", "abc", "files", "b", "secret.txt")); err == nil {
+		t.Fatalf("another site's file was archived inside this site: %q", b)
+	}
+	if b, err := os.ReadFile(filepath.Join(dst, "sites", "xyz", "files", "secret.txt")); err != nil || string(b) != "another customer's" {
+		t.Errorf("the other site itself was not backed up: %q %v", b, err)
 	}
 }
