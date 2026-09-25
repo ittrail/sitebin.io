@@ -422,16 +422,19 @@ func (p *provider) OnSiteCreated(ownerAccountID, viewID string) error {
 // browser's own drop page creates sites).
 //
 // A presented bearer is answered ONLY from that bearer: an account API token,
-// or — where MCP OAuth is configured — an access token from the issuer. It
-// deliberately does not fall back to the session cookie when a bearer was sent
-// and did not check out, because a wrong credential must fail rather than
-// quietly succeed as whoever happens to be logged in.
+// or — where MCP OAuth is configured, and only on a request that came through
+// /mcp — an access token from the issuer. The token's audience is the MCP
+// resource; on POST /api/sites it would let a read-only grant create sites,
+// since the JSON API has no scopes to hold it to. It deliberately does not
+// fall back to the session cookie when a bearer was sent and did not check
+// out, because a wrong credential must fail rather than quietly succeed as
+// whoever happens to be logged in.
 func (p *provider) accountForAPI(r *http.Request) (*account.Account, bool) {
 	if secret := bearerToken(r); secret != "" {
 		if acc, ok := p.accounts.ByToken(secret); ok {
 			return acc, true
 		}
-		if p.mcpOAuth != nil {
+		if p.mcpOAuth != nil && ext.IsMCPCaller(r.Context()) {
 			if cred, ok := p.mcpOAuth.Verify(r.Context(), secret); ok {
 				if acc, err := p.accounts.ByID(cred.AccountID); err == nil {
 					return acc, true
@@ -460,7 +463,11 @@ func bearerToken(r *http.Request) string {
 // this method's job so the core never has to. An account API token is
 // recognised by its own prefix and grants everything its account can do, which
 // is why it carries no scopes. Anything else is offered to the OAuth verifier,
-// when one is configured.
+// when one is configured — and only on a request that came through /mcp. An
+// access token is for that resource alone, so elsewhere it is not even
+// verified: a JSON API request cannot make this instance ask the stack about
+// consent or create an account. The core refuses an OAuth credential outside
+// /mcp as well; this is the same rule held on both sides of the seam.
 func (p *provider) BearerCredential(r *http.Request) (ext.Credential, bool) {
 	if !p.cfg.Enabled() {
 		return ext.Credential{}, false
@@ -472,7 +479,7 @@ func (p *provider) BearerCredential(r *http.Request) (ext.Credential, bool) {
 	if acc, ok := p.accounts.ByToken(secret); ok {
 		return ext.Credential{AccountID: acc.ID}, true
 	}
-	if p.mcpOAuth != nil {
+	if p.mcpOAuth != nil && ext.IsMCPCaller(r.Context()) {
 		if cred, ok := p.mcpOAuth.Verify(r.Context(), secret); ok {
 			return cred, true
 		}

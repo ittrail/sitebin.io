@@ -110,7 +110,7 @@ func (m *mcpOAuth) Verify(ctx context.Context, raw string) (ext.Credential, bool
 		return ext.Credential{}, false
 	}
 
-	return ext.Credential{AccountID: accountID, Scopes: parseScopes(claims.Scope)}, true
+	return ext.Credential{AccountID: accountID, Scopes: parseScopes(claims.Scope), OAuth: true}, true
 }
 
 // audience decodes the `aud` claim, which JSON-encodes as either a string or an
