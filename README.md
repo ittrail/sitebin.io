@@ -864,7 +864,8 @@ backups and a low DNS TTL this alone gives minutes-level recovery:
 # needs bash: put SHELL=/bin/bash at the top of the crontab (cron's default
 # /bin/sh may not have it, and the protection would be silently lost):
 set -o pipefail
-docker exec sitebin sitebin backup - | ssh backup-host 'cat > sitebin-latest.tar.gz.part'   && ssh backup-host 'mv sitebin-latest.tar.gz.part sitebin-latest.tar.gz'
+docker exec sitebin sitebin backup - | ssh backup-host 'cat > sitebin-latest.tar.gz.part' \
+  && ssh backup-host 'mv sitebin-latest.tar.gz.part sitebin-latest.tar.gz'
 
 # disaster: on any fresh server with Docker
 docker run -d --name sitebin -v sitebin-data:/data … sitebin:latest   # same env as before
