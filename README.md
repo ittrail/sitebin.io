@@ -1034,9 +1034,9 @@ revokes them. Send one as `Authorization: Bearer <token>` to
 ```bash
 TOKEN=sbp_...
 # publish a build artifact
-curl -H "Authorization: Bearer $TOKEN" -F "files=@dist.zip"      https://app.example.com/api/sites
+curl -H "Authorization: Bearer $TOKEN" -F "zip=@dist.zip"      https://app.example.com/api/sites
 # and update it later, no per-site secret needed
-curl -H "Authorization: Bearer $TOKEN" -F "files=@dist.zip"      "https://app.example.com/api/sites/<edit-id>/files?replace=true"
+curl -H "Authorization: Bearer $TOKEN" -F "zip=@dist.zip"      "https://app.example.com/api/sites/<edit-id>/files?replace=true"
 ```
 
 The same token authenticates the [MCP server](#mcp-server-for-ai-agents), where
