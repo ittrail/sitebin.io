@@ -293,6 +293,20 @@ func TestMCPUnknownEditID(t *testing.T) {
 	}
 }
 
+// Review fix round 1, Finding 2: an upload token handed to MCP as
+// edit_password must not be tried as one — it belongs to open_upload's own
+// upload_url/webdav_url, not to the JSON-RPC tools.
+func TestMCPEditPasswordRejectsAnUploadToken(t *testing.T) {
+	e := newEnv(t, nil)
+	cs := mcpClient(t, e, nil)
+	editID, _ := mcpCreate(t, cs, "hi")
+
+	res := mcpCall(t, cs, "get_site", map[string]any{"edit_id": editID, "edit_password": "sbu_notatoken"})
+	if !res.IsError || !strings.Contains(mcpText(res), "upload token") {
+		t.Errorf("res = %v %s", res.IsError, mcpText(res))
+	}
+}
+
 // ---- list_sites without a token ----
 
 func TestMCPListSitesWithoutAccountsExplains(t *testing.T) {

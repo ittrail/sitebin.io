@@ -254,12 +254,21 @@ func TestUploadTokenIsBoundToOneSiteOverTheAPI(t *testing.T) {
 	}
 }
 
+// TestUploadTokenRefusedEverywhereElse runs the refusal loop once per channel
+// a credential can travel on — Authorization: Bearer, X-Edit-Password, and
+// the Basic-auth password — because withEditAuth's password path only reads
+// X-Edit-Password and Basic, never Bearer. A version that sent the token only
+// as Bearer would stay green even if the X-Edit-Password (or Basic) branch of
+// uploadCredential were deleted, since that channel's "edit password
+// required" 401 looks like a refusal too. Running all three, then checking the
+// real edit password still verifies under a rate limit of one, proves none of
+// the three channels reached the password path.
 func TestUploadTokenRefusedEverywhereElse(t *testing.T) {
 	e := newEnv(t, map[string]string{"SITEBIN_RATE_AUTH_PER_5MIN": "1"})
 	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
 	edit := editIDFrom(t, c.EditURL)
 	tok := uploadTokenFor(t, e, c)
-	for _, rt := range []struct{ method, path, body string }{
+	routes := []struct{ method, path, body string }{
 		{"GET", "/api/sites/" + edit, ""},
 		{"PUT", "/api/sites/" + edit, `{"view_password":"x"}`},
 		{"DELETE", "/api/sites/" + edit, ""},
@@ -269,15 +278,27 @@ func TestUploadTokenRefusedEverywhereElse(t *testing.T) {
 		{"POST", "/api/sites/" + edit + "/domains", `{"domain":"d.example.com"}`},
 		{"GET", "/api/sites/" + edit + "/forms", ""},
 		{"POST", "/api/sites", ""},
-	} {
-		req := bearer(httptest.NewRequest(rt.method, rt.path, strings.NewReader(rt.body)), tok)
-		w := e.public(t, req)
-		if w.Code != 403 || !strings.Contains(w.Body.String(), "upload token") {
-			t.Errorf("%s %s with an upload token: %d %s", rt.method, rt.path, w.Code, w.Body)
+	}
+	channels := []struct {
+		name string
+		with func(*http.Request) *http.Request
+	}{
+		{"Bearer", func(r *http.Request) *http.Request { return bearer(r, tok) }},
+		{"X-Edit-Password", func(r *http.Request) *http.Request { return authed(r, tok) }},
+		{"Basic", func(r *http.Request) *http.Request { r.SetBasicAuth("sitebin", tok); return r }},
+	}
+	for _, ch := range channels {
+		for _, rt := range routes {
+			req := ch.with(httptest.NewRequest(rt.method, rt.path, strings.NewReader(rt.body)))
+			w := e.public(t, req)
+			if w.Code != 403 || !strings.Contains(w.Body.String(), "upload token") {
+				t.Errorf("%s: %s %s with an upload token: %d %s", ch.name, rt.method, rt.path, w.Code, w.Body)
+			}
 		}
 	}
 	// With a rate limit of one attempt, the edit password still verifies: none
-	// of the refusals above reached the rate-limited password path.
+	// of the refusals above, on any channel, reached the rate-limited password
+	// path.
 	if w := e.public(t, authed(httptest.NewRequest("GET", "/api/sites/"+edit, nil), c.EditPassword)); w.Code != 200 {
 		t.Fatalf("edit password after the refusals: %d %s", w.Code, w.Body)
 	}
@@ -287,5 +308,45 @@ func TestUploadTokenRefusedEverywhereElse(t *testing.T) {
 	}
 	if site.Meta.ViewPasswordProtected {
 		t.Error("an upload token changed a setting")
+	}
+}
+
+// A good upload token works the JSON API upload route through X-Edit-Password
+// alone, with no Bearer header at all — an agent's HTTP client may not offer
+// a way to set Authorization on a plain form upload.
+func TestUploadTokenAsXEditPasswordUploads(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	tok := uploadTokenFor(t, e, c)
+	body, ct := uploadBody(t, nil, map[string]string{"a.txt": "a"})
+	req := authed(httptest.NewRequest("POST", "/api/sites/"+editIDFrom(t, c.EditURL)+"/files", body), tok)
+	req.Header.Set("Content-Type", ct)
+	if w := e.public(t, req); w.Code != 200 {
+		t.Fatalf("X-Edit-Password upload token: %d %s", w.Code, w.Body)
+	}
+	site, _ := e.st.ByViewID(c.ID)
+	if b, err := e.st.ReadContentFile(site, "a.txt"); err != nil || string(b) != "a" {
+		t.Fatalf("a.txt = %q, %v", b, err)
+	}
+}
+
+// Review fix round 1, Finding 2: an sbu_ credential is never tried as an edit
+// password, on any surface. verifyEditIP refuses it before the verify cache,
+// the rate limiters, and Argon2 — so an upload token thrown at the password
+// path never spends the limiter budget a real wrong password would.
+func TestUploadTokenNeverVerifiesAsAnEditPassword(t *testing.T) {
+	e := newEnv(t, map[string]string{"SITEBIN_RATE_AUTH_PER_5MIN": "1"})
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	site, err := e.st.ByEditID(editIDFrom(t, c.EditURL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := e.api.verifyEditIP("192.0.2.1", site, "sbu_x"); got != verifyFailed {
+		t.Fatalf("verifyEditIP(upload token) = %v, want verifyFailed", got)
+	}
+	// The limiter allows exactly one attempt. If the upload token above had
+	// spent it, this real password would come back throttled instead of OK.
+	if got := e.api.verifyEditIP("192.0.2.1", site, c.EditPassword); got != verifyOK {
+		t.Fatalf("verifyEditIP(edit password) after an upload-token attempt = %v, want verifyOK (limiter must not have been spent)", got)
 	}
 }

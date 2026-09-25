@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/ids"
 	"github.com/ittrail/sitebin.io/internal/mcp"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
@@ -112,6 +113,9 @@ func (o mcpOps) openSite(auth mcp.Auth, ref mcp.SiteRef) (*store.Site, error) {
 			return nil, errors.New("this site is not owned by the connected account: pass its edit_password, or use list_sites to see the sites this token can manage")
 		}
 		return nil, errors.New("edit_password is required for this site — it was returned once by create_site")
+	}
+	if strings.HasPrefix(ref.EditPassword, ids.UploadTokenPrefix) {
+		return nil, errors.New("that is an upload token from open_upload: it works only with your own HTTP client on its upload_url or webdav_url — pass the site's edit_password here, or connect with an account API token")
 	}
 	switch o.a.verifyEditIP(auth.ClientIP, site, ref.EditPassword) {
 	case verifyOK:

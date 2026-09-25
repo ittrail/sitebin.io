@@ -20,6 +20,7 @@ import (
 	"github.com/ittrail/sitebin.io/internal/auth"
 	"github.com/ittrail/sitebin.io/internal/config"
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/ids"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
@@ -333,6 +334,12 @@ func (a *API) verifyEdit(r *http.Request, site *store.Site, pw string) verifyRes
 // verifyEditIP is verifyEdit keyed by a client IP string (used by non-HTTP
 // callers such as the FTP server).
 func (a *API) verifyEditIP(clientIP string, site *store.Site, pw string) verifyResult {
+	// An upload token is never an edit password; refusing it here keeps it
+	// from spending the password rate limits on any surface — API, WebDAV,
+	// FTP, MCP.
+	if strings.HasPrefix(pw, ids.UploadTokenPrefix) {
+		return verifyFailed
+	}
 	sum := sha256.Sum256([]byte(pw))
 	cacheKey := site.EditID + ":" + hex.EncodeToString(sum[:])
 	if a.verifyCache.Check(cacheKey) {
