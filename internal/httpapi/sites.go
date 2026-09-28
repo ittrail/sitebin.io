@@ -409,6 +409,10 @@ type pendingDomain struct {
 	TXTValue    string `json:"txt_value"`
 	CNAMETarget string `json:"cname_target,omitempty"`
 	RequestedAt string `json:"requested_at"`
+	// CheckedAt and CheckResult are the last check, the owner's or the
+	// sweep's, and what it found (store.DomainClaim.CheckResult).
+	CheckedAt   string `json:"checked_at,omitempty"`
+	CheckResult string `json:"check_result,omitempty"`
 }
 
 // pendingDomains lists the site's unverified claims with their records. The
@@ -416,7 +420,10 @@ type pendingDomain struct {
 func (a *API) pendingDomains(site *store.Site) []pendingDomain {
 	out := []pendingDomain{}
 	for _, c := range site.PendingDomains() {
-		p := pendingDomain{Domain: c.Domain, TXTName: c.TXTName(), TXTValue: c.TXTValue(), RequestedAt: c.RequestedAt.UTC().Format(time.RFC3339)}
+		p := pendingDomain{Domain: c.Domain, TXTName: c.TXTName(), TXTValue: c.TXTValue(), RequestedAt: c.RequestedAt.UTC().Format(time.RFC3339), CheckResult: c.CheckResult}
+		if c.CheckedAt != nil {
+			p.CheckedAt = c.CheckedAt.UTC().Format(time.RFC3339)
+		}
 		if a.cfg.SubdomainViews() {
 			p.CNAMETarget = site.ViewID + "." + a.cfg.ViewDomain
 		}
@@ -473,6 +480,7 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"custom_domains":          m.CustomDomains,
 		"container":               a.containerPayload(site),
 		"pending_domains":         a.pendingDomains(site),
+		"domain_recheck_minutes":  a.recheckMinutes(),
 		"zone_domains":            a.zoneDomains(site),
 		"origin":                  m.Origin,
 		"locked":                  lockPayload(m.Locked),
@@ -842,15 +850,6 @@ func (a *API) deleteFile(w http.ResponseWriter, r *http.Request, site *store.Sit
 }
 
 func (a *API) addDomain(w http.ResponseWriter, r *http.Request, site *store.Site) {
-	// Custom domains are an enterprise feature; the community build has no
-	// provider and rejects them.
-	if p, ok := ext.Get(); !ok {
-		writeError(w, 403, "custom domains are an enterprise feature; see the Enterprise edition")
-		return
-	} else if err := p.CustomDomainsAllowed(); err != nil {
-		writeError(w, 403, err.Error())
-		return
-	}
 	var body struct {
 		Domain string `json:"domain"`
 	}
@@ -859,25 +858,71 @@ func (a *API) addDomain(w http.ResponseWriter, r *http.Request, site *store.Site
 		writeError(w, 400, `body must be {"domain": "example.com"}`)
 		return
 	}
-	// A container site's domains come from its compose file. Posting one it
-	// already claims is the edit page's "check now"; anything else is refused.
-	if site.Meta.Mode == store.ModeContainer && !site.HasDomainClaim(body.Domain) {
-		writeError(w, 409, errContainerDomains)
+	pending, err := a.claimDomain(site, body.Domain)
+	if err != nil {
+		respondErr(w, err)
 		return
 	}
-	err := a.st.AddDomain(site, body.Domain)
-	switch {
-	case errors.Is(err, store.ErrDomainPending):
-		// Recorded, not attached: the payload carries the record to create.
-		a.log.Info("custom domain claimed, pending verification", "id", site.ViewID, "owner", site.Meta.OwnerAccountID, "domain", body.Domain)
+	if pending != "" {
+		// Recorded, not attached: the payload carries the record to create
+		// and what this check found.
+		a.log.Info("custom domain pending verification", "id", site.ViewID, "owner", site.Meta.OwnerAccountID, "domain", body.Domain)
 		writeJSON(w, 202, a.sitePayload(site))
-		return
-	case err != nil:
-		respondErr(w, err)
 		return
 	}
 	a.log.Info("custom domain attached", "id", site.ViewID, "owner", site.Meta.OwnerAccountID, "domain", body.Domain)
 	writeJSON(w, 200, a.sitePayload(site))
+}
+
+// Checks an owner asks for — adding a domain, "Check now", MCP's add_domain —
+// each send a handful of queries to the nameservers of a domain the owner
+// names. Per claim: three at once, then one a minute; per site: ten, then two
+// a minute. The sweep's own checks are not counted: one pass per interval.
+const (
+	domainChecksPerHour     = 60
+	domainChecksBurst       = 3
+	domainSiteChecksPerHour = 120
+	domainSiteChecksBurst   = 10
+)
+
+// claimDomain is the one path an owner's request takes to claim a custom
+// domain or to check a claim again, from the edit page, the API and MCP
+// alike: the edition and licence gate, the container rule, the rate limit,
+// then the store. A claim left pending is not an error: pending is what the
+// check found, which the claim also records. Both "" and nil: attached.
+func (a *API) claimDomain(site *store.Site, domain string) (pending string, err error) {
+	// Custom domains are an enterprise feature; the community build has no
+	// provider and rejects them.
+	if p, ok := ext.Get(); !ok {
+		return "", &apiError{403, "custom domains are an enterprise feature and are not available on this instance; see the Enterprise edition"}
+	} else if err := p.CustomDomainsAllowed(); err != nil {
+		return "", &apiError{403, err.Error()}
+	}
+	// A container site's domains come from its compose file. Posting one it
+	// already claims is "Check now"; anything else is refused.
+	if site.Meta.Mode == store.ModeContainer && !site.HasDomainClaim(domain) {
+		return "", &apiError{409, errContainerDomains}
+	}
+	key := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
+	if !a.domainChecks.Allow(site.ViewID+"|"+key) || !a.domainSites.Allow(site.ViewID) {
+		return "", &apiError{429, fmt.Sprintf("%s was checked a moment ago; try again in a minute. "+
+			"The instance also checks pending domains by itself every %d minutes.", key, a.recheckMinutes())}
+	}
+	err = a.st.AddDomain(site, domain)
+	if !errors.Is(err, store.ErrDomainPending) {
+		return "", err
+	}
+	for _, c := range site.PendingDomains() {
+		if c.Domain == key && c.CheckResult != "" {
+			return c.CheckResult, nil
+		}
+	}
+	return strings.TrimPrefix(err.Error(), store.ErrDomainPending.Error()+": "), nil
+}
+
+// recheckMinutes is how often the sweep checks pending domains on its own.
+func (a *API) recheckMinutes() int {
+	return max(1, int(a.cfg.CleanupInterval.Round(time.Minute).Minutes()))
 }
 
 func (a *API) removeDomain(w http.ResponseWriter, r *http.Request, site *store.Site) {

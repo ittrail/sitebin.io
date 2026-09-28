@@ -437,15 +437,20 @@ func (o mcpOps) AddDomain(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, dom
 	if err != nil {
 		return nil, err
 	}
-	if p, ok := ext.Get(); !ok {
-		return nil, errors.New("custom domains are an enterprise feature and are not available on this instance")
-	} else if err := p.CustomDomainsAllowed(); err != nil {
-		return nil, err
-	}
-	if err := o.a.st.AddDomain(site, domain); err != nil && !errors.Is(err, store.ErrDomainPending) {
+	pending, err := o.a.claimDomain(site, domain)
+	if err != nil {
 		return nil, o.mcpError(err)
 	}
-	return o.siteResult(site), nil
+	res := o.siteResult(site)
+	if pending != "" {
+		// In warnings, an existing field: a client that cached the output
+		// schema rejects a result carrying a field it has not seen.
+		res.Warnings = append(res.Warnings, fmt.Sprintf("%s is not verified yet: %s. "+
+			"Create the record listed under pending_domains, then call add_domain again; "+
+			"the instance also checks by itself every %d minutes.",
+			strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), ".")), pending, o.a.recheckMinutes()))
+	}
+	return res, nil
 }
 
 func (o mcpOps) RemoveDomain(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, domain string) (*mcp.SiteResult, error) {

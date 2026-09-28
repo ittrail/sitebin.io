@@ -94,13 +94,14 @@ func (s *Store) AddDomain(site *Site, domain string) error {
 		// Verified in meta but not indexed (a lost link): repair the index.
 		return s.attach(site, d, now)
 	}
-	ok, verr := s.verify(context.Background(), site, claim)
+	ok, found, verr := s.verify(context.Background(), site, claim)
 	if verr != nil {
+		s.stampCheck(site, d, now, lookupFailed(verr))
 		return fmt.Errorf("%w: the DNS lookup failed (%v); try again in a moment", ErrDomainPending, verr)
 	}
 	if !ok {
-		s.stampCheck(site, d, now)
-		return ErrDomainPending
+		s.stampCheck(site, d, now, found)
+		return fmt.Errorf("%w: %s", ErrDomainPending, found)
 	}
 	return s.attach(site, d, now)
 }
@@ -136,6 +137,7 @@ func (s *Store) attach(site *Site, d string, now time.Time) error {
 			}
 			c.CheckedAt = &t
 			c.FailingSince = nil
+			c.CheckResult = ""
 		} else {
 			m.DomainClaims = append(m.DomainClaims, DomainClaim{Domain: d, Token: newClaimToken(), RequestedAt: t, VerifiedAt: &t, CheckedAt: &t})
 		}

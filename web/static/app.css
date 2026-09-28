@@ -563,6 +563,8 @@ input::placeholder { color: var(--ink-faint); }
 .ctsvc .maps { margin-top: 6px; display: grid; gap: 4px; font: 13px var(--mono); color: var(--ink-dim); }
 .ctsvc .maps a { color: var(--ink); }
 .ctsvc .maps .pending { color: var(--amber); }
+.ctsvc .maps .pendingroute .btn { margin-left: 8px; font-family: inherit; }
+.lastcheck { font: 12px var(--mono); color: var(--ink-faint); margin-top: 4px; word-break: break-word; }
 .ctsvc .vols { margin-top: 4px; font: 12px var(--mono); color: var(--ink-faint); }
 .ctlog {
   margin-top: 12px; max-height: 320px; overflow: auto; padding: 12px 14px; border-radius: 10px;

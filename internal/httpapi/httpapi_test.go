@@ -2062,6 +2062,70 @@ func TestAddDomainPendingUntilDNSProvesControl(t *testing.T) {
 	}
 }
 
+// explainingVerifier never proves anything and says what it found.
+type explainingVerifier struct{ found string }
+
+func (v explainingVerifier) Verify(context.Context, string, string, string) (bool, error) {
+	return false, nil
+}
+
+func (v explainingVerifier) Explain(context.Context, string, string, string) (bool, string, error) {
+	return false, v.found, nil
+}
+
+// "Check now" answers with what the check found, not a bare "pending", and
+// is rate-limited per claim so it cannot be used to hammer somebody's
+// nameservers; another claim has its own budget.
+func TestCheckNowSaysWhatItFoundAndIsRateLimited(t *testing.T) {
+	ext.Register(&fakeProvider{domainsOK: true})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	found := "no TXT record at _sitebin-challenge.docs.customer.example (answered by ns1.kunde-dns.test)"
+	e.st.SetDomainVerifier(explainingVerifier{found}, e.cfg.ViewDomain)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+	post := func(d string) *httptest.ResponseRecorder {
+		req := authed(httptest.NewRequest("POST", "/api/sites/"+edit+"/domains", strings.NewReader(`{"domain":"`+d+`"}`)), c.EditPassword)
+		req.Header.Set("Content-Type", "application/json")
+		return e.public(t, req)
+	}
+
+	w := post("docs.customer.example")
+	if w.Code != 202 {
+		t.Fatalf("add = %d %s", w.Code, w.Body)
+	}
+	var out struct {
+		RecheckMinutes int `json:"domain_recheck_minutes"`
+		PendingDomains []struct {
+			Domain      string `json:"domain"`
+			CheckedAt   string `json:"checked_at"`
+			CheckResult string `json:"check_result"`
+		} `json:"pending_domains"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.PendingDomains) != 1 || out.PendingDomains[0].CheckResult != found || out.PendingDomains[0].CheckedAt == "" {
+		t.Errorf("pending_domains = %+v, want the check's finding and time", out.PendingDomains)
+	}
+	if out.RecheckMinutes != int(e.cfg.CleanupInterval.Minutes()) || out.RecheckMinutes == 0 {
+		t.Errorf("domain_recheck_minutes = %d, want the sweep interval", out.RecheckMinutes)
+	}
+
+	for i := 0; i < 2; i++ {
+		if w := post("docs.customer.example"); w.Code != 202 {
+			t.Fatalf("check now #%d = %d %s", i+2, w.Code, w.Body)
+		}
+	}
+	w = post("docs.customer.example")
+	if w.Code != 429 || !strings.Contains(w.Body.String(), "minute") {
+		t.Errorf("a fourth check within the minute = %d %s, want 429 saying when to try", w.Code, w.Body)
+	}
+	if w := post("other.customer.example"); w.Code != 202 {
+		t.Errorf("another claim on the same site = %d %s, want its own budget", w.Code, w.Body)
+	}
+}
+
 // ---- abuse reports: what is kept, for how long, and how many ----
 
 // A report keeps only a truncated source address (/24, /48) and the

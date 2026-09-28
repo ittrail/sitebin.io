@@ -234,19 +234,12 @@ function render() {
       cn.append(c, " \u2192 ", t);
       rec.append(cn);
     }
+    const last = lastCheck(p);
+    if (last) rec.append(last);
     const note = document.createElement("div");
-    note.textContent = "Checked automatically every few minutes; a claim that never verifies is dropped after 7 days.";
+    note.textContent = recheckNote() + " A claim that never verifies is dropped after 7 days.";
     rec.append(note);
-    const check = document.createElement("button");
-    check.className = "btn small";
-    check.textContent = "Check now";
-    check.addEventListener("click", async () => {
-      try {
-        site = await api("POST", "/domains", { domain: p.domain });
-        render();
-        toast(site.custom_domains.includes(p.domain) ? "Verified " + p.domain : "Not verified yet: the record is not visible");
-      } catch (err) { toast(err.message, true); }
-    });
+    const check = checkNowButton(p.domain);
     const rm = document.createElement("button");
     rm.className = "btn small";
     rm.textContent = "Remove";
@@ -288,6 +281,48 @@ function render() {
     dr.appendChild(row);
   }
   $("dns-target").textContent = site.dns_target;
+}
+
+// checkNowButton asks the server to look the claim's record up again, now.
+// The answer says what the check found; the server rate-limits it per claim.
+function checkNowButton(domain) {
+  const b = document.createElement("button");
+  b.className = "btn small";
+  b.textContent = "Check now";
+  b.addEventListener("click", async () => {
+    b.disabled = true;
+    try {
+      site = await api("POST", "/domains", { domain });
+      render();
+      if (site.custom_domains.includes(domain)) {
+        toast("Verified " + domain);
+      } else {
+        const p = (site.pending_domains || []).find((x) => x.domain === domain);
+        toast("Not verified yet: " + (p && p.check_result ? p.check_result : "the record is not visible"));
+      }
+    } catch (err) { toast(err.message, true); b.disabled = false; }
+  });
+  return b;
+}
+
+// lastCheck says when a pending claim was last looked up and what that found,
+// or nothing before its first check.
+function lastCheck(p) {
+  if (!p.check_result) return null;
+  const d = document.createElement("div");
+  d.className = "lastcheck";
+  let when = "";
+  if (p.checked_at) {
+    when = " (" + new Date(p.checked_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + ")";
+  }
+  d.textContent = "Last check" + when + ": " + p.check_result;
+  return d;
+}
+
+// recheckNote says how often the instance checks pending domains itself.
+function recheckNote() {
+  const m = site.domain_recheck_minutes;
+  return m ? "Checked automatically every " + m + (m === 1 ? " minute." : " minutes.") : "Checked automatically every few minutes.";
 }
 
 // ---- containers ----
@@ -354,6 +389,18 @@ function renderContainer() {
           w.textContent = p ? "  pending DNS: TXT " + p.txt_name + " = " + p.txt_value +
             (p.cname_target ? " (or CNAME → " + p.cname_target + ")" : "") : "  not attached";
           line.append(w);
+          if (p) {
+            // A container site's domains come from its compose file, so the
+            // domain card is hidden; its "Check now" lives here instead.
+            line.classList.add("pendingroute");
+            line.append(" ", checkNowButton(d.domain));
+            const last = lastCheck(p);
+            if (last) line.append(last);
+            const note = document.createElement("div");
+            note.className = "lastcheck";
+            note.textContent = recheckNote();
+            line.append(note);
+          }
         }
         maps.append(line);
       }

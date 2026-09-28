@@ -336,16 +336,28 @@ func (a *authDNS) LookupCNAME(ctx context.Context, name string) (string, error) 
 }
 
 // withFallback prefers the authoritative answer and uses the system resolver
-// only when no authoritative server could be asked.
+// only when no authoritative server could be asked. The resolver's errors
+// are marked (fromResolver), so a message can say the answer may be old.
 func withFallback[T any](auth, sys func(context.Context, string) (T, error)) func(context.Context, string) (T, error) {
 	return func(ctx context.Context, name string) (T, error) {
 		v, err := auth(ctx, name)
 		if err != nil && errors.Is(err, errNoAuthority) {
-			return sys(ctx, name)
+			v, err = sys(ctx, name)
+			if err != nil {
+				err = fromResolver{err}
+			}
 		}
 		return v, err
 	}
 }
+
+// fromResolver marks an error from the system resolver, reached because no
+// authoritative server could be asked. It unwraps to the resolver's own
+// error, so a not-found answer still reads as one.
+type fromResolver struct{ err error }
+
+func (e fromResolver) Error() string { return e.err.Error() }
+func (e fromResolver) Unwrap() error { return e.err }
 
 // dnsExchange sends one DNS message to server and returns the reply.
 func dnsExchange(ctx context.Context, server string, query []byte, tcp bool) ([]byte, error) {

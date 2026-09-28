@@ -356,6 +356,19 @@ func TestContainerSiteDomainsComeFromTheComposeFile(t *testing.T) {
 	if w := e.call(t, "DELETE", "/api/sites/"+edit+"/domains/a.example.com", c.EditPassword, nil); w.Code != 409 {
 		t.Errorf("remove on container site: %d", w.Code)
 	}
+	// MCP follows the same rule: a claimed domain re-checks, a new one is
+	// refused, because the compose file is where a container site's domains
+	// are declared.
+	cs := mcpClient(t, e, nil)
+	if res := mcpCall(t, cs, "add_domain", map[string]any{"edit_id": edit, "edit_password": c.EditPassword, "domain": "a.example.com"}); res.IsError {
+		t.Errorf("MCP re-check of a claimed domain: %s", mcpText(res))
+	}
+	if res := mcpCall(t, cs, "add_domain", map[string]any{"edit_id": edit, "edit_password": c.EditPassword, "domain": "new.example.com"}); !res.IsError || !strings.Contains(mcpText(res), store.ComposeFile) {
+		t.Errorf("MCP add of a new domain on a container site = %v %s, want refused", res.IsError, mcpText(res))
+	}
+	if site, _ := e.st.ByViewID(c.ID); site.HasDomainClaim("new.example.com") {
+		t.Error("MCP claimed a domain the compose file does not declare")
+	}
 
 	if _, err := e.api.SiteService().SyncContainerDomains(c.ID, []string{"b.example.com"}); err != nil {
 		t.Fatal(err)

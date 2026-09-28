@@ -237,8 +237,8 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		Name: "add_domain",
 		Description: "Attach a custom domain to a site. Enterprise instances only. " +
 			"The domain is attached once its DNS proves it belongs to this site: until then the result lists it under " +
-			"pending_domains with the TXT record (or CNAME) to create. Create the record, then call add_domain again, " +
-			"or wait: the instance re-checks pending domains itself.",
+			"pending_domains with the TXT record (or CNAME) to create, and its warnings say what the check found. " +
+			"Create the record, then call add_domain again, or wait: the instance re-checks pending domains itself.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in domainArgs) (*sdk.CallToolResult, *SiteResult, error) {
 		return out(ops.AddDomain(ctx, auth, in.ref(), in.Domain))
 	})

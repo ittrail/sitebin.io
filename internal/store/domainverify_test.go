@@ -381,3 +381,80 @@ func TestCountDomains(t *testing.T) {
 		t.Errorf("a dangling index link was counted: %d", n)
 	}
 }
+
+// explainingVerifier is a scriptedVerifier that also says what it found.
+type explainingVerifier struct {
+	*scriptedVerifier
+	found map[string]string
+}
+
+func (v explainingVerifier) Explain(ctx context.Context, domain, token, viewHost string) (bool, string, error) {
+	ok, err := v.Verify(ctx, domain, token, viewHost)
+	return ok, v.found[domain], err
+}
+
+// A pending claim records what its last check found — the owner's, and every
+// sweep's — so the edit page and the API can say more than "pending"; the
+// record goes once the domain is attached.
+func TestPendingClaimRecordsWhatTheCheckFound(t *testing.T) {
+	s := newTestStore(t)
+	v := explainingVerifier{newScripted(), map[string]string{}}
+	s.SetDomainVerifier(v, "sitebin.example")
+	site, _, _ := s.Create()
+	claim := func() DomainClaim {
+		t.Helper()
+		fresh, err := s.ByViewID(site.ViewID)
+		if err != nil || len(fresh.Meta.DomainClaims) != 1 {
+			t.Fatalf("claims = %+v %v", fresh.Meta.DomainClaims, err)
+		}
+		return fresh.Meta.DomainClaims[0]
+	}
+
+	v.found["www.kunde.example"] = "no TXT record at _sitebin-challenge.www.kunde.example (answered by ns1.kunde-dns.test)"
+	err := s.AddDomain(site, "www.kunde.example")
+	if !errors.Is(err, ErrDomainPending) || !strings.Contains(err.Error(), "answered by ns1.kunde-dns.test") {
+		t.Fatalf("AddDomain = %v, want pending with what the check found", err)
+	}
+	if c := claim(); c.CheckResult != v.found["www.kunde.example"] || c.CheckedAt == nil {
+		t.Errorf("after the owner's check: %+v", c)
+	}
+	if got := site.Meta.DomainClaims[0].CheckResult; got == "" {
+		t.Error("the caller's site does not see the result it just caused")
+	}
+
+	// The sweep's definitive answer replaces it.
+	t1 := time.Now().Add(10 * time.Minute)
+	v.found["www.kunde.example"] = `the TXT record at _sitebin-challenge.www.kunde.example carries "x", not "sitebin-verify=…"`
+	s.ReconcileDomains(context.Background(), site, t1)
+	if c := claim(); c.CheckResult != v.found["www.kunde.example"] || !c.CheckedAt.Equal(t1.UTC()) {
+		t.Errorf("after the sweep: %+v", c)
+	}
+
+	// A sweep whose lookup failed says so too, with when.
+	t2 := t1.Add(10 * time.Minute)
+	v.errs["www.kunde.example"] = errors.New("i/o timeout")
+	s.ReconcileDomains(context.Background(), site, t2)
+	if c := claim(); !strings.Contains(c.CheckResult, "i/o timeout") || !c.CheckedAt.Equal(t2.UTC()) || c.Verified() {
+		t.Errorf("after a failed lookup: %+v", c)
+	}
+
+	// Attached: nothing left to explain.
+	delete(v.errs, "www.kunde.example")
+	v.answers["www.kunde.example"] = true
+	s.ReconcileDomains(context.Background(), site, t2.Add(10*time.Minute))
+	if c := claim(); !c.Verified() || c.CheckResult != "" {
+		t.Errorf("after verification: %+v", c)
+	}
+}
+
+// A verifier that cannot explain still leaves a sentence, never a blank.
+func TestPendingClaimResultWithoutAnExplainer(t *testing.T) {
+	s, _ := verifiedStore(t)
+	site, _, _ := s.Create()
+	if err := s.AddDomain(site, "docs.customer.example"); !errors.Is(err, ErrDomainPending) {
+		t.Fatal(err)
+	}
+	if c := site.Meta.DomainClaims[0]; !strings.Contains(c.CheckResult, "_sitebin-challenge.docs.customer.example") {
+		t.Errorf("result = %q", c.CheckResult)
+	}
+}

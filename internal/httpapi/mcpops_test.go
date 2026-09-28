@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -709,6 +710,14 @@ func TestMCPAddDomainReportsPendingVerification(t *testing.T) {
 	}
 	if strings.Contains(text, `"custom_domains":["docs.example.com"]`) {
 		t.Error("the result lists an unverified domain as attached")
+	}
+	// What the check found rides in warnings — an existing field, because a
+	// client with a cached output schema rejects a new one.
+	m, _ := res.StructuredContent.(map[string]any)
+	warnings, _ := m["warnings"].([]any)
+	if len(warnings) != 1 || !strings.Contains(fmt.Sprint(warnings[0]), "docs.example.com is not verified yet") ||
+		!strings.Contains(fmt.Sprint(warnings[0]), "_sitebin-challenge.docs.example.com") {
+		t.Errorf("warnings = %v, want what the check found", warnings)
 	}
 }
 

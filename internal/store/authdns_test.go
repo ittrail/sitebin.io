@@ -385,3 +385,70 @@ func TestAuthDNSCNAME(t *testing.T) {
 		t.Errorf("Verify via authoritative CNAME = %v %v", ok, err)
 	}
 }
+
+// A check the owner asked for answers in words they can act on: which record
+// is missing and who said so, what value a TXT record carries instead, where
+// a CNAME points instead.
+func TestDNSVerifierExplainsWhatItFound(t *testing.T) {
+	cname := func(to string) func(dnsmessage.Question) dnsmessage.Message {
+		return func(q dnsmessage.Question) dnsmessage.Message {
+			m := dnsmessage.Message{Header: dnsmessage.Header{Authoritative: true}}
+			if q.Type == dnsmessage.TypeCNAME && to != "" {
+				m.Answers = []dnsmessage.Resource{{
+					Header: dnsmessage.ResourceHeader{Name: q.Name, Type: dnsmessage.TypeCNAME, Class: dnsmessage.ClassINET, TTL: 60},
+					Body:   &dnsmessage.CNAMEResource{CNAME: dnsName(to)},
+				}}
+			}
+			if q.Type == dnsmessage.TypeTXT {
+				m.Header.RCode = dnsmessage.RCodeNameError
+			}
+			return m
+		}
+	}
+	for name, tc := range map[string]struct {
+		reply func(dnsmessage.Question) dnsmessage.Message
+		want  []string
+	}{
+		"nothing there": {cname(""), []string{"no TXT record at _sitebin-challenge.www.kunde.example", "ns1.kunde-dns.test"}},
+		"another value": {func(q dnsmessage.Question) dnsmessage.Message {
+			if q.Type != dnsmessage.TypeTXT {
+				return dnsmessage.Message{Header: dnsmessage.Header{Authoritative: true}}
+			}
+			return txtAnswer(q, "hkq-without-the-prefix", "v=spf1 -all")
+		}, []string{`"hkq-without-the-prefix"`, `"v=spf1 -all"`, `"sitebin-verify=tok"`}},
+		"a CNAME elsewhere": {cname("kunde.example"), []string{"no TXT record", "www.kunde.example is a CNAME to kunde.example, not to abc.sitebin.app"}},
+	} {
+		f := &fakeAuth{zones: map[string][]string{"kunde.example": {"ns1.kunde-dns.test"}},
+			replies: map[string]func(dnsmessage.Question) dnsmessage.Message{"ns1.kunde-dns.test": tc.reply}}
+		a := f.dns()
+		v := &DNSVerifier{lookupTXT: a.LookupTXT, lookupCNAME: a.LookupCNAME}
+		ok, found, err := v.Explain(context.Background(), "www.kunde.example", "tok", "abc.sitebin.app")
+		if ok || err != nil {
+			t.Errorf("%s: = %v %v, want a definitive no", name, ok, err)
+		}
+		for _, w := range tc.want {
+			if !strings.Contains(found, w) {
+				t.Errorf("%s: %q does not say %q", name, found, w)
+			}
+		}
+	}
+
+	// An answer from the instance's own resolver — no authoritative server
+	// could be asked — says so: it may be an hour old.
+	f := &fakeAuth{zones: map[string][]string{}}
+	a := f.dns()
+	nx := func(_ context.Context, name string) ([]string, error) {
+		return nil, &net.DNSError{Err: "no such host", Name: name, Server: "127.0.0.11:53", IsNotFound: true}
+	}
+	nxc := func(_ context.Context, name string) (string, error) {
+		return "", &net.DNSError{Err: "no such host", Name: name, IsNotFound: true}
+	}
+	v := &DNSVerifier{lookupTXT: withFallback(a.LookupTXT, nx), lookupCNAME: withFallback(a.LookupCNAME, nxc)}
+	ok, found, err := v.Explain(context.Background(), "www.kunde.example", "tok", "")
+	if ok || err != nil || !strings.Contains(found, "resolver") || strings.Contains(found, "127.0.0.11") {
+		t.Errorf("fallback answer = %v %q %v, want it named as the instance's resolver", ok, found, err)
+	}
+	if !isNotFound(func() error { _, err := v.lookupTXT(context.Background(), "x"); return err }()) {
+		t.Error("an answer from the resolver must still read as not found")
+	}
+}

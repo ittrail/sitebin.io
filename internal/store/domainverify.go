@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base32"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
@@ -84,6 +85,12 @@ type DomainClaim struct {
 	// FailingSince is set when a verified domain's proof is first found
 	// definitively absent, and cleared the moment it is seen again.
 	FailingSince *time.Time `json:"failing_since,omitempty"`
+	// CheckResult is what the last check that did not prove the claim found,
+	// in words for its owner: which record is missing and who said so, a
+	// value that is not the token, a failed lookup. For a PENDING claim every
+	// check records it with CheckedAt, a failed lookup included (a pending
+	// claim is checked every sweep whatever it says). Empty once proven.
+	CheckResult string `json:"check_result,omitempty"`
 }
 
 // Verified reports whether the claim is attached.
@@ -102,6 +109,13 @@ func (c DomainClaim) TXTValue() string { return challengePrefix + c.Token }
 // question could not be answered, and callers must not act on it.
 type DomainVerifier interface {
 	Verify(ctx context.Context, domain, token, viewHost string) (ok bool, err error)
+}
+
+// DomainExplainer is a DomainVerifier that can also say, for a definitive
+// "no", what DNS showed instead — which is the owner's next step. The store
+// asks it wherever one is installed; found is empty when ok or err is set.
+type DomainExplainer interface {
+	Explain(ctx context.Context, domain, token, viewHost string) (ok bool, found string, err error)
 }
 
 // TrustingVerifier attaches every domain unproven. It is SITEBIN_DOMAIN_VERIFICATION=off,
@@ -133,24 +147,34 @@ func NewDNSVerifier() *DNSVerifier {
 	}
 }
 
-// Verify implements DomainVerifier. Each route is tried on its own; a lookup
-// error on one does not hide a positive answer from the other, and only when
-// neither answered positively does an error surface.
+// Verify implements DomainVerifier.
 func (v *DNSVerifier) Verify(ctx context.Context, domain, token, viewHost string) (bool, error) {
-	var lookupErr error
+	ok, _, err := v.Explain(ctx, domain, token, viewHost)
+	return ok, err
+}
 
+// Explain implements DomainExplainer. Each route is tried on its own; a
+// lookup error on one does not hide a positive answer from the other, and
+// only when neither answered positively does an error surface.
+func (v *DNSVerifier) Explain(ctx context.Context, domain, token, viewHost string) (bool, string, error) {
+	var lookupErr error
+	var found []string
+
+	name, want := challengeLabel+domain, challengePrefix+token
 	tctx, cancel := context.WithTimeout(ctx, lookupTimeout)
-	txts, err := v.lookupTXT(tctx, challengeLabel+domain)
+	txts, err := v.lookupTXT(tctx, name)
 	cancel()
 	switch {
 	case err == nil:
-		want := challengePrefix + token
 		for _, t := range txts {
 			if strings.TrimSpace(t) == want {
-				return true, nil
+				return true, "", nil
 			}
 		}
-	case !isNotFound(err):
+		found = append(found, fmt.Sprintf("the TXT record at %s carries %s, not %q", name, quoted(txts), want))
+	case isNotFound(err):
+		found = append(found, fmt.Sprintf("no TXT record at %s%s", name, answeredBy(err)))
+	default:
 		lookupErr = err
 	}
 
@@ -158,21 +182,57 @@ func (v *DNSVerifier) Verify(ctx context.Context, domain, token, viewHost string
 		cctx, cancel := context.WithTimeout(ctx, lookupTimeout)
 		cname, err := v.lookupCNAME(cctx, domain)
 		cancel()
+		cname = strings.TrimSuffix(cname, ".")
 		switch {
 		case err == nil:
 			// LookupCNAME reports the name itself for a name with A records
 			// and no CNAME, which is exactly not a CNAME at the view host.
-			if strings.EqualFold(strings.TrimSuffix(cname, "."), viewHost) {
-				return true, nil
+			if strings.EqualFold(cname, viewHost) {
+				return true, "", nil
+			}
+			if !strings.EqualFold(cname, domain) {
+				found = append(found, fmt.Sprintf("%s is a CNAME to %s, not to %s", domain, cname, viewHost))
 			}
 		case !isNotFound(err):
 			lookupErr = err
 		}
 	}
 	if lookupErr != nil {
-		return false, lookupErr
+		return false, "", lookupErr
 	}
-	return false, nil
+	return false, strings.Join(found, "; "), nil
+}
+
+// quoted lists TXT values for a message: at most three, each cut short.
+func quoted(vals []string) string {
+	const maxVals, maxLen = 3, 80
+	var out []string
+	for i, v := range vals {
+		if i == maxVals {
+			out = append(out, fmt.Sprintf("and %d more", len(vals)-maxVals))
+			break
+		}
+		if r := []rune(v); len(r) > maxLen {
+			v = string(r[:maxLen]) + "…"
+		}
+		out = append(out, fmt.Sprintf("%q", v))
+	}
+	return strings.Join(out, ", ")
+}
+
+// answeredBy names who gave a not-found answer: the nameserver, or the
+// instance's resolver when no nameserver could be asked — whose answer can be
+// an hour old, which the owner should know.
+func answeredBy(err error) string {
+	var fr fromResolver
+	if errors.As(err, &fr) {
+		return " (answered by the instance's resolver, which can lag an hour behind; no nameserver of the domain could be asked)"
+	}
+	var de *net.DNSError
+	if errors.As(err, &de) && de.Server != "" {
+		return " (answered by " + de.Server + ")"
+	}
+	return ""
 }
 
 // isNotFound tells "there is no such record" — an answer — from "the lookup
@@ -243,18 +303,42 @@ func newClaimToken() string {
 // A name in a verified ACCOUNT zone is proven the same way: the zone owner's
 // site holds it, nobody else's can (see zones.go). Once the zone is released
 // the name falls through to the ordinary per-name proof below.
-func (s *Store) verify(ctx context.Context, site *Site, c DomainClaim) (bool, error) {
+//
+// found says, for a definitive "no", what stood in the way (see
+// DomainClaim.CheckResult); it is never empty then.
+func (s *Store) verify(ctx context.Context, site *Site, c DomainClaim) (ok bool, found string, err error) {
 	if s.InOperatorZone(c.Domain) {
-		return s.operatorOwns(site)
+		ok, err := s.operatorOwns(site)
+		if !ok && err == nil {
+			found = c.Domain + " is inside the operator's own zone, which only the operator's sites can use"
+		}
+		return ok, found, err
 	}
 	if z, ok := s.accountZoneFor(c.Domain); ok {
 		owner := site.Meta.OwnerAccountID
-		return owner != "" && owner == z.AccountID, nil
+		if owner != "" && owner == z.AccountID {
+			return true, "", nil
+		}
+		return false, c.Domain + " is inside the zone " + z.Zone + ", which another account has proved", nil
 	}
 	if s.verifier == nil {
-		return false, nil
+		return false, "this instance checks no DNS records, so no domain can be proven", nil
 	}
-	return s.verifier.Verify(ctx, c.Domain, c.Token, s.viewHost(site))
+	if ex, explains := s.verifier.(DomainExplainer); explains {
+		ok, found, err = ex.Explain(ctx, c.Domain, c.Token, s.viewHost(site))
+	} else {
+		ok, err = s.verifier.Verify(ctx, c.Domain, c.Token, s.viewHost(site))
+	}
+	if !ok && err == nil && found == "" {
+		found = "no TXT record " + c.TXTName() + " = " + c.TXTValue() + " is visible yet"
+	}
+	return ok, found, err
+}
+
+// lookupFailed is what a pending claim records when its check could not be
+// answered.
+func lookupFailed(err error) string {
+	return "the DNS lookup failed (" + err.Error() + "); it is tried again at the next check"
 }
 
 // claimIndex finds the site's claim on d, or -1.
@@ -299,13 +383,14 @@ func (s *Store) ReconcileDomains(ctx context.Context, site *Site, now time.Time)
 				slog.Info("custom domain: dropped a claim inside a zone another account proved", "site", site.ViewID, "domain", c.Domain, "zone", z.Zone)
 				continue
 			}
-			ok, err := s.verify(ctx, site, c)
+			ok, found, err := s.verify(ctx, site, c)
 			if err != nil {
 				slog.Warn("custom domain: verification lookup failed; will retry", "site", site.ViewID, "domain", c.Domain, "err", err)
+				s.stampCheck(site, c.Domain, now, lookupFailed(err))
 				continue
 			}
 			if !ok {
-				s.stampCheck(site, c.Domain, now)
+				s.stampCheck(site, c.Domain, now, found)
 				continue
 			}
 			switch err := s.attach(site, c.Domain, now); {
@@ -324,7 +409,7 @@ func (s *Store) ReconcileDomains(ctx context.Context, site *Site, now time.Time)
 		if c.CheckedAt != nil && now.Sub(*c.CheckedAt) < reverifyEvery {
 			continue
 		}
-		ok, err := s.verify(ctx, site, c)
+		ok, found, err := s.verify(ctx, site, c)
 		if err != nil {
 			slog.Warn("custom domain: re-verification lookup failed; leaving the domain attached", "site", site.ViewID, "domain", c.Domain, "err", err)
 			continue
@@ -334,7 +419,7 @@ func (s *Store) ReconcileDomains(ctx context.Context, site *Site, now time.Time)
 			continue
 		}
 		if c.FailingSince == nil {
-			s.markFailing(site, c.Domain, now)
+			s.markFailing(site, c.Domain, now, found)
 			slog.Warn("custom domain: proof of ownership is gone; the domain is detached if it stays gone", "site", site.ViewID, "domain", c.Domain, "after", revokeAfter)
 			continue
 		}
@@ -346,17 +431,21 @@ func (s *Store) ReconcileDomains(ctx context.Context, site *Site, now time.Time)
 			slog.Warn("custom domain: detached; its proof of ownership has been gone for longer than the revocation window", "site", site.ViewID, "domain", c.Domain)
 			continue
 		}
-		s.stampCheck(site, c.Domain, now)
+		s.stampCheck(site, c.Domain, now, found)
 	}
 	return nil
 }
 
-// stampCheck records that a lookup ran to a definitive answer.
-func (s *Store) stampCheck(site *Site, d string, now time.Time) {
+// stampCheck records a check that did not prove the claim, and what it
+// found: a definitive answer — or, for a pending claim only, a failed lookup
+// (a verified claim's CheckedAt schedules its next re-check, so a failure
+// there must leave it alone).
+func (s *Store) stampCheck(site *Site, d string, now time.Time, found string) {
 	s.Update(site, func(m *Meta) error {
 		if i := claimIndex(m, d); i >= 0 {
 			t := now.UTC()
 			m.DomainClaims[i].CheckedAt = &t
+			m.DomainClaims[i].CheckResult = found
 		}
 		return nil
 	})
@@ -370,18 +459,20 @@ func (s *Store) stampOK(site *Site, d string, now time.Time) {
 			t := now.UTC()
 			m.DomainClaims[i].CheckedAt = &t
 			m.DomainClaims[i].FailingSince = nil
+			m.DomainClaims[i].CheckResult = ""
 		}
 		return nil
 	})
 }
 
 // markFailing starts a verified domain's revocation window.
-func (s *Store) markFailing(site *Site, d string, now time.Time) {
+func (s *Store) markFailing(site *Site, d string, now time.Time, found string) {
 	s.Update(site, func(m *Meta) error {
 		if i := claimIndex(m, d); i >= 0 {
 			t := now.UTC()
 			m.DomainClaims[i].CheckedAt = &t
 			m.DomainClaims[i].FailingSince = &t
+			m.DomainClaims[i].CheckResult = found
 		}
 		return nil
 	})
