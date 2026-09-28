@@ -434,3 +434,27 @@ func TestAdminRegisterShowsAndFiltersViolations(t *testing.T) {
 		t.Errorf("Flagged = %d, want 1", stats.Flagged)
 	}
 }
+
+// The confirmation step carries the list's search and filter through to the
+// action and the cancel link, so the operator lands back on the view they
+// were working in. They were once escaped twice ("filter%3danon"), which
+// quietly reset the view after every delete.
+func TestAdminConfirmationKeepsTheView(t *testing.T) {
+	p, host, mux := setupAdmin(t, "boss@example.com")
+	cookie, accID := adminUser(t, p, mux, "boss@example.com", "admin")
+	instance(t, host, accID)
+
+	body := getAs(mux, "/account/admin?confirm=cccccccccccccccccccccccccc&filter=anon&q=example", cookie).Body.String()
+	if !strings.Contains(body, `action="/account/admin/sites/cccccccccccccccccccccccccc/delete?filter=anon&amp;q=example"`) {
+		t.Errorf("the delete form does not carry the view: %s", body)
+	}
+	if !strings.Contains(body, `href="/account/admin?filter=anon&amp;q=example"`) {
+		t.Errorf("the cancel link does not carry the view")
+	}
+
+	// Without a confirmation, each row's delete link carries it too.
+	body = getAs(mux, "/account/admin?filter=anon", cookie).Body.String()
+	if !strings.Contains(body, `href="/account/admin?confirm=dddddddddddddddddddddddddd&amp;filter=anon"`) {
+		t.Errorf("a row's delete link does not carry the view")
+	}
+}

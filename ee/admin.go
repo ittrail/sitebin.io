@@ -3,6 +3,7 @@
 package ee
 
 import (
+	"html/template"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -152,8 +153,13 @@ type adminView struct {
 	// returns to the list the operator was actually looking at. Params is
 	// prefixed with "&" for appending to an existing query; ParamsQ is the
 	// bare form for starting one.
-	Params  string
-	ParamsQ string
+	//
+	// Both are template.URL: listParams builds them with url.Values.Encode,
+	// so they are already escaped, and as plain strings html/template
+	// escaped them again in query position — "filter=anon" became
+	// "filter%3danon", and every cancel and redirect lost the view.
+	Params  template.URL
+	ParamsQ template.URL
 }
 
 // matches decides whether a site survives the text query. It searches the
@@ -260,8 +266,8 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		Filter:  filter,
 		Shown:   len(rows),
 		Flash:   r.URL.Query().Get("flash"),
-		Params:  listParams(r),
-		ParamsQ: strings.TrimPrefix(listParams(r), "&"),
+		Params:  template.URL(listParams(r)),
+		ParamsQ: template.URL(strings.TrimPrefix(listParams(r), "&")),
 	})
 }
 
