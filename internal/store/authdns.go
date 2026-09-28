@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strings"
 
 	"golang.org/x/net/dns/dnsmessage"
@@ -28,9 +29,14 @@ import (
 //
 // Finding those servers still goes through the system resolver (NS records
 // are stable, and a cached negative answer for a label that has no NS only
-// makes the walk step up one more label). If no authoritative server answers
-// at all, the lookup falls back to the system resolver: a slower proof is
-// better than none.
+// makes the walk step up one more label). The walk goes up as far as the TLD,
+// and a server that answers with a delegation towards the name is followed to
+// the servers it names: a domain registered minutes ago is looked up before
+// its registry publishes it, the resolver then denies the WHOLE domain exists
+// for the TLD's negative TTL, and only the registry's own delegation still
+// leads to the zone's servers. If no authoritative server answers at all, the
+// lookup falls back to the system resolver: a slower proof is better than
+// none.
 
 // authDNS asks a name's authoritative nameservers directly.
 type authDNS struct {
@@ -47,57 +53,140 @@ func newAuthDNS() *authDNS {
 // maxAuthServers bounds how many nameserver addresses one lookup tries.
 const maxAuthServers = 4
 
+// maxReferrals bounds how many delegations one lookup follows.
+const maxReferrals = 6
+
 // errNoAuthority reports that no authoritative server gave a usable answer;
 // the caller falls back to the system resolver.
 var errNoAuthority = errors.New("no authoritative nameserver answered")
 
+// nameserver is one address to ask, with the name it was found under, which
+// is what a person reading "no such record" wants to know.
+type nameserver struct {
+	addr string // host:port
+	host string
+}
+
 // servers finds the nameservers of the zone that holds name: the NS set of
-// name itself or its nearest ancestor that has one. Leading underscore labels
+// name itself or its nearest ancestor that has one, up to and including the
+// TLD, whose servers then delegate (see query). Leading underscore labels
 // (_sitebin-zone., _sitebin-challenge.) are never a zone apex and are skipped.
-// A lookup that fails outright steps up a label too: if the label was in fact
-// a delegated zone, its parent's servers answer with a referral, which is not
-// authoritative, and the caller falls back to the system resolver.
-func (a *authDNS) servers(ctx context.Context, name string) ([]string, error) {
-	cand := strings.TrimSuffix(name, ".")
+// A lookup that fails outright steps up a label too. It returns the zone whose
+// NS set it found alongside its servers.
+func (a *authDNS) servers(ctx context.Context, name string) (string, []nameserver, error) {
+	cand := strings.ToLower(strings.TrimSuffix(name, "."))
 	for strings.HasPrefix(cand, "_") {
 		_, cand, _ = strings.Cut(cand, ".")
 	}
 	var lastErr error
-	for strings.Contains(cand, ".") {
-		ns, err := a.lookupNS(ctx, cand)
+	for cand != "" {
+		// Fully qualified: a bare TLD would be tried with the search domains
+		// first, and some platforms refuse a single label outright.
+		ns, err := a.lookupNS(ctx, cand+".")
 		if err == nil && len(ns) > 0 {
-			var out []string
+			hosts := make([]string, 0, len(ns))
 			for _, n := range ns {
-				addrs, err := a.lookupHost(ctx, strings.TrimSuffix(n.Host, "."))
-				if err != nil {
-					continue
-				}
-				for _, ip := range addrs {
-					out = append(out, net.JoinHostPort(ip, "53"))
-					if len(out) >= maxAuthServers {
-						return out, nil
-					}
-				}
+				hosts = append(hosts, n.Host)
 			}
+			out := a.addresses(ctx, hosts, nil)
 			if len(out) == 0 {
-				return nil, fmt.Errorf("%w: the nameservers of %s do not resolve", errNoAuthority, cand)
+				return "", nil, fmt.Errorf("%w: the nameservers of %s do not resolve", errNoAuthority, cand)
 			}
-			return out, nil
+			return cand, out, nil
 		}
 		if err != nil && !isNotFound(err) {
 			lastErr = err
 		}
 		_, cand, _ = strings.Cut(cand, ".")
 	}
-	return nil, fmt.Errorf("%w: no NS found for %s (%v)", errNoAuthority, name, lastErr)
+	return "", nil, fmt.Errorf("%w: no NS found for %s (%v)", errNoAuthority, name, lastErr)
+}
+
+// addresses resolves nameserver host names to at most maxAuthServers
+// addresses, preferring the glue a referral carried (which the caller has
+// already restricted to names it may vouch for) over the system resolver.
+func (a *authDNS) addresses(ctx context.Context, hosts []string, glue map[string][]string) []nameserver {
+	var out []nameserver
+	for _, h := range hosts {
+		h = strings.ToLower(strings.TrimSuffix(h, "."))
+		addrs := glue[h]
+		if len(addrs) == 0 {
+			var err error
+			if addrs, err = a.lookupHost(ctx, h); err != nil {
+				continue
+			}
+		}
+		for _, ip := range addrs {
+			out = append(out, nameserver{addr: net.JoinHostPort(ip, "53"), host: h})
+			if len(out) >= maxAuthServers {
+				return out
+			}
+		}
+	}
+	return out
+}
+
+// inZone reports whether name is zone or lies below it. Both are lower-case
+// and carry no trailing dot; "" is the root, which holds every name.
+func inZone(name, zone string) bool {
+	return zone == "" || name == zone || strings.HasSuffix(name, "."+zone)
+}
+
+// canonical is a dnsmessage name as inZone compares it.
+func canonical(n dnsmessage.Name) string {
+	return strings.ToLower(strings.TrimSuffix(n.String(), "."))
+}
+
+// delegation reads a non-authoritative answer from a server of zone as a
+// referral towards qname: the child zone it names, that zone's nameservers
+// and the glue it may vouch for. ok is false for anything else — a referral
+// sideways, upwards or to the zone itself is a server that knows nothing.
+func delegation(resp *dnsmessage.Message, zone, qname string) (child string, hosts []string, glue map[string][]string, ok bool) {
+	for _, rr := range resp.Authorities {
+		ns, isNS := rr.Body.(*dnsmessage.NSResource)
+		if !isNS {
+			continue
+		}
+		owner := canonical(rr.Header.Name)
+		if owner == zone || !inZone(owner, zone) || !inZone(qname, owner) {
+			continue
+		}
+		if child == "" || len(owner) > len(child) {
+			child, hosts = owner, nil
+		}
+		if owner == child {
+			hosts = append(hosts, canonical(ns.NS))
+		}
+	}
+	if child == "" || len(hosts) == 0 {
+		return "", nil, nil, false
+	}
+	// Glue is trusted only for a nameserver inside the zone of the server
+	// that sent it: that server is the authority for that name, and for
+	// nothing else.
+	glue = map[string][]string{}
+	for _, rr := range resp.Additionals {
+		h := canonical(rr.Header.Name)
+		if !inZone(h, zone) || !slices.Contains(hosts, h) {
+			continue
+		}
+		switch b := rr.Body.(type) {
+		case *dnsmessage.AResource:
+			glue[h] = append(glue[h], net.IP(b.A[:]).String())
+		case *dnsmessage.AAAAResource:
+			glue[h] = append(glue[h], net.IP(b.AAAA[:]).String())
+		}
+	}
+	return child, hosts, glue, true
 }
 
 // query asks the authoritative servers for name/qtype. It returns the answer
 // records of that type, or a *net.DNSError with IsNotFound for a definitive
 // NXDOMAIN or NODATA, or errNoAuthority when no server answered with
-// authority.
+// authority. A delegation towards name is followed, at most maxReferrals
+// times.
 func (a *authDNS) query(ctx context.Context, name string, qtype dnsmessage.Type) ([]dnsmessage.Resource, error) {
-	servers, err := a.servers(ctx, name)
+	zone, servers, err := a.servers(ctx, name)
 	if err != nil {
 		return nil, err
 	}
@@ -105,6 +194,7 @@ func (a *authDNS) query(ctx context.Context, name string, qtype dnsmessage.Type)
 	if err != nil {
 		return nil, err
 	}
+	want := canonical(qname)
 	var id [2]byte
 	rand.Read(id[:])
 	msg := dnsmessage.Message{
@@ -116,37 +206,61 @@ func (a *authDNS) query(ctx context.Context, name string, qtype dnsmessage.Type)
 		return nil, err
 	}
 	var last error = errNoAuthority
-	for _, srv := range servers {
-		resp, err := a.ask(ctx, srv, packed, msg.Header.ID, qname, qtype)
-		if err != nil {
-			last = fmt.Errorf("%w: %s: %v", errNoAuthority, srv, err)
-			continue
-		}
-		switch resp.Header.RCode {
-		case dnsmessage.RCodeNameError:
-			return nil, &net.DNSError{Err: "no such host", Name: name, Server: srv, IsNotFound: true}
-		case dnsmessage.RCodeSuccess:
-		default:
-			last = fmt.Errorf("%w: %s answered %v", errNoAuthority, srv, resp.Header.RCode)
-			continue
-		}
-		if !resp.Header.Authoritative {
-			// A lame or referring server knows nothing definitive.
-			last = fmt.Errorf("%w: %s is not authoritative for %s", errNoAuthority, srv, name)
-			continue
-		}
-		var out []dnsmessage.Resource
-		for _, rr := range resp.Answers {
-			if rr.Header.Type == qtype && strings.EqualFold(rr.Header.Name.String(), qname.String()) {
-				out = append(out, rr)
+	for referrals := 0; ; referrals++ {
+		var next []nameserver
+		nextZone := ""
+	tryServers:
+		for _, srv := range servers {
+			resp, err := a.ask(ctx, srv.addr, packed, msg.Header.ID, qname, qtype)
+			if err != nil {
+				last = fmt.Errorf("%w: %s: %v", errNoAuthority, srv.host, err)
+				continue
 			}
+			switch resp.Header.RCode {
+			case dnsmessage.RCodeNameError:
+				if resp.Header.Authoritative {
+					return nil, &net.DNSError{Err: "no such host", Name: name, Server: srv.host, IsNotFound: true}
+				}
+				last = fmt.Errorf("%w: %s is not authoritative for %s", errNoAuthority, srv.host, name)
+				continue
+			case dnsmessage.RCodeSuccess:
+			default:
+				last = fmt.Errorf("%w: %s answered %v", errNoAuthority, srv.host, resp.Header.RCode)
+				continue
+			}
+			if !resp.Header.Authoritative {
+				child, hosts, glue, ok := delegation(resp, zone, want)
+				if !ok {
+					// A lame server knows nothing definitive.
+					last = fmt.Errorf("%w: %s is not authoritative for %s", errNoAuthority, srv.host, name)
+					continue
+				}
+				if referrals >= maxReferrals {
+					return nil, fmt.Errorf("%w: more than %d delegations on the way to %s", errNoAuthority, maxReferrals, name)
+				}
+				if next = a.addresses(ctx, hosts, glue); len(next) == 0 {
+					last = fmt.Errorf("%w: the nameservers %s delegates %s to do not resolve", errNoAuthority, srv.host, child)
+					continue
+				}
+				nextZone = child
+				break tryServers
+			}
+			var out []dnsmessage.Resource
+			for _, rr := range resp.Answers {
+				if rr.Header.Type == qtype && strings.EqualFold(rr.Header.Name.String(), qname.String()) {
+					out = append(out, rr)
+				}
+			}
+			if len(out) == 0 {
+				return nil, &net.DNSError{Err: "no such record", Name: name, Server: srv.host, IsNotFound: true}
+			}
+			return out, nil
 		}
-		if len(out) == 0 {
-			return nil, &net.DNSError{Err: "no such record", Name: name, Server: srv, IsNotFound: true}
+		if len(next) == 0 {
+			return nil, last
 		}
-		return out, nil
+		servers, zone = next, nextZone
 	}
-	return nil, last
 }
 
 // ask sends one query over UDP, and again over TCP if the answer was cut.
