@@ -26,8 +26,9 @@ import (
 // the person belongs to: export first (Art. 20), and for a deletion (Art. 17)
 // the app BEFORE the identity, so that a name and an email never outlive the
 // only thing that made the app's data findable. These two endpoints are
-// Sitebin's side of that, and they are the only calls the stack ever makes
-// INTO a Sitebin instance.
+// Sitebin's side of that; with the suspension order (suspend.go), signed the
+// same way, they are the only calls the stack ever makes INTO a Sitebin
+// instance.
 //
 // Three rules:
 //
@@ -62,15 +63,17 @@ const (
 	gdprMaxBody = 1 << 20
 )
 
-// gdprRoutes mounts the two endpoints, and only when there is a secret to
-// verify a caller with: a route the stack could call but nothing could check
-// would be an unauthenticated deletion endpoint.
+// gdprRoutes mounts the endpoints the stack calls — the two GDPR orders and
+// the suspension — and only when there is a secret to verify a caller with: a
+// route the stack could call but nothing could check would be an
+// unauthenticated deletion endpoint.
 func (p *provider) gdprRoutes(routes map[string]http.Handler) {
 	if p.cfg.GDPRSecret == "" {
 		return
 	}
 	routes["POST "+gdprDeletePath] = http.HandlerFunc(p.handleGDPRDelete)
 	routes["POST "+gdprExportPath] = http.HandlerFunc(p.handleGDPRExport)
+	routes["POST "+gdprSuspendPath] = http.HandlerFunc(p.handleSuspend)
 }
 
 // gdprSignature is what X-Signature must carry for body at timestamp:
@@ -94,26 +97,45 @@ type gdprOrder struct {
 
 // verifyGDPROrder authenticates a request from the stack and decodes its
 // order. It writes the refusal itself and reports ok=false; the caller then
-// simply returns. Every refusal to authenticate is the same 401 to the caller
-// — the reason goes to the log, where the operator is — so a probe learns
-// nothing about which check it failed.
+// simply returns.
 func (p *provider) verifyGDPROrder(w http.ResponseWriter, r *http.Request, now time.Time) (gdprOrder, bool) {
+	body, ok := p.verifyGDPRRequest(w, r, now)
+	if !ok {
+		return gdprOrder{}, false
+	}
+	var order gdprOrder
+	if err := json.Unmarshal(body, &order); err != nil || order.UserID == "" {
+		// Verified, so it IS the stack — and the stack sent something this
+		// instance cannot act on. That is a 400 and worth the detail.
+		http.Error(w, "the order must carry a userId", http.StatusBadRequest)
+		return gdprOrder{}, false
+	}
+	return order, true
+}
+
+// verifyGDPRRequest authenticates a request from the stack and returns its
+// body, which nothing reads before the signature over it checks out. It
+// writes the refusal itself and reports ok=false. Every refusal to
+// authenticate is the same 401 to the caller — the reason goes to the log,
+// where the operator is — so a probe learns nothing about which check it
+// failed. Every call the stack makes into Sitebin comes through here.
+func (p *provider) verifyGDPRRequest(w http.ResponseWriter, r *http.Request, now time.Time) ([]byte, bool) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, gdprMaxBody+1))
 	if err != nil {
 		http.Error(w, "could not read the request", http.StatusBadRequest)
-		return gdprOrder{}, false
+		return nil, false
 	}
 	if len(body) > gdprMaxBody {
 		http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
-		return gdprOrder{}, false
+		return nil, false
 	}
 
-	refuse := func(reason string) (gdprOrder, bool) {
+	refuse := func(reason string) ([]byte, bool) {
 		slog.Warn("gdpr: refused an unverified order", "path", r.URL.Path, "reason", reason)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		json.NewEncoder(w).Encode(map[string]string{"error": "invalid signature"})
-		return gdprOrder{}, false
+		return nil, false
 	}
 
 	ts := r.Header.Get("X-Timestamp")
@@ -134,15 +156,7 @@ func (p *provider) verifyGDPROrder(w http.ResponseWriter, r *http.Request, now t
 	if !hmac.Equal([]byte(r.Header.Get("X-Signature")), []byte(gdprSignature(p.cfg.GDPRSecret, ts, body))) {
 		return refuse("signature mismatch")
 	}
-
-	var order gdprOrder
-	if err := json.Unmarshal(body, &order); err != nil || order.UserID == "" {
-		// Verified, so it IS the stack — and the stack sent something this
-		// instance cannot act on. That is a 400 and worth the detail.
-		http.Error(w, "the order must carry a userId", http.StatusBadRequest)
-		return gdprOrder{}, false
-	}
-	return order, true
+	return body, true
 }
 
 // gdprAccount is the account record as exported: everything stored on it
@@ -157,8 +171,11 @@ type gdprAccount struct {
 	Tier          string           `json:"tier,omitempty"`
 	QuotaOverride *int64           `json:"quota_override,omitempty"`
 	Billing       *account.Billing `json:"billing,omitempty"`
-	CreatedAt     time.Time        `json:"created_at"`
-	UpdatedAt     time.Time        `json:"updated_at"`
+	// A suspension is data held about the subject too.
+	SuspendedAt     *time.Time `json:"suspended_at,omitempty"`
+	SuspendedReason string     `json:"suspended_reason,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 type gdprSite struct {
@@ -223,7 +240,8 @@ func (p *provider) handleGDPRExport(w http.ResponseWriter, r *http.Request) {
 		out.Account = &gdprAccount{
 			ID: acc.ID, Provider: acc.Provider, Email: acc.Email, EmailVerified: acc.EmailVerified,
 			OAuthSubject: acc.OAuthSubject, Tier: acc.Tier, QuotaOverride: acc.QuotaOverride,
-			Billing: acc.Billing, CreatedAt: acc.CreatedAt, UpdatedAt: acc.UpdatedAt,
+			Billing: acc.Billing, SuspendedAt: acc.SuspendedAt, SuspendedReason: acc.SuspendedReason,
+			CreatedAt: acc.CreatedAt, UpdatedAt: acc.UpdatedAt,
 		}
 		ids, err := p.accounts.ListSiteIDs(acc)
 		if err != nil {

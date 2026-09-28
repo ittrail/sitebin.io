@@ -445,11 +445,11 @@ func (p *provider) OnSiteCreated(ownerAccountID, viewID string) error {
 func (p *provider) accountForAPI(r *http.Request) (*account.Account, bool) {
 	if secret := bearerToken(r); secret != "" {
 		if acc, ok := p.accounts.ByToken(secret); ok {
-			return acc, true
+			return acc, !acc.Suspended()
 		}
 		if p.mcpOAuth != nil && ext.IsMCPCaller(r.Context()) {
 			if cred, ok := p.mcpOAuth.Verify(r.Context(), secret); ok {
-				if acc, err := p.accounts.ByID(cred.AccountID); err == nil {
+				if acc, err := p.accounts.ByID(cred.AccountID); err == nil && !acc.Suspended() {
 					return acc, true
 				}
 			}
@@ -489,11 +489,21 @@ func (p *provider) BearerCredential(r *http.Request) (ext.Credential, bool) {
 	if secret == "" {
 		return ext.Credential{}, false
 	}
+	// A suspended account's credentials are refused like wrong ones. Neither
+	// kind is bound to the token version a suspension bumps, so the account
+	// is asked here — for an OAuth token after it verified, because the
+	// verifier's first-use provisioning hands an existing account's id back.
 	if acc, ok := p.accounts.ByToken(secret); ok {
+		if acc.Suspended() {
+			return ext.Credential{}, false
+		}
 		return ext.Credential{AccountID: acc.ID}, true
 	}
 	if p.mcpOAuth != nil && ext.IsMCPCaller(r.Context()) {
 		if cred, ok := p.mcpOAuth.Verify(r.Context(), secret); ok {
+			if acc, err := p.accounts.ByID(cred.AccountID); err != nil || acc.Suspended() {
+				return ext.Credential{}, false
+			}
 			return cred, true
 		}
 	}
@@ -519,7 +529,8 @@ func (p *provider) AccountSiteIDs(accountID string) ([]string, bool) {
 }
 
 // currentAccount resolves the SESSION COOKIE to an account, honoring token
-// version (revocation).
+// version (revocation) and suspension. A suspension bumps the token version
+// too, so this check is the second lock on the same door.
 //
 // It deliberately does not accept API tokens. Those are script credentials for
 // the site API; letting one drive the dashboard would let it read a CSRF token
@@ -531,7 +542,7 @@ func (p *provider) currentAccount(r *http.Request) (*account.Account, bool) {
 		return nil, false
 	}
 	acc, err := p.accounts.ByID(id)
-	if err != nil || acc.TokenVersion != ver {
+	if err != nil || acc.TokenVersion != ver || acc.Suspended() {
 		return nil, false
 	}
 	return acc, true

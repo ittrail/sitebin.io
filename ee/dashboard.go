@@ -137,6 +137,10 @@ func (p *provider) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 		p.renderAuth(w, "login", email, "Incorrect email or password.")
 		return
 	}
+	if acc.Suspended() {
+		p.renderAuth(w, "login", email, msgSuspendedAccount)
+		return
+	}
 	http.SetCookie(w, p.sessions.Cookie(acc.ID, acc.TokenVersion))
 	p.redirect(w, r, "/account")
 }

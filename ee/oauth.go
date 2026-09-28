@@ -98,6 +98,13 @@ func (p *provider) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		p.oauthError(w, err.Error())
 		return
 	}
+	// The stack disables a suspended user, so this is normally unreachable;
+	// it is here for an identity provider that let the sign-in through.
+	if acc.Suspended() {
+		slog.Warn("oauth: sign-in refused: the account is suspended", "account", acc.ID)
+		p.oauthError(w, msgSuspendedAccount)
+		return
+	}
 	http.SetCookie(w, p.sessions.Cookie(acc.ID, acc.TokenVersion))
 	p.redirect(w, r, "/account")
 }

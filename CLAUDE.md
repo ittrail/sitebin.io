@@ -481,8 +481,12 @@ All caps and toggles are startup env vars (`SITEBIN_*`) — see the README's
   `effectiveTier`. A plan change is only ever noticed at a request that already
   resolves the tier, so there is no "on tier change" hook to hang work on.
 - **The only calls the stack makes INTO Sitebin are the two GDPR orders**
-  (`ee/gdpr.go`: delete user, export user data), authenticated by nothing but
-  the HMAC over `<X-Timestamp>.<body>` with `SITEBIN_STACK_GDPR_SECRET`. A
+  (`ee/gdpr.go`: delete user, export user data) **and the suspension order**
+  (`ee/suspend.go`), all authenticated by nothing but `verifyGDPRRequest`: the
+  HMAC over `<X-Timestamp>.<body>` with `SITEBIN_STACK_GDPR_SECRET`. A
+  suspended account (`account.SuspendedAt`) is refused by `currentAccount`,
+  `BearerCredential` and `accountForAPI` — tokens are not bound to the token
+  version — and its sites are locked `By: "account"`. A
   verified deletion IS the instruction — but a site that cannot be deleted
   still stops the order with a 5xx, so the stack keeps the identity and the
   operator retries; and a user with no account here is a 200, because the

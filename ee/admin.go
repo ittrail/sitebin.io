@@ -152,6 +152,9 @@ type adminRow struct {
 	// placed, which the register offers to keep as the operator's own.
 	LockText        string
 	LockedByAccount bool
+	// OwnerSuspended is the owner's suspension on the stack, with its date
+	// and reason; empty for an active or anonymous owner.
+	OwnerSuspended string
 }
 
 type adminView struct {
@@ -213,6 +216,7 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 
 	figures := p.instanceStats(sites)
 	emails := p.ownerEmails(sites)
+	suspended := p.suspendedOwners(sites)
 	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 	filter := r.URL.Query().Get("filter")
 	confirm := r.URL.Query().Get("confirm")
@@ -223,16 +227,17 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	rows := make([]adminRow, 0, len(sites))
 	for _, s := range sites {
 		row := adminRow{
-			SiteInfo:    s,
-			OwnerLabel:  emails[s.Owner],
-			SizeText:    humanBytes(s.Bytes),
-			CreatedText: s.CreatedAt.Local().Format("2006-01-02"),
-			ExpiryText:  "—",
-			DomainsText: strings.Join(s.Domains, ", "),
-			BlockedText: strings.Join(s.Blocked, ", "),
-			Confirming:  s.ViewID == confirm,
-			Locking:     s.ViewID == locking,
-			Unlocking:   s.ViewID == unlocking && s.Locked != nil,
+			SiteInfo:       s,
+			OwnerLabel:     emails[s.Owner],
+			SizeText:       humanBytes(s.Bytes),
+			CreatedText:    s.CreatedAt.Local().Format("2006-01-02"),
+			ExpiryText:     "—",
+			DomainsText:    strings.Join(s.Domains, ", "),
+			BlockedText:    strings.Join(s.Blocked, ", "),
+			Confirming:     s.ViewID == confirm,
+			Locking:        s.ViewID == locking,
+			Unlocking:      s.ViewID == unlocking && s.Locked != nil,
+			OwnerSuspended: suspended[s.Owner],
 		}
 		if s.Locked != nil {
 			row.LockText = lockText(s.Locked)
