@@ -1414,8 +1414,7 @@ local accounts and never orders anything for them.
 
 The stack's **suspension** comes through the same door, signed the same way:
 `POST /account/gdpr/suspend` with `{"userId", "email", "suspended": true|false,
-"reason"}` (declared to the stack as `gdpr.suspendUserUrl` — see the design's
-"Deploy order"). Suspending marks the account suspended, ends its browser
+"reason"}`, declared to the stack as `gdpr.suspendUserUrl`. Suspending marks the account suspended, ends its browser
 sessions, refuses its API tokens, MCP OAuth tokens and sign-ins, and locks every
 site it owns (served to nobody, frozen, kept past expiry). Lifting it clears the
 suspension and unlocks only the sites the suspension locked; a site the operator

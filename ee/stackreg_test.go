@@ -265,6 +265,7 @@ func TestStackDeclarationCarriesGDPR(t *testing.T) {
 		}
 		if reg.GDPR.DeleteUserURL != "http://sitebin.example/account/gdpr/delete" ||
 			reg.GDPR.ExportUserDataURL != "http://sitebin.example/account/gdpr/export" ||
+			reg.GDPR.SuspendUserURL != "http://sitebin.example/account/gdpr/suspend" ||
 			reg.GDPR.WebhookSecret != testGDPRSecret {
 			t.Errorf("gdpr = %+v", reg.GDPR)
 		}
@@ -274,15 +275,16 @@ func TestStackDeclarationCarriesGDPR(t *testing.T) {
 		}
 		var wire struct {
 			GDPR *struct {
-				Delete string `json:"deleteUserUrl"`
-				Export string `json:"exportUserDataUrl"`
-				Secret string `json:"webhookSecret"`
+				Delete  string `json:"deleteUserUrl"`
+				Export  string `json:"exportUserDataUrl"`
+				Suspend string `json:"suspendUserUrl"`
+				Secret  string `json:"webhookSecret"`
 			} `json:"gdpr"`
 		}
 		if err := json.Unmarshal(b, &wire); err != nil {
 			t.Fatal(err)
 		}
-		if wire.GDPR == nil || wire.GDPR.Delete == "" || wire.GDPR.Export == "" || wire.GDPR.Secret != testGDPRSecret {
+		if wire.GDPR == nil || wire.GDPR.Delete == "" || wire.GDPR.Export == "" || wire.GDPR.Suspend == "" || wire.GDPR.Secret != testGDPRSecret {
 			t.Fatalf("gdpr did not survive the wire in the stack's field names: %s", b)
 		}
 	})

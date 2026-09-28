@@ -110,7 +110,12 @@ type stackTheme struct {
 type stackGDPR struct {
 	DeleteUserURL     string `json:"deleteUserUrl"`
 	ExportUserDataURL string `json:"exportUserDataUrl"`
-	WebhookSecret     string `json:"webhookSecret"`
+	// SuspendUserURL is where the stack's "Suspend user" reaches this app
+	// (suspend.go), signed with the same secret. The stack's registration
+	// schema is strict: this field may only be declared to a stack that
+	// knows it, or the whole registration is refused.
+	SuspendUserURL string `json:"suspendUserUrl"`
+	WebhookSecret  string `json:"webhookSecret"`
 }
 
 type stackBilling struct {
@@ -237,6 +242,7 @@ func (p *provider) stackDeclaration(appID string) stackRegistration {
 		reg.GDPR = &stackGDPR{
 			DeleteUserURL:     base + gdprDeletePath,
 			ExportUserDataURL: base + gdprExportPath,
+			SuspendUserURL:    base + gdprSuspendPath,
 			WebhookSecret:     p.cfg.GDPRSecret,
 		}
 	}
