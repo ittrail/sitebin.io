@@ -875,7 +875,21 @@ site. Design: [`2026-09-22-container-sites-design.md`](docs/superpowers/specs/20
 ### Expiry
 
 An expired site answers `410 Gone`; the cleanup worker deletes its files 24 h
-after expiry.
+after expiry — unless the operator has **locked** it (below).
+
+### Locked sites
+
+A lock is the operator's evidence hold for abuse (phishing, scams): the site
+answers `410` with a "Site suspended" page on every address it has, its
+containers stop, and its owner can no longer change, download or delete it —
+every API route, MCP tool, WebDAV, FTP and upload token answers `403 This site
+is locked by the operator` (the settings read, `get_site` and `list_sites`
+still show the lock, without the files). The cleanup sweep never deletes a
+locked site, however far past its expiry, and no tier change restamps it; an
+account that owns one cannot be deleted until the operator lets go. Only the
+operator's explicit delete — the instance register's, or `sitebin delete
+--force` — removes it. Lock and unlock from the instance register or the CLI.
+Design: [`2026-09-28-site-lock-and-account-suspension.md`](docs/superpowers/specs/2026-09-28-site-lock-and-account-suspension.md).
 
 ---
 
@@ -885,9 +899,11 @@ Operator commands (run inside the container, e.g. `docker exec sitebin sitebin <
 
 | Command | Purpose |
 |---|---|
-| `sitebin list` | List all sites (id, size, files, mode, created, owner/domains). |
+| `sitebin list` | List all sites (id, size, files, mode, created, lock, owner/domains). |
 | `sitebin reports` | List filed abuse reports. |
-| `sitebin delete <id\|domain>` | Take down a site by view id, edit id, or domain. |
+| `sitebin lock <id\|domain> [reason…]` | Lock a site: served to nobody, frozen for its owner, kept past its expiry. The reason is shown to the owner. |
+| `sitebin unlock <id\|domain>` | Lift a lock; the site's expiry applies again. |
+| `sitebin delete [--force] <id\|domain>` | Take down a site by view id, edit id, or domain. A locked site needs `--force`. |
 | `sitebin backup [file]` | Write a gzip tar of `/data` (stdout if no file). |
 | `sitebin restore <file>` | Restore `/data` from a backup. |
 | `sitebin caddyfile` | Print the generated Caddyfile. |
@@ -1100,7 +1116,7 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_CONTAINERS_RUNTIME` | OCI runtime for customer containers, e.g. `runsc` (gVisor). Default: the Engine's. |
 | `SITEBIN_CONTAINER_MEMORY_MB` / `_CPUS` / `_PIDS` | Fixed per-container limits: `512` MB (no swap), `0.5` CPU, `256` processes. |
 | `SITEBIN_VIEW_DOMAIN` | Domain user sites are served from, as `<id>.<view-domain>` (default: the base domain). Point it at a **separate registrable domain** and list that domain in the [Public Suffix List](https://publicsuffix.org/) to stop uploaded content sharing a browser "site" with the dashboard: no cookie can be written upward onto the app, `SameSite` stops treating navigations from a user site as same-site, and a phishing takedown against one site does not endanger the app's own domain. Needs its own wildcard DNS record and DNS-challenge access. Cannot be combined with `SITEBIN_VIEW_ACCESS=path\|both`, which would serve content from the main domain again. |
-| `SITEBIN_ADMIN_ACCOUNTS` | Comma-separated emails allowed to reach the **instance register** at `/account/admin` — every site on the instance, with delete and expiry control. Gated twice: the account's tier must also carry `"admin": true` in the tier config, so neither the plan source nor the environment can grant it alone. Unset disables the console entirely. |
+| `SITEBIN_ADMIN_ACCOUNTS` | Comma-separated emails allowed to reach the **instance register** at `/account/admin` — every site on the instance, with delete, expiry and lock control. Gated twice: the account's tier must also carry `"admin": true` in the tier config, so neither the plan source nor the environment can grant it alone. Unset disables the console entirely. |
 | `SITEBIN_ALLOW_ANON_CREATE` | In accounts mode, still allow anonymous sites. |
 | `SITEBIN_OAUTH_GOOGLE_CLIENT_ID` / `_SECRET` | Google OIDC login. |
 | `SITEBIN_OAUTH_MICROSOFT_CLIENT_ID` / `_SECRET` / `_TENANT` | Microsoft OIDC. `_TENANT` is a tenant id or verified domain for single-tenant sign-in (issuer matched exactly), or one of the multi-tenant aliases `common` (default), `organizations`, `consumers`, whose tokens name the signing tenant in `iss` and are accepted from any Microsoft tenant. |
@@ -1187,7 +1203,8 @@ A tier may set `"admin": true`. That does not change its quotas; it marks the
 tier as one whose holders may reach the instance register, and only together
 with `SITEBIN_ADMIN_ACCOUNTS`. The register lists every site on the instance —
 anonymous drops included — with instance-wide figures, search and filters, and
-two actions per site: delete, and set or clear the expiry. It never exposes a
+three actions per site: delete, set or clear the expiry, and lock or unlock
+(see "Locked sites"). It never exposes a
 site's edit password or edit page: an operator can clean up and look, but the
 claim ticket stays the only thing that confers ownership.
 

@@ -10,7 +10,7 @@ import (
 
 // authz answers Caddy's forward_auth subrequest for every content request on
 // view subdomains, custom domains, and /v/<id> path views: 200 serve, 401 gate
-// (body relayed to the client), 410 expired, 404 unknown.
+// (body relayed to the client), 410 expired or locked, 404 unknown.
 func (a *API) authz(w http.ResponseWriter, r *http.Request) {
 	var site *store.Site
 	var err error
@@ -28,6 +28,15 @@ func (a *API) authz(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		a.msgPage(w, 404, "Site not found", "There is no site at this address. It may have been deleted.")
+		return
+	}
+	// A locked site is served to nobody, before any other rule: not after a
+	// view password, not on a custom domain, not as a container's upstream.
+	// This is the one place every content request passes through, so it is
+	// the whole of "not served". The reason stays between the operator and
+	// the owner; a visitor gets the generic sentence.
+	if site.Meta.IsLocked() {
+		a.msgPage(w, 410, msgSuspendedTitle, msgSuspendedBody)
 		return
 	}
 	if site.Meta.Expired(time.Now()) {

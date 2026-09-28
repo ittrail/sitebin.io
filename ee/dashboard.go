@@ -40,6 +40,8 @@ func (p *provider) PublicRoutes() map[string]http.Handler {
 		"GET /account/admin":                    http.HandlerFunc(p.handleAdmin),
 		"POST /account/admin/sites/{id}/delete": http.HandlerFunc(p.handleAdminDelete),
 		"POST /account/admin/sites/{id}/expiry": http.HandlerFunc(p.handleAdminExpiry),
+		"POST /account/admin/sites/{id}/lock":   http.HandlerFunc(p.handleAdminLock),
+		"POST /account/admin/sites/{id}/unlock": http.HandlerFunc(p.handleAdminUnlock),
 	}
 	p.oauthRoutes(routes)
 	p.emailRoutes(routes)
@@ -248,6 +250,10 @@ func (p *provider) handleRotate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pw, err := p.host.Sites().RotateEditPassword(viewID)
+	if errors.Is(err, ext.ErrSiteLocked) {
+		p.renderLocked(w)
+		return
+	}
 	if err != nil {
 		http.Error(w, "could not reset the edit password", http.StatusInternalServerError)
 		return
@@ -282,6 +288,9 @@ func (p *provider) handleRenameSite(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		msgTmpl.Execute(w, msgView{Title: "That name was not saved", Body: "Sorry — " + err.Error() + ".", Back: "/account"})
 		return
+	case errors.Is(err, ext.ErrSiteLocked):
+		p.renderLocked(w)
+		return
 	case err != nil:
 		slog.Error("rename site", "account", acc.ID, "site", viewID, "err", err)
 		http.Error(w, "could not rename the site", http.StatusInternalServerError)
@@ -302,11 +311,71 @@ func (p *provider) handleDeleteSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := p.host.Sites().Delete(viewID); err != nil {
+		if errors.Is(err, ext.ErrSiteLocked) {
+			p.renderLocked(w)
+			return
+		}
 		http.Error(w, "could not delete the site", http.StatusInternalServerError)
 		return
 	}
 	p.accounts.UnlinkSite(acc, viewID)
 	p.redirect(w, r, "/account")
+}
+
+// renderLocked answers an owner's change to a site the operator has locked.
+// The dashboard hides those buttons on a locked site; this is the answer for
+// a form posted from a page rendered before the lock.
+func (p *provider) renderLocked(w http.ResponseWriter) {
+	p.securityHeaders(w)
+	w.WriteHeader(http.StatusForbidden)
+	msgTmpl.Execute(w, msgView{
+		Title: "This site is locked by the operator",
+		Body:  "It is not served, and it cannot be changed or deleted while the lock is in place.",
+		Back:  "/account",
+	})
+}
+
+// lockedSites lists the account's sites the operator holds locked. An
+// account with one cannot be deleted — by its owner or by the stack's
+// erasure order — because deleting it would end the hold: see
+// docs/superpowers/specs/2026-09-28-site-lock-and-account-suspension.md.
+func (p *provider) lockedSites(acc *account.Account) ([]string, error) {
+	ids, err := p.accounts.ListSiteIDs(acc)
+	if err != nil {
+		return nil, err
+	}
+	var locked []string
+	for _, id := range ids {
+		if info, ok := p.host.Sites().Info(id); ok && info.Locked != nil {
+			locked = append(locked, id)
+		}
+	}
+	return locked, nil
+}
+
+// refuseLockedDeletion answers a local account deletion while one of the
+// account's sites is locked, and reports whether it did. It runs before
+// anything is cancelled or deleted: a subscription ended for an account that
+// then stays would be the worst of both.
+func (p *provider) refuseLockedDeletion(w http.ResponseWriter, acc *account.Account) bool {
+	locked, err := p.lockedSites(acc)
+	if err != nil {
+		slog.Error("account deletion: could not check the account's sites for locks", "account", acc.ID, "err", err)
+		http.Error(w, "could not delete the account", http.StatusInternalServerError)
+		return true
+	}
+	if len(locked) == 0 {
+		return false
+	}
+	slog.Info("account deletion refused: the operator holds sites of the account locked", "account", acc.ID, "sites", locked)
+	p.securityHeaders(w)
+	w.WriteHeader(http.StatusConflict)
+	msgTmpl.Execute(w, msgView{
+		Title: "Account not deleted",
+		Body:  "The operator has locked one or more of this account's sites, so the account cannot be deleted while the lock is in place. Nothing was deleted or cancelled. Contact the operator of this instance.",
+		Back:  "/account",
+	})
+	return true
 }
 
 // deleteConfirmView is the confirmation step of a local account deletion:
@@ -348,6 +417,9 @@ func (p *provider) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, p.cfg.AccountConsoleURL(p.baseURL()+"/account"), http.StatusSeeOther)
 		return
 	}
+	if p.refuseLockedDeletion(w, acc) {
+		return
+	}
 	ids, _ := p.accounts.ListSiteIDs(acc)
 	toks, _ := p.accounts.ListTokens(acc)
 	v := deleteConfirmView{Email: acc.Email, CSRF: p.csrf(acc), Sites: len(ids), Tokens: len(toks)}
@@ -374,6 +446,9 @@ func (p *provider) handleDeleteAccountConfirm(w http.ResponseWriter, r *http.Req
 	}
 	if p.stackDeletion(acc) {
 		http.Redirect(w, r, p.cfg.AccountConsoleURL(p.baseURL()+"/account"), http.StatusSeeOther)
+		return
+	}
+	if p.refuseLockedDeletion(w, acc) {
 		return
 	}
 	if liveSubscription(acc) {
@@ -483,6 +558,9 @@ type siteRow struct {
 	SizeText   string
 	ExpiryText string
 	CSRF       string
+	// LockedText is the lock's date, for the line a locked site shows in
+	// place of its actions. Who placed it is not shown to the owner.
+	LockedText string
 }
 
 // expiryText is the site row's lifetime line. A downgrade puts a 30-day grace
@@ -560,12 +638,19 @@ func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, 
 	rows := make([]siteRow, 0, len(ids))
 	for _, id := range ids {
 		if info, ok := p.host.Sites().Info(id); ok {
-			rows = append(rows, siteRow{
+			row := siteRow{
 				SiteInfo:   info,
 				SizeText:   humanBytes(info.Bytes),
 				ExpiryText: expiryText(info.ExpiresAt),
 				CSRF:       token,
-			})
+			}
+			if info.Locked != nil {
+				row.LockedText = info.Locked.At.Local().Format("2006-01-02")
+				// A lock outlives the expiry; saying the date would promise
+				// a deletion that is not coming.
+				row.ExpiryText = "kept while locked"
+			}
+			rows = append(rows, row)
 		}
 	}
 	current := p.effectiveTierFresh(acc)

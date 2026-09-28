@@ -1,6 +1,7 @@
 // Package cleanup deletes expired sites and repairs the filesystem indexes.
 // Between expiry and deletion (a 24h grace window) the authz endpoint serves
-// 410 Gone, so visitors see a clear signal before the site disappears.
+// 410 Gone, so visitors see a clear signal before the site disappears. A
+// locked site is never swept: see store.SiteLock.
 package cleanup
 
 import (
@@ -90,6 +91,15 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 	st.ReconcileZones(context.Background(), now)
 	removed := 0
 	for _, site := range sites {
+		// A locked site is the operator's evidence hold, and the sweep leaves
+		// it entirely alone: no expiry (it outlives its date indefinitely), no
+		// restamp from the owner's tier, no trust or domain reconciliation —
+		// it is kept exactly as the lock found it. store.Delete refuses it as
+		// well; skipping here keeps that refusal from being logged as a
+		// failure every ten minutes.
+		if site.Meta.IsLocked() {
+			continue
+		}
 		reconcileTrust(st, site)
 		// The second half of custom-domain verification: claims whose record
 		// appeared since the owner asked are attached, verified domains are

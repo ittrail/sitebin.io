@@ -512,3 +512,70 @@ func TestSweepPurgesReportsOlderThanRetention(t *testing.T) {
 		t.Fatalf("reports after sweep = %+v", reports)
 	}
 }
+
+// A locked site is the operator's evidence hold: the sweep must neither
+// delete it, however long ago it expired, nor restamp it from its owner's
+// tier, nor touch its trust marker or domains. Unlocked, the same site is
+// swept as usual.
+func TestSweepLeavesALockedSiteAlone(t *testing.T) {
+	p := &stubProvider{grant: ext.CreateGrant{MaxExpiryDays: 7, MaxSiteBytes: 1 << 30}, ok: true}
+	ext.Register(p)
+	defer ext.Reset()
+	st, err := store.New(t.TempDir(), "sitebin.example", 1<<20, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.SetDomainVerifier(store.TrustingVerifier{}, "sitebin.example")
+	now := time.Now().UTC()
+	site := expiredOwnedSite(t, st, now, "acct-1", 7, true)
+	longAgo := now.Add(-400 * 24 * time.Hour)
+	st.Update(site, func(m *store.Meta) error { m.ExpiresAt = &longAgo; return nil })
+	if _, err := st.SetLock(site, &store.SiteLock{Reason: "phishing", By: store.LockByAdmin}); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := Sweep(st, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 0 {
+		t.Fatalf("removed = %d, want 0 — the site is locked", removed)
+	}
+	got, err := st.ByViewID(site.ViewID)
+	if err != nil {
+		t.Fatalf("locked site deleted by the sweep: %v", err)
+	}
+	if got.Meta.QuotaBytes != 0 {
+		t.Errorf("locked site restamped from the owner's tier: %+v", got.Meta)
+	}
+	if len(p.calls) != 0 {
+		t.Errorf("the sweep asked the owner's tier for a locked site: %v", p.calls)
+	}
+
+	// Lifted, the hold is gone and the expiry applies again.
+	if _, err := st.SetLock(got, nil); err != nil {
+		t.Fatal(err)
+	}
+	if removed, _ := Sweep(st, now); removed != 1 {
+		t.Fatalf("removed = %d after unlock, want 1", removed)
+	}
+}
+
+// The account-lock kind is held exactly like the operator's.
+func TestSweepLeavesAnAccountLockedAnonymousSiteAlone(t *testing.T) {
+	st, err := store.New(t.TempDir(), "sitebin.example", 1<<20, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	site, _, _ := st.Create()
+	when := now.Add(-48 * time.Hour)
+	st.Update(site, func(m *store.Meta) error { m.ExpiresAt = &when; return nil })
+	st.SetLock(site, &store.SiteLock{By: store.LockByAccount})
+	if removed, _ := Sweep(st, now); removed != 0 {
+		t.Fatalf("removed = %d, want 0", removed)
+	}
+	if _, err := st.ByViewID(site.ViewID); err != nil {
+		t.Fatalf("locked site gone: %v", err)
+	}
+}

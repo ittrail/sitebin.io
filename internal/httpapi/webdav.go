@@ -98,6 +98,11 @@ func (a *API) webdav(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "this site was created without an account, so it has no WebDAV access — create it while signed in at "+a.apiAccountHint()+" to use WebDAV")
 		return
 	}
+	// A locked site's tree is frozen, reads included: a lock holds the
+	// content as evidence and keeps it from everyone but the operator.
+	if refuseLocked(w, site) {
+		return
+	}
 
 	// A readable refusal for the common cases. siteFS below is the guarantee
 	// -- it validates every name on every method -- but a 400 with a reason

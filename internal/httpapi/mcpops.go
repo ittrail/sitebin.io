@@ -90,6 +90,8 @@ func (o mcpOps) mcpError(err error) error {
 		return errors.New("this form's recipient has already confirmed; there is nothing to resend")
 	case errors.Is(err, store.ErrReplaceBusy):
 		return errors.New(msgReplaceBusy)
+	case errors.Is(err, store.ErrLocked):
+		return errors.New(store.LockedMessage(nil))
 	default:
 		o.a.log.Error("mcp internal error", "err", err)
 		return errors.New("internal error")
@@ -110,7 +112,24 @@ func (o mcpOps) mcpError(err error) error {
 // The last rule is where MCP is deliberately stricter than the JSON API: the
 // API lets Sitebin's own pages through on browser fetch metadata, and an MCP
 // client is never one of Sitebin's own pages.
+//
+// A locked site is refused once the caller has authenticated, exactly as
+// withEditAuth refuses it; get_site alone opens one (openSiteEvenLocked), so
+// an agent can see and report the lock.
 func (o mcpOps) openSite(auth mcp.Auth, ref mcp.SiteRef) (*store.Site, error) {
+	site, err := o.openSiteEvenLocked(auth, ref)
+	if err != nil {
+		return nil, err
+	}
+	if site.Meta.IsLocked() {
+		return nil, errors.New(store.LockedMessage(site.Meta.Locked))
+	}
+	return site, nil
+}
+
+// openSiteEvenLocked is openSite without the lock refusal. Only get_site uses
+// it; its result then carries the lock and no files.
+func (o mcpOps) openSiteEvenLocked(auth mcp.Auth, ref mcp.SiteRef) (*store.Site, error) {
 	if strings.TrimSpace(ref.EditID) == "" {
 		return nil, errors.New("edit_id is required")
 	}
@@ -148,7 +167,8 @@ func (o mcpOps) openSite(auth mcp.Auth, ref mcp.SiteRef) (*store.Site, error) {
 // siteResult maps a site onto the struct every site-shaped tool returns.
 func (o mcpOps) siteResult(site *store.Site) *mcp.SiteResult {
 	files, err := o.a.st.ListFiles(site)
-	if err != nil {
+	if err != nil || site.Meta.IsLocked() {
+		// A locked site's content stays out of reach, its file names too.
 		files = []store.FileInfo{}
 	}
 	bytes, count, _ := o.a.st.Usage(site)
@@ -173,6 +193,7 @@ func (o mcpOps) siteResult(site *store.Site) *mcp.SiteResult {
 		FileCount:     count,
 		MaxBytes:      o.a.st.EffMaxBytes(site),
 		MaxFiles:      o.a.st.EffMaxFiles(site),
+		Locked:        mcpLock(m.Locked),
 	}
 	for _, f := range files {
 		out.Files = append(out.Files, mcp.FileInfo{Path: f.Path, Bytes: f.Size})
@@ -181,6 +202,18 @@ func (o mcpOps) siteResult(site *store.Site) *mcp.SiteResult {
 		out.PendingDomains = append(out.PendingDomains, mcp.PendingDomain{Domain: p.Domain, TXTName: p.TXTName, TXTValue: p.TXTValue, CNAMETarget: p.CNAMETarget})
 	}
 	return out
+}
+
+// mcpLock is the lock as an agent sees it: when, and why — never who placed
+// it, which is the operator's business. Nil for an unlocked site, which keeps
+// every unlocked site's result exactly what it was before locks existed: a
+// client holding an output schema cached before the field existed only ever
+// meets it on a locked site.
+func mcpLock(l *store.SiteLock) *mcp.SiteLock {
+	if l == nil {
+		return nil
+	}
+	return &mcp.SiteLock{At: l.At, Reason: l.Reason}
 }
 
 // settings maps the tool argument onto the JSON API's updateSet, so
@@ -277,13 +310,14 @@ func (o mcpOps) ListSites(_ context.Context, auth mcp.Auth) ([]mcp.SiteSummary, 
 			CreatedAt: site.Meta.CreatedAt,
 			ExpiresAt: site.Meta.ExpiresAt,
 			Origin:    site.Meta.Origin,
+			Locked:    mcpLock(site.Meta.Locked),
 		})
 	}
 	return out, nil
 }
 
 func (o mcpOps) GetSite(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) (*mcp.SiteResult, error) {
-	site, err := o.openSite(auth, ref)
+	site, err := o.openSiteEvenLocked(auth, ref)
 	if err != nil {
 		return nil, err
 	}

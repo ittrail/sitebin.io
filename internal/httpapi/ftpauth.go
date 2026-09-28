@@ -1,6 +1,10 @@
 package httpapi
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/ittrail/sitebin.io/internal/store"
+)
 
 // FTPAuth authenticates an FTP login (username = edit UUID, password = edit
 // password) and returns the site's content directory plus its effective quota
@@ -25,6 +29,12 @@ func (a *API) FTPAuth(editID, password, clientIP string) (string, int64, int, er
 		// no FTP field, so this is the only place that rule is enforced.
 		if a.gatedAnonymous(site) {
 			return "", 0, 0, errors.New("this site was created without an account, so it has no FTP access")
+		}
+		// Checked at login, which is the one moment FTP asks: a session
+		// opened before the lock can keep writing until it disconnects (FTP
+		// is off on the hosted instance; see the lock design).
+		if site.Meta.IsLocked() {
+			return "", 0, 0, errors.New(store.LockedMessage(site.Meta.Locked))
 		}
 		return site.ContentDir(), a.st.EffMaxBytes(site), a.st.EffMaxFiles(site), nil
 	case verifyThrottled:

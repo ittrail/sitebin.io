@@ -39,6 +39,10 @@ type fakeSites struct {
 	zonesReleased []string
 	// expirySet records what SetExpiry was asked to write, including nil.
 	expirySet map[string]*time.Time
+	// forceDeleted records ForceDelete calls; lockErrs fails SetLock and
+	// ReleaseLock for the listed site ids.
+	forceDeleted []string
+	lockErrs     map[string]error
 }
 
 func (s *fakeSites) Info(id string) (ext.SiteInfo, bool) { i, ok := s.infos[id]; return i, ok }
@@ -136,18 +140,80 @@ func (s *fakeSites) SetName(id, name string) error {
 	if !ok {
 		return fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
 	}
+	if info.Locked != nil {
+		return fmt.Errorf("%w: %s", ext.ErrSiteLocked, id)
+	}
 	info.Name = clean
 	s.infos[id] = info
 	return nil
 }
 
 func (s *fakeSites) RotateEditPassword(id string) (string, error) {
+	if info, ok := s.infos[id]; ok && info.Locked != nil {
+		return "", fmt.Errorf("%w: %s", ext.ErrSiteLocked, id)
+	}
 	s.rotated = append(s.rotated, id)
 	return "freshEditPw123456789012", nil
 }
+
+// SetLock and ReleaseLock mirror store.SetLock and store.ReleaseLock: an
+// account lock never replaces a lock, and ReleaseLock lifts only its own kind.
+func (s *fakeSites) SetLock(id string, lock *ext.SiteLock) error {
+	if err := s.lockErrs[id]; err != nil {
+		return err
+	}
+	info, ok := s.infos[id]
+	if !ok {
+		return fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
+	}
+	switch {
+	case lock == nil:
+		info.Locked = nil
+	case lock.By == ext.LockByAccount && info.Locked != nil:
+		return nil
+	default:
+		l := *lock
+		if l.At.IsZero() {
+			l.At = time.Now()
+		}
+		info.Locked = &l
+	}
+	s.infos[id] = info
+	return nil
+}
+
+func (s *fakeSites) ReleaseLock(id, by string) (bool, error) {
+	if err := s.lockErrs[id]; err != nil {
+		return false, err
+	}
+	info, ok := s.infos[id]
+	if !ok {
+		return false, fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
+	}
+	if info.Locked == nil || info.Locked.By != by {
+		return false, nil
+	}
+	info.Locked = nil
+	s.infos[id] = info
+	return true, nil
+}
+
+func (s *fakeSites) ForceDelete(id string) error {
+	if _, ok := s.infos[id]; !ok {
+		return fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
+	}
+	s.forceDeleted = append(s.forceDeleted, id)
+	s.deleted = append(s.deleted, id) // a delete like any other, to a test counting them
+	delete(s.infos, id)
+	return nil
+}
+
 func (s *fakeSites) Delete(id string) error {
 	if err := s.deleteErrs[id]; err != nil {
 		return err
+	}
+	if info, ok := s.infos[id]; ok && info.Locked != nil {
+		return fmt.Errorf("%w: %s", ext.ErrSiteLocked, id)
 	}
 	if _, ok := s.infos[id]; !ok {
 		// The real siteService reports a stale reference as ErrSiteGone, and a
@@ -171,6 +237,9 @@ func (s *fakeSites) ApplyQuota(id string, g ext.CreateGrant) error {
 		// never seen hides the whole dangling-ownership-marker failure mode, so
 		// tests must register every site they link.
 		return fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
+	}
+	if info.Locked != nil {
+		return nil // the hold freezes a locked site, as the real one does
 	}
 	if s.quotas == nil {
 		s.quotas = map[string]ext.CreateGrant{}

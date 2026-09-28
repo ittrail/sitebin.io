@@ -30,6 +30,7 @@ const pageHead = `<!doctype html>
   .acct .sitecard .doms { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 3px; }
   .acct .sitecard .doms a { font: 12px var(--mono); color: var(--amber); word-break: break-all; }
   .acct .sitecard .doms .pend { font: 12px var(--mono); color: rgba(245,184,77,.5); word-break: break-all; }
+  .acct .sitecard .locked { margin-top: 4px; font: 12px var(--mono); color: var(--danger); overflow-wrap: anywhere; }
   .acct .sitecard details.rename { margin-top: 6px; }
   .acct .sitecard details.rename summary { display: inline-block; cursor: pointer; list-style: none; font: 12px var(--mono); color: var(--ink-dim); }
   .acct .sitecard details.rename summary::-webkit-details-marker { display: none; }
@@ -149,6 +150,10 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
         <a class="plain" href="{{.ViewURL}}" target="_blank" rel="noopener">{{.ViewURL}}</a>
         {{if .DomainLinks}}<div class="doms">{{range .DomainLinks}}{{if .Pending}}<span class="pend" title="Claimed, waiting for its DNS record">{{.Domain}} · pending DNS</span>{{else}}<a href="{{.URL}}" target="_blank" rel="noopener">{{.Domain}}</a>{{end}}{{end}}</div>{{end}}
         <div class="u">{{.Mode}} · {{.SizeText}} · {{.Files}} files · {{.ExpiryText}}</div>
+        {{if .Locked}}
+        <div class="locked">Locked by the operator on {{.LockedText}}{{if .Locked.Reason}}: {{.Locked.Reason}}{{end}}. It is not served, and it cannot be changed or deleted.</div>
+      </div>
+      {{else}}
         <details class="rename">
           <summary>&#9998; {{if .Name}}Rename{{else}}Add a name{{end}}</summary>
           <form method="post" action="/account/sites/{{.ViewID}}/name">
@@ -167,6 +172,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
         <input type="hidden" name="csrf" value="{{.CSRF}}">
         <button class="btn small danger" type="submit">Delete</button>
       </form>
+      {{end}}
     </div>
     {{end}}
   </div>
@@ -402,7 +408,7 @@ const adminConsoleCSS = `
 
   /* the register */
   .adm .reg { border: 1px solid var(--line-soft); border-radius: var(--radius); overflow: hidden; background: var(--bg-card); }
-  .adm .rowhead, .adm .row { display: grid; grid-template-columns: minmax(184px,1.8fr) minmax(126px,1.05fr) 62px 78px 100px 90px minmax(92px,.75fr) 226px; gap: 12px; align-items: center; padding: 10px 16px; }
+  .adm .rowhead, .adm .row { display: grid; grid-template-columns: minmax(184px,1.8fr) minmax(126px,1.05fr) 62px 78px 100px 90px minmax(92px,.75fr) 286px; gap: 12px; align-items: center; padding: 10px 16px; }
   .adm .rowhead { font: 600 10px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--ink-faint); background: var(--bg-raise); border-bottom: 1px solid var(--line); }
   .adm .row { border-top: 1px solid var(--line-soft); font-size: 13px; }
   .adm .row:first-of-type { border-top: 0; }
@@ -411,6 +417,16 @@ const adminConsoleCSS = `
   .adm .row .id a { color: var(--ink); }
   .adm .row .nm { display: block; font: 600 13px var(--body); color: var(--ink); margin-bottom: 2px; overflow-wrap: anywhere; }
   .adm .row .dom { display: block; font: 11px var(--mono); color: var(--amber); margin-top: 3px; word-break: break-all; }
+  /* The operator's hold: a stamped tag, so a locked row reads as handled
+     evidence rather than as a live site. */
+  .adm .row .lock { display: block; margin-top: 4px; font: 11px var(--mono); color: var(--danger); overflow-wrap: anywhere; }
+  .adm .row .lock b { display: inline-block; padding: 0 6px; margin-right: 6px; border: 1px solid var(--danger); border-radius: 4px; font-weight: 700; letter-spacing: .08em; }
+  .adm .row.locked { background: rgba(242,109,109,.035); }
+  .adm .row .susp { display: inline-block; margin-left: 6px; padding: 0 5px; border: 1px solid var(--danger); border-radius: 4px; font: 700 10px var(--mono); letter-spacing: .08em; color: var(--danger); text-transform: uppercase; }
+  .adm .row.confirm input[type=text] {
+    background: var(--bg-raise); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 7px; padding: 5px 8px; font: 12px var(--body); width: 220px;
+  }
   .adm .row .own { font-size: 12px; color: var(--ink-dim); word-break: break-all; }
   .adm .row .own.anon { color: var(--ink-faint); font-style: italic; }
   .adm .row .num { font: 12px var(--mono); color: var(--ink-dim); }
@@ -444,6 +460,8 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
 
   {{if eq .Flash "deleted"}}<p class="flash">Site deleted.</p>{{end}}
   {{if eq .Flash "expiry"}}<p class="flash">Expiry updated.</p>{{end}}
+  {{if eq .Flash "locked"}}<p class="flash">Site locked: it is served to nobody, frozen for its owner, and kept past its expiry.</p>{{end}}
+  {{if eq .Flash "unlocked"}}<p class="flash">Site unlocked: it is served again, and its expiry applies again.</p>{{end}}
 
   <section class="figures">
     <div class="fig"><span class="k">Sites</span><span class="v">{{.Figures.Sites}}</span></div>
@@ -453,6 +471,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
     <div class="fig"><span class="k">Files</span><span class="v">{{.Figures.Files}}</span></div>
     <div class="fig{{if .Figures.ExpiringSoon}} warn{{end}}"><span class="k">Due in 7 days</span><span class="v">{{.Figures.ExpiringSoon}}</span></div>
     <div class="fig{{if .Figures.Flagged}} alarm{{end}}"><span class="k">CSP-blocked</span><span class="v">{{.Figures.Flagged}}</span></div>
+    <div class="fig"><span class="k">Locked</span><span class="v">{{.Figures.Locked}}</span></div>
   </section>
 
   <form class="bar" method="get" action="/account/admin">
@@ -464,6 +483,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
       <option value="expiring"{{if eq .Filter "expiring"}} selected{{end}}>Expiring within 7 days</option>
       <option value="mcp"{{if eq .Filter "mcp"}} selected{{end}}>Created by an agent (MCP)</option>
       <option value="flagged"{{if eq .Filter "flagged"}} selected{{end}}>Blocked by CSP</option>
+      <option value="locked"{{if eq .Filter "locked"}} selected{{end}}>Locked</option>
     </select>
     <button class="btn small" type="submit">Apply</button>
     <span class="count">{{.Shown}} shown</span>
@@ -474,10 +494,35 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
       <span>Site</span><span>Owner</span><span>Origin</span><span>Mode</span><span>Size</span><span>Created</span><span>Expiry</span><span style="text-align:right">Actions</span>
     </div>
     {{range .Rows}}
-    {{if .Confirming}}
+    {{if .Locking}}
     <div class="row confirm">
       <span class="id">{{if .Name}}<span class="nm">{{.Name}}</span>{{end}}{{.ViewID}}{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}</span>
-      <span class="warnmsg">Delete this site permanently? Its {{.Files}} file(s) and any custom domain go with it. This cannot be undone.</span>
+      <span class="warnmsg">{{if .Locked}}Keep this site locked as your own hold? A lock placed by a suspension is lifted when the owner is unsuspended; yours stays until you unlock it.{{else}}Lock this site? It stops being served at once, its owner can no longer change, download or delete it, and it is kept past its expiry — nothing is deleted until you unlock or delete it.{{end}}</span>
+      <span class="acts">
+        <form method="post" action="/account/admin/sites/{{.ViewID}}/lock{{if $.Params}}?{{$.ParamsQ}}{{end}}" class="inline">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <input type="text" name="reason" maxlength="200" value="{{if .Locked}}{{.Locked.Reason}}{{end}}" placeholder="Reason — shown to the owner" aria-label="Reason for locking {{.ViewID}}">
+          <button class="btn small danger" type="submit">Yes, lock {{.ViewID}}</button>
+        </form>
+        <a class="btn small" href="/account/admin?{{$.ParamsQ}}">Cancel</a>
+      </span>
+    </div>
+    {{else if .Unlocking}}
+    <div class="row confirm">
+      <span class="id">{{if .Name}}<span class="nm">{{.Name}}</span>{{end}}{{.ViewID}}{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}</span>
+      <span class="warnmsg">Unlock this site? It is served again at once, its owner can change it again, and its expiry{{if .ExpiryValue}} ({{.ExpiryValue}}){{end}} applies again — a date already past means the next sweep deletes it.</span>
+      <span class="acts">
+        <form method="post" action="/account/admin/sites/{{.ViewID}}/unlock{{if $.Params}}?{{$.ParamsQ}}{{end}}" class="inline">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <button class="btn small" type="submit">Yes, unlock {{.ViewID}}</button>
+        </form>
+        <a class="btn small" href="/account/admin?{{$.ParamsQ}}">Cancel</a>
+      </span>
+    </div>
+    {{else if .Confirming}}
+    <div class="row confirm">
+      <span class="id">{{if .Name}}<span class="nm">{{.Name}}</span>{{end}}{{.ViewID}}{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}</span>
+      <span class="warnmsg">{{if .Locked}}This site is LOCKED — held as evidence. {{end}}Delete this site permanently? Its {{.Files}} file(s) and any custom domain go with it. This cannot be undone.</span>
       <span class="acts">
         <form method="post" action="/account/admin/sites/{{.ViewID}}/delete{{if $.Params}}?{{$.ParamsQ}}{{end}}" class="inline">
           <input type="hidden" name="csrf" value="{{$.CSRF}}">
@@ -487,8 +532,8 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
       </span>
     </div>
     {{else}}
-    <div class="row">
-      <span class="id">{{if .Name}}<span class="nm">{{.Name}}</span>{{end}}<a href="{{.ViewURL}}" rel="noreferrer noopener" target="_blank">{{.ViewID}}</a>{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}</span>
+    <div class="row{{if .Locked}} locked{{end}}">
+      <span class="id">{{if .Name}}<span class="nm">{{.Name}}</span>{{end}}<a href="{{.ViewURL}}" rel="noreferrer noopener" target="_blank">{{.ViewID}}</a>{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}{{if .LockText}}<span class="lock"><b>LOCKED</b>{{.LockText}}</span>{{end}}</span>
       <span class="own{{if not .Owner}} anon{{end}}">{{.OwnerLabel}}{{if .Violations}}<span class="flag" title="{{.BlockedText}}">&#9888; {{.Violations}} blocked{{if .Reporters}} &middot; {{.Reporters}} source{{if ne .Reporters 1}}s{{end}}{{end}}</span>{{end}}</span>
       <span class="num orig">{{if .Origin}}{{.Origin}}{{else}}&mdash;{{end}}</span>
       <span class="num">{{.Mode}}</span>
@@ -501,6 +546,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
           <input type="date" name="expires" value="{{.ExpiryValue}}" aria-label="Expiry for {{.ViewID}}">
           <button class="btn small" type="submit">Set</button>
         </form>
+        {{if .Locked}}<a class="btn small" href="/account/admin?unlock={{.ViewID}}{{$.Params}}">Unlock</a>{{if .LockedByAccount}}<a class="btn small" href="/account/admin?lock={{.ViewID}}{{$.Params}}" title="Keep it locked when the owner is unsuspended">Keep</a>{{end}}{{else}}<a class="btn small danger" href="/account/admin?lock={{.ViewID}}{{$.Params}}">Lock</a>{{end}}
         <a class="btn small danger" href="/account/admin?confirm={{.ViewID}}{{$.Params}}">Delete</a>
       </span>
     </div>

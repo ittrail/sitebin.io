@@ -94,7 +94,7 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("POST /api/sites", a.createSite)
 	mux.HandleFunc("OPTIONS /api/sites", a.createPreflight)
 	mux.HandleFunc("POST /api/report", a.report)
-	mux.HandleFunc("GET /api/sites/{editID}", a.withEditAuth(a.getSite))
+	mux.HandleFunc("GET /api/sites/{editID}", a.withEditAuthEvenLocked(a.getSite))
 	mux.HandleFunc("GET /api/sites/{editID}/download", a.withEditAuth(a.downloadSite))
 	mux.HandleFunc("GET /api/sites/{editID}/content/{path...}", a.withEditAuth(a.getFileContent))
 	mux.HandleFunc("GET /api/sites/{editID}/dir", a.withEditAuth(a.listDir))
@@ -263,6 +263,10 @@ func storeError(w http.ResponseWriter, err error) {
 		writeError(w, 410, err.Error())
 	case errors.Is(err, store.ErrReplaceBusy):
 		writeError(w, 409, msgReplaceBusy)
+	case errors.Is(err, store.ErrLocked):
+		// A lock placed while the request was on its way (a replace commit,
+		// a delete): the gate let it in, the store held the line.
+		writeError(w, 403, store.LockedMessage(nil))
 	default:
 		slog.Error("internal error", "err", err)
 		writeError(w, 500, "internal error")
@@ -339,7 +343,31 @@ func (a *API) sessionProvider() (ext.SessionAccounts, bool) {
 // withEditAuth authenticates edit operations: the edit id in the path plus
 // the edit password from X-Edit-Password (or Basic auth), rate limited and
 // cached to keep Argon2 work off the hot path.
+//
+// A locked site is refused with 403 once the caller has authenticated —
+// whichever credential it used — so every per-site route is frozen by the
+// lock without restating the rule in each handler.
 func (a *API) withEditAuth(next func(http.ResponseWriter, *http.Request, *store.Site)) http.HandlerFunc {
+	return a.editAuth(next, false)
+}
+
+// withEditAuthEvenLocked is withEditAuth for the one route that answers a
+// locked site: GET /api/sites/{editID}, the edit page's load, which is how
+// the owner learns about the lock. Its payload then carries no file list.
+func (a *API) withEditAuthEvenLocked(next func(http.ResponseWriter, *http.Request, *store.Site)) http.HandlerFunc {
+	return a.editAuth(next, true)
+}
+
+func (a *API) editAuth(next func(http.ResponseWriter, *http.Request, *store.Site), showLocked bool) http.HandlerFunc {
+	if !showLocked {
+		handler := next
+		next = func(w http.ResponseWriter, r *http.Request, site *store.Site) {
+			if refuseLocked(w, site) {
+				return
+			}
+			handler(w, r, site)
+		}
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		// An upload token opens exactly one route, which withUploadAuth
 		// guards. Everywhere else it is refused before any password work, so

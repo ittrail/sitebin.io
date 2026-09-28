@@ -362,8 +362,19 @@ func (s *Store) Update(site *Site, mutate func(*Meta) error) error {
 	return nil
 }
 
-// Delete removes the site folder and all index links pointing at it.
-func (s *Store) Delete(site *Site) error {
+// Delete removes the site folder and all index links pointing at it. A locked
+// site is refused with ErrLocked: the lock is an evidence hold, and this is
+// the one operation that cannot be undone, so it is checked here, under the
+// site lock, whichever surface asked. Only ForceDelete — the operator's
+// explicit takedown — goes past it.
+func (s *Store) Delete(site *Site) error { return s.delete(site, false) }
+
+// ForceDelete is Delete for a locked site too. Only the operator's own
+// takedowns call it: the instance register's two-step delete and
+// `sitebin delete --force`.
+func (s *Store) ForceDelete(site *Site) error { return s.delete(site, true) }
+
+func (s *Store) delete(site *Site, force bool) error {
 	l := s.lockSite(site.ViewID)
 	l.Lock()
 	defer l.Unlock()
@@ -373,7 +384,13 @@ func (s *Store) Delete(site *Site) error {
 	sl.Lock()
 	defer sl.Unlock()
 
+	// An unreadable meta.json is not a lock: Delete has always removed a site
+	// whose meta was damaged, and a lock that cannot be read was never shown
+	// anywhere to be relied on.
 	meta, err := readMeta(site.dir)
+	if err == nil && meta.Locked != nil && !force {
+		return ErrLocked
+	}
 	if err == nil {
 		for _, d := range meta.CustomDomains {
 			os.Remove(filepath.Join(s.domainIndexDir(), d))

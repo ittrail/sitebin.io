@@ -249,6 +249,11 @@ func (r *Replacement) Commit() error {
 		}
 		return err
 	}
+	// A replace that began before the operator locked the site must not
+	// swap out the content the lock is holding as evidence.
+	if meta.Locked != nil {
+		return ErrLocked
+	}
 	// The mode decides where the content lives; take it as it is now, not as
 	// it was when the upload began.
 	r.site.Meta = meta

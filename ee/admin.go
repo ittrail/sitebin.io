@@ -69,6 +69,7 @@ type instanceFigures struct {
 	Expiring     int // carrying any expiry
 	ExpiringSoon int // falling due within expiringSoon
 	Flagged      int // sites with at least one CSP violation
+	Locked       int // sites under the operator's hold
 }
 
 // HumanBytes renders the stored total for the figure stub.
@@ -94,6 +95,9 @@ func (p *provider) instanceStats(sites []ext.SiteInfo) instanceFigures {
 		}
 		if s.Violations > 0 {
 			f.Flagged++
+		}
+		if s.Locked != nil {
+			f.Locked++
 		}
 	}
 	return f
@@ -138,6 +142,16 @@ type adminRow struct {
 	// is script-src 'none', so a confirm() dialog would silently never appear;
 	// the confirmation has to be a step the server renders.
 	Confirming bool
+	// Locking and Unlocking are the same kind of step for the lock: locking
+	// takes the site off the web and asks for the reason; unlocking puts it
+	// back and its expiry in force again. Neither is a single stray click.
+	Locking   bool
+	Unlocking bool
+	// LockText describes the lock for the row — date, who, reason — and is
+	// empty for an unlocked site. LockedByAccount marks a lock a suspension
+	// placed, which the register offers to keep as the operator's own.
+	LockText        string
+	LockedByAccount bool
 }
 
 type adminView struct {
@@ -202,6 +216,8 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 	filter := r.URL.Query().Get("filter")
 	confirm := r.URL.Query().Get("confirm")
+	locking := r.URL.Query().Get("lock")
+	unlocking := r.URL.Query().Get("unlock")
 	cutoff := time.Now().Add(expiringSoon)
 
 	rows := make([]adminRow, 0, len(sites))
@@ -215,6 +231,12 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 			DomainsText: strings.Join(s.Domains, ", "),
 			BlockedText: strings.Join(s.Blocked, ", "),
 			Confirming:  s.ViewID == confirm,
+			Locking:     s.ViewID == locking,
+			Unlocking:   s.ViewID == unlocking && s.Locked != nil,
+		}
+		if s.Locked != nil {
+			row.LockText = lockText(s.Locked)
+			row.LockedByAccount = s.Locked.By == ext.LockByAccount
 		}
 		if row.OwnerLabel == "" {
 			row.OwnerLabel = "anonymous"
@@ -248,6 +270,10 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 			if s.Violations == 0 {
 				continue
 			}
+		case "locked":
+			if s.Locked == nil {
+				continue
+			}
 		}
 		if !matches(row, q) {
 			continue
@@ -269,6 +295,19 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		Params:  template.URL(listParams(r)),
 		ParamsQ: template.URL(strings.TrimPrefix(listParams(r), "&")),
 	})
+}
+
+// lockText is a lock as the register's row states it: when, who, and why.
+func lockText(l *ext.SiteLock) string {
+	who := "by an admin"
+	if l.By == ext.LockByAccount {
+		who = "with the owner's suspension"
+	}
+	out := "locked " + l.At.Local().Format("2006-01-02 15:04") + " " + who
+	if l.Reason != "" {
+		out += " · " + l.Reason
+	}
+	return out
 }
 
 // listParams re-encodes just the list's own query so a redirect or a cancel
@@ -298,13 +337,60 @@ func (p *provider) handleAdminDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	viewID := r.PathValue("id")
-	if err := p.host.Sites().Delete(viewID); err != nil {
+	// ForceDelete: the operator's takedown is the one delete a lock does not
+	// stop. The confirmation step said the site was locked.
+	if err := p.host.Sites().ForceDelete(viewID); err != nil {
 		http.Error(w, "could not delete the site", http.StatusInternalServerError)
 		return
 	}
 	// An operator acting on sites that are not theirs leaves a trail.
 	slog.Info("admin deleted a site", "admin", acc.ID, "site", viewID)
 	p.redirect(w, r, "/account/admin?flash=deleted"+listParams(r))
+}
+
+// handleAdminLock places the operator's hold on a site, or turns a
+// suspension's lock into the operator's own ("keep locked"), which an
+// unsuspension then leaves in place.
+func (p *provider) handleAdminLock(w http.ResponseWriter, r *http.Request) {
+	acc, ok := p.adminAccount(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if !p.checkCSRF(r, acc) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	viewID := r.PathValue("id")
+	reason := store.CleanLockReason(r.PostFormValue("reason"))
+	if err := p.host.Sites().SetLock(viewID, &ext.SiteLock{At: time.Now(), Reason: reason, By: ext.LockByAdmin}); err != nil {
+		slog.Error("admin could not lock a site", "admin", acc.ID, "site", viewID, "err", err)
+		http.Error(w, "could not lock the site", http.StatusInternalServerError)
+		return
+	}
+	slog.Info("admin locked a site", "admin", acc.ID, "site", viewID, "reason", reason)
+	p.redirect(w, r, "/account/admin?flash=locked"+listParams(r))
+}
+
+// handleAdminUnlock lifts any lock, the operator's or a suspension's.
+func (p *provider) handleAdminUnlock(w http.ResponseWriter, r *http.Request) {
+	acc, ok := p.adminAccount(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if !p.checkCSRF(r, acc) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	viewID := r.PathValue("id")
+	if err := p.host.Sites().SetLock(viewID, nil); err != nil {
+		slog.Error("admin could not unlock a site", "admin", acc.ID, "site", viewID, "err", err)
+		http.Error(w, "could not unlock the site", http.StatusInternalServerError)
+		return
+	}
+	slog.Info("admin unlocked a site", "admin", acc.ID, "site", viewID)
+	p.redirect(w, r, "/account/admin?flash=unlocked"+listParams(r))
 }
 
 func (p *provider) handleAdminExpiry(w http.ResponseWriter, r *http.Request) {

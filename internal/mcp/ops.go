@@ -168,6 +168,16 @@ type SiteResult struct {
 	MaxBytes       int64           `json:"max_bytes,omitempty"`
 	MaxFiles       int             `json:"max_files,omitempty"`
 	Warnings       []string        `json:"warnings,omitempty"`
+	// Locked is present only on a site the operator has locked. omitempty on
+	// purpose: every other site's result is exactly what it was before locks
+	// existed, so a client that cached this schema earlier never sees it.
+	Locked *SiteLock `json:"locked,omitempty" jsonschema:"present only when the operator has locked the site: it is not served to anyone, its files cannot be read, and it cannot be changed or deleted"`
+}
+
+// SiteLock is the operator's lock on a site, as its owner sees it.
+type SiteLock struct {
+	At     time.Time `json:"at" jsonschema:"when the site was locked"`
+	Reason string    `json:"reason,omitempty" jsonschema:"why, when the operator said"`
 }
 
 // PendingDomain is a claimed custom domain and the proof it is waiting for:
@@ -201,6 +211,7 @@ type SiteSummary struct {
 	CreatedAt time.Time  `json:"created_at"`
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	Origin    string     `json:"origin,omitempty" jsonschema:"which surface created the site: mcp, or empty for the web UI and the JSON API"`
+	Locked    *SiteLock  `json:"locked,omitempty" jsonschema:"present only when the operator has locked the site: it is not served, and no tool but get_site can open it"`
 }
 
 // CreateInput is what create_site hands to Ops. Its files are already decoded

@@ -62,6 +62,11 @@ func (a *API) submitForm(w http.ResponseWriter, r *http.Request) {
 	case !ok:
 		fail(404, noForm)
 		return
+	case site.Meta.IsLocked():
+		// A locked site is often a phishing page, and its form is how the
+		// page harvests: nothing it posts is mailed anywhere.
+		fail(410, "This site has been suspended.")
+		return
 	case site.Meta.Expired(time.Now()):
 		fail(410, "This site has expired.")
 		return
@@ -236,7 +241,7 @@ func (a *API) formChallenge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f, i, ok := store.FindForm(site.Meta, r.PathValue("key"))
-	if !ok || !f.Captcha || f.Status != store.FormActive || store.FormPaused(i, a.formsLimit(site)) {
+	if !ok || site.Meta.IsLocked() || !f.Captcha || f.Status != store.FormActive || store.FormPaused(i, a.formsLimit(site)) {
 		http.NotFound(w, r)
 		return
 	}

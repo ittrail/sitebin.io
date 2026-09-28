@@ -293,6 +293,29 @@ func (p *provider) handleGDPRDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A site the operator holds locked is evidence, and erasing the account
+	// would end the hold. The order is refused whole, before anything is
+	// deleted, so the stack keeps the identity and the operator decides:
+	// collect what the lock holds, delete the site in the register, retry.
+	// GDPR Art. 17(3)(e) is the reason this is lawful; the lock is the
+	// operator's statement that it applies.
+	locked, err := p.lockedSites(acc)
+	if err != nil {
+		slog.Error("gdpr: could not check the account's sites for locks", "account", acc.ID, "err", err)
+		http.Error(w, `{"error":"could not read the account's sites"}`, http.StatusInternalServerError)
+		return
+	}
+	if len(locked) > 0 {
+		slog.Warn("gdpr: deletion refused: the operator holds sites of this account locked; nothing was deleted",
+			"account", acc.ID, "subject", order.UserID, "sites", locked)
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]any{
+			"error":       "the operator of this instance holds sites of this account locked; delete them in the instance register first",
+			"lockedSites": locked,
+		})
+		return
+	}
+
 	sites := 0
 	err = p.accounts.Delete(acc, func(viewID string) error {
 		err := p.host.Sites().Delete(viewID)

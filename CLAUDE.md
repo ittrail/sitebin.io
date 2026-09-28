@@ -97,6 +97,30 @@ and must never be loosened into `fromOwnBrowser`, which is a forgeable plan
 heuristic. MCP never reads the session, and the dashboard never reads a token.
 See `docs/superpowers/specs/2026-09-25-owner-session-edit-design.md`.
 
+## Locked sites are an evidence hold
+
+`store.Meta.Locked` (`internal/store/lock.go`) is the operator's hold on an
+abuse site: served to nobody, frozen for its owner, never swept. Read
+`docs/superpowers/specs/2026-09-28-site-lock-and-account-suspension.md`.
+
+- **`authz` answers a locked site first** (410 "Site suspended"), before
+  expiry, view password and container routing — that one check is "not
+  served" for every address.
+- **Every per-site gate refuses it after authenticating** — `withEditAuth`,
+  `withUploadAuth`, WebDAV, FTP login, MCP `openSite`, the dashboard's seam
+  methods. A new per-site route or tool gets this for free through those
+  gates; one that bypasses them must call `refuseLocked` itself. Only the
+  settings read (`withEditAuthEvenLocked`, `get_site`) answers a locked site,
+  without its files.
+- **`store.Delete` refuses it; only `ForceDelete` does not**, and only the
+  operator's takedowns call that (register, `sitebin delete --force`). The
+  sweep skips a locked site before doing anything, `ApplyQuota` leaves it
+  alone, and an account owning one cannot be deleted — by its owner or the
+  stack's GDPR order (409).
+- **Gates read the lock from `meta.json`**, never from memory, so the CLI can
+  lock from another process. An account lock (`By: "account"`, a stack
+  suspension) never replaces a lock and an unsuspension lifts only those.
+
 ## Custom domains prove ownership
 
 A custom domain is attached — indexed, served, issued a certificate — only

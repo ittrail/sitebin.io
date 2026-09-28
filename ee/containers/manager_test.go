@@ -277,6 +277,9 @@ func (s *fakeSites) SetExpiry(string, *time.Time) error        { return nil }
 func (s *fakeSites) RotateEditPassword(string) (string, error) { return "", nil }
 func (s *fakeSites) SetName(string, string) error              { return nil }
 func (s *fakeSites) Delete(string) error                       { return nil }
+func (s *fakeSites) ForceDelete(string) error                  { return nil }
+func (s *fakeSites) SetLock(string, *ext.SiteLock) error       { return nil }
+func (s *fakeSites) ReleaseLock(string, string) (bool, error)  { return false, nil }
 func (s *fakeSites) ApplyQuota(string, ext.CreateGrant) error  { return nil }
 func (s *fakeSites) CustomDomainCount() (int, error)           { return 0, nil }
 
@@ -568,6 +571,54 @@ func TestStopAndDisable(t *testing.T) {
 	r.reconcile(t, siteA, true)
 	if cs := r.sites.get(siteA); cs.Observed.Status != store.ContainerStopped || cs.Observed.Message != "the site has expired" || len(r.eng.containers) != 0 {
 		t.Errorf("expired: %+v", cs.Observed)
+	}
+}
+
+// A locked project is stopped like an expired one, even though its owner left
+// it enabled, and it starts again only when its restart sequence moves —
+// which is what an unlock does.
+func TestLockedProjectStops(t *testing.T) {
+	r := newRig(t)
+	r.sites.add(siteA, "acct", example)
+	r.reconcile(t, siteA, true)
+	if len(r.eng.containers) == 0 {
+		t.Fatal("the project did not start")
+	}
+	r.sites.update(siteA, func(cs *ext.ContainerSite) { cs.Locked = true })
+	r.reconcile(t, siteA, false)
+	cs := r.sites.get(siteA)
+	if cs.Observed.Status != store.ContainerStopped || cs.Observed.Message != "the site is locked by the operator" {
+		t.Errorf("locked: %+v", cs.Observed)
+	}
+	if len(r.eng.containers) != 0 || len(r.eng.networks) != 0 {
+		t.Errorf("a locked project kept %d containers, networks %v", len(r.eng.containers), r.eng.networks)
+	}
+	if r.m.known[siteA] {
+		t.Error("a locked site stays on the tick")
+	}
+	if counts(r.sites.get(siteA)) {
+		t.Error("a locked project counts against its owner's cap")
+	}
+
+	// Unlocked: the core bumped the sequence, and the project comes back.
+	created := r.eng.created
+	r.sites.update(siteA, func(cs *ext.ContainerSite) { cs.Locked = false; cs.RestartSeq++ })
+	r.reconcile(t, siteA, true)
+	if r.eng.created == created || r.sites.get(siteA).Observed.Status != store.ContainerRunning {
+		t.Errorf("unlocked project not restarted: %+v", r.sites.get(siteA).Observed)
+	}
+}
+
+// The full scan treats a locked site as unwanted, so whatever is left of it
+// goes even when the runtime was not told about the lock (the CLI's).
+func TestFullScanRemovesALockedProject(t *testing.T) {
+	r := newRig(t)
+	r.sites.add(siteA, "acct", example)
+	r.reconcile(t, siteA, true)
+	r.sites.update(siteA, func(cs *ext.ContainerSite) { cs.Locked = true })
+	r.m.fullScan(context.Background())
+	if _, ok := r.eng.containers["sb-"+siteA+"-app"]; ok {
+		t.Error("the scan kept a locked project's container")
 	}
 }
 

@@ -434,13 +434,17 @@ func (m *Manager) reconcile(ctx context.Context, cs ext.ContainerSite, kicked bo
 	}
 	obs := cs.Observed
 
-	if !cs.Enabled || cs.Expired {
+	if !cs.Enabled || cs.Expired || cs.Locked {
 		// A stopped site leaves the tick: nothing about it changes until
 		// someone presses Start, which kicks it back in. The full scan still
-		// removes anything left of it.
+		// removes anything left of it. A locked site is stopped the same way;
+		// its unlock bumps the restart sequence, which is what starts it again.
 		m.forget(id)
 		msg := ""
-		if cs.Enabled && cs.Expired {
+		switch {
+		case cs.Enabled && cs.Locked:
+			msg = "the site is locked by the operator"
+		case cs.Enabled && cs.Expired:
 			msg = "the site has expired"
 		}
 		if obs.Status != store.ContainerStopped || obs.Message != msg || len(present) > 0 {
@@ -608,7 +612,7 @@ func (m *Manager) usedByOthers(owner, except string) (int, error) {
 
 // counts reports whether a site's services count against its owner's cap.
 func counts(s ext.ContainerSite) bool {
-	return s.Container && s.Enabled && !s.Expired &&
+	return s.Container && s.Enabled && !s.Expired && !s.Locked &&
 		(s.Observed.Status == store.ContainerRunning || s.Observed.Status == store.ContainerStarting)
 }
 
@@ -891,7 +895,7 @@ func (m *Manager) fullScan(ctx context.Context) {
 	}
 	wanted := map[string]bool{}
 	for _, cs := range all {
-		if cs.Container && cs.Enabled && !cs.Expired {
+		if cs.Container && cs.Enabled && !cs.Expired && !cs.Locked {
 			wanted[cs.ViewID] = true
 		}
 	}

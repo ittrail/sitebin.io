@@ -62,7 +62,12 @@ type Meta struct {
 	Container *ContainerMeta `json:"container,omitempty"`
 	// Forms are the site's email forms, in creation order: the order decides
 	// which forms a smaller plan pauses. See forms.go.
-	Forms     []Form    `json:"forms,omitempty"`
+	Forms []Form `json:"forms,omitempty"`
+	// Locked is the operator's evidence hold: a locked site is served to
+	// nobody, changed by nobody but the operator, and outlives its expiry.
+	// Nil on every site written before locks existed, which reads as
+	// unlocked. See lock.go.
+	Locked    *SiteLock `json:"locked,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

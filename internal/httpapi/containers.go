@@ -266,6 +266,7 @@ func (s siteService) containerSiteOf(site *store.Site) ext.ContainerSite {
 		Owner:     site.Meta.OwnerAccountID,
 		Container: site.Meta.Mode == store.ModeContainer,
 		Expired:   site.Meta.Expired(time.Now()),
+		Locked:    site.Meta.IsLocked(),
 		MaxBytes:  s.a.st.EffMaxBytes(site),
 	}
 	if c := site.Meta.Container; c != nil {

@@ -66,6 +66,12 @@ func (a *API) withUploadAuth(next func(http.ResponseWriter, *http.Request, *stor
 			writeError(w, 403, "this site was created without an account, so it has no API — create it while signed in at "+a.apiAccountHint()+" to script it")
 			return
 		}
+		// Locking revokes a site's tokens, but a lock the CLI wrote from
+		// another process cannot reach this process's memory: the meta the
+		// token's request just read is the check that always holds.
+		if refuseLocked(w, site) {
+			return
+		}
 		next(w, r, site)
 	}
 }

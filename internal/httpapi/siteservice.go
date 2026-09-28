@@ -47,7 +47,16 @@ func (s siteService) infoOf(site *store.Site) ext.SiteInfo {
 		EditURL:     s.a.cfg.EditURL(site.Meta.EditID),
 		CreatedAt:   site.Meta.CreatedAt,
 		ExpiresAt:   site.Meta.ExpiresAt,
+		Locked:      extLock(site.Meta.Locked),
 	}
+}
+
+// extLock maps the store's lock record onto the seam's.
+func extLock(l *store.SiteLock) *ext.SiteLock {
+	if l == nil {
+		return nil
+	}
+	return &ext.SiteLock{At: l.At, Reason: l.Reason, By: l.By}
 }
 
 // domainLinks lists the verified domains with the URL each serves at, then the
@@ -103,14 +112,24 @@ func (s siteService) SetName(viewID, name string) error {
 	if err != nil {
 		return mapSiteGone(err, viewID)
 	}
-	err = s.a.st.Update(site, func(m *store.Meta) error { m.Name = clean; return nil })
-	return mapSiteGone(err, viewID)
+	err = s.a.st.Update(site, func(m *store.Meta) error {
+		if m.IsLocked() {
+			return store.ErrLocked
+		}
+		m.Name = clean
+		return nil
+	})
+	return mapSiteErr(err, viewID)
 }
 
 func (s siteService) RotateEditPassword(viewID string) (string, error) {
 	site, err := s.a.st.ByViewID(viewID)
 	if err != nil {
 		return "", err
+	}
+	// A new password would be a new way in to a site the operator froze.
+	if site.Meta.IsLocked() {
+		return "", fmt.Errorf("%w: %s", ext.ErrSiteLocked, viewID)
 	}
 	pw, err := s.a.st.SetEditPassword(site)
 	if err != nil {
@@ -124,21 +143,75 @@ func (s siteService) RotateEditPassword(viewID string) (string, error) {
 	return pw, nil
 }
 
-func (s siteService) Delete(viewID string) error {
+func (s siteService) Delete(viewID string) error { return s.delete(viewID, false) }
+
+func (s siteService) ForceDelete(viewID string) error { return s.delete(viewID, true) }
+
+func (s siteService) delete(viewID string, force bool) error {
 	site, err := s.a.st.ByViewID(viewID)
 	if err != nil {
 		return mapSiteGone(err, viewID)
 	}
+	// Refused before anything is torn down: a locked site's containers and
+	// tokens are already stopped, and nothing about it may change.
+	if site.Meta.IsLocked() && !force {
+		return fmt.Errorf("%w: %s", ext.ErrSiteLocked, viewID)
+	}
 	s.a.verifyCache.Drop(site.EditID + ":")
 	s.a.uploads.revokeSite(site.ViewID)
 	s.a.stopContainersBeforeDelete(site)
-	return s.a.st.Delete(site)
+	if force {
+		err = s.a.st.ForceDelete(site)
+	} else {
+		err = s.a.st.Delete(site)
+	}
+	return mapSiteErr(err, viewID)
+}
+
+func (s siteService) SetLock(viewID string, lock *ext.SiteLock) error {
+	site, err := s.a.st.ByViewID(viewID)
+	if err != nil {
+		return mapSiteGone(err, viewID)
+	}
+	var sl *store.SiteLock
+	if lock != nil {
+		sl = &store.SiteLock{At: lock.At, Reason: lock.Reason, By: lock.By}
+	}
+	changed, err := s.a.st.SetLock(site, sl)
+	if err != nil {
+		return mapSiteGone(err, viewID)
+	}
+	if changed {
+		s.a.lockChanged(site)
+	}
+	return nil
+}
+
+func (s siteService) ReleaseLock(viewID, by string) (bool, error) {
+	site, err := s.a.st.ByViewID(viewID)
+	if err != nil {
+		return false, mapSiteGone(err, viewID)
+	}
+	released, err := s.a.st.ReleaseLock(site, by)
+	if err != nil {
+		return false, mapSiteGone(err, viewID)
+	}
+	if released {
+		s.a.lockChanged(site)
+	}
+	return released, nil
 }
 
 func (s siteService) ApplyQuota(viewID string, g ext.CreateGrant) error {
 	site, err := s.a.st.ByViewID(viewID)
 	if err != nil {
 		return mapSiteGone(err, viewID)
+	}
+	// The hold freezes the site's caps and expiry with everything else: a
+	// downgrade's grace date or a shrunken cap on a locked site would only
+	// be a surprise waiting for the unlock.
+	if site.Meta.IsLocked() {
+		return nil
 	}
 	// A tier change can flip trust in either direction, so the marker is
 	// restamped with the caps. Failing here would leave the site's headers
@@ -170,6 +243,15 @@ func mapSiteGone(err error, viewID string) error {
 		return fmt.Errorf("%w: %s", ext.ErrSiteGone, viewID)
 	}
 	return err
+}
+
+// mapSiteErr is mapSiteGone that also maps the store's lock refusal onto the
+// seam's ErrSiteLocked, for the methods a lock refuses.
+func mapSiteErr(err error, viewID string) error {
+	if errors.Is(err, store.ErrLocked) {
+		return fmt.Errorf("%w: %s", ext.ErrSiteLocked, viewID)
+	}
+	return mapSiteGone(err, viewID)
 }
 
 // quotaFromGrant maps the extension's grant onto the store's cap set.

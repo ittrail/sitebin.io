@@ -26,6 +26,33 @@ import (
 // drop it and carry on, rather than treating the site as unreachable.
 var ErrSiteGone = errors.New("ext: site no longer exists")
 
+// ErrSiteLocked reports that the site is locked by the operator, so the
+// change asked for — a rename, a password rotation, a delete — is refused.
+// Like ErrSiteGone it is the seam's own sentinel. The lock itself is visible
+// in SiteInfo.Locked; see SiteLock.
+var ErrSiteLocked = errors.New("ext: site is locked by the operator")
+
+// Who placed a lock (SiteLock.By). An operator lock replaces any lock; an
+// account lock is applied only to an unlocked site.
+const (
+	LockByAdmin   = "admin"
+	LockByAccount = "account"
+)
+
+// SiteLock is the operator's evidence hold on a site: it is served to
+// nobody, changed by nobody but the operator, and outlives its expiry — the
+// cleanup sweep and every tier restamp leave it alone. Only ForceDelete
+// removes it. See docs/superpowers/specs/2026-09-28-site-lock-and-account-suspension.md.
+type SiteLock struct {
+	At time.Time
+	// Reason is shown to the owner and in the register. Optional.
+	Reason string
+	// By is LockByAdmin (the operator, from the register or the CLI) or
+	// LockByAccount (a stack-level suspension of the owner, lifted again by
+	// the unsuspension).
+	By string
+}
+
 // Provider is implemented by the enterprise extension. Its methods are the
 // only surface the core depends on; the core has no compile-time reference to
 // any ee/ package.
@@ -243,23 +270,42 @@ type SiteService interface {
 	// leaving the flag set would let the next sliding renewal overwrite it. Like
 	// ApplyQuota it reports a site that no longer exists as ErrSiteGone.
 	SetExpiry(viewID string, at *time.Time) error
-	// RotateEditPassword issues a new edit password, returning it once.
+	// RotateEditPassword issues a new edit password, returning it once. A
+	// locked site is refused with ErrSiteLocked.
 	RotateEditPassword(viewID string) (newPassword string, err error)
 	// SetName sets the site's name, or clears it when name is empty. The name
 	// is validated by the core's one rule, and a refused name is an error
 	// whose message states that rule and is safe to show as-is. A site that
-	// no longer exists is ErrSiteGone.
+	// no longer exists is ErrSiteGone; a locked one is ErrSiteLocked.
 	SetName(viewID, name string) error
 	// Delete removes a site and its indexes. Like ApplyQuota it reports a site
 	// that no longer exists as ErrSiteGone, so a caller erasing everything an
 	// account owns can tell "already gone, carry on" from "could not delete,
-	// stop" — the second must never be reported as the first.
+	// stop" — the second must never be reported as the first. A locked site
+	// is refused with ErrSiteLocked: the lock is an evidence hold, and an
+	// owner's delete — of the site or of their whole account — must not end
+	// it.
 	Delete(viewID string) error
+	// ForceDelete is Delete for a locked site too: the operator's explicit
+	// takedown. Only the admin console calls it, after its own confirmation.
+	ForceDelete(viewID string) error
+	// SetLock locks a site, or lifts any lock when lock is nil. An account
+	// lock (By LockByAccount) is applied only to a site that is not locked
+	// already, so a suspension never replaces the operator's own lock and a
+	// repeated one keeps the first date; the operator's lock replaces any.
+	// Locking also ends the site's upload tokens and stops its containers.
+	// A site that no longer exists is ErrSiteGone.
+	SetLock(viewID string, lock *SiteLock) error
+	// ReleaseLock lifts the site's lock only when it was placed by by, and
+	// reports whether it did — how an unsuspension lifts its own locks and
+	// leaves the operator's. A site that no longer exists is ErrSiteGone.
+	ReleaseLock(viewID, by string) (released bool, err error)
 	// ApplyQuota restamps a site's per-site caps from a grant and reconciles its
 	// expiry with the new lifetime cap. It returns an error wrapping ErrSiteGone
 	// when viewID names a site that no longer exists, which callers holding
 	// their own ownership records must treat as "drop the record", not as a
-	// failure.
+	// failure. A locked site is left exactly as it is and reported as done:
+	// the hold freezes its caps and its expiry along with everything else.
 	ApplyQuota(viewID string, g CreateGrant) error
 	// CustomDomainCount is the number of custom domains attached across the
 	// instance, anonymous sites included. It exists because the licence
@@ -395,6 +441,9 @@ type ContainerSite struct {
 	Enabled    bool
 	RestartSeq int
 	Expired    bool
+	// Locked is the operator's hold (SiteLock): the project is stopped like
+	// an expired one and counts against nothing.
+	Locked bool
 	// Compose is the compose file, or nil with ComposeErr saying why not.
 	Compose    []byte
 	ComposeErr string
@@ -479,6 +528,10 @@ type SiteInfo struct {
 	// the owner gets before the sweep deletes the site — the dashboard must
 	// show it.
 	ExpiresAt *time.Time
+	// Locked is the operator's hold on the site, or nil. The register shows
+	// and filters it; the owner's dashboard shows it and hides the actions
+	// the lock refuses.
+	Locked *SiteLock
 }
 
 // DomainLink is one custom domain of a site as the dashboard shows it. A

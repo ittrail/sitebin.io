@@ -428,7 +428,9 @@ func (a *API) pendingDomains(site *store.Site) []pendingDomain {
 // sitePayload is the full settings/state document returned by GET/PUT.
 func (a *API) sitePayload(site *store.Site) map[string]any {
 	files, err := a.st.ListFiles(site)
-	if err != nil {
+	if err != nil || site.Meta.IsLocked() {
+		// A locked site is shown to its owner so they can see the lock, and
+		// its content stays out of reach: not even the names of its files.
 		files = []store.FileInfo{}
 	}
 	// A container site's tree holds what its containers wrote — a
@@ -473,6 +475,7 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"pending_domains":         a.pendingDomains(site),
 		"zone_domains":            a.zoneDomains(site),
 		"origin":                  m.Origin,
+		"locked":                  lockPayload(m.Locked),
 		"expires_at":              m.ExpiresAt,
 		"expiry_cap_days":         a.expiryCap(site),
 		// ExpiryFromTier is part of the condition because sliding renewal is:

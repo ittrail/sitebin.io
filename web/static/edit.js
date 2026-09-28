@@ -55,6 +55,12 @@ async function api(method, path, body, isForm) {
 
 function unlock() {
   $("lock").classList.add("hidden");
+  // A locked site answers only this read: every other call would be refused,
+  // so the editor is not shown at all — only why.
+  if (site.locked) {
+    showHeld(site.locked);
+    return;
+  }
   $("app").classList.remove("hidden");
   render();
   loadDir(dirFromHash());
@@ -95,6 +101,16 @@ $("lockform").addEventListener("submit", async (e) => {
     $("lockpw").focus();
   }
 })();
+
+function showHeld(lock) {
+  document.title = "Locked — Sitebin";
+  $("held-site").textContent = site.name ? site.name + " · " + site.id : site.id;
+  let text = "The operator locked this site on " + new Date(lock.at).toLocaleString() + ".";
+  if (lock.reason) text += " Reason: " + lock.reason + ".";
+  text += " It is not served to anyone, and it cannot be changed, downloaded or deleted while the lock is in place.";
+  $("held-text").textContent = text;
+  $("held").classList.remove("hidden");
+}
 
 // ---- rendering ----
 

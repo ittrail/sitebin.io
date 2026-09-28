@@ -6,7 +6,9 @@
 //	sitebin healthcheck  probe the internal health endpoint (container HEALTHCHECK)
 //	sitebin list         list all sites (operator)
 //	sitebin reports      list filed abuse reports (operator)
-//	sitebin delete <id|domain>  operator takedown of a site
+//	sitebin lock <id|domain> [reason…]    hold a site: served to nobody, frozen, never swept
+//	sitebin unlock <id|domain>            lift a hold
+//	sitebin delete [--force] <id|domain>  operator takedown of a site (--force for a locked one)
 //	sitebin backup [file]       write a tar.gz of the data dir
 //	sitebin restore <file>      restore the data dir from a backup
 package main
@@ -15,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -67,16 +70,35 @@ func main() {
 		}
 		fmt.Println("ok")
 	case "delete":
-		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "usage: sitebin delete <view-id|edit-id|domain>")
+		force, args := forceFlag(os.Args[2:])
+		if len(args) != 1 {
+			fmt.Fprintln(os.Stderr, "usage: sitebin delete [--force] <view-id|edit-id|domain>")
 			os.Exit(2)
 		}
-		if err := deleteSite(os.Args[2]); err != nil {
+		if err := deleteSite(mustStore(mustConfig()), os.Stdout, args[0], force); err != nil {
 			fmt.Fprintln(os.Stderr, "delete failed:", err)
 			os.Exit(1)
 		}
+	case "lock":
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "usage: sitebin lock <view-id|edit-id|domain> [reason…]")
+			os.Exit(2)
+		}
+		if err := lockSite(mustStore(mustConfig()), os.Stdout, os.Args[2], strings.Join(os.Args[3:], " ")); err != nil {
+			fmt.Fprintln(os.Stderr, "lock failed:", err)
+			os.Exit(1)
+		}
+	case "unlock":
+		if len(os.Args) != 3 {
+			fmt.Fprintln(os.Stderr, "usage: sitebin unlock <view-id|edit-id|domain>")
+			os.Exit(2)
+		}
+		if err := unlockSite(mustStore(mustConfig()), os.Stdout, os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, "unlock failed:", err)
+			os.Exit(1)
+		}
 	case "list":
-		if err := listSites(); err != nil {
+		if err := listSites(mustStore(mustConfig()), os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "list failed:", err)
 			os.Exit(1)
 		}
@@ -341,27 +363,43 @@ func healthcheck(cfg config.Config) error {
 	return nil
 }
 
-// listSites prints all sites for the operator (`sitebin list`).
-func listSites() error {
-	cfg := mustConfig()
-	st := mustStore(cfg)
+// listSites prints all sites for the operator (`sitebin list`). A locked
+// site says so in its row, and the lock's date, author and reason follow on
+// a line of their own.
+func listSites(st *store.Store, out io.Writer) error {
 	sites, err := st.AllSites()
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%-26s  %-9s  %5s  %-10s  %-20s  %s\n", "VIEW-ID", "SIZE", "FILES", "MODE", "CREATED", "OWNER/DOMAINS")
+	fmt.Fprintf(out, "%-26s  %-9s  %5s  %-10s  %-20s  %-6s  %s\n", "VIEW-ID", "SIZE", "FILES", "MODE", "CREATED", "LOCK", "OWNER/DOMAINS")
+	locked := 0
 	for _, site := range sites {
 		bytes, files, _ := st.Usage(site)
 		owner := site.Meta.OwnerAccountID
 		if len(site.Meta.CustomDomains) > 0 {
 			owner += " " + strings.Join(site.Meta.CustomDomains, ",")
 		}
-		fmt.Printf("%-26s  %-9s  %5d  %-10s  %-20s  %s\n",
+		lock := "-"
+		if site.Meta.IsLocked() {
+			lock = "LOCKED"
+			locked++
+		}
+		fmt.Fprintf(out, "%-26s  %-9s  %5d  %-10s  %-20s  %-6s  %s\n",
 			site.ViewID, humanSize(bytes), files, site.Meta.Mode,
-			site.Meta.CreatedAt.Format("2006-01-02 15:04"), strings.TrimSpace(owner))
+			site.Meta.CreatedAt.Format("2006-01-02 15:04"), lock, strings.TrimSpace(owner))
+		if l := site.Meta.Locked; l != nil {
+			fmt.Fprintf(out, "    locked %s by %s%s\n", l.At.Format("2006-01-02 15:04"), l.By, reasonSuffix(l.Reason))
+		}
 	}
-	fmt.Printf("\n%d site(s).\n", len(sites))
+	fmt.Fprintf(out, "\n%d site(s), %d locked.\n", len(sites), locked)
 	return nil
+}
+
+func reasonSuffix(reason string) string {
+	if reason == "" {
+		return ""
+	}
+	return ": " + reason
 }
 
 // listReports prints filed abuse reports (`sitebin reports`).
@@ -383,17 +421,15 @@ func listReports() error {
 			fmt.Printf("  details: %s\n", r.Details)
 		}
 	}
-	fmt.Printf("\n%d report(s). Take down a site with: sitebin delete <view-id|domain>\n", len(reports))
+	fmt.Printf("\n%d report(s). Hold a site as evidence with: sitebin lock <view-id|domain> <reason>; take one down with: sitebin delete <view-id|domain>\n", len(reports))
 	return nil
 }
 
 func humanSize(n int64) string { return store.HumanBytes(n) }
 
-// deleteSite is the operator/abuse takedown: accepts a view id, edit id, or
+// findSite resolves what an operator typed: a view id, an edit id, or a
 // custom domain.
-func deleteSite(key string) error {
-	cfg := mustConfig()
-	st := mustStore(cfg)
+func findSite(st *store.Store, key string) (*store.Site, error) {
 	site, err := st.ByViewID(key)
 	if err != nil {
 		site, err = st.ByEditID(key)
@@ -402,11 +438,89 @@ func deleteSite(key string) error {
 		site, err = st.ByDomain(key)
 	}
 	if err != nil {
-		return fmt.Errorf("no site found for %q", key)
+		return nil, fmt.Errorf("no site found for %q", key)
 	}
-	if err := st.Delete(site); err != nil {
+	return site, nil
+}
+
+// forceFlag takes --force out of args, wherever it stands.
+func forceFlag(args []string) (bool, []string) {
+	force := false
+	rest := make([]string, 0, len(args))
+	for _, a := range args {
+		if a == "--force" || a == "-f" {
+			force = true
+			continue
+		}
+		rest = append(rest, a)
+	}
+	return force, rest
+}
+
+// deleteSite is the operator/abuse takedown. A locked site is the operator's
+// own evidence hold, so deleting one takes --force: typing the takedown for a
+// site somebody locked for an abuse report must not quietly end the hold.
+func deleteSite(st *store.Store, out io.Writer, key string, force bool) error {
+	site, err := findSite(st, key)
+	if err != nil {
 		return err
 	}
-	fmt.Println("deleted site", site.ViewID)
+	if site.Meta.IsLocked() && !force {
+		return fmt.Errorf("site %s is locked%s — unlock it first, or delete it anyway with: sitebin delete --force %s",
+			site.ViewID, reasonSuffix(site.Meta.Locked.Reason), site.ViewID)
+	}
+	del := st.Delete
+	if force {
+		del = st.ForceDelete
+	}
+	if err := del(site); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "deleted site", site.ViewID)
+	return nil
+}
+
+// lockSite places the operator's hold on a site from the command line: it is
+// served to nobody from the next request on, frozen for its owner, and kept
+// past its expiry. The running server needs no signal — every gate reads the
+// lock from meta.json — and its container runtime stops a locked project on
+// its next pass. Locking a locked site replaces the lock, which turns a
+// suspension's lock into the operator's own.
+func lockSite(st *store.Store, out io.Writer, key, reason string) error {
+	site, err := findSite(st, key)
+	if err != nil {
+		return err
+	}
+	if _, err := st.SetLock(site, &store.SiteLock{Reason: reason, By: store.LockByAdmin}); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "locked site %s%s\n", site.ViewID, reasonSuffix(site.Meta.Locked.Reason))
+	fmt.Fprintln(out, "It is served to nobody, frozen for its owner and kept past its expiry. Lift it with: sitebin unlock "+site.ViewID)
+	return nil
+}
+
+// unlockSite lifts any lock. The site's expiry applies again: one already
+// past means the next sweep deletes the site after the usual grace.
+func unlockSite(st *store.Store, out io.Writer, key string) error {
+	site, err := findSite(st, key)
+	if err != nil {
+		return err
+	}
+	changed, err := st.SetLock(site, nil)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		fmt.Fprintf(out, "site %s was not locked\n", site.ViewID)
+		return nil
+	}
+	fmt.Fprintf(out, "unlocked site %s: it is served again", site.ViewID)
+	if at := site.Meta.ExpiresAt; at != nil {
+		fmt.Fprintf(out, ", and its expiry (%s) applies again", at.Format("2006-01-02 15:04"))
+		if at.Before(time.Now()) {
+			fmt.Fprint(out, " — it has passed, so the next sweep deletes the site")
+		}
+	}
+	fmt.Fprintln(out)
 	return nil
 }
