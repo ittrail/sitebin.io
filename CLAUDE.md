@@ -135,8 +135,18 @@ A verified domain with no claim record predates verification and is left
 alone. Proofs are asked of the domain's AUTHORITATIVE nameservers
 (`internal/store/authdns.go`), not the system resolver: every proof is first
 looked up before it exists, and the hosting provider's resolver caches that
-NXDOMAIN for an hour, which made "check now" useless. The system resolver is
-only the fallback when no authoritative server answers. `SITEBIN_DOMAIN_VERIFICATION=off` is for trusted instances and the e2e
+NXDOMAIN for an hour, which made "check now" useless. The nameservers are
+still FOUND through that resolver, so the walk goes up to the TLD and follows
+a delegation down to the zone's servers (glue only from inside the referring
+zone): a domain registered minutes before it is added is first looked up
+before its registry publishes it, and the resolver then denies the WHOLE
+domain exists for the TLD's negative TTL (`www.physioprint.org`, 2026-09-28).
+The system resolver is only the fallback when no authoritative server
+answers, and its answers are marked as such. Every check that does not prove
+a claim records what it found (`DomainClaim.CheckResult`); owner-triggered
+checks go through `API.claimDomain` (API and MCP alike: edition gate,
+container rule, per-claim and per-site rate limit). See
+`docs/superpowers/specs/2026-09-28-domain-recheck.md`. `SITEBIN_DOMAIN_VERIFICATION=off` is for trusted instances and the e2e
 suite; the default is `dns`. `SITEBIN_OPERATOR_DOMAINS` names zones the
 operator owns (wildcard-pointed here): inside them the proof is WHOSE site it
 is, not DNS — the operator's (admin tier + allowlist, `ext.OperatorAccounts`)

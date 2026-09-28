@@ -251,7 +251,8 @@ curl -H "X-Edit-Password: $PW" \
 
 # custom domains (Enterprise edition only; 403 in community). 202 = claimed,
 # pending DNS proof: the body lists it under pending_domains with the TXT
-# record (or CNAME) to create; POST again to re-check. 200 = attached.
+# record (or CNAME) to create and what the check found (check_result,
+# checked_at); POST again to re-check (rate-limited: 429). 200 = attached.
 curl -X POST -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
      -d '{"domain":"docs.client.com"}' \
      https://sitebin.example.com/api/sites/$EDIT_ID/domains
@@ -651,9 +652,16 @@ but not served and not issued a certificate. Either record suffices:
 | CNAME | `<domain>` → `<view id>.<view domain>`, the site's own address — which is also how the domain routes here |
 
 The check runs when you add the domain, again on "Check now" (a repeat `POST`
-of the same domain re-checks with the same token), and every cleanup sweep,
-which attaches a claim on its own once the record appears. A claim that never
-verifies is dropped after 7 days. A pending claim reserves nothing: the site
+of the same domain re-checks with the same token; container sites have it in
+the container view beside each pending route), and every cleanup sweep, which
+attaches a claim on its own once the record appears. Each check that does not
+prove the claim records what it found — no TXT record and which nameserver
+said so, a TXT value that is not the token, a CNAME pointing elsewhere, a
+failed lookup — as `pending_domains[].check_result` with `checked_at`; MCP's
+`add_domain` returns it in `warnings`. Checks an owner triggers are
+rate-limited (per claim three, then one a minute; per site ten, then two a
+minute; `429` past that). A claim that never verifies is dropped after 7
+days. A pending claim reserves nothing: the site
 whose DNS carries *its* token gets the domain, whoever asked first — which is
 the point, because before this a stranger could claim `docs.customer.com`,
 wait for the customer to point DNS here, and be served on it with a valid
