@@ -1,8 +1,8 @@
 # Site locks and account suspension
 
 **Date:** 2026-09-28
-**Status:** phase 1 implemented; phase 2 implemented, its stack declaration
-waits for the production stack (see "Deploy order")
+**Status:** implemented, both phases (see "Deploy order" for how the
+declaration shipped)
 
 ## Problem
 
@@ -190,11 +190,17 @@ sessions and calls every member app's optional webhook. Sitebin's side:
 
 The stack's registration schema is `.strict()`. Declaring `suspendUserUrl`
 before the production stack knows the field breaks registration. So the
-declaration is its own commit, kept off `main` until the production stack's
-`services/platform-api/src/routes/apps.ts` contains `suspendUserUrl` (and the
-running platform-api was rebuilt after it). Everything else in phase 2 is on
-`main`: an endpoint that is mounted but not declared is never called, and is
-still authenticated by the secret.
+declaration is its own commit, to be deployed only once the production stack's
+`services/platform-api/src/routes/apps.ts` contains `suspendUserUrl` and the
+running platform-api was built after it. An endpoint that is mounted but not
+declared is never called, and is still authenticated by the secret, so the
+rest of phase 2 never needed to wait.
+
+On 2026-09-28 the running production platform-api already accepted
+`gdpr.suspendUserUrl` (an optional URL, the body in the order above) by the
+time phase 2 was ready, so both commits shipped together. A stack older than
+that — a dev stack not rebuilt since — refuses the registration of any
+instance built from this commit on; it logs the refusal and keeps serving.
 
 ## Out of scope
 
