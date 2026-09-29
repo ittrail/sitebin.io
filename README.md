@@ -123,6 +123,7 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | `SITEBIN_RATE_CREATE_PER_HOUR` / `SITEBIN_RATE_CREATE_BURST` | `30` / `10` | Anonymous creation limit per IP. |
 | `SITEBIN_RATE_AUTH_PER_5MIN` | `10` | Password-attempt limit per (IP, site) — edit, view, and WebDAV auth. |
 | `SITEBIN_CLEANUP_INTERVAL` | `10m` | Expiry sweep interval. |
+| `SITEBIN_LOCK_RETENTION_DAYS` | `180` | How long a [lock](#locked-sites) keeps a site as evidence: the cleanup sweep purges a locked site whose lock is older, unless you placed an evidence hold on it (`sitebin hold`, or the register). It also bounds how long a suspended account's provenance outlives the 90 days. `0` keeps locked sites forever. |
 | `SITEBIN_PUBLIC_ADDR` | `:8080` | Address of the Go backend listener that Caddy proxies. Change it only if `8080` is taken inside the container. |
 | `SITEBIN_INTERNAL_ADDR` | `:9000` | Address of the authz / `tls-check` / health listener. It is **never proxied publicly**; do not expose it. |
 | `SITEBIN_FORMS_SMTP_HOST` | — | SMTP server for [forms](#forms). Unset: the instance has no forms. Separate from the account mailer's `SITEBIN_SMTP_*`. |
@@ -896,17 +897,30 @@ after expiry — unless the operator has **locked** it (below).
 
 ### Locked sites
 
-A lock is the operator's evidence hold for abuse (phishing, scams): the site
-answers `410` with a "Site suspended" page on every address it has, its
-containers stop, and its owner can no longer change, download or delete it —
-every API route, MCP tool, WebDAV, FTP and upload token answers `403 This site
-is locked by the operator` (the settings read, `get_site` and `list_sites`
-still show the lock, without the files). The cleanup sweep never deletes a
-locked site, however far past its expiry, and no tier change restamps it; an
-account that owns one cannot be deleted until the operator lets go. Only the
-operator's explicit delete — the instance register's, or `sitebin delete
---force` — removes it. Lock and unlock from the instance register or the CLI.
-Design: [`2026-09-28-site-lock-and-account-suspension.md`](docs/superpowers/specs/2026-09-28-site-lock-and-account-suspension.md).
+A lock is the operator's hold on an abuse site (phishing, scams), kept as
+evidence: the site answers `410` with a "Site suspended" page on every address
+it has, its containers stop, and its owner can no longer change, download or
+delete it — every API route, MCP tool, WebDAV, FTP and upload token answers
+`403 This site is locked by the operator` (the settings read, `get_site` and
+`list_sites` still show the lock, without the files). The cleanup sweep never
+deletes a locked site for its expiry and no tier change restamps it; an
+account that owns one cannot be deleted while it is locked. Lock and unlock
+from the instance register or the CLI; the operator's explicit delete — the
+register's, or `sitebin delete --force` — removes it at any time.
+
+**Retention.** A lock keeps a site for `SITEBIN_LOCK_RETENTION_DAYS` (default
+**180**) from the moment it was locked; the cleanup sweep then purges it
+completely — files, metadata, indexes and its provenance — logs it and puts
+one line in the operator's alert digest. The clock runs from the first lock:
+re-locking, keeping a scanner's or a suspension's lock as your own, or a
+suspension arriving on a locked site never resets it; only an unlock does.
+While a case, investigation or proceeding is still open, place an **evidence
+hold** on the lock (`sitebin hold <id>`, or **Hold** in the register) and the
+site is kept until you release it (`sitebin unhold <id>`, **Release hold**).
+The register and `sitebin list` show every lock's "purge due" date or its
+hold. `0` keeps locked sites forever.
+Design: [`2026-09-28-site-lock-and-account-suspension.md`](docs/superpowers/specs/2026-09-28-site-lock-and-account-suspension.md)
+(and its lock-retention addendum).
 
 ### Abuse detection
 
@@ -953,7 +967,8 @@ hits are recorded and alerted. Flag-severity rules only alert.
   operator. The register has a **Reports** tab with a one-click lock.
 - **Alerts** go to `SITEBIN_ABUSE_ALERTS_TO` as plain text with URLs defanged,
   at most one mail per site per hour and ten per hour in all, the rest in an
-  hourly digest. Every decision is also logged (`abuse guard …`).
+  hourly digest. Every decision is also logged (`abuse guard …`). A locked site
+  the lock retention purges is one line in the digest.
 
 Design: [`2026-09-29-abuse-detection.md`](docs/superpowers/specs/2026-09-29-abuse-detection.md).
 
@@ -965,12 +980,14 @@ Operator commands (run inside the container, e.g. `docker exec sitebin sitebin <
 
 | Command | Purpose |
 |---|---|
-| `sitebin list` | List all sites (id, size, files, mode, created, the address it was created from, lock, owner/domains). |
+| `sitebin list` | List all sites (id, size, files, mode, created, the address it was created from, lock, owner/domains); a locked site's line says when it is purged, or that it is held. |
 | `sitebin reports` | List filed abuse reports. |
 | `sitebin provenance <id\|domain\|ip\|cidr>` | A site's trail — every creation and write with address, client, surface and credential — or every site seen from an address or range. |
 | `sitebin scan <id\|domain>\|--all [--lock]` | Run the abuse rules over sites already on disk. Reports only; `--lock` records the findings and holds what an upload would have held (never a trusted site). |
-| `sitebin lock <id\|domain> [reason…]` | Lock a site: served to nobody, frozen for its owner, kept past its expiry. The reason is shown to the owner. |
-| `sitebin unlock <id\|domain>` | Lift a lock; the site's expiry applies again. |
+| `sitebin lock <id\|domain> [reason…]` | Lock a site: served to nobody, frozen for its owner, kept past its expiry as evidence — until the lock retention runs out. The reason is shown to the owner. Re-locking keeps the lock's date. |
+| `sitebin unlock <id\|domain>` | Lift a lock (and any evidence hold); the site's expiry applies again. |
+| `sitebin hold <id\|domain>` | Place an evidence hold on a locked site: a case is still open, so the sweep keeps it past `SITEBIN_LOCK_RETENTION_DAYS`. |
+| `sitebin unhold <id\|domain>` | Release the evidence hold; a lock older than the retention is purged at the next sweep. |
 | `sitebin delete [--force] <id\|domain>` | Take down a site by view id, edit id, or domain. A locked site needs `--force`. |
 | `sitebin backup [file]` | Write a gzip tar of `/data` (stdout if no file). |
 | `sitebin restore <file>` | Restore `/data` from a backup. |
@@ -995,9 +1012,11 @@ Operator commands (run inside the container, e.g. `docker exec sitebin sitebin <
   what changed. The enterprise edition also keeps `accounts/<id>/provenance.jsonl`:
   sign-up, sign-ins, every API token minted, and the account's sites created
   and deleted. Both are bounded (100 lines, bursts merged into one) and purged
-  by the cleanup sweep after **90 days** — except a locked site's, a suspended
-  account's and that of an account owning a locked site, which are evidence.
-  Deleting a site or an account deletes its log. State it in your privacy
+  by the cleanup sweep after **90 days** — except a locked site's, which stays
+  with the site and goes when the lock retention purges it, and a suspended
+  account's or that of an account owning a locked site, which keeps entries up
+  to `SITEBIN_LOCK_RETENTION_DAYS` (all of them while one of its sites carries
+  an evidence hold). Deleting a site or an account deletes its log. State it in your privacy
   policy. Design: [`2026-09-29-provenance-csp-apex.md`](docs/superpowers/specs/2026-09-29-provenance-csp-apex.md).
 - **security.txt:** `/.well-known/security.txt` (RFC 9116) is served on the
   base domain — and on the view domain's apex — from `SITEBIN_ABUSE_CONTACT`
@@ -1298,7 +1317,8 @@ tier as one whose holders may reach the instance register, and only together
 with `SITEBIN_ADMIN_ACCOUNTS`. The register lists every site on the instance —
 anonymous drops included — with instance-wide figures, search and filters, and
 three actions per site: delete, set or clear the expiry, and lock or unlock
-(see "Locked sites"). Each row says where the site came from — the address
+(see "Locked sites") — plus, on a locked site, the evidence hold, and the date
+the lock retention purges it. Each row says where the site came from — the address
 and surface of its creation, and its latest write — and links to its **trail**:
 every write with address, client, surface and credential, plus its owner's
 sign-up, sign-ins and the API tokens it minted (a token minted within ten
@@ -1491,7 +1511,7 @@ the registration's `gdpr` block when `SITEBIN_STACK_GDPR_SECRET` is set:
 | | |
 |---|---|
 | `POST /account/gdpr/export` | Everything this instance holds about the user, as JSON: the account record (never a password hash), the metadata of every site it owns (id, URL, mode, custom domains, origin, size, files, created, expires), the metadata of every API token (never a secret — none is stored), and what is held about sessions (nothing: they are signed cookies the browser keeps). An unknown user exports an empty document, not an error. |
-| `POST /account/gdpr/delete` | Removes the account, its ownership markers, its sites, its API tokens and — by removing the record every cookie is validated against — its sessions. **Idempotent: a user with no account here is a `200`**, because the stack reads every other status, `404` included, as "the app still holds the data" and never deletes the identity. A site that cannot be deleted stops the order with a `500` and keeps the account, so the stack keeps the identity and the operator retries; whatever was deleted before stays deleted and the retry steps over it. An account with a site the operator has **locked** is refused whole with a `409` naming the sites, and nothing is deleted: the lock is an evidence hold (see "Locked sites"). |
+| `POST /account/gdpr/delete` | Removes the account, its ownership markers, its sites, its API tokens and — by removing the record every cookie is validated against — its sessions. **Idempotent: a user with no account here is a `200`**, because the stack reads every other status, `404` included, as "the app still holds the data" and never deletes the identity. A site that cannot be deleted stops the order with a `500` and keeps the account, so the stack keeps the identity and the operator retries; whatever was deleted before stays deleted and the retry steps over it. An account with a site the operator has **locked** is refused whole with a `409` naming the sites, and nothing is deleted: the lock is an evidence hold (see "Locked sites"). Once the lock retention has purged those sites, the stack's retry goes through. |
 
 Both take `{"userId": "<stack user id>", "email": "..."}` and are authenticated
 by nothing but the signature: `X-Signature: sha256=<hex HMAC-SHA256 over

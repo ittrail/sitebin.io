@@ -2,7 +2,9 @@
 
 **Date:** 2026-09-28
 **Status:** implemented, both phases (see "Deploy order" for how the
-declaration shipped)
+declaration shipped). A lock no longer lasts forever: see the addendum
+"Lock retention and the evidence hold" (2026-09-29) at the end, which
+amends "Never deleted except by the operator".
 
 ## Problem
 
@@ -62,6 +64,10 @@ suspended."), its captcha challenge `404`. CSP reports keep arriving and keep
 being counted: they are evidence, and cost nothing.
 
 ### Never deleted except by the operator, explicitly
+
+*(Amended 2026-09-29: the cleanup sweep also purges a locked site once its
+lock is older than `SITEBIN_LOCK_RETENTION_DAYS`, unless the operator placed
+an evidence hold — see the addendum at the end.)*
 
 - `store.Delete` refuses a locked site with `store.ErrLocked`, under the site
   lock — the one irreversible operation is guarded where it happens, whatever
@@ -208,3 +214,170 @@ instance built from this commit on; it logs the refusal and keeps serving.
   suspension locks by owner).
 - Showing the lock to visitors with the reason — they get the generic page.
 - A lock that also freezes CSP counting or view stats.
+
+## Addendum (2026-09-29): lock retention and the evidence hold
+
+**Status:** implemented. This changes Phase 1's "never swept": a lock now
+keeps a site for a bounded time.
+
+### Why
+
+Phase 1 made a lock last forever: the sweep skipped a locked site, and
+nothing but the operator's delete ever removed one. The website now promises
+something narrower (the abuse page, and the privacy policy's "Locked
+sites"): locked content is kept as evidence only as long as a case needs it,
+and **purged after at most 180 days after the lock unless a case,
+investigation or proceeding is still open**. The product has to do exactly
+that on its own, or the promise is only as good as the operator's memory.
+
+### The rule
+
+- **`SITEBIN_LOCK_RETENTION_DAYS`** — default `180`; `0` keeps locked sites
+  forever (the behaviour before this addendum, for an instance whose policy
+  says so); a negative or unparsable value refuses to start.
+- **The clock is `Locked.At`, the start of the continuous lock.** A lock that
+  replaces a lock keeps it — the operator's **Keep** over a scanner's or a
+  suspension's lock, the operator re-locking with a new reason, an
+  unsuspension that turns into a scanner lock (`ReleaseLock`). An account or
+  scanner lock never replaces a lock anyway. Only an **unlock** ends the
+  clock; a lock placed after it starts a new one. Without this, the natural
+  sequence *scanner lock → Keep → suspension lock → Keep again* would reset
+  the clock at every step and retention would never end. Consequence: after
+  a Keep the register reads "locked <original date> by an admin"; the admin's
+  action itself is logged with their id. `SiteLock.At` handed to `SetLock`
+  is used only for a site that is not locked yet.
+- **The cleanup sweep purges a locked site whose lock is older than the
+  retention** (`now > At + retention`), completely: `store.PurgeLocked`
+  deletes it the way `ForceDelete` does — the site folder (files,
+  `meta.json` with its findings, `stats.json`, `provenance.jsonl`) and its
+  edit-index and domain-index links. A container project's containers and
+  networks are removed first (`stopContainers`, as for an expired site; a
+  runtime that cannot stop them keeps the site for the next sweep). The
+  extension's ownership marker goes stale and is dropped the next time the
+  account is read (`ErrSiteGone`), as after every sweep deletion. The
+  decision is taken **again under the site lock, from `meta.json`**: an
+  evidence hold placed, an unlock, or a lock lifted while the sweep ran —
+  from the register, or from the CLI in another process — wins, and an
+  unreadable `meta.json` is never purged.
+- **Unless the lock carries an evidence hold** — `Locked.Hold {at, by}`, the
+  operator's statement that a case is still open. It is placed and released
+  in the instance register (two server-rendered steps, like every other
+  action under `script-src 'none'`) or with `sitebin hold <id>` /
+  `sitebin unhold <id>`; `by` is the admin's account id (the register shows
+  the email) or `cli`. Only a locked site can be held (`store.ErrNotLocked` /
+  `ext.ErrSiteNotLocked`, `409` in the register): a hold without a lock would
+  hold nothing. A replaced lock keeps its hold, a second hold keeps the
+  first, an unlock ends the hold with the lock, and `SetLock` never places
+  one. A hold does not move the date the retention ends; it only stops the
+  purge. Releasing it lets the next sweep purge a site whose lock is already
+  older than the retention — the release step and `sitebin unhold` say so.
+- **The operator hears of every purge.** The sweep logs it at INFO
+  (`cleanup: purged a locked site past the lock retention` — id, owner,
+  `locked_at`, `locked_by`, reason, `retention_days`), and the running
+  server's store hook (`SetPurgeHook`) hands it to the abuse alert mailer as
+  **one plain-text line in the hourly digest** (view id, lock date and
+  author, retention, owner, domains and reason defanged). Digest-only on
+  purpose: a routine purge must never spend the hourly budget of immediate
+  mails that real alerts need — the reasoning of abuse-detection Correction
+  6. The one-shot `sitebin cleanup` has no mailer: it logs and prints.
+
+Why the CLI is `sitebin hold` / `sitebin unhold` and not `sitebin lock
+--hold`: a hold is placed on and released from a lock that already exists,
+often weeks later. A flag on `lock` would need a second flag to take it off,
+and would re-lock the site (new author, new reason) just to change the hold.
+
+### Where it shows
+
+- **Register:** every locked row carries a second line under the LOCKED tag:
+  "purge due <date>", or "held (case open) since <date> by <email> ·
+  retention ends <date>" (amber), or "kept until unlocked" with retention
+  `0`. Actions: **Hold** (only with a retention) or **Release hold**, each a
+  confirmation step naming the date. The lock step says the site is purged N
+  days after the lock unless held; the Keep step says the lock keeps its
+  date; the unlock step says a hold ends with it.
+- **CLI:** `sitebin list`'s lock line ends in the same state; `sitebin lock`
+  prints since when the site is locked and when it is due.
+- **Alerts:** the site block of every alert names the purge date or the
+  hold, and a hold alert says how to keep the site (`sitebin hold`).
+- **Owner:** nothing new. The settings read, `get_site` and the dashboard
+  show the lock as before — never whether a case is open or when it ends.
+
+### Provenance follows the same rule
+
+Stated precisely, with *R* the lock retention and 90 days
+`provenance.Retention`:
+
+1. **A locked site's own log** (`sites/<id>/provenance.jsonl`) is not purged
+   while the site is locked (the sweep does nothing else to a locked site)
+   and is deleted **with the site** when the site is purged — at most *R*
+   after the lock, or later only while an evidence hold stands. Its entries
+   from before the lock are then at most 90 + *R* days old (the log was
+   purged at 90 days while the site was unlocked).
+2. **An account's log** (enterprise, `accounts/<id>/provenance.jsonl`), at
+   each sweep:
+   - an account neither suspended nor owning a locked site: entries older
+     than **90 days** are purged, as before;
+   - a **suspended** account, or one **owning a locked site**: entries older
+     than **max(90 days, *R*)** are purged — its log outlives the 90 days
+     only up to the lock retention;
+   - an account **one of whose locked sites carries an evidence hold**:
+     nothing is purged;
+   - *R* = 0: a suspended account or one owning a locked site keeps its
+     whole log, as before this addendum.
+
+   The account log's clock is its **entries' age**, not a lock's: a
+   suspended account's sign-up from 200 days ago goes at 180 days even if
+   its site was locked last month. A suspended account that owns no site
+   cannot carry a hold (holds are per site); an operator who needs its trail
+   longer exports it from the register's account page into the case file.
+   The account purge runs **after** the site loop, so an account whose last
+   locked site was purged in the same sweep is judged without it.
+3. The seam carries both cutoffs:
+   `ext.AccountProvenance.PurgeProvenance(before, heldBefore)`, with
+   `heldBefore` zero for *R* = 0.
+
+### Account deletion
+
+Unchanged: refused while any of the account's sites is locked, held or not
+(the owner's own deletion and the stack's GDPR order, `409`). Once the sweep
+has purged the locked sites the account owns none, and the deletion — the
+owner's, or the stack's retried GDPR order — goes through.
+
+### Seam and store additions
+
+`ext.LockHold`, `ext.SiteLock.Hold` and `.PurgeAt` (when the retention runs
+out, computed by the core from the one rule in `store/retention.go` — the
+register never computes a date), `ext.ErrSiteNotLocked`,
+`SiteService.SetHold`, `Host.LockRetention()` (wording only), and the
+two-cutoff `AccountProvenance.PurgeProvenance`. Store: `SiteLock.Hold`,
+`LockHold`, `SetHold`, `SetLockRetention`, `LockRetentionEnds`,
+`LockPurgeAt`, `LockPurgeDue`, `PurgeLocked`, `SetPurgeHook`. A store nobody
+configured has retention 0 and never purges; `mustStore` sets it from the
+configuration for the server and every CLI command.
+
+### Tests
+
+- `internal/store`: re-lock keeps the date (scanner → Keep → suspension →
+  re-lock), an unlock starts a new clock, an account lock turned scanner
+  lock keeps date and hold; a hold only on a locked site, the first hold
+  stays, a re-lock keeps it, `SetLock` cannot place one, an unlock ends it;
+  purge and retention-end dates; the purge before, at and after the
+  retention (files, meta, edit and domain index, provenance, hook); the
+  re-check under the lock (hold, unlock, retention 0 after the read).
+- `internal/cleanup`: purge past the retention and not before; a held lock
+  kept and purged once released; the re-lock chain purged on the first
+  lock's date; retention 0 never purges; a container site stopped first and
+  kept when it cannot be; the account-purge cutoffs for *R* = 180, 30 and 0,
+  and the order (sites first).
+- `internal/httpapi`: the seam (`PurgeAt`, `Hold`, `SetHold`, Keep keeps the
+  date, `ErrSiteNotLocked`, `ErrSiteGone`); the owner's payload never shows
+  the hold; a purge is one digest line, never an immediate mail; a hold
+  alert names the retention.
+- `internal/config`: default, `0`, refusals.
+- `cmd/sitebin`: `hold` / `unhold` (refused unlocked, repeated, released past
+  the date), `list` and `lock` output.
+- `ee`: register rows (purge due, held, kept), the Hold and Release steps,
+  CSRF, admin only, `409` for an unlocked site, retention 0 hides Hold; the
+  account purge (suspended, owner of a locked site, held, *R* = 0); account
+  deletion refused while locked or held and accepted once the site is purged
+  (real store).

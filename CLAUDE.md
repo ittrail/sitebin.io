@@ -100,8 +100,11 @@ See `docs/superpowers/specs/2026-09-25-owner-session-edit-design.md`.
 ## Locked sites are an evidence hold
 
 `store.Meta.Locked` (`internal/store/lock.go`) is the operator's hold on an
-abuse site: served to nobody, frozen for its owner, never swept. Read
-`docs/superpowers/specs/2026-09-28-site-lock-and-account-suspension.md`.
+abuse site: served to nobody, frozen for its owner, never swept for its
+expiry — and purged once the lock is older than the lock retention, unless an
+evidence hold stands. Read
+`docs/superpowers/specs/2026-09-28-site-lock-and-account-suspension.md`,
+including its lock-retention addendum.
 
 - **`authz` answers a locked site first** (410 "Site suspended"), before
   expiry, view password and container routing — that one check is "not
@@ -114,9 +117,22 @@ abuse site: served to nobody, frozen for its owner, never swept. Read
   without its files.
 - **`store.Delete` refuses it; only `ForceDelete` does not**, and only the
   operator's takedowns call that (register, `sitebin delete --force`). The
-  sweep skips a locked site before doing anything, `ApplyQuota` leaves it
-  alone, and an account owning one cannot be deleted — by its owner or the
-  stack's GDPR order (409).
+  sweep does nothing to a locked site but the retention check, `ApplyQuota`
+  leaves it alone, and an account owning one cannot be deleted — by its owner
+  or the stack's GDPR order (409).
+- **The lock retention** (`internal/store/retention.go`,
+  `SITEBIN_LOCK_RETENTION_DAYS`, default 180, 0 = forever): the sweep purges
+  a locked site whose `Locked.At` is older, through `store.PurgeLocked`, which
+  decides again under the site lock from `meta.json`. `Locked.At` is the start
+  of the CONTINUOUS lock — a lock replacing a lock (Keep, a re-lock, account →
+  scanner) keeps it and its hold; only an unlock resets the clock. Never let a
+  new code path write `Locked` with a fresh date over an existing lock, or
+  retention never ends. `Locked.Hold` (the operator's evidence hold, "case
+  open": `SetHold`, register, `sitebin hold`/`unhold`) stops the purge;
+  `LockPurgeAt` / `LockRetentionEnds` are the one statement of the rule — the
+  register reads it from `ext.SiteLock.PurgeAt`, never computes it. A purge
+  is a digest line (never an immediate mail), and a store nobody configured
+  has retention 0.
 - **Gates read the lock from `meta.json`**, never from memory, so the CLI can
   lock from another process. An account lock (`By: "account"`, a stack
   suspension) never replaces a lock and an unsuspension lifts only those.
@@ -141,10 +157,13 @@ creations/deletions. Read `docs/superpowers/specs/2026-09-29-provenance-csp-apex
   `files/` — never served, listed, zipped or counted.
 - **The stats lock guards it** (so `Delete` excludes a record, and a record
   never recreates a deleted folder). Bounded: 100 lines, bursts merged.
-- **Retention 90 days** (`provenance.Retention`), purged by the sweep — a
-  locked site (the sweep skips it), a suspended account and an account owning
-  a locked site keep theirs. The GDPR export carries the account's log and its
-  own entries on its sites, never edit-password entries.
+- **Retention 90 days** (`provenance.Retention`), purged by the sweep. A
+  locked site keeps its log until the site itself is purged; a suspended
+  account and one owning a locked site keep theirs up to max(90 days, lock
+  retention) — whole while one of its sites carries an evidence hold, or with
+  retention 0 (`AccountProvenance.PurgeProvenance(before, heldBefore)`). The
+  GDPR export carries the account's log and its own entries on its sites,
+  never edit-password entries.
 
 ## The view domain's apex
 

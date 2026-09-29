@@ -98,6 +98,9 @@ evidence holds the operator placed deliberately:
 - a **suspended** account's log, or one of an account owning a locked site, is
   not purged either.
 
+*(Corrected 2026-09-29, see "Corrections (post-implementation)" below: both
+holds are now bounded by the lock retention.)*
+
 Deleting a site deletes its log (it lives in the site folder); deleting an
 account deletes its log (it lives in the account folder) and its sites. An
 entry naming the account in a site it did NOT own — possible only when it
@@ -300,3 +303,26 @@ protections are untouched.
 - `ee`: sign-up / sign-in / token-mint entries on every sign-in path, MCP
   provisioning, the account purge and its holds, the GDPR export, the
   register's trail, address search and account page.
+
+## Corrections (post-implementation)
+
+**2026-09-29 — the evidence holds are bounded.** The two exceptions under
+"Retention — 90 days" were open-ended: a locked site's log lasted as long as
+the lock, and a suspended account's (or a locked-site owner's) log as long as
+the suspension or the lock — which, before the lock retention, was forever.
+The privacy policy now promises at most 180 days after the lock unless a case
+is still open, so the rule is, with *R* = `SITEBIN_LOCK_RETENTION_DAYS`
+(default 180):
+
+- A **locked site's** log is still not purged while the site is locked, and
+  goes **with the site** when the sweep purges it at *R* after the lock —
+  unless the lock carries the operator's **evidence hold** ("case open").
+- A **suspended** account's log, and that of an account **owning a locked
+  site**, is purged of entries older than **max(90 days, *R*)** — kept past
+  the 90 days only up to the lock retention — unless one of the account's
+  locked sites carries an evidence hold, which keeps the whole log.
+- *R* = 0 restores the open-ended holds.
+
+The seam became `AccountProvenance.PurgeProvenance(before, heldBefore)`. The
+full statement, the clock and the hold are in the lock-retention addendum of
+[`2026-09-28-site-lock-and-account-suspension.md`](2026-09-28-site-lock-and-account-suspension.md).

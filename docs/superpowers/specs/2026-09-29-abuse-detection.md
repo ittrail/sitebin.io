@@ -374,3 +374,15 @@ before it was pushed, and the sections above describe the result:
 
 Also: the operator check reads the admin allowlist before the tier, so an
 upload that trips a rule costs no PayGate call for someone who is not on it.
+
+## Addendum (2026-09-29): lock retention
+
+A scanner lock is kept as evidence like any other: the cleanup sweep purges
+the site once the lock is older than `SITEBIN_LOCK_RETENTION_DAYS` (default
+180) unless the operator places an evidence hold. **Keep** (a scanner lock
+made the operator's own) keeps the lock's date — the retention's clock — and
+so does an unsuspension that turns into a scanner lock. Every purge reaches
+the operator as one line in the digest, never as an immediate mail: it is
+routine and must not spend the hourly budget. See the lock-retention
+addendum of
+[`2026-09-28-site-lock-and-account-suspension.md`](2026-09-28-site-lock-and-account-suspension.md).
