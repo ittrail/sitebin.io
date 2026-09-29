@@ -36,6 +36,10 @@ type mcpOAuth struct {
 	// the platform and Sitebin currently require. nil where no stack is
 	// registered: such an instance has no gate to ask about.
 	consent consentCheck
+	// provisioned is told, with the request's context, about an account
+	// provision just created — the account's sign-up, for its provenance
+	// log. nil means nobody listens.
+	provisioned func(ctx context.Context, accountID string)
 	// provision creates the account for a subject that has none. nil where
 	// no stack is registered, which keeps the old rule there: an unknown
 	// subject is refused.
@@ -189,6 +193,9 @@ func (m *mcpOAuth) Verify(ctx context.Context, raw string) (ext.Credential, bool
 		accountID, ok = m.provisionAccount(tok.Subject, claims.Email, bool(claims.EmailVerified))
 		if !ok {
 			return ext.Credential{}, false
+		}
+		if m.provisioned != nil {
+			m.provisioned(ctx, accountID)
 		}
 	}
 

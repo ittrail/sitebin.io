@@ -126,6 +126,7 @@ func (p *provider) Init(h ext.Host) error {
 	if p.mcpOAuth != nil && cfg.StackRegistration != nil {
 		p.mcpOAuth.consent = newStackConsent(cfg.StackRegistration).complete
 		p.mcpOAuth.provision = p.provisionFromToken
+		p.mcpOAuth.provisioned = p.recordTokenSignup
 	}
 	if cfg.EmailEnabled() {
 		p.mailer = smtp.New(*cfg.SMTP)
@@ -448,7 +449,7 @@ func (p *provider) accountForAPI(r *http.Request) (*account.Account, bool) {
 			return acc, !acc.Suspended()
 		}
 		if p.mcpOAuth != nil && ext.IsMCPCaller(r.Context()) {
-			if cred, ok := p.mcpOAuth.Verify(r.Context(), secret); ok {
+			if cred, ok := p.mcpOAuth.Verify(withReqInfo(r.Context(), r), secret); ok {
 				if acc, err := p.accounts.ByID(cred.AccountID); err == nil && !acc.Suspended() {
 					return acc, true
 				}
@@ -500,7 +501,7 @@ func (p *provider) BearerCredential(r *http.Request) (ext.Credential, bool) {
 		return ext.Credential{AccountID: acc.ID}, true
 	}
 	if p.mcpOAuth != nil && ext.IsMCPCaller(r.Context()) {
-		if cred, ok := p.mcpOAuth.Verify(r.Context(), secret); ok {
+		if cred, ok := p.mcpOAuth.Verify(withReqInfo(r.Context(), r), secret); ok {
 			if acc, err := p.accounts.ByID(cred.AccountID); err != nil || acc.Suspended() {
 				return ext.Credential{}, false
 			}

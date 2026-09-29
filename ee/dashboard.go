@@ -13,6 +13,7 @@ import (
 	"github.com/ittrail/sitebin.io/ee/authn"
 	"github.com/ittrail/sitebin.io/ee/billing"
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/provenance"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
@@ -141,6 +142,7 @@ func (p *provider) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 		p.renderAuth(w, "login", email, msgSuspendedAccount)
 		return
 	}
+	p.recordAccount(r, acc.ID, provenance.ActionSignin, provenance.SurfaceLocal, provenance.AuthPassword, "")
 	http.SetCookie(w, p.sessions.Cookie(acc.ID, acc.TokenVersion))
 	p.redirect(w, r, "/account")
 }
@@ -183,6 +185,7 @@ func (p *provider) handleSignupPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.sendVerification(acc)
+	p.recordAccount(r, acc.ID, provenance.ActionSignup, provenance.SurfaceLocal, provenance.AuthPassword, "")
 	http.SetCookie(w, p.sessions.Cookie(acc.ID, acc.TokenVersion))
 	p.redirect(w, r, "/account")
 }
@@ -262,6 +265,7 @@ func (p *provider) handleRotate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not reset the edit password", http.StatusInternalServerError)
 		return
 	}
+	p.recordSite(r, acc, viewID, provenance.ActionRotatePassword, "")
 	p.renderMessage(w, msgView{
 		Title:  "New edit password",
 		Body:   "This is the only time it is shown — store it now.",
@@ -300,6 +304,7 @@ func (p *provider) handleRenameSite(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not rename the site", http.StatusInternalServerError)
 		return
 	}
+	p.recordSite(r, acc, viewID, provenance.ActionRename, "")
 	p.redirect(w, r, "/account")
 }
 
@@ -323,6 +328,7 @@ func (p *provider) handleDeleteSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.accounts.UnlinkSite(acc, viewID)
+	p.recordSiteDelete(r, acc, viewID)
 	p.redirect(w, r, "/account")
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/ittrail/sitebin.io/ee/authn"
 	"github.com/ittrail/sitebin.io/internal/auth"
 	"github.com/ittrail/sitebin.io/internal/ids"
+	"github.com/ittrail/sitebin.io/internal/provenance"
 )
 
 const oauthCookie = "sitebin_oauth"
@@ -92,6 +93,7 @@ func (p *provider) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		p.oauthError(w, "Could not complete sign-in. Please try again.")
 		return
 	}
+	_, lookupErr := p.accounts.ByOAuth(id.Provider, id.Subject)
 	acc, err := p.linkOrCreateOAuth(id)
 	if err != nil {
 		slog.Warn("oauth: could not link or create the account", "provider", prov, "err", err)
@@ -105,6 +107,12 @@ func (p *provider) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		p.oauthError(w, msgSuspendedAccount)
 		return
 	}
+	// Provenance: a first sign-in is the account's sign-up.
+	action := provenance.ActionSignin
+	if lookupErr != nil {
+		action = provenance.ActionSignup
+	}
+	p.recordAccount(r, acc.ID, action, provenance.SurfaceOIDC, provenance.AuthNone, string(prov))
 	http.SetCookie(w, p.sessions.Cookie(acc.ID, acc.TokenVersion))
 	p.redirect(w, r, "/account")
 }

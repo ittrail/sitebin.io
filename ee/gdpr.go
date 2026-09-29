@@ -17,6 +17,7 @@ import (
 	"github.com/ittrail/sitebin.io/ee/account"
 	"github.com/ittrail/sitebin.io/ee/session"
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/provenance"
 )
 
 // The stack's GDPR orchestration.
@@ -210,11 +211,28 @@ type gdprSessions struct {
 	TokenVersion int    `json:"token_version"`
 }
 
+// gdprProvenance is the provenance held about the subject: the account's
+// own log (sign-up, sign-ins, tokens minted, its sites created and deleted),
+// and from each site it owns the entries that were its own. An entry made on
+// its site with the site's edit password is not exported: nothing says it was
+// this person, and it may be somebody else's address.
+type gdprProvenance struct {
+	Account   []provenance.Entry   `json:"account"`
+	Sites     []gdprSiteProvenance `json:"sites"`
+	Retention string               `json:"retention"`
+}
+
+type gdprSiteProvenance struct {
+	Site    string             `json:"site"`
+	Entries []provenance.Entry `json:"entries"`
+}
+
 type gdprExport struct {
-	Account   *gdprAccount  `json:"account"`
-	Sites     []gdprSite    `json:"sites"`
-	APITokens []gdprToken   `json:"api_tokens"`
-	Sessions  *gdprSessions `json:"sessions"`
+	Account    *gdprAccount    `json:"account"`
+	Sites      []gdprSite      `json:"sites"`
+	APITokens  []gdprToken     `json:"api_tokens"`
+	Sessions   *gdprSessions   `json:"sessions"`
+	Provenance *gdprProvenance `json:"provenance,omitempty"`
 }
 
 // handleGDPRExport answers with everything this instance holds about the
@@ -269,6 +287,7 @@ func (p *provider) handleGDPRExport(w http.ResponseWriter, r *http.Request) {
 		for _, t := range toks {
 			out.APITokens = append(out.APITokens, gdprToken{ID: t.ID, Name: t.Name, Prefix: t.Prefix, CreatedAt: t.CreatedAt})
 		}
+		out.Provenance = p.gdprProvenance(acc, ids)
 		out.Sessions = &gdprSessions{
 			Stored:       false,
 			Note:         "sessions are signed cookies held by the browser; the instance stores no session list and can name no device",
@@ -358,4 +377,36 @@ func (p *provider) handleGDPRDelete(w http.ResponseWriter, r *http.Request) {
 		"deletedResources": []string{"account", "sites", "api_tokens", "sessions"},
 		"sites":            sites,
 	})
+}
+
+// gdprProvenance collects what the export carries about provenance. A log
+// that cannot be read is logged and left out rather than failing the export:
+// the rest of it is still owed.
+func (p *provider) gdprProvenance(acc *account.Account, siteIDs []string) *gdprProvenance {
+	out := &gdprProvenance{Account: []provenance.Entry{}, Sites: []gdprSiteProvenance{}, Retention: "90 days"}
+	if es, err := p.accounts.Provenance(acc.ID); err != nil {
+		slog.Error("gdpr: could not read the account's provenance for an export", "account", acc.ID, "err", err)
+	} else if es != nil {
+		out.Account = es
+	}
+	sp, ok := p.host.Sites().(ext.SiteProvenance)
+	if !ok {
+		return out
+	}
+	for _, id := range siteIDs {
+		es, err := sp.SiteProvenance(id)
+		if err != nil {
+			continue
+		}
+		var own []provenance.Entry
+		for _, e := range es {
+			if e.Account == acc.ID {
+				own = append(own, e)
+			}
+		}
+		if len(own) > 0 {
+			out.Sites = append(out.Sites, gdprSiteProvenance{Site: id, Entries: own})
+		}
+	}
+	return out
 }

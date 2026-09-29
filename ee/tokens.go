@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ittrail/sitebin.io/ee/account"
+	"github.com/ittrail/sitebin.io/internal/provenance"
 )
 
 // maxTokenNameLen bounds the label. It is rendered back into the dashboard, so
@@ -48,6 +49,9 @@ func (p *provider) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("api token created", "account", acc.ID, "token", tok.ID)
+	// Where each token was minted, and by what client: a script that signs up
+	// and mints a token in the same minute is exactly what this makes visible.
+	p.recordAccount(r, acc.ID, provenance.ActionTokenMint, provenance.SurfaceDashboard, provenance.AuthSession, tokenDetail(tok))
 	// Shown once and never again: the secret is not stored, only its hash.
 	p.renderMessage(w, msgView{
 		Title:  "Your new API token",
