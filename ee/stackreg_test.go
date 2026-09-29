@@ -335,6 +335,31 @@ func TestStackDeclarationRegistersTheDashboardAsAReturnAddress(t *testing.T) {
 	}
 }
 
+// Keycloak sends the browser back after a sign-out only to an address the
+// client registered for that (post.logout.redirect.uris), and shows an error
+// page for any other. So the signed-out page is declared beside the callback,
+// under the exact key the stack's strict schema knows.
+func TestStackDeclarationRegistersTheSignedOutPage(t *testing.T) {
+	p := stackProvider(t, "")
+	b, err := json.Marshal(p.stackDeclaration("sitebin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Auth map[string]json.RawMessage `json:"auth"`
+	}
+	if err := json.Unmarshal(b, &wire); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	if err := json.Unmarshal(wire.Auth["postLogoutRedirectUris"], &got); err != nil {
+		t.Fatalf("auth.postLogoutRedirectUris missing or not a list: %s", b)
+	}
+	if want := p.baseURL() + "/account/signed-out"; len(got) != 1 || got[0] != want {
+		t.Errorf("postLogoutRedirectUris = %v, want [%s]", got, want)
+	}
+}
+
 func TestStackDeclarationCarriesSitebinsOwnBrand(t *testing.T) {
 	p := stackProvider(t, "")
 	reg := p.stackDeclaration("sitebin")

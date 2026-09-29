@@ -50,6 +50,13 @@ type stackRegistration struct {
 	Auth        struct {
 		RedirectURIs []string `json:"redirectUris"`
 		WebOrigins   []string `json:"webOrigins,omitempty"`
+		// PostLogoutRedirectURIs is where the identity provider may send the
+		// browser back after a sign-out (the stack writes it to the Keycloak
+		// client's post.logout.redirect.uris); Keycloak shows an error page
+		// for any address not registered there. The stack's registration
+		// schema is strict: this field may only be declared to a stack that
+		// knows it, or the whole registration is refused.
+		PostLogoutRedirectURIs []string `json:"postLogoutRedirectUris,omitempty"`
 	} `json:"auth"`
 	Billing *stackBilling `json:"billing,omitempty"`
 	MCP     *stackMCP     `json:"mcp,omitempty"`
@@ -204,6 +211,9 @@ func (p *provider) stackDeclaration(appID string) stackRegistration {
 	// address (referrer_uri), which Keycloak honours only for a registered one.
 	reg.Auth.RedirectURIs = []string{base + "/account/auth/oidc/callback", base + "/account"}
 	reg.Auth.WebOrigins = []string{base}
+	// The page every sign-out ends on, from the same base as the callback and
+	// the same constant the logout builds post_logout_redirect_uri from.
+	reg.Auth.PostLogoutRedirectURIs = []string{base + signedOutPath}
 	reg.Theme = sitebinTheme(base)
 
 	// Declared in catalogue order, because that IS the order the stack renders
