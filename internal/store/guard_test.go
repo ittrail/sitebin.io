@@ -568,3 +568,16 @@ func TestRulesFileInTheDataDirIsUsed(t *testing.T) {
 		t.Fatalf("SaveFile = %v", err)
 	}
 }
+
+func TestRenameRefusedOnALockedSite(t *testing.T) {
+	s, _ := guardedStore(t)
+	site, _, _ := s.Create()
+	s.SaveFile(site, "a.txt", strings.NewReader("x"))
+	s.SetLock(site, &SiteLock{By: LockByAdmin})
+	if err := s.RenameChecked(site, "a.txt", "b.txt", false); !errors.Is(err, ErrLocked) {
+		t.Fatalf("RenameChecked on a locked site = %v", err)
+	}
+	if !exists(site, "a.txt") {
+		t.Error("the evidence moved")
+	}
+}

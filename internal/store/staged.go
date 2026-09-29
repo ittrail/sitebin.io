@@ -219,6 +219,16 @@ func (s *Store) RenameChecked(site *Site, oldRel, newRel string, lockHeld bool) 
 		l.Lock()
 		defer l.Unlock()
 	}
+	// A site locked since the session began (FTP asks only at login) keeps
+	// its evidence where it is.
+	if meta, err := readMeta(site.dir); err != nil {
+		if os.IsNotExist(err) {
+			return ErrNotFound
+		}
+		return err
+	} else if meta.Locked != nil {
+		return ErrLocked
+	}
 	root, err := openContent(site)
 	if err != nil {
 		return err
