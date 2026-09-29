@@ -151,6 +151,11 @@ var basePageTmpl = template.Must(template.New("page").Parse(`<!doctype html>
   .code { font: 700 46px/1 ui-monospace, monospace; color: #f5b84d; margin-bottom: 12px; text-shadow: 0 0 32px rgba(245,184,77,.4); }
   .back { display: inline-block; margin-top: 20px; color: #f5b84d; font-size: 14px; text-decoration: none; }
   .back:hover { text-decoration: underline; }
+  .more { margin-top: 12px; }
+  .abuse { margin-top: 22px; padding: 14px 16px; border: 1px dashed rgba(245,184,77,.45); border-radius: 12px; display: grid; gap: 6px; font-size: 14px; }
+  .abuse .k { font: 600 11px ui-monospace, monospace; letter-spacing: .14em; text-transform: uppercase; color: #8fa3c8; }
+  .abuse a { color: #f5b84d; text-decoration: none; overflow-wrap: anywhere; }
+  .abuse a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -162,6 +167,8 @@ var basePageTmpl = template.Must(template.New("page").Parse(`<!doctype html>
   {{if .Code}}<div class="code">{{.Code}}</div>{{end}}
   <h1>{{.Title}}</h1>
   <p>{{.Message}}</p>
+  {{range .More}}<p class="more">{{.}}</p>{{end}}
+  {{with .Abuse}}<div class="abuse"><span class="k">Report abuse</span>{{if .ReportURL}}<a href="{{.ReportURL}}">{{.ReportLabel}}</a>{{end}}{{if .Email}}<a href="mailto:{{.Email}}">{{.Email}}</a>{{end}}</div>{{end}}
   {{if .ShowForm}}
   <form method="post" action="/_sitebin/unlock">
     <input type="hidden" name="redirect" value="{{.Redirect}}">
@@ -178,6 +185,7 @@ var basePageTmpl = template.Must(template.New("page").Parse(`<!doctype html>
   </form>
   {{end}}
   {{if .Back}}<a class="back" href="{{.Back}}">&larr; Back</a>{{end}}
+  {{if .Home}}<a class="back" href="{{.Home}}">{{.HomeLabel}} &rarr;</a>{{end}}
 </main>
 </body>
 </html>
@@ -198,6 +206,13 @@ type pageData struct {
 	Action string
 	Token  string
 	Button string
+	// More are further paragraphs, Abuse where to report abuse, Home a link
+	// onward to the operator's site: the view domain's info page, and the
+	// "site suspended" page.
+	More      []string
+	Abuse     *abuseLinks
+	Home      string
+	HomeLabel string
 }
 
 func (a *API) renderPage(w http.ResponseWriter, status int, d pageData) {

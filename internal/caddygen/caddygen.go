@@ -56,23 +56,29 @@ func Generate(cfg config.Config) string {
 	// ---- view subdomains: wildcard cert, pure static serving ----
 	if cfg.SubdomainViews() {
 		fmt.Fprintf(&b, "%s*.%s {\n", scheme, cfg.ViewDomain)
-		if !cfg.HTTPOnly {
-			b.WriteString("\ttls {\n")
-			if cfg.TLSSnippet != "" {
-				for _, line := range strings.Split(cfg.TLSSnippet, "\n") {
-					fmt.Fprintf(&b, "\t\t%s\n", line)
-				}
-			} else {
-				fmt.Fprintf(&b, "\t\tdns %s {env.SITEBIN_DNS_TOKEN}\n", cfg.DNSProvider)
-				// Managed DNS backends publish zone changes with a delay, and
-				// recursive resolvers negative-cache the challenge name; skip
-				// the pre-check and give the record a fixed head start instead.
-				b.WriteString("\t\tpropagation_delay 60s\n")
-			}
-			b.WriteString("\t}\n")
-		}
+		writeViewTLS(&b, cfg)
 		writeHSTS(&b, cfg, true)
 		writeContentRoutes(&b, backend, fmt.Sprintf("%s/sites/{labels.%d}/files", cfg.DataDir, labelIdx), untrusted)
+		b.WriteString("}\n\n")
+	}
+
+	// ---- the view domain's apex and www: who serves this, how to report ----
+	// A separate view domain answered nothing at its apex (the custom-domain
+	// catch-all asked the backend, which refused, so no certificate existed)
+	// and www fell into the wildcard as a site id that cannot exist. Both now
+	// go to the backend, which answers them with the info page and
+	// security.txt only. A named host sorts before the wildcard in Caddy, and
+	// the apex needs a certificate of its own, obtained the way the
+	// wildcard's is.
+	if hosts := viewApexHosts(cfg); len(hosts) > 0 {
+		for i := range hosts {
+			hosts[i] = scheme + hosts[i]
+		}
+		fmt.Fprintf(&b, "%s {\n", strings.Join(hosts, ", "))
+		writeViewTLS(&b, cfg)
+		b.WriteString("\tencode zstd gzip\n")
+		writeHSTS(&b, cfg, true)
+		fmt.Fprintf(&b, "\treverse_proxy %s\n", backend("8080"))
 		b.WriteString("}\n\n")
 	}
 
@@ -92,6 +98,45 @@ func Generate(cfg config.Config) string {
 		b.WriteString("\nhttp:// {\n\tredir https://{host}{uri} permanent\n}\n")
 	}
 	return b.String()
+}
+
+// viewApexHosts are the hosts the view domain's info page answers on: the
+// apex and www, when user content lives on a domain of its own and on
+// subdomains. None on a single-domain install, where the apex is the app.
+// A base domain that happens to be one of them keeps its own block.
+func viewApexHosts(cfg config.Config) []string {
+	if cfg.ViewDomain == cfg.BaseDomain || !cfg.SubdomainViews() {
+		return nil
+	}
+	var out []string
+	for _, h := range []string{cfg.ViewDomain, "www." + cfg.ViewDomain} {
+		if h != cfg.BaseDomain {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// writeViewTLS emits the tls block of the view domain's certificates: the
+// operator's snippet, or the DNS challenge the wildcard needs. The apex uses
+// the same, so both are issued the same way.
+func writeViewTLS(b *strings.Builder, cfg config.Config) {
+	if cfg.HTTPOnly {
+		return
+	}
+	b.WriteString("\ttls {\n")
+	if cfg.TLSSnippet != "" {
+		for _, line := range strings.Split(cfg.TLSSnippet, "\n") {
+			fmt.Fprintf(b, "\t\t%s\n", line)
+		}
+	} else {
+		fmt.Fprintf(b, "\t\tdns %s {env.SITEBIN_DNS_TOKEN}\n", cfg.DNSProvider)
+		// Managed DNS backends publish zone changes with a delay, and
+		// recursive resolvers negative-cache the challenge name; skip
+		// the pre-check and give the record a fixed head start instead.
+		b.WriteString("\t\tpropagation_delay 60s\n")
+	}
+	b.WriteString("\t}\n")
 }
 
 // hstsMaxAge is one year, the value preload lists and every hardening guide

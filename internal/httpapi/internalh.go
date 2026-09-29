@@ -36,7 +36,9 @@ func (a *API) authz(w http.ResponseWriter, r *http.Request) {
 	// the whole of "not served". The reason stays between the operator and
 	// the owner; a visitor gets the generic sentence.
 	if site.Meta.IsLocked() {
-		a.msgPage(w, 410, msgSuspendedTitle, msgSuspendedBody)
+		// With where to report it: a visitor who came here from a phishing
+		// mail may have more to tell.
+		a.renderPage(w, 410, pageData{Title: msgSuspendedTitle, Message: msgSuspendedBody, Code: "410", Abuse: a.abuse()})
 		return
 	}
 	if site.Meta.Expired(time.Now()) {

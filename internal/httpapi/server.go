@@ -94,6 +94,7 @@ func (a *API) Public() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /{$}", a.landingPage)
+	mux.HandleFunc("GET "+securityTxtPath, a.securityTxt)
 	mux.HandleFunc("GET /e/{editID}", a.editPage)
 
 	mux.HandleFunc("POST /api/sites", a.createSite)
@@ -153,7 +154,7 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		a.notFoundPage(w, r)
 	})
-	return a.logMiddleware(mux)
+	return a.logMiddleware(a.viewApexGuard(mux))
 }
 
 // Internal returns the handler for Caddy's subrequests plus health checks.
