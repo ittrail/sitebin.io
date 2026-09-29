@@ -42,6 +42,7 @@ var errTooManyUploads = errors.New("too many open uploads on this instance, try 
 type uploadToken struct {
 	viewID   string // the revocation handle
 	editID   string // the one site the token opens
+	account  string // the account that opened it, for the provenance record
 	issuedAt time.Time
 	lastSeen time.Time
 	inflight int
@@ -83,6 +84,13 @@ func hashUploadToken(secret string) string {
 // it exists outside the caller — and the time the token dies however it is
 // used.
 func (u *uploadTokens) issue(viewID, editID string) (string, time.Time, error) {
+	return u.issueFor(viewID, editID, "")
+}
+
+// issueFor is issue for a caller acting as account (empty when it opened the
+// site with its edit password): the uploads the token makes are recorded as
+// that account's.
+func (u *uploadTokens) issueFor(viewID, editID, account string) (string, time.Time, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	now := u.now()
@@ -106,7 +114,7 @@ func (u *uploadTokens) issue(viewID, editID string) (string, time.Time, error) {
 		return "", time.Time{}, errTooManyUploads
 	}
 	secret := ids.NewUploadToken()
-	u.m[hashUploadToken(secret)] = &uploadToken{viewID: viewID, editID: editID, issuedAt: now, lastSeen: now}
+	u.m[hashUploadToken(secret)] = &uploadToken{viewID: viewID, editID: editID, account: account, issuedAt: now, lastSeen: now}
 	return secret, now.Add(uploadTokenMaxAge), nil
 }
 
@@ -145,6 +153,17 @@ func (u *uploadTokens) begin(secret, editID string) (end func(), ok bool) {
 			t.lastSeen = u.now()
 		})
 	}, true
+}
+
+// issuer returns the account a live token was opened by ("" for none, or
+// for an unknown token).
+func (u *uploadTokens) issuer(secret string) string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if t, ok := u.m[hashUploadToken(secret)]; ok {
+		return t.account
+	}
+	return ""
 }
 
 // revokeSite drops every token for the site viewID. A request already running

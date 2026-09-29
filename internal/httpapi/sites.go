@@ -17,6 +17,7 @@ import (
 
 	"github.com/ittrail/sitebin.io/internal/auth"
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/provenance"
 	"github.com/ittrail/sitebin.io/internal/store"
 	"github.com/ittrail/sitebin.io/internal/viewer"
 )
@@ -560,6 +561,10 @@ type createOpts struct {
 	// pages create anonymous sites on a gated instance. True for the JSON API,
 	// which serves those pages; false for MCP, which is never one of them.
 	browserOK bool
+	// actor is who is creating the site, for its provenance record. Nil for
+	// the JSON API and the UI, where createSiteWith works it out from the
+	// request and the grant.
+	actor *actor
 	// fill writes the caller's content into the freshly created site and
 	// returns any settings that travelled with it. For a multipart POST the
 	// files and the settings arrive in the same pass, which is why this is one
@@ -679,6 +684,11 @@ func (a *API) createSiteWith(r *http.Request, opts createOpts) (*store.Site, str
 			}
 		}
 	}
+	act := a.createActor(r, owner)
+	if opts.actor != nil {
+		act = *opts.actor
+	}
+	a.recordCreate(r, site, act)
 	a.log.Info("site created", "id", site.ViewID, "owner", owner, "origin", opts.origin)
 	return site, editPassword, warnings, nil
 }
@@ -779,6 +789,7 @@ func (a *API) updateSite(w http.ResponseWriter, r *http.Request, site *store.Sit
 		return
 	}
 	oldHash := site.Meta.ViewPasswordHash
+	noteOf(r).detail = settingsDetail(set)
 	if err := a.applySettings(site, set); err != nil {
 		respondErr(w, err)
 		return
@@ -807,7 +818,9 @@ func (a *API) deleteSite(w http.ResponseWriter, r *http.Request, site *store.Sit
 
 func (a *API) uploadFiles(w http.ResponseWriter, r *http.Request, site *store.Site) {
 	r.Body = http.MaxBytesReader(w, r.Body, a.cfg.MaxSiteBytes+(10<<20))
+	note := noteOf(r)
 	if r.URL.Query().Get("replace") == "true" {
+		note.action = provenance.ActionReplace
 		// The old files go only once the new ones are all in and within the
 		// site's caps: a failed, cut-off or over-quota replace leaves the
 		// site exactly as it was.
@@ -817,7 +830,7 @@ func (a *API) uploadFiles(w http.ResponseWriter, r *http.Request, site *store.Si
 			return
 		}
 		defer rep.Abort()
-		if _, err := a.consumeUploads(r, rep); err != nil {
+		if _, err := a.consumeUploads(r, countingSink{rep, note}); err != nil {
 			respondErr(w, err)
 			return
 		}
@@ -825,7 +838,7 @@ func (a *API) uploadFiles(w http.ResponseWriter, r *http.Request, site *store.Si
 			respondErr(w, err)
 			return
 		}
-	} else if _, err := a.consumeUploads(r, liveSink{st: a.st, site: site}); err != nil {
+	} else if _, err := a.consumeUploads(r, countingSink{liveSink{st: a.st, site: site}, note}); err != nil {
 		respondErr(w, err)
 		return
 	}
@@ -838,6 +851,7 @@ func (a *API) uploadFiles(w http.ResponseWriter, r *http.Request, site *store.Si
 
 func (a *API) deleteFile(w http.ResponseWriter, r *http.Request, site *store.Site) {
 	rel := r.PathValue("path")
+	noteOf(r).detail = rel
 	if err := a.st.DeleteFile(site, rel); err != nil {
 		respondErr(w, err)
 		return
@@ -863,7 +877,9 @@ func (a *API) addDomain(w http.ResponseWriter, r *http.Request, site *store.Site
 		respondErr(w, err)
 		return
 	}
+	noteOf(r).detail = strings.ToLower(strings.TrimSpace(body.Domain))
 	if pending != "" {
+		noteOf(r).detail += " (pending)"
 		// Recorded, not attached: the payload carries the record to create
 		// and what this check found.
 		a.log.Info("custom domain pending verification", "id", site.ViewID, "owner", site.Meta.OwnerAccountID, "domain", body.Domain)
@@ -930,6 +946,7 @@ func (a *API) removeDomain(w http.ResponseWriter, r *http.Request, site *store.S
 		writeError(w, 409, errContainerDomains)
 		return
 	}
+	noteOf(r).detail = r.PathValue("domain")
 	if err := a.st.RemoveDomain(site, r.PathValue("domain")); err != nil {
 		respondErr(w, err)
 		return

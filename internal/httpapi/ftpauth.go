@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"errors"
+	"time"
 
+	"github.com/ittrail/sitebin.io/internal/provenance"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
@@ -42,4 +44,25 @@ func (a *API) FTPAuth(editID, password, clientIP string) (string, int64, int, er
 	default:
 		return "", 0, 0, errors.New("incorrect edit password")
 	}
+}
+
+// FTPWrote records an FTP write in the site's provenance log. Implements
+// ftp.Recorder. FTP logs in with the edit password and carries no user agent.
+func (a *API) FTPWrote(editID, clientIP, action, path string) {
+	site, err := a.st.ByEditID(editID)
+	if err != nil {
+		return
+	}
+	e := provenance.Entry{
+		Time:    time.Now().UTC(),
+		Action:  action,
+		Surface: provenance.SurfaceFTP,
+		Auth:    provenance.AuthPassword,
+		IP:      clientIP,
+		Detail:  path,
+	}
+	if action == provenance.ActionUpload {
+		e.Files = 1
+	}
+	a.record(site, e)
 }

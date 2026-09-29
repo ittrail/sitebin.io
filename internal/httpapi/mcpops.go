@@ -14,6 +14,7 @@ import (
 	"github.com/ittrail/sitebin.io/internal/ext"
 	"github.com/ittrail/sitebin.io/internal/ids"
 	"github.com/ittrail/sitebin.io/internal/mcp"
+	"github.com/ittrail/sitebin.io/internal/provenance"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
@@ -250,9 +251,11 @@ func (o mcpOps) CreateSite(_ context.Context, auth mcp.Auth, in mcp.CreateInput)
 	// The MCP request is handed to createSiteWith so the extension resolves the
 	// caller's tier from the same Authorization header the tools authenticated
 	// with. browserOK is false: an MCP client is never one of Sitebin's pages.
+	act := mcpActor(auth, nil)
 	site, editPassword, warnings, err := o.a.createSiteWith(auth.Request, createOpts{
 		origin:    store.OriginMCP,
 		browserOK: false,
+		actor:     &act,
 		fill: func(site *store.Site) (updateSet, error) {
 			for _, f := range in.Files {
 				if err := o.a.st.SaveFile(site, f.Path, bytes.NewReader(f.Data)); err != nil {
@@ -329,9 +332,11 @@ func (o mcpOps) UpdateSite(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, s 
 	if err != nil {
 		return nil, err
 	}
-	if err := o.a.applySettings(site, settingsToUpdateSet(s)); err != nil {
+	set := settingsToUpdateSet(s)
+	if err := o.a.applySettings(site, set); err != nil {
 		return nil, o.mcpError(err)
 	}
+	o.a.recordMCP(auth, site, provenance.ActionSettings, 0, settingsDetail(set))
 	if err := o.a.syncViewerLayout(site); err != nil {
 		return nil, o.mcpError(err)
 	}
@@ -392,12 +397,21 @@ func (o mcpOps) WriteFiles(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, fi
 			return nil, o.mcpError(err)
 		}
 	} else {
-		for _, f := range files {
+		for i, f := range files {
 			if err := o.a.st.SaveFile(site, f.Path, bytes.NewReader(f.Data)); err != nil {
+				// The files before this one are in: record what happened.
+				if i > 0 {
+					o.a.recordMCP(auth, site, provenance.ActionUpload, i, mcpPaths(files[:i]))
+				}
 				return nil, o.mcpError(err)
 			}
 		}
 	}
+	action := provenance.ActionUpload
+	if replace {
+		action = provenance.ActionReplace
+	}
+	o.a.recordMCP(auth, site, action, len(files), mcpPaths(files))
 	if err := o.a.syncViewerLayout(site); err != nil {
 		return nil, o.mcpError(err)
 	}
@@ -412,6 +426,7 @@ func (o mcpOps) DeleteFile(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, pa
 	if err := o.a.st.DeleteFile(site, path); err != nil {
 		return nil, o.mcpError(err)
 	}
+	o.a.recordMCP(auth, site, provenance.ActionDeleteFile, 0, path)
 	if err := o.a.syncViewerLayout(site); err != nil {
 		return nil, o.mcpError(err)
 	}
@@ -428,6 +443,7 @@ func (o mcpOps) DeleteSite(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) er
 	}
 	o.a.verifyCache.Drop(site.EditID + ":")
 	o.a.uploads.revokeSite(site.ViewID)
+	o.a.recordMCP(auth, site, provenance.ActionSiteDelete, 0, "")
 	o.a.log.Info("site deleted", "id", site.ViewID, "via", "mcp")
 	return nil
 }
@@ -441,6 +457,11 @@ func (o mcpOps) AddDomain(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, dom
 	if err != nil {
 		return nil, o.mcpError(err)
 	}
+	detail := strings.ToLower(strings.TrimSpace(domain))
+	if pending != "" {
+		detail += " (pending)"
+	}
+	o.a.recordMCP(auth, site, provenance.ActionDomainAdd, 0, detail)
 	res := o.siteResult(site)
 	if pending != "" {
 		// In warnings, an existing field: a client that cached the output
@@ -461,6 +482,7 @@ func (o mcpOps) RemoveDomain(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, 
 	if err := o.a.st.RemoveDomain(site, domain); err != nil {
 		return nil, o.mcpError(err)
 	}
+	o.a.recordMCP(auth, site, provenance.ActionDomainRemove, 0, domain)
 	return o.siteResult(site), nil
 }
 
@@ -490,10 +512,18 @@ func (o mcpOps) OpenUpload(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) (*
 	if err != nil {
 		return nil, err
 	}
-	secret, expires, err := o.a.uploads.issue(site.ViewID, site.EditID)
+	// The token carries the connection's account only when that account
+	// opened the site as its owner: an upload through it is then that
+	// account's, and otherwise it is the edit password's.
+	issuer := ""
+	if act := mcpActor(auth, site); act.auth != provenance.AuthPassword {
+		issuer = act.account
+	}
+	secret, expires, err := o.a.uploads.issueFor(site.ViewID, site.EditID, issuer)
 	if err != nil {
 		return nil, err // errTooManyUploads says what to do
 	}
+	o.a.recordMCP(auth, site, provenance.ActionOpenUpload, 0, "")
 	o.a.log.Info("upload token issued", "id", site.ViewID, "token", secret[:10])
 
 	res := &mcp.UploadResult{
@@ -555,6 +585,11 @@ func (o mcpOps) AddForm(ctx context.Context, auth mcp.Auth, ref mcp.SiteRef, in 
 	if err != nil {
 		return nil, o.mcpError(err)
 	}
+	name := ""
+	if in.Name != nil {
+		name = *in.Name
+	}
+	o.a.recordMCP(auth, site, provenance.ActionFormAdd, 0, name)
 	return toFormsResult(v), nil
 }
 
@@ -567,6 +602,7 @@ func (o mcpOps) UpdateForm(ctx context.Context, auth mcp.Auth, ref mcp.SiteRef, 
 	if err != nil {
 		return nil, o.mcpError(err)
 	}
+	o.a.recordMCP(auth, site, provenance.ActionFormUpdate, 0, key)
 	return toFormsResult(v), nil
 }
 
@@ -579,6 +615,7 @@ func (o mcpOps) RemoveForm(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, ke
 	if err != nil {
 		return nil, o.mcpError(err)
 	}
+	o.a.recordMCP(auth, site, provenance.ActionFormRemove, 0, key)
 	return toFormsResult(v), nil
 }
 
@@ -591,5 +628,18 @@ func (o mcpOps) ResendFormConfirmation(ctx context.Context, auth mcp.Auth, ref m
 	if err != nil {
 		return nil, o.mcpError(err)
 	}
+	o.a.recordMCP(auth, site, provenance.ActionFormResend, 0, key)
 	return toFormsResult(v), nil
+}
+
+// mcpPaths names the first few files a write_files call carried.
+func mcpPaths(files []mcp.DecodedFile) string {
+	paths := make([]string, 0, maxNotedPaths+1)
+	for i, f := range files {
+		if i > maxNotedPaths {
+			break
+		}
+		paths = append(paths, f.Path)
+	}
+	return filesDetail(paths)
 }

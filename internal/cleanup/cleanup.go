@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/provenance"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
@@ -100,6 +101,14 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 		if site.Meta.IsLocked() {
 			continue
 		}
+		// Provenance is kept for provenance.Retention (the privacy policy's
+		// 90 days). A locked site's log is part of what the lock holds, and
+		// the skip above keeps it.
+		if n, err := st.PurgeProvenance(site, now.Add(-provenance.Retention)); err != nil {
+			slog.Error("cleanup: purge provenance", "id", site.ViewID, "err", err)
+		} else if n > 0 {
+			slog.Info("cleanup: purged provenance past retention", "id", site.ViewID, "entries", n)
+		}
 		reconcileTrust(st, site)
 		// The second half of custom-domain verification: claims whose record
 		// appeared since the owner asked are attached, verified domains are
@@ -139,6 +148,13 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 		}
 		slog.Info("cleanup: deleted expired site", "id", site.ViewID, "owner", site.Meta.OwnerAccountID)
 		removed++
+	}
+	// The extension's account logs (sign-ups, sign-ins, tokens) keep the same
+	// retention; it knows which accounts it holds as evidence.
+	if p, ok := ext.Get(); ok {
+		if ap, ok := p.(ext.AccountProvenance); ok {
+			ap.PurgeProvenance(now.Add(-provenance.Retention))
+		}
 	}
 	// Abuse reports are a log somebody typed; they go after the retention the
 	// privacy page promises for logs.

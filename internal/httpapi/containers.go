@@ -183,6 +183,7 @@ func (a *API) containerAction(w http.ResponseWriter, r *http.Request, site *stor
 	} else {
 		rt.Kick(site.ViewID)
 	}
+	noteOf(r).detail = action
 	a.log.Info("container action", "id", site.ViewID, "owner", site.Meta.OwnerAccountID, "action", action)
 	writeJSON(w, 202, a.sitePayload(site))
 }

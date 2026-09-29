@@ -21,6 +21,7 @@ import (
 	"github.com/ittrail/sitebin.io/internal/config"
 	"github.com/ittrail/sitebin.io/internal/ext"
 	"github.com/ittrail/sitebin.io/internal/ids"
+	"github.com/ittrail/sitebin.io/internal/provenance"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
@@ -102,20 +103,20 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("GET /api/sites/{editID}/download", a.withEditAuth(a.downloadSite))
 	mux.HandleFunc("GET /api/sites/{editID}/content/{path...}", a.withEditAuth(a.getFileContent))
 	mux.HandleFunc("GET /api/sites/{editID}/dir", a.withEditAuth(a.listDir))
-	mux.HandleFunc("PUT /api/sites/{editID}", a.withEditAuth(a.updateSite))
-	mux.HandleFunc("DELETE /api/sites/{editID}", a.withEditAuth(a.deleteSite))
-	mux.HandleFunc("POST /api/sites/{editID}/files", a.withUploadAuth(a.uploadFiles))
-	mux.HandleFunc("DELETE /api/sites/{editID}/files/{path...}", a.withEditAuth(a.deleteFile))
-	mux.HandleFunc("POST /api/sites/{editID}/domains", a.withEditAuth(a.addDomain))
-	mux.HandleFunc("DELETE /api/sites/{editID}/domains/{domain}", a.withEditAuth(a.removeDomain))
-	mux.HandleFunc("POST /api/sites/{editID}/containers/{action}", a.withEditAuth(a.containerAction))
+	mux.HandleFunc("PUT /api/sites/{editID}", a.withEditAuth(a.recorded(provenance.ActionSettings, a.updateSite)))
+	mux.HandleFunc("DELETE /api/sites/{editID}", a.withEditAuth(a.recorded(provenance.ActionSiteDelete, a.deleteSite)))
+	mux.HandleFunc("POST /api/sites/{editID}/files", a.withUploadAuth(a.recorded(provenance.ActionUpload, a.uploadFiles)))
+	mux.HandleFunc("DELETE /api/sites/{editID}/files/{path...}", a.withEditAuth(a.recorded(provenance.ActionDeleteFile, a.deleteFile)))
+	mux.HandleFunc("POST /api/sites/{editID}/domains", a.withEditAuth(a.recorded(provenance.ActionDomainAdd, a.addDomain)))
+	mux.HandleFunc("DELETE /api/sites/{editID}/domains/{domain}", a.withEditAuth(a.recorded(provenance.ActionDomainRemove, a.removeDomain)))
+	mux.HandleFunc("POST /api/sites/{editID}/containers/{action}", a.withEditAuth(a.recorded(provenance.ActionContainer, a.containerAction)))
 	mux.HandleFunc("GET /api/sites/{editID}/containers/{service}/logs", a.withEditAuth(a.containerLogs))
 
 	mux.HandleFunc("GET /api/sites/{editID}/forms", a.withEditAuth(a.listForms))
-	mux.HandleFunc("POST /api/sites/{editID}/forms", a.withEditAuth(a.createForm))
-	mux.HandleFunc("PUT /api/sites/{editID}/forms/{key}", a.withEditAuth(a.patchForm))
-	mux.HandleFunc("DELETE /api/sites/{editID}/forms/{key}", a.withEditAuth(a.removeForm))
-	mux.HandleFunc("POST /api/sites/{editID}/forms/{key}/confirmation", a.withEditAuth(a.resendFormConfirmation))
+	mux.HandleFunc("POST /api/sites/{editID}/forms", a.withEditAuth(a.recorded(provenance.ActionFormAdd, a.createForm)))
+	mux.HandleFunc("PUT /api/sites/{editID}/forms/{key}", a.withEditAuth(a.recorded(provenance.ActionFormUpdate, a.patchForm)))
+	mux.HandleFunc("DELETE /api/sites/{editID}/forms/{key}", a.withEditAuth(a.recorded(provenance.ActionFormRemove, a.removeForm)))
+	mux.HandleFunc("POST /api/sites/{editID}/forms/{key}/confirmation", a.withEditAuth(a.recorded(provenance.ActionFormResend, a.resendFormConfirmation)))
 
 	mux.Handle("/dav/", http.HandlerFunc(a.webdav))
 
@@ -390,13 +391,13 @@ func (a *API) editAuth(next func(http.ResponseWriter, *http.Request, *store.Site
 		// account owns. That is the whole point of tokens: a script should not
 		// have to carry one secret per site to manage the sites it created.
 		if a.tokenOwns(r, site) {
-			next(w, r, site)
+			next(w, withActor(r, actor{surface: a.apiSurface(r), auth: provenance.AuthToken, account: site.Meta.OwnerAccountID}), site)
 			return
 		}
 		// The owner, signed in, on Sitebin's own edit page: the same standing,
 		// through the browser session.
 		if a.sessionOwns(r, site) {
-			next(w, r, site)
+			next(w, withActor(r, actor{surface: a.apiSurface(r), auth: provenance.AuthSession, account: site.Meta.OwnerAccountID}), site)
 			return
 		}
 		pw := r.Header.Get("X-Edit-Password")
@@ -423,7 +424,7 @@ func (a *API) editAuth(next func(http.ResponseWriter, *http.Request, *store.Site
 				writeError(w, 403, "this site was created without an account, so it has no API — create it while signed in at "+a.apiAccountHint()+" to script it")
 				return
 			}
-			next(w, r, site)
+			next(w, withActor(r, actor{surface: a.apiSurface(r), auth: provenance.AuthPassword}), site)
 		case verifyThrottled:
 			writeError(w, 429, "too many password attempts, slow down")
 		default:

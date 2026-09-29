@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/net/webdav"
 
+	"github.com/ittrail/sitebin.io/internal/provenance"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
@@ -57,11 +58,16 @@ func (a *API) webdav(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Who is writing, for the provenance record: the upload token's account,
+	// or whoever holds the edit password.
+	act := actor{surface: provenance.SurfaceWebDAV, auth: provenance.AuthPassword}
+
 	// An upload token opens the tree whatever the site's WebDAV toggle says:
 	// it is an agent's upload channel, not the site's network drive, and it
 	// grants nothing write_files does not. It is answered only as a token — a
 	// bad one is a 401, never a fall-through to the edit password.
 	if secret := uploadCredential(r); secret != "" {
+		act = actor{surface: provenance.SurfaceWebDAV, auth: provenance.AuthUploadToken, account: a.uploadIssuer(secret)}
 		end, ok := a.uploads.begin(secret, editID)
 		if !ok {
 			w.Header().Set("WWW-Authenticate", `Basic realm="Sitebin WebDAV (password = edit password)"`)
@@ -146,7 +152,11 @@ func (a *API) webdav(w http.ResponseWriter, r *http.Request) {
 	}
 	if davMutating[r.Method] {
 		// serialize with API writes / mode switches on the same site
-		a.st.WithLock(site.ViewID, func() error { h.ServeHTTP(w, r); return nil })
+		sw := &statusWriter{ResponseWriter: w, code: 200}
+		a.st.WithLock(site.ViewID, func() error { h.ServeHTTP(sw, r); return nil })
+		if sw.code < 300 {
+			a.recordDAV(r, site, act, sub)
+		}
 	} else {
 		h.ServeHTTP(w, r)
 	}
@@ -195,4 +205,32 @@ func (a *API) davDestinationOK(dest, editID string) bool {
 	}
 	_, err = store.CleanRelPath(strings.TrimSuffix(rel, "/"))
 	return err == nil
+}
+
+// davActions maps a mutating WebDAV method onto the provenance action.
+var davActions = map[string]string{
+	"PUT":       provenance.ActionUpload,
+	"DELETE":    provenance.ActionDeleteFile,
+	"MKCOL":     provenance.ActionMkdir,
+	"MOVE":      provenance.ActionMove,
+	"COPY":      provenance.ActionCopy,
+	"PROPPATCH": provenance.ActionProps,
+}
+
+// recordDAV records one successful WebDAV write. A sync is a burst of these,
+// and the log merges it into one line.
+func (a *API) recordDAV(r *http.Request, site *store.Site, act actor, sub string) {
+	e := entryFor(r, act, davActions[r.Method])
+	e.Detail = sub
+	if r.Method == "PUT" {
+		e.Files = 1
+	}
+	if dest := r.Header.Get("Destination"); dest != "" {
+		if u, err := url.Parse(dest); err == nil {
+			if rel, ok := strings.CutPrefix(u.Path, "/dav/"+site.EditID+"/"); ok {
+				e.Detail = sub + " → " + rel
+			}
+		}
+	}
+	a.record(site, e)
 }

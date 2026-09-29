@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ittrail/sitebin.io/internal/ids"
+	"github.com/ittrail/sitebin.io/internal/provenance"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
@@ -72,6 +73,6 @@ func (a *API) withUploadAuth(next func(http.ResponseWriter, *http.Request, *stor
 		if refuseLocked(w, site) {
 			return
 		}
-		next(w, r, site)
+		next(w, withActor(r, actor{surface: provenance.SurfaceUploadToken, auth: provenance.AuthUploadToken, account: a.uploadIssuer(secret)}), site)
 	}
 }

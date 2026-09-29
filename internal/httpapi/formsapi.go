@@ -25,6 +25,9 @@ func (a *API) createForm(w http.ResponseWriter, r *http.Request, site *store.Sit
 	if !decodeFormInput(w, r, &in) {
 		return
 	}
+	if in.Name != nil {
+		noteOf(r).detail = *in.Name
+	}
 	out, err := a.addForm(r.Context(), site, in, clientIP(r))
 	if err != nil {
 		respondErr(w, err)
@@ -38,6 +41,7 @@ func (a *API) patchForm(w http.ResponseWriter, r *http.Request, site *store.Site
 	if !decodeFormInput(w, r, &in) {
 		return
 	}
+	noteOf(r).detail = r.PathValue("key")
 	out, err := a.updateForm(r.Context(), site, r.PathValue("key"), in, clientIP(r))
 	if err != nil {
 		respondErr(w, err)
@@ -47,6 +51,7 @@ func (a *API) patchForm(w http.ResponseWriter, r *http.Request, site *store.Site
 }
 
 func (a *API) removeForm(w http.ResponseWriter, r *http.Request, site *store.Site) {
+	noteOf(r).detail = r.PathValue("key")
 	if _, err := a.deleteForm(site, r.PathValue("key")); err != nil {
 		respondErr(w, err)
 		return
@@ -55,6 +60,7 @@ func (a *API) removeForm(w http.ResponseWriter, r *http.Request, site *store.Sit
 }
 
 func (a *API) resendFormConfirmation(w http.ResponseWriter, r *http.Request, site *store.Site) {
+	noteOf(r).detail = r.PathValue("key")
 	out, err := a.resendConfirmation(r.Context(), site, r.PathValue("key"), clientIP(r))
 	if err != nil {
 		respondErr(w, err)

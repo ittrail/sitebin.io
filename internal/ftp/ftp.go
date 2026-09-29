@@ -25,6 +25,14 @@ type Authenticator interface {
 	FTPAuth(editID, password, clientIP string) (dir string, maxBytes int64, maxFiles int, err error)
 }
 
+// Recorder is implemented by an Authenticator that keeps a record of every
+// write (the HTTP API's provenance log). OPTIONAL: without it FTP writes are
+// simply not recorded. action is one of the provenance actions (upload,
+// delete-file, mkdir, move); path is the site-relative name.
+type Recorder interface {
+	FTPWrote(editID, clientIP, action, path string)
+}
+
 // Server wraps the FTP server for one instance.
 type Server struct {
 	srv *ftpserver.FtpServer
@@ -95,7 +103,11 @@ func (d *driver) AuthUser(cc ftpserver.ClientContext, user, pass string) (ftpser
 	if err != nil {
 		return nil, err
 	}
-	return newQuotaFs(dir, maxBytes, maxFiles), nil
+	q := newQuotaFs(dir, maxBytes, maxFiles)
+	if rec, ok := d.auth.(Recorder); ok {
+		q.onWrite = func(action, path string) { rec.FTPWrote(user, ip, action, path) }
+	}
+	return q, nil
 }
 
 func (d *driver) GetTLSConfig() (*tls.Config, error) {
