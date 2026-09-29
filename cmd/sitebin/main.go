@@ -6,6 +6,7 @@
 //	sitebin healthcheck  probe the internal health endpoint (container HEALTHCHECK)
 //	sitebin list         list all sites (operator)
 //	sitebin reports      list filed abuse reports (operator)
+//	sitebin provenance <id|domain|ip|cidr>  a site's trail, or every site seen from an address
 //	sitebin lock <id|domain> [reason…]    hold a site: served to nobody, frozen, never swept
 //	sitebin unlock <id|domain>            lift a hold
 //	sitebin delete [--force] <id|domain>  operator takedown of a site (--force for a locked one)
@@ -100,6 +101,15 @@ func main() {
 	case "list":
 		if err := listSites(mustStore(mustConfig()), os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "list failed:", err)
+			os.Exit(1)
+		}
+	case "provenance":
+		if len(os.Args) != 3 {
+			fmt.Fprintln(os.Stderr, "usage: sitebin provenance <view-id|edit-id|domain|ip|cidr>")
+			os.Exit(2)
+		}
+		if err := showProvenance(mustStore(mustConfig()), os.Stdout, os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, "provenance failed:", err)
 			os.Exit(1)
 		}
 	case "reports":
@@ -371,7 +381,7 @@ func listSites(st *store.Store, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "%-26s  %-9s  %5s  %-10s  %-20s  %-6s  %s\n", "VIEW-ID", "SIZE", "FILES", "MODE", "CREATED", "LOCK", "OWNER/DOMAINS")
+	fmt.Fprintf(out, "%-26s  %-9s  %5s  %-10s  %-20s  %-15s  %-6s  %s\n", "VIEW-ID", "SIZE", "FILES", "MODE", "CREATED", "FROM", "LOCK", "OWNER/DOMAINS")
 	locked := 0
 	for _, site := range sites {
 		bytes, files, _ := st.Usage(site)
@@ -384,9 +394,9 @@ func listSites(st *store.Store, out io.Writer) error {
 			lock = "LOCKED"
 			locked++
 		}
-		fmt.Fprintf(out, "%-26s  %-9s  %5d  %-10s  %-20s  %-6s  %s\n",
+		fmt.Fprintf(out, "%-26s  %-9s  %5d  %-10s  %-20s  %-15s  %-6s  %s\n",
 			site.ViewID, humanSize(bytes), files, site.Meta.Mode,
-			site.Meta.CreatedAt.Format("2006-01-02 15:04"), lock, strings.TrimSpace(owner))
+			site.Meta.CreatedAt.Format("2006-01-02 15:04"), creatorIP(st, site), lock, strings.TrimSpace(owner))
 		if l := site.Meta.Locked; l != nil {
 			fmt.Fprintf(out, "    locked %s by %s%s\n", l.At.Format("2006-01-02 15:04"), l.By, reasonSuffix(l.Reason))
 		}
