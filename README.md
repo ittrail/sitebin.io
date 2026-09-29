@@ -133,6 +133,13 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | `SITEBIN_FORMS_MAX_PER_SITE` | `10` (community) / `0` (with accounts) | Forms per site when no plan says otherwise. With accounts, a tier's `max_forms` decides. |
 | `SITEBIN_FORMS_MAX_FILES` / `SITEBIN_FORMS_MAX_FILE_BYTES` | `5` / `2097152` | Attachments per submission, and bytes per attachment. `0` files turns attachments off. |
 | `SITEBIN_FORMS_PER_IP_HOUR` / `SITEBIN_FORMS_PER_FORM_HOUR` | `10` / `60` | Submissions per visitor IP (all forms) and per form. |
+| `SITEBIN_CSP_SCRIPT_HOSTS` | `https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com https://cdn.tailwindcss.com https://code.jquery.com` | Hosts an **untrusted** site may load scripts from (comma- or space-separated host sources; `none` for none). Trusted sites are unaffected. See [Security headers](#security-headers-for-untrusted-sites-enterprise). |
+| `SITEBIN_CSP_STYLE_HOSTS` | `https://fonts.googleapis.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com` | Hosts an untrusted site may load stylesheets from. |
+| `SITEBIN_CSP_FONT_HOSTS` | `https://fonts.gstatic.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com` | Hosts an untrusted site may load fonts from. |
+| `SITEBIN_CSP_IMG_HOSTS` | — (none) | Hosts an untrusted site may load images from besides itself, `data:` and `blob:`. |
+| `SITEBIN_ABUSE_CONTACT` | — | Public abuse mailbox (a bare address). Named on the view domain's info page, in `security.txt` and on the "Site suspended" page; omitted everywhere when unset. |
+| `SITEBIN_ABUSE_REPORT_URL` | `<base>/report` | The page where people report a site. `none` omits it. |
+| `SITEBIN_HOME_URL` | the base URL | The operator's main site, linked from the view domain's info page. |
 
 A tier's `max_expiry_days` works the same way per site and adds one rule:
 while a site **owned by an account** stays under a cap, every content change
@@ -907,8 +914,9 @@ Operator commands (run inside the container, e.g. `docker exec sitebin sitebin <
 
 | Command | Purpose |
 |---|---|
-| `sitebin list` | List all sites (id, size, files, mode, created, lock, owner/domains). |
+| `sitebin list` | List all sites (id, size, files, mode, created, the address it was created from, lock, owner/domains). |
 | `sitebin reports` | List filed abuse reports. |
+| `sitebin provenance <id\|domain\|ip\|cidr>` | A site's trail — every creation and write with address, client, surface and credential — or every site seen from an address or range. |
 | `sitebin lock <id\|domain> [reason…]` | Lock a site: served to nobody, frozen for its owner, kept past its expiry. The reason is shown to the owner. |
 | `sitebin unlock <id\|domain>` | Lift a lock; the site's expiry applies again. |
 | `sitebin delete [--force] <id\|domain>` | Take down a site by view id, edit id, or domain. A locked site needs `--force`. |
@@ -928,6 +936,20 @@ Operator commands (run inside the container, e.g. `docker exec sitebin sitebin <
   shipper needs its own retention. Abuse reports keep only the reporter's
   network (`/24`, `/48`) and are purged by the cleanup sweep after 14 days;
   at most 10,000 are kept, oldest first out.
+- **Provenance:** every site creation and write is recorded in
+  `sites/<id>/provenance.jsonl` — time, the client address (the one Caddy
+  saw), the user agent, the surface (`ui`, `api`, `mcp`, `upload-token`,
+  `webdav`, `ftp`, `dashboard`), the credential and the acting account, and
+  what changed. The enterprise edition also keeps `accounts/<id>/provenance.jsonl`:
+  sign-up, sign-ins, every API token minted, and the account's sites created
+  and deleted. Both are bounded (100 lines, bursts merged into one) and purged
+  by the cleanup sweep after **90 days** — except a locked site's, a suspended
+  account's and that of an account owning a locked site, which are evidence.
+  Deleting a site or an account deletes its log. State it in your privacy
+  policy. Design: [`2026-09-29-provenance-csp-apex.md`](docs/superpowers/specs/2026-09-29-provenance-csp-apex.md).
+- **security.txt:** `/.well-known/security.txt` (RFC 9116) is served on the
+  base domain — and on the view domain's apex — from `SITEBIN_ABUSE_CONTACT`
+  and `SITEBIN_ABUSE_REPORT_URL`, with an `Expires` always 180 days ahead.
 
 ### Availability & failover
 
@@ -1123,7 +1145,7 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_CONTAINERS_SELF` | Sitebin's own container id or name. Default: detected. |
 | `SITEBIN_CONTAINERS_RUNTIME` | OCI runtime for customer containers, e.g. `runsc` (gVisor). Default: the Engine's. |
 | `SITEBIN_CONTAINER_MEMORY_MB` / `_CPUS` / `_PIDS` | Fixed per-container limits: `512` MB (no swap), `0.5` CPU, `256` processes. |
-| `SITEBIN_VIEW_DOMAIN` | Domain user sites are served from, as `<id>.<view-domain>` (default: the base domain). Point it at a **separate registrable domain** and list that domain in the [Public Suffix List](https://publicsuffix.org/) to stop uploaded content sharing a browser "site" with the dashboard: no cookie can be written upward onto the app, `SameSite` stops treating navigations from a user site as same-site, and a phishing takedown against one site does not endanger the app's own domain. Needs its own wildcard DNS record and DNS-challenge access. Cannot be combined with `SITEBIN_VIEW_ACCESS=path\|both`, which would serve content from the main domain again. |
+| `SITEBIN_VIEW_DOMAIN` | Domain user sites are served from, as `<id>.<view-domain>` (default: the base domain). Point it at a **separate registrable domain** and list that domain in the [Public Suffix List](https://publicsuffix.org/) to stop uploaded content sharing a browser "site" with the dashboard: no cookie can be written upward onto the app, `SameSite` stops treating navigations from a user site as same-site, and a phishing takedown against one site does not endanger the app's own domain. Needs its own wildcard DNS record and DNS-challenge access. Cannot be combined with `SITEBIN_VIEW_ACCESS=path\|both`, which would serve content from the main domain again. The apex and `www.` of the view domain then serve a static `noindex` page saying whose content it is and how to report it, and `security.txt`; point both at the instance too (the apex certificate is obtained the way the wildcard's is). |
 | `SITEBIN_ADMIN_ACCOUNTS` | Comma-separated emails allowed to reach the **instance register** at `/account/admin` — every site on the instance, with delete, expiry and lock control. Gated twice: the account's tier must also carry `"admin": true` in the tier config, so neither the plan source nor the environment can grant it alone. Unset disables the console entirely. |
 | `SITEBIN_ALLOW_ANON_CREATE` | In accounts mode, still allow anonymous sites. |
 | `SITEBIN_OAUTH_GOOGLE_CLIENT_ID` / `_SECRET` | Google OIDC login. |
@@ -1190,15 +1212,23 @@ only sites its own account owns — never another account's, and never an
 anonymous site. The secret is shown once and stored only as a SHA-256, so a lost
 token is replaced rather than recovered. Up to 25 per account.
 
+### Security headers for untrusted sites *(Enterprise)*
+
 A tier may set `"trusted": true`. Sites it owns are served without the strict
 content-security headers Sitebin applies to untrusted uploads — anonymous drops
 and sites on tiers without the flag get `form-action 'none'`, `connect-src
-'self'`, `frame-ancestors 'none'` and a `no-referrer` policy on top of the
-baseline every site receives (`nosniff`, `object-src 'none'`, `base-uri 'self'`,
-a restrictive `Permissions-Policy`). Scripts and images still load from
-anywhere: the aim is to stop a phishing page from *shipping* what it captures,
-not to stop it rendering, because blocking remote scripts would equally break
-every legitimate app that loads a library from a CDN.
+'self'`, `frame-ancestors 'none'`, `frame-src 'none'` and a `no-referrer`
+policy on top of the baseline every site receives (`nosniff`, `object-src
+'none'`, `base-uri 'self'`, a restrictive `Permissions-Policy`). They may load
+images only from themselves (`img-src 'self' data: blob:`, which closes the
+image-beacon channel), and scripts, stylesheets and fonts only from themselves
+and a short list of CDNs (`SITEBIN_CSP_SCRIPT_HOSTS`, `_STYLE_HOSTS`,
+`_FONT_HOSTS`; Google Fonts, cdnjs, jsDelivr, unpkg, the Tailwind CDN and
+jQuery by default); `media-src 'self' data: blob:`, `worker-src 'self' blob:`
+and `manifest-src 'self'` complete it. Inline scripts and `eval` still run: the
+aim is to stop a phishing page from *shipping* what it captures and to keep
+third-party widgets, trackers and IPFS-hosted kits off drops, not to break
+every page that inlines a script.
 
 Violations are reported to `/_sitebin/csp-report`, counted per site, and shown
 in the instance register with the destinations that were blocked. A site whose
@@ -1207,12 +1237,19 @@ phishing. Grant `trusted` to tiers whose holders you can hold accountable; an
 anonymous site never qualifies, whatever its tier says. **The community build is
 unaffected** — it registers no provider, so every site there is trusted.
 
+### The instance register *(Enterprise)*
+
 A tier may set `"admin": true`. That does not change its quotas; it marks the
 tier as one whose holders may reach the instance register, and only together
 with `SITEBIN_ADMIN_ACCOUNTS`. The register lists every site on the instance —
 anonymous drops included — with instance-wide figures, search and filters, and
 three actions per site: delete, set or clear the expiry, and lock or unlock
-(see "Locked sites"). It never exposes a
+(see "Locked sites"). Each row says where the site came from — the address
+and surface of its creation, and its latest write — and links to its **trail**:
+every write with address, client, surface and credential, plus its owner's
+sign-up, sign-ins and the API tokens it minted (a token minted within ten
+minutes of sign-up is flagged). Searching for an IP address or a CIDR range
+lists every site whose trail names it and every account seen there. It never exposes a
 site's edit password or edit page: an operator can clean up and look, but the
 claim ticket stays the only thing that confers ownership.
 

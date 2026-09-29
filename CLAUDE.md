@@ -121,6 +121,40 @@ abuse site: served to nobody, frozen for its owner, never swept. Read
   lock from another process. An account lock (`By: "account"`, a stack
   suspension) never replaces a lock and an unsuspension lifts only those.
 
+## Provenance is recorded at the gate
+
+Every site creation and write lands in `sites/<id>/provenance.jsonl`
+(`internal/provenance`, `store.RecordProvenance`): time, the address
+`auth.ClientIP` derives (the last `X-Forwarded-For` entry — Caddy's — never
+one a client chose), user agent, surface, credential, acting account, what
+changed. The enterprise account log (`accounts/<id>/provenance.jsonl`) holds
+sign-up, sign-ins, token mints and a mirror of the account's site
+creations/deletions. Read `docs/superpowers/specs/2026-09-29-provenance-csp-apex.md`.
+
+- **Record where the surface authenticated.** `editAuth` / `withUploadAuth`
+  put the actor in the context and the route table wraps per-site writes in
+  `recorded(action, …)`; creation records in `createSiteWith`; MCP, WebDAV and
+  FTP (`ftp.Recorder`) record themselves. A new write route gets `recorded`
+  in the route table, a new MCP write tool calls `recordMCP`.
+- **Best effort, and only what happened.** A failed record is logged, never
+  returned; a refused or failed write is not recorded. The log is outside
+  `files/` — never served, listed, zipped or counted.
+- **The stats lock guards it** (so `Delete` excludes a record, and a record
+  never recreates a deleted folder). Bounded: 100 lines, bursts merged.
+- **Retention 90 days** (`provenance.Retention`), purged by the sweep — a
+  locked site (the sweep skips it), a suspended account and an account owning
+  a locked site keep theirs. The GDPR export carries the account's log and its
+  own entries on its sites, never edit-password entries.
+
+## The view domain's apex
+
+With a separate `SITEBIN_VIEW_DOMAIN`, Caddy proxies `<view>` and
+`www.<view>` to the backend, where `viewApexGuard` answers only the info page
+and `/.well-known/security.txt` and 404s everything else — the app never
+answers on the user-content domain. `www` can never be a site (ids are 26
+base32 characters). The untrusted CSP's CDN lists are `SITEBIN_CSP_*_HOSTS`,
+validated as host sources because they are written into the Caddyfile.
+
 ## Custom domains prove ownership
 
 A custom domain is attached — indexed, served, issued a certificate — only
