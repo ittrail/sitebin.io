@@ -106,6 +106,21 @@ services:
       # record and DNS-challenge access, and cannot be combined with
       # SITEBIN_VIEW_ACCESS=path|both.
       # SITEBIN_VIEW_DOMAIN: "sitebin.app"
+      # Its apex and www then answer with a page saying whose content it is and
+      # how to report a site, plus /.well-known/security.txt (also on the base
+      # domain). Point both at this host too.
+      # SITEBIN_ABUSE_CONTACT:    "abuse@example.com"             # public abuse mailbox
+      # SITEBIN_ABUSE_REPORT_URL: "https://sitebin.example.com/report"  # default <base>/report
+      # SITEBIN_HOME_URL:         "https://example.com"           # your main site
+
+      # Untrusted sites (anonymous drops, tiers without "trusted") may load
+      # scripts, styles and fonts only from these hosts (defaults: the common
+      # CDNs), and images only from themselves unless listed here. "none" empties
+      # a list.
+      # SITEBIN_CSP_SCRIPT_HOSTS: "https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com https://cdn.tailwindcss.com https://code.jquery.com"
+      # SITEBIN_CSP_STYLE_HOSTS:  "https://fonts.googleapis.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com"
+      # SITEBIN_CSP_FONT_HOSTS:   "https://fonts.gstatic.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com"
+      # SITEBIN_CSP_IMG_HOSTS:    ""
 
       # --- TLS in production (only relevant once SITEBIN_HTTP_ONLY is gone) ---
       # Wildcard certificate for *.base via DNS challenge. subdomain/both only.
