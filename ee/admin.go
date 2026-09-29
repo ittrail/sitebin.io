@@ -17,6 +17,9 @@ import (
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
+// shownFindings is how many abuse-guard findings a register row lists.
+const shownFindings = 3
+
 // expiringSoon is the window the console highlights: a site falling due inside
 // it is the operator's cue to act, because after it lapses the sweep deletes.
 const expiringSoon = 7 * 24 * time.Hour
@@ -70,7 +73,9 @@ type instanceFigures struct {
 	Expiring     int // carrying any expiry
 	ExpiringSoon int // falling due within expiringSoon
 	Flagged      int // sites with at least one CSP violation
+	Scanner      int // sites with abuse-guard findings not yet reviewed
 	Locked       int // sites under the operator's hold
+	Reports      int // abuse reports on file (they are kept 14 days)
 }
 
 // HumanBytes renders the stored total for the figure stub.
@@ -96,6 +101,9 @@ func (p *provider) instanceStats(sites []ext.SiteInfo) instanceFigures {
 		}
 		if s.Violations > 0 {
 			f.Flagged++
+		}
+		if len(s.Findings) > 0 {
+			f.Scanner++
 		}
 		if s.Locked != nil {
 			f.Locked++
@@ -149,10 +157,15 @@ type adminRow struct {
 	Locking   bool
 	Unlocking bool
 	// LockText describes the lock for the row — date, who, reason — and is
-	// empty for an unlocked site. LockedByAccount marks a lock a suspension
-	// placed, which the register offers to keep as the operator's own.
+	// empty for an unlocked site. LockedByMachine marks a lock a suspension
+	// or the abuse guard placed, which the register offers to keep as the
+	// operator's own.
 	LockText        string
-	LockedByAccount bool
+	LockedByMachine bool
+	// FindingLines are the abuse guard's newest hits as the row shows them,
+	// MoreFindings how many are not shown.
+	FindingLines []string
+	MoreFindings int
 	// OwnerSuspended is the owner's suspension on the stack, with its date
 	// and reason; empty for an active or anonymous owner.
 	OwnerSuspended string
@@ -261,7 +274,15 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		}
 		if s.Locked != nil {
 			row.LockText = lockText(s.Locked)
-			row.LockedByAccount = s.Locked.By == ext.LockByAccount
+			row.LockedByMachine = s.Locked.By == ext.LockByAccount || s.Locked.By == ext.LockByScanner
+		}
+		shown := s.Findings
+		if n := len(shown); n > shownFindings {
+			// the newest are the last ones
+			shown, row.MoreFindings = shown[n-shownFindings:], n-shownFindings
+		}
+		for _, f := range shown {
+			row.FindingLines = append(row.FindingLines, findingText(f))
 		}
 		if row.OwnerLabel == "" {
 			row.OwnerLabel = "anonymous"
@@ -292,7 +313,9 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		case "flagged":
-			if s.Violations == 0 {
+			// Either signal: the abuse guard's findings, or a CSP report
+			// naming a blocked destination.
+			if s.Violations == 0 && len(s.Findings) == 0 {
 				continue
 			}
 		case "locked":
@@ -315,6 +338,9 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	if ipMode {
 		panel = p.ipSearch(ipMatch, seen)
 	}
+	if reps, err := p.host.Sites().Reports(); err == nil {
+		figures.Reports = len(reps)
+	}
 	p.securityHeaders(w)
 	adminTmpl.Execute(w, adminView{
 		Prov:    p.rowProvenance(rows),
@@ -335,8 +361,11 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 // lockText is a lock as the register's row states it: when, who, and why.
 func lockText(l *ext.SiteLock) string {
 	who := "by an admin"
-	if l.By == ext.LockByAccount {
+	switch l.By {
+	case ext.LockByAccount:
 		who = "with the owner's suspension"
+	case ext.LockByScanner:
+		who = "by the scanner"
 	}
 	out := "locked " + l.At.Local().Format("2006-01-02 15:04") + " " + who
 	if l.Reason != "" {
@@ -404,6 +433,11 @@ func (p *provider) handleAdminLock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("admin locked a site", "admin", acc.ID, "site", viewID, "reason", reason)
+	if r.URL.Query().Get("return") == "reports" {
+		// locked from the Reports tab: back to it
+		p.redirect(w, r, "/account/admin/reports?flash=locked")
+		return
+	}
 	p.redirect(w, r, "/account/admin?flash=locked"+listParams(r))
 }
 

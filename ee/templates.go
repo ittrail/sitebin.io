@@ -394,6 +394,28 @@ const adminConsoleCSS = `
   .adm .fig.alarm .v { color: var(--danger); }
   .adm .fig.alarm::before { border-color: rgba(242,109,109,.6); }
   .adm .row .flag { display: block; margin-top: 3px; font: 11px var(--mono); color: var(--danger); word-break: break-all; }
+  /* the abuse guard's hits: what matched, where, and the text around it */
+  .adm .row .hits { display: block; margin-top: 4px; }
+  .adm .row .hit { display: block; font: 11px var(--mono); color: var(--amber); overflow-wrap: anywhere; }
+  .adm .row .hits form.inline { display: inline-block; margin-top: 4px; }
+
+  .adm .tabs { display: flex; gap: 6px; margin-bottom: 18px; }
+  .adm .tabs a { font: 600 12px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-dim); text-decoration: none; padding: 7px 12px; border: 1px dashed var(--line); border-radius: 8px; }
+  .adm .tabs a.on { color: var(--ink); border-color: rgba(245,184,77,.55); border-style: solid; }
+
+  /* the Reports tab */
+  .adm .rep { border-top: 1px solid var(--line-soft); padding: 12px 16px; font-size: 13px; }
+  .adm .rep:first-of-type { border-top: 0; }
+  .adm .rep .rephead { display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline; }
+  .adm .rep .when { font: 12px var(--mono); color: var(--ink-faint); }
+  .adm .rep .why { font-weight: 650; color: var(--ink); }
+  .adm .rep .via { font: 11px var(--mono); color: var(--ink-faint); margin-left: auto; }
+  .adm .rep .tgt { font: 12px var(--mono); color: var(--amber); overflow-wrap: anywhere; margin-top: 3px; }
+  .adm .rep .det { white-space: pre-wrap; color: var(--ink-dim); margin-top: 4px; overflow-wrap: anywhere; }
+  .adm .rep .con, .adm .rep .site { margin-top: 4px; color: var(--ink-dim); font-size: 12px; overflow-wrap: anywhere; }
+  .adm .rep .site .lock { display: inline; margin-left: 6px; font: 11px var(--mono); color: var(--danger); }
+  .adm .rep .site .lock b { padding: 0 6px; margin-right: 6px; border: 1px solid var(--danger); border-radius: 4px; }
+  .adm .rep .site form.inline { display: inline; margin-left: 8px; }
 
   /* filter bar */
   .adm .bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
@@ -467,11 +489,13 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
 <main class="adm">
   <h1>Instance register</h1>
   <p class="lede">Every site on this instance — yours, other accounts', and anonymous drops. Signed in as {{.Email}} · <a href="/account">back to your account</a></p>
+  <nav class="tabs"><a class="on" href="/account/admin">Sites</a><a href="/account/admin/reports">Reports{{if .Figures.Reports}} ({{.Figures.Reports}}){{end}}</a></nav>
 
   {{if eq .Flash "deleted"}}<p class="flash">Site deleted.</p>{{end}}
   {{if eq .Flash "expiry"}}<p class="flash">Expiry updated.</p>{{end}}
   {{if eq .Flash "locked"}}<p class="flash">Site locked: it is served to nobody, frozen for its owner, and kept past its expiry.</p>{{end}}
   {{if eq .Flash "unlocked"}}<p class="flash">Site unlocked: it is served again, and its expiry applies again.</p>{{end}}
+  {{if eq .Flash "reviewed"}}<p class="flash">Findings dismissed: the same content is not flagged or held again.</p>{{end}}
 
   <section class="figures">
     <div class="fig"><span class="k">Sites</span><span class="v">{{.Figures.Sites}}</span></div>
@@ -481,6 +505,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
     <div class="fig"><span class="k">Files</span><span class="v">{{.Figures.Files}}</span></div>
     <div class="fig{{if .Figures.ExpiringSoon}} warn{{end}}"><span class="k">Due in 7 days</span><span class="v">{{.Figures.ExpiringSoon}}</span></div>
     <div class="fig{{if .Figures.Flagged}} alarm{{end}}"><span class="k">CSP-blocked</span><span class="v">{{.Figures.Flagged}}</span></div>
+    <div class="fig{{if .Figures.Scanner}} alarm{{end}}"><span class="k">Scanner hits</span><span class="v">{{.Figures.Scanner}}</span></div>
     <div class="fig"><span class="k">Locked</span><span class="v">{{.Figures.Locked}}</span></div>
   </section>
 
@@ -492,7 +517,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
       <option value="anon"{{if eq .Filter "anon"}} selected{{end}}>Anonymous</option>
       <option value="expiring"{{if eq .Filter "expiring"}} selected{{end}}>Expiring within 7 days</option>
       <option value="mcp"{{if eq .Filter "mcp"}} selected{{end}}>Created by an agent (MCP)</option>
-      <option value="flagged"{{if eq .Filter "flagged"}} selected{{end}}>Blocked by CSP</option>
+      <option value="flagged"{{if eq .Filter "flagged"}} selected{{end}}>Flagged (scanner or CSP)</option>
       <option value="locked"{{if eq .Filter "locked"}} selected{{end}}>Locked</option>
     </select>
     <button class="btn small" type="submit">Apply</button>
@@ -529,7 +554,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
     {{else if .Unlocking}}
     <div class="row confirm">
       <span class="id">{{if .Name}}<span class="nm">{{.Name}}</span>{{end}}{{.ViewID}}{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}</span>
-      <span class="warnmsg">Unlock this site? It is served again at once, its owner can change it again, and its expiry{{if .ExpiryValue}} ({{.ExpiryValue}}){{end}} applies again — a date already past means the next sweep deletes it.</span>
+      <span class="warnmsg">Unlock this site? It is served again at once, its owner can change it again, and its expiry{{if .ExpiryValue}} ({{.ExpiryValue}}){{end}} applies again — a date already past means the next sweep deletes it.{{if .FindingLines}} Its scanner findings become reviewed: the same content is not held again.{{end}}</span>
       <span class="acts">
         <form method="post" action="/account/admin/sites/{{.ViewID}}/unlock{{if $.Params}}?{{$.ParamsQ}}{{end}}" class="inline">
           <input type="hidden" name="csrf" value="{{$.CSRF}}">
@@ -552,7 +577,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
     </div>
     {{else}}
     <div class="row{{if .Locked}} locked{{end}}">
-      <span class="id">{{if .Name}}<span class="nm">{{.Name}}</span>{{end}}<a href="{{.ViewURL}}" rel="noreferrer noopener" target="_blank">{{.ViewID}}</a>{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}{{if .LockText}}<span class="lock"><b>LOCKED</b>{{.LockText}}</span>{{end}}{{with index $.Prov .ViewID}}<span class="prov">{{if .CreatedIP}}from <a href="/account/admin?q={{.CreatedIP}}" title="{{.CreatedUA}}">{{.CreatedIP}}</a> · {{.CreatedText}}{{end}}{{if .LastText}}{{if .CreatedIP}}<br>{{end}}last {{.LastText}}{{if .LastIP}} · <a href="/account/admin?q={{.LastIP}}" title="{{.LastUA}}">{{.LastIP}}</a>{{end}}{{end}} · <a href="{{.Trail}}">trail &rarr;</a></span>{{end}}</span>
+      <span class="id">{{if .Name}}<span class="nm">{{.Name}}</span>{{end}}<a href="{{.ViewURL}}" rel="noreferrer noopener" target="_blank">{{.ViewID}}</a>{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}{{if .LockText}}<span class="lock"><b>LOCKED</b>{{.LockText}}</span>{{end}}{{if .FindingLines}}<span class="hits">{{range .FindingLines}}<span class="hit">&#9873; {{.}}</span>{{end}}{{if .MoreFindings}}<span class="hit">… and {{.MoreFindings}} more</span>{{end}}<form method="post" action="/account/admin/sites/{{.ViewID}}/review{{if $.Params}}?{{$.ParamsQ}}{{end}}" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button class="btn small" type="submit" title="You have looked: the same content is not flagged or held again">Dismiss</button></form></span>{{end}}{{with index $.Prov .ViewID}}<span class="prov">{{if .CreatedIP}}from <a href="/account/admin?q={{.CreatedIP}}" title="{{.CreatedUA}}">{{.CreatedIP}}</a> · {{.CreatedText}}{{end}}{{if .LastText}}{{if .CreatedIP}}<br>{{end}}last {{.LastText}}{{if .LastIP}} · <a href="/account/admin?q={{.LastIP}}" title="{{.LastUA}}">{{.LastIP}}</a>{{end}}{{end}} · <a href="{{.Trail}}">trail &rarr;</a></span>{{end}}</span>
       <span class="own{{if not .Owner}} anon{{end}}">{{.OwnerLabel}}{{if .OwnerSuspended}}<span class="susp" title="{{.OwnerSuspended}}">Suspended</span>{{end}}{{if .Violations}}<span class="flag" title="{{.BlockedText}}">&#9888; {{.Violations}} blocked{{if .Reporters}} &middot; {{.Reporters}} source{{if ne .Reporters 1}}s{{end}}{{end}}</span>{{end}}</span>
       <span class="num orig">{{if .Origin}}{{.Origin}}{{else}}&mdash;{{end}}</span>
       <span class="num">{{.Mode}}</span>
@@ -565,13 +590,35 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
           <input type="date" name="expires" value="{{.ExpiryValue}}" aria-label="Expiry for {{.ViewID}}">
           <button class="btn small" type="submit">Set</button>
         </form>
-        {{if .Locked}}<a class="btn small" href="/account/admin?unlock={{.ViewID}}{{$.Params}}">Unlock</a>{{if .LockedByAccount}}<a class="btn small" href="/account/admin?lock={{.ViewID}}{{$.Params}}" title="Keep it locked when the owner is unsuspended">Keep</a>{{end}}{{else}}<a class="btn small danger" href="/account/admin?lock={{.ViewID}}{{$.Params}}">Lock</a>{{end}}
+        {{if .Locked}}<a class="btn small" href="/account/admin?unlock={{.ViewID}}{{$.Params}}">Unlock</a>{{if .LockedByMachine}}<a class="btn small" href="/account/admin?lock={{.ViewID}}{{$.Params}}" title="Make it your own lock">Keep</a>{{end}}{{else}}<a class="btn small danger" href="/account/admin?lock={{.ViewID}}{{$.Params}}">Lock</a>{{end}}
         <a class="btn small danger" href="/account/admin?confirm={{.ViewID}}{{$.Params}}">Delete</a>
       </span>
     </div>
     {{end}}
     {{else}}
     <p class="empty">No site matches.</p>
+    {{end}}
+  </section>
+</main>
+` + pageFoot))
+
+var reportsTmpl = template.Must(template.New("reports").Parse(pageHead + adminConsoleCSS + `
+<main class="adm">
+  <h1>Abuse reports</h1>
+  <p class="lede">Filed through the report page and POST /api/report, newest first, and kept for 14 days. Signed in as {{.Email}} · <a href="/account">back to your account</a></p>
+  <nav class="tabs"><a href="/account/admin">Sites</a><a class="on" href="/account/admin/reports">Reports ({{.Total}})</a></nav>
+  {{if eq .Flash "locked"}}<p class="flash">Site locked: it is served to nobody, frozen for its owner, and kept past its expiry.</p>{{end}}
+  <section class="reg">
+    {{range .Rows}}
+    <div class="rep">
+      <div class="rephead"><span class="when">{{.TimeText}}</span><span class="why">{{.Reason}}</span><span class="via">{{.Via}}{{if .Source}} · {{.Source}}{{end}}</span></div>
+      <div class="tgt">{{.Target}}</div>
+      {{if .Details}}<div class="det">{{.Details}}</div>{{end}}
+      {{if .Contact}}<div class="con">contact: <a href="mailto:{{.Contact}}">{{.Contact}}</a></div>{{end}}
+      <div class="site">{{if .Site}}site <a href="/account/admin?q={{.Site.ViewID}}">{{.Site.ViewID}}</a> · {{.OwnerLabel}}{{if .LockText}}<span class="lock"><b>LOCKED</b>{{.LockText}}</span>{{else}}<form method="post" action="/account/admin/sites/{{.Site.ViewID}}/lock?return=reports" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="reason" value="{{.LockReason}}"><button class="btn small danger" type="submit">Lock site</button></form>{{end}}{{else if .ViewID}}site {{.ViewID}} no longer exists{{else}}not resolved to a site on this instance{{end}}</div>
+    </div>
+    {{else}}
+    <p class="empty">No reports on file.</p>
     {{end}}
   </section>
 </main>

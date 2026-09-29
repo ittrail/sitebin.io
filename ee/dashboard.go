@@ -45,6 +45,8 @@ func (p *provider) PublicRoutes() map[string]http.Handler {
 		"POST /account/admin/sites/{id}/expiry": http.HandlerFunc(p.handleAdminExpiry),
 		"POST /account/admin/sites/{id}/lock":   http.HandlerFunc(p.handleAdminLock),
 		"POST /account/admin/sites/{id}/unlock": http.HandlerFunc(p.handleAdminUnlock),
+		"POST /account/admin/sites/{id}/review": http.HandlerFunc(p.handleAdminReview),
+		"GET /account/admin/reports":            http.HandlerFunc(p.handleAdminReports),
 	}
 	p.oauthRoutes(routes)
 	p.emailRoutes(routes)
