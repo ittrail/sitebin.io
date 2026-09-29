@@ -100,3 +100,15 @@ func TestApexNeverDuplicatesTheBaseDomain(t *testing.T) {
 		t.Fatalf("apex block with a www base domain:\n%s", out)
 	}
 }
+
+// The file server hides the two markers and nothing else, so an uploaded
+// .well-known/security.txt is served like any file.
+func TestFileServerHidesOnlyTheMarkers(t *testing.T) {
+	cfg := mustLoad(t, map[string]string{"SITEBIN_BASE_DOMAIN": "sitebin.example", "SITEBIN_HTTP_ONLY": "true", "SITEBIN_VIEW_ACCESS": "both"})
+	for _, line := range strings.Split(Generate(cfg), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "hide ") && line != "hide .sitebin-spa .sitebin-trusted" {
+			t.Errorf("file_server hides more than the markers: %q", line)
+		}
+	}
+}
