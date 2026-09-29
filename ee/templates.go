@@ -86,6 +86,9 @@ var authTmpl = template.Must(template.New("auth").Parse(pageHead + `
   <div style="display:grid;gap:8px">
     {{range .Providers}}<a class="btn primary" style="justify-content:center" href="/account/auth/{{.ID}}">{{.Label}}</a>{{end}}
   </div>
+  {{/* One click stays one click; this asks the provider who is signing in
+       instead of letting the session it holds answer (fresh=1). */}}
+  <div class="switch-link">{{if eq (len .Providers) 1}}{{with index .Providers 0}}<a href="/account/auth/{{.ID}}?fresh=1">Use a different account</a>{{end}}{{else}}Use a different account: {{range $i, $b := .Providers}}{{if $i}} · {{end}}<a href="/account/auth/{{$b.ID}}?fresh=1">{{$b.Label}}</a>{{end}}{{end}}</div>
   {{end}}
   {{if .LocalAuth}}
   <div class="switch-link">
@@ -93,6 +96,26 @@ var authTmpl = template.Must(template.New("auth").Parse(pageHead + `
     {{if and (eq .Mode "login") .EmailEnabled}}<br><a href="/account/reset">Forgot your password?</a>{{end}}
   </div>
   {{end}}
+</div></div></main>
+` + pageFoot))
+
+// signedOutTmpl is where every sign-out ends. No script, no refresh: it must
+// never send the browser anywhere by itself (see handleSignedOut). With one
+// provider and no password form it is a single "Sign in"; otherwise each
+// provider, and the password form where there is one.
+var signedOutTmpl = template.Must(template.New("signedout").Parse(pageHead + `
+<main class="acct"><div class="authwrap"><div class="card">
+  <h1>You are signed out</h1>
+  <p class="muted">Your Sitebin session has ended on every device. Sign in again to come back — as yourself or with a different account.</p>
+  <div style="display:grid;gap:8px;margin-top:18px">
+  {{if and (eq (len .Providers) 1) (not .LocalAuth)}}
+    {{with index .Providers 0}}<a class="btn primary" style="justify-content:center" href="/account/auth/{{.ID}}?fresh=1">Sign in</a>{{end}}
+  {{else}}
+    {{range .Providers}}<a class="btn primary" style="justify-content:center" href="/account/auth/{{.ID}}?fresh=1">{{.Label}}</a>{{end}}
+    {{if .LocalAuth}}<a class="btn" style="justify-content:center" href="/account/login">Sign in with email and password</a>{{end}}
+  {{end}}
+  </div>
+  {{if .Providers}}<p class="muted" style="margin-top:14px">You will be asked which account to use.</p>{{end}}
 </div></div></main>
 ` + pageFoot))
 

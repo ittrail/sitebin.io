@@ -30,6 +30,7 @@ func (p *provider) PublicRoutes() map[string]http.Handler {
 		"GET /account/signup":                   http.HandlerFunc(p.handleSignupGet),
 		"POST /account/signup":                  http.HandlerFunc(p.handleSignupPost),
 		"POST /account/logout":                  http.HandlerFunc(p.handleLogout),
+		"GET " + signedOutPath:                  http.HandlerFunc(p.handleSignedOut),
 		"POST /account/tier":                    http.HandlerFunc(p.handleSelectTier),
 		"POST /account/sites/{id}/rotate":       http.HandlerFunc(p.handleRotate),
 		"POST /account/sites/{id}/name":         http.HandlerFunc(p.handleRenameSite),
@@ -150,6 +151,9 @@ func (p *provider) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 	}
 	p.recordAccount(r, acc.ID, provenance.ActionSignin, provenance.SurfaceLocal, provenance.AuthPassword, "")
 	http.SetCookie(w, p.sessions.Cookie(acc.ID, acc.TokenVersion))
+	// A password sign-in has no provider session to end: a hint an earlier
+	// SSO sign-in left in this browser is not this session's.
+	http.SetCookie(w, p.sessions.ClearHint())
 	p.redirect(w, r, "/account")
 }
 
@@ -193,8 +197,13 @@ func (p *provider) handleSignupPost(w http.ResponseWriter, r *http.Request) {
 	p.sendVerification(acc)
 	p.recordAccount(r, acc.ID, provenance.ActionSignup, provenance.SurfaceLocal, provenance.AuthPassword, "")
 	http.SetCookie(w, p.sessions.Cookie(acc.ID, acc.TokenVersion))
+	http.SetCookie(w, p.sessions.ClearHint())
 	p.redirect(w, r, "/account")
 }
+
+// signedOutPath is where every sign-out ends, and the address declared to
+// the stack as the client's post-logout redirect URI.
+const signedOutPath = "/account/signed-out"
 
 // handleLogout ends EVERY session of the account, not just the cookie that
 // asked. Sessions are stateless signed cookies, so clearing one changes
@@ -203,11 +212,19 @@ func (p *provider) handleSignupPost(w http.ResponseWriter, r *http.Request) {
 // "sign out everywhere" is what a person clicking Sign out on a shared
 // machine means anyway. Behind the CSRF token, because a cross-site form
 // signing people out is a nuisance an attacker should not have.
+//
+// Then it ends the identity provider's session too, for an account signed in
+// through the operator's own issuer: otherwise the next sign-in is answered
+// silently by the provider with the same person, and no other account can
+// ever be chosen (docs/superpowers/specs/2026-09-29-sign-out-ends-the-sso-session.md).
+// That hop leaves this origin from a form POST, which the dashboard's
+// form-action 'self' forbids as a redirect, so it is a handoff page.
 func (p *provider) handleLogout(w http.ResponseWriter, r *http.Request) {
 	acc, ok := p.currentAccount(r)
 	if !ok {
 		http.SetCookie(w, p.sessions.Clear())
-		p.redirect(w, r, "/account/login")
+		http.SetCookie(w, p.sessions.ClearHint())
+		p.redirect(w, r, signedOutPath)
 		return
 	}
 	if !p.checkCSRF(r, acc) {
@@ -218,7 +235,49 @@ func (p *provider) handleLogout(w http.ResponseWriter, r *http.Request) {
 		slog.Error("logout: could not revoke sessions", "account", acc.ID, "err", err)
 	}
 	http.SetCookie(w, p.sessions.Clear())
-	p.redirect(w, r, "/account/login")
+	http.SetCookie(w, p.sessions.ClearHint())
+	if dest := p.providerLogoutURL(r, acc, p.sessions.Hint(r)); dest != "" {
+		label := "your identity provider"
+		if p.cfg.OIDC != nil && p.cfg.OIDC.Label != "" {
+			label = p.cfg.OIDC.Label
+		}
+		p.leaveTo(w, dest, "Signing you out", "Ending your sign-in at "+label+" as well.")
+		return
+	}
+	p.redirect(w, r, signedOutPath)
+}
+
+// providerLogoutURL is the identity provider's end-session URL for acc, or ""
+// when there is no provider session to end from here. A failure is logged and
+// answered with "": the person is signed out of Sitebin either way, and an
+// unreachable provider must not keep them on the dashboard.
+func (p *provider) providerLogoutURL(r *http.Request, acc *account.Account, hint string) string {
+	dest, err := p.oidc.LogoutURL(r.Context(), acc.Provider, acc.OAuthSubject, hint, p.baseURL()+signedOutPath)
+	if err != nil {
+		slog.Warn("logout: the identity provider's sign-out is unavailable; signed out of sitebin only",
+			"account", acc.ID, "provider", acc.Provider, "err", err)
+		return ""
+	}
+	return dest
+}
+
+// handleSignedOut is the page every sign-out ends on. It never redirects —
+// the old sign-out went to /account/login, which on an SSO-only instance
+// sends the browser straight back into the provider, and the Sign out button
+// looked dead. Its sign-in buttons start a FRESH request (fresh=1), which the
+// provider answers with its login page or account chooser rather than with
+// whichever session it still holds.
+func (p *provider) handleSignedOut(w http.ResponseWriter, r *http.Request) {
+	p.securityHeaders(w)
+	signedOutTmpl.Execute(w, signedOutView{
+		Providers: p.oauthButtons(),
+		LocalAuth: p.cfg.LocalAuth,
+	})
+}
+
+type signedOutView struct {
+	Providers []providerButton
+	LocalAuth bool
 }
 
 // handleSelectTier lets a user switch to a free (non-paid) tier when

@@ -4,8 +4,11 @@ package authn
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -23,6 +26,12 @@ type Identity struct {
 	Subject       string
 	Email         string
 	EmailVerified bool
+	// LogoutHint is the raw ID token of this sign-in, set only for a
+	// provider whose session this instance ends at sign-out (the generic
+	// issuer, when its discovery names an end_session_endpoint): it is the
+	// id_token_hint that lets the provider sign the person out without
+	// asking. It carries the person's email and name -- never log it.
+	LogoutHint string
 }
 
 // oidcProvider lazily initializes one provider's oauth2 config + verifier. The
@@ -47,11 +56,24 @@ type oidcProvider struct {
 	clientID     string
 	secret       string
 	redirectURL  string
+	// rpLogout says a sign-out ends this provider's own session too (OpenID
+	// Connect RP-Initiated Logout). Only the operator's generic issuer: for
+	// Google or Microsoft signed in directly it would end the person's whole
+	// Google or Microsoft session, mail included, for leaving Sitebin.
+	rpLogout bool
+	// freshPrompt is the `prompt` that makes the provider ask who is signing
+	// in, for a sign-in that must not be answered silently by the session
+	// the provider already holds. The values differ by provider: Google
+	// knows no `login` in that sense, Keycloak no useful `select_account`.
+	freshPrompt string
 
 	once     sync.Once
 	initErr  error
 	oauthCfg *oauth2.Config
 	verifier *oidc.IDTokenVerifier
+	// endSession is the discovery document's end_session_endpoint, kept only
+	// for an rpLogout provider and only when it is an absolute http(s) URL.
+	endSession string
 }
 
 // discoveryBase is where go-oidc should fetch discovery from. go-oidc appends
@@ -91,7 +113,8 @@ func (p *oidcProvider) init(ctx context.Context) error {
 			return
 		}
 		var doc struct {
-			Issuer string `json:"issuer"`
+			Issuer     string `json:"issuer"`
+			EndSession string `json:"end_session_endpoint"`
 		}
 		if err := prov.Claims(&doc); err != nil {
 			p.initErr = fmt.Errorf("oidc discovery for %s at %s: unusable document: %w", p.name, base, err)
@@ -101,6 +124,9 @@ func (p *oidcProvider) init(ctx context.Context) error {
 			p.initErr = fmt.Errorf("oidc discovery for %s at %s advertises issuer %q, but this instance is configured for %q",
 				p.name, base, doc.Issuer, p.issuer)
 			return
+		}
+		if p.rpLogout && httpURL(doc.EndSession) {
+			p.endSession = doc.EndSession
 		}
 		vcfg := &oidc.Config{ClientID: p.clientID}
 		if p.issuerPattern != nil {
@@ -151,6 +177,7 @@ func microsoftProvider(ms *eeconfig.OAuthProvider, redirectBase string) *oidcPro
 		clientID:    ms.ClientID,
 		secret:      ms.ClientSecret,
 		redirectURL: redirectBase + "/account/auth/microsoft/callback",
+		freshPrompt: "select_account",
 	}
 	if microsoftMultiTenant[tenant] {
 		p.issuer = "https://login.microsoftonline.com/{tenantid}/v2.0"
@@ -177,6 +204,7 @@ func NewOIDC(cfg eeconfig.Config, redirectBase string) *OIDC {
 			name: account.Google, issuer: "https://accounts.google.com",
 			clientID: g.ClientID, secret: g.ClientSecret,
 			redirectURL: redirectBase + "/account/auth/google/callback",
+			freshPrompt: "select_account",
 		}
 	}
 	if ms := cfg.Microsoft; ms != nil {
@@ -187,6 +215,7 @@ func NewOIDC(cfg eeconfig.Config, redirectBase string) *OIDC {
 			name: account.OIDCProv, issuer: g.Issuer, discoveryURL: g.DiscoveryURL,
 			clientID: g.ClientID, secret: g.ClientSecret,
 			redirectURL: redirectBase + "/account/auth/oidc/callback",
+			rpLogout:    true, freshPrompt: "login",
 		}
 	}
 	return m
@@ -207,8 +236,11 @@ func (m *OIDC) Providers() []account.Provider {
 var ErrProviderNotConfigured = errors.New("oauth provider not configured")
 
 // AuthCodeURL returns the provider's authorization URL for the given state and
-// nonce.
-func (m *OIDC) AuthCodeURL(ctx context.Context, provider account.Provider, state, nonce string) (string, error) {
+// nonce. fresh asks the provider who is signing in (its freshPrompt) instead
+// of letting a session it already holds answer silently -- the sign-in after
+// a sign-out, or "use a different account". An ordinary sign-in carries no
+// prompt, so single sign-on stays one click.
+func (m *OIDC) AuthCodeURL(ctx context.Context, provider account.Provider, state, nonce string, fresh bool) (string, error) {
 	p, ok := m.providers[provider]
 	if !ok {
 		return "", ErrProviderNotConfigured
@@ -216,7 +248,97 @@ func (m *OIDC) AuthCodeURL(ctx context.Context, provider account.Provider, state
 	if err := p.init(ctx); err != nil {
 		return "", err
 	}
-	return p.oauthCfg.AuthCodeURL(state, oidc.Nonce(nonce), oauth2.AccessTypeOnline), nil
+	opts := []oauth2.AuthCodeOption{oidc.Nonce(nonce), oauth2.AccessTypeOnline}
+	if fresh && p.freshPrompt != "" {
+		opts = append(opts, oauth2.SetAuthURLParam("prompt", p.freshPrompt))
+	}
+	return p.oauthCfg.AuthCodeURL(state, opts...), nil
+}
+
+// LogoutURL is where the browser goes, at sign-out, to end the provider's own
+// session (OpenID Connect RP-Initiated Logout 1.0): the discovery document's
+// end_session_endpoint with client_id, post_logout_redirect_uri and -- when
+// it is this account's -- the ID token of the sign-in as id_token_hint.
+//
+// "" with no error means there is no provider session to end from here: a
+// provider that is not rpLogout (Google, Microsoft, a local account), or one
+// whose discovery names no endpoint. An error means discovery failed; the
+// caller signs the person out of Sitebin regardless.
+//
+// The hint is checked against subject, issuer and client before it is sent,
+// and dropped -- not refused -- when it does not match: Keycloak answers a
+// hint issued to another client with an error page, so a stale or planted
+// cookie must never reach it. Its signature is Keycloak's to verify, and its
+// expiry is deliberately not checked: Keycloak 26.7 accepts an expired hint
+// (it verifies the signature only), and its ID tokens live for minutes.
+func (m *OIDC) LogoutURL(ctx context.Context, provider account.Provider, subject, idTokenHint, postLogoutRedirect string) (string, error) {
+	p, ok := m.providers[provider]
+	if !ok || !p.rpLogout {
+		return "", nil
+	}
+	if err := p.init(ctx); err != nil {
+		return "", err
+	}
+	if p.endSession == "" {
+		return "", nil
+	}
+	u, err := url.Parse(p.endSession)
+	if err != nil {
+		return "", nil // init kept only a URL that parses
+	}
+	q := u.Query()
+	q.Set("client_id", p.clientID)
+	q.Set("post_logout_redirect_uri", postLogoutRedirect)
+	if idTokenHint != "" && p.hintNames(idTokenHint, subject) {
+		q.Set("id_token_hint", idTokenHint)
+	}
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+// hintNames reports whether raw's (unverified) payload names subject, an
+// issuer this provider accepts, and this client -- as `azp`, or in `aud`
+// when there is no `azp`, as the spec allows.
+func (p *oidcProvider) hintNames(raw, subject string) bool {
+	parts := strings.Split(raw, ".")
+	if len(parts) != 3 || subject == "" {
+		return false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return false
+	}
+	var c struct {
+		Iss string          `json:"iss"`
+		Sub string          `json:"sub"`
+		Azp string          `json:"azp"`
+		Aud json.RawMessage `json:"aud"`
+	}
+	if json.Unmarshal(payload, &c) != nil || c.Sub != subject || !p.issuerAccepted(c.Iss) {
+		return false
+	}
+	if c.Azp != "" {
+		return c.Azp == p.clientID
+	}
+	var one string
+	if json.Unmarshal(c.Aud, &one) == nil {
+		return one == p.clientID
+	}
+	var many []string
+	if json.Unmarshal(c.Aud, &many) == nil {
+		for _, a := range many {
+			if a == p.clientID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// httpURL reports whether s is an absolute http(s) URL with a host.
+func httpURL(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != ""
 }
 
 // Exchange completes the callback: swaps code for tokens, verifies the ID
@@ -254,10 +376,14 @@ func (m *OIDC) Exchange(ctx context.Context, provider account.Provider, code, no
 	if err := idTok.Claims(&claims); err != nil {
 		return Identity{}, fmt.Errorf("parse claims: %w", err)
 	}
-	return Identity{
+	id := Identity{
 		Provider:      provider,
 		Subject:       idTok.Subject,
 		Email:         claims.Email,
 		EmailVerified: claims.EmailVerified,
-	}, nil
+	}
+	if p.endSession != "" {
+		id.LogoutHint = rawID
+	}
+	return id, nil
 }

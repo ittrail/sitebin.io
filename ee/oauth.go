@@ -50,7 +50,7 @@ func (p *provider) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 		Name: oauthCookie, Value: token, Path: "/account/auth", MaxAge: 600,
 		HttpOnly: true, Secure: !p.host.HTTPOnly(), SameSite: http.SameSiteLaxMode,
 	})
-	url, err := p.oidc.AuthCodeURL(r.Context(), prov, state, nonce)
+	url, err := p.oidc.AuthCodeURL(r.Context(), prov, state, nonce, r.URL.Query().Get("fresh") == "1")
 	if err != nil {
 		p.renderMessage(w, msgView{Title: "Sign-in unavailable", Body: "This provider is temporarily unavailable. Try again shortly.", Back: "/account/login?stay=1"})
 		return
@@ -114,6 +114,10 @@ func (p *provider) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	p.recordAccount(r, acc.ID, action, provenance.SurfaceOIDC, provenance.AuthNone, string(prov))
 	http.SetCookie(w, p.sessions.Cookie(acc.ID, acc.TokenVersion))
+	// The ID token, for the sign-out to hand back to the provider as its
+	// id_token_hint -- or, for a provider this instance never signs out of,
+	// the cookie that clears an earlier sign-in's.
+	http.SetCookie(w, p.sessions.HintCookie(id.LogoutHint))
 	p.redirect(w, r, "/account")
 }
 

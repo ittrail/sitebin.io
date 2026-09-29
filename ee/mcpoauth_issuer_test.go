@@ -57,6 +57,9 @@ type testIssuer struct {
 	// down makes discovery answer 503, the way an issuer mid-restart does.
 	down        atomic.Bool
 	discoveries atomic.Int32
+	// endSession, when set before the first discovery, is the path of an
+	// end_session_endpoint the document advertises (sign-out tests).
+	endSession string
 }
 
 func newTestIssuer(t *testing.T) *testIssuer {
@@ -69,13 +72,17 @@ func newTestIssuer(t *testing.T) *testIssuer {
 			http.Error(w, "restarting", http.StatusServiceUnavailable)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{
+		doc := map[string]any{
 			"issuer":                                ti.srv.URL,
 			"authorization_endpoint":                ti.srv.URL + "/auth",
 			"token_endpoint":                        ti.srv.URL + "/token",
 			"jwks_uri":                              ti.srv.URL + "/jwks",
 			"id_token_signing_alg_values_supported": []string{"RS256"},
-		})
+		}
+		if ti.endSession != "" {
+			doc["end_session_endpoint"] = ti.srv.URL + ti.endSession
+		}
+		json.NewEncoder(w).Encode(doc)
 	})
 	mux.HandleFunc("GET /jwks", func(w http.ResponseWriter, r *http.Request) {
 		pub := ti.key.PublicKey
