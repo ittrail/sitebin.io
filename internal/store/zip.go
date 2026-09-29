@@ -40,7 +40,7 @@ func (s *Store) ExtractZip(site *Site, r io.ReaderAt, size int64) error {
 		return err
 	}
 	defer root.Close()
-	if _, _, err := extractEntries(root, entries, used, count, maxBytes, maxFiles); err != nil {
+	if _, _, err := extractEntries(root, entries, used, count, maxBytes, maxFiles, liveGuard{s: s, site: site}); err != nil {
 		return err
 	}
 	return s.renewExpiryLocked(site)
@@ -89,8 +89,9 @@ func zipEntries(r io.ReaderAt, size int64, maxFiles int) ([]zipEntry, error) {
 
 // extractEntries writes validated entries into root, keeping the byte and
 // file budgets in a running counter rather than re-walking the tree per
-// entry. It returns the updated totals.
-func extractEntries(root *os.Root, entries []zipEntry, used int64, count int, maxBytes int64, maxFiles int) (int64, int, error) {
+// entry. It returns the updated totals. Each entry passes g like any file
+// (see writeFileIn); a hold stops the extraction.
+func extractEntries(root *os.Root, entries []zipEntry, used int64, count int, maxBytes int64, maxFiles int, g fileGuard) (int64, int, error) {
 	for _, e := range entries {
 		rc, err := e.f.Open()
 		if err != nil {
@@ -99,7 +100,7 @@ func extractEntries(root *os.Root, entries []zipEntry, used int64, count int, ma
 			}
 			return used, count, fmt.Errorf("zip entry %q: %w", e.f.Name, err)
 		}
-		written, existing, err := writeFileIn(root, e.rel, rc, used, count, maxBytes, maxFiles)
+		written, existing, err := writeFileIn(root, e.rel, rc, used, count, maxBytes, maxFiles, g)
 		rc.Close()
 		if err != nil {
 			if damagedEntry(err) {

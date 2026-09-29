@@ -2,6 +2,7 @@ package store
 
 import (
 	"archive/zip"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -11,6 +12,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/ittrail/sitebin.io/internal/abuse"
 )
 
 // FileInfo describes one stored user file.
@@ -187,14 +190,28 @@ func (s *Store) saveFileLocked(site *Site, rel string, r io.Reader) error {
 
 // writeFileLocked writes one file into the site's content root against a
 // budget the CALLER has measured; see writeFileIn. The caller holds the site
-// lock.
+// lock, which is what lets the abuse guard settle its verdict in meta.json
+// before the file is renamed into place.
 func (s *Store) writeFileLocked(site *Site, rel string, r io.Reader, used int64, count int, maxBytes int64, maxFiles int) (written, existing int64, err error) {
 	root, err := openContent(site)
 	if err != nil {
 		return 0, 0, err
 	}
 	defer root.Close()
-	return writeFileIn(root, rel, r, used, count, maxBytes, maxFiles)
+	return writeFileIn(root, rel, r, used, count, maxBytes, maxFiles, liveGuard{s: s, site: site})
+}
+
+// fileGuard sees one file between being written and becoming visible: it
+// scans the bytes as they stream to the temp file, and settles the verdict
+// before the rename. See guard.go.
+type fileGuard interface {
+	// scan returns the scan for the file at rel, or nil when it is not
+	// scanned.
+	scan(rel string) *abuse.Scan
+	// settle acts on a finished scan. ErrHeld means the site is now locked:
+	// the file is still put in place, as evidence, and the write fails.
+	// Any other error discards the file.
+	settle(res abuse.Result) error
 }
 
 // writeFileIn writes one file into root against a budget the CALLER has
@@ -203,7 +220,11 @@ func (s *Store) writeFileLocked(site *Site, rel string, r io.Reader, used int64,
 // file it replaced (0 for a new one), so a caller writing many files can keep
 // the totals current without walking the tree again. root is the live content
 // root or a replacement's staging root; the rules are the same for both.
-func writeFileIn(root *os.Root, rel string, r io.Reader, used int64, count int, maxBytes int64, maxFiles int) (written, existing int64, err error) {
+//
+// g, when not nil, scans the file as it is written and settles the verdict
+// after the last byte and before the rename, so nothing it holds is ever
+// visible under its real name.
+func writeFileIn(root *os.Root, rel string, r io.Reader, used int64, count int, maxBytes int64, maxFiles int, g fileGuard) (written, existing int64, err error) {
 	dst := filepath.FromSlash(rel)
 	if fi, err := root.Lstat(dst); err == nil {
 		if fi.IsDir() {
@@ -231,7 +252,15 @@ func writeFileIn(root *os.Root, rel string, r io.Reader, used int64, count int, 
 	if err != nil {
 		return 0, existing, fmt.Errorf("create file: %w", err)
 	}
-	written, err = io.Copy(f, io.LimitReader(r, budget+1))
+	var sc *abuse.Scan
+	if g != nil {
+		sc = g.scan(rel)
+	}
+	var w io.Writer = f
+	if sc != nil {
+		w = io.MultiWriter(f, sc)
+	}
+	written, err = io.Copy(w, io.LimitReader(r, budget+1))
 	if err == nil && written > budget {
 		// LimitReader stops silently at budget+1: past the budget by one is
 		// past the budget.
@@ -244,11 +273,21 @@ func writeFileIn(root *os.Root, rel string, r io.Reader, used int64, count int, 
 		root.Remove(tmp)
 		return 0, existing, err
 	}
+	var held error
+	if sc != nil {
+		if err := g.settle(sc.Result()); err != nil {
+			if !errors.Is(err, ErrHeld) {
+				root.Remove(tmp)
+				return 0, existing, err
+			}
+			held = err
+		}
+	}
 	if err := root.Rename(tmp, dst); err != nil {
 		root.Remove(tmp)
 		return 0, existing, fmt.Errorf("commit file: %w", err)
 	}
-	return written, existing, nil
+	return written, existing, held
 }
 
 // DeleteFile removes one file and prunes now-empty parent directories.

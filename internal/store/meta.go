@@ -67,9 +67,13 @@ type Meta struct {
 	// nobody, changed by nobody but the operator, and outlives its expiry.
 	// Nil on every site written before locks existed, which reads as
 	// unlocked. See lock.go.
-	Locked    *SiteLock `json:"locked,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Locked *SiteLock `json:"locked,omitempty"`
+	// Abuse is what the abuse guard found in the site's content and which
+	// contents the operator has since reviewed. Nil on every site that never
+	// had a hit. Never shown to the owner. See guard.go.
+	Abuse     *AbuseState `json:"abuse,omitempty"`
+	CreatedAt time.Time   `json:"created_at"`
+	UpdatedAt time.Time   `json:"updated_at"`
 }
 
 // OriginMCP marks a site created through the MCP server. See Meta.Origin.

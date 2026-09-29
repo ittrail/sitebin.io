@@ -9,8 +9,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/ittrail/sitebin.io/internal/abuse"
 )
 
 // A replace upload stages under the store's tmp/ directory — the one the zip
@@ -61,6 +64,27 @@ type Replacement struct {
 	// next, a replacement missing a file is never committed.
 	failed   bool
 	finished bool
+	// pending are the staged files the abuse guard had hits on, one per
+	// path, as they will be committed. Their verdict is applied in Commit,
+	// under the site lock, before any of them moves in.
+	pending []abuse.Result
+}
+
+// stagedGuard scans a replacement's files as they stage and keeps the
+// results with hits for Commit. Nothing staged is visible, so nothing is
+// settled here.
+type stagedGuard struct{ r *Replacement }
+
+func (g stagedGuard) scan(rel string) *abuse.Scan { return g.r.s.newScan(rel) }
+
+func (g stagedGuard) settle(res abuse.Result) error {
+	// A path staged twice is committed with its last content: drop what the
+	// earlier write found.
+	g.r.pending = slices.DeleteFunc(g.r.pending, func(p abuse.Result) bool { return p.Path == res.Path })
+	if len(res.Hits) > 0 {
+		g.r.pending = append(g.r.pending, res)
+	}
+	return nil
 }
 
 func (s *Store) tmpDir() string { return filepath.Join(s.root, tmpDirName) }
@@ -174,7 +198,7 @@ func (r *Replacement) SaveFile(relPath string, rd io.Reader) error {
 		r.failed = true
 		return err
 	}
-	written, existing, err := writeFileIn(r.root, rel, rd, r.used, r.count, r.maxBytes, r.maxFiles)
+	written, existing, err := writeFileIn(r.root, rel, rd, r.used, r.count, r.maxBytes, r.maxFiles, stagedGuard{r})
 	if err != nil {
 		r.failed = true
 		return err
@@ -196,7 +220,7 @@ func (r *Replacement) ExtractZip(ra io.ReaderAt, size int64) error {
 		r.failed = true
 		return err
 	}
-	r.used, r.count, err = extractEntries(r.root, entries, r.used, r.count, r.maxBytes, r.maxFiles)
+	r.used, r.count, err = extractEntries(r.root, entries, r.used, r.count, r.maxBytes, r.maxFiles, stagedGuard{r})
 	if err != nil {
 		r.failed = true
 	}
@@ -257,6 +281,18 @@ func (r *Replacement) Commit() error {
 	// The mode decides where the content lives; take it as it is now, not as
 	// it was when the upload began.
 	r.site.Meta = meta
+	// The abuse guard's verdict on what is about to go live, settled in
+	// meta.json before a single staged file moves in: a held replacement is
+	// committed, as evidence, into a site nobody is served.
+	var held error
+	if len(r.pending) > 0 {
+		ev, err := r.s.settleLocked(r.site, r.pending, FindingUpload, "")
+		if err != nil && !errors.Is(err, ErrHeld) {
+			return err
+		}
+		held = err
+		r.s.emit(ev)
+	}
 
 	moved := filepath.Join(r.site.dir, replaceCommitPrefix+randomSuffix())
 	if err := commitRename(r.dir, moved); err != nil {
@@ -296,6 +332,9 @@ func (r *Replacement) Commit() error {
 		}
 	}
 	keep = false
+	if held != nil {
+		return held
+	}
 	return r.s.renewExpiryLocked(r.site)
 }
 

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ittrail/sitebin.io/internal/abuse"
 	"github.com/ittrail/sitebin.io/internal/auth"
 	"github.com/ittrail/sitebin.io/internal/ids"
 )
@@ -151,7 +152,16 @@ type Store struct {
 	// replacing holds the view ids with a Replacement in flight, guarded by
 	// mu: one per site at a time. See BeginReplace.
 	replacing map[string]bool
+
+	// scanner serves the abuse rules every write is scanned with, and
+	// scanHook hears every decision. See guard.go.
+	scanner  *abuse.Loader
+	scanHook func(ScanEvent)
 }
+
+// AbuseRulesFile is the instance's own abuse rules, in the data directory,
+// merged with the built-in ones and reloaded when it changes.
+const AbuseRulesFile = "abuse-rules.json"
 
 // Site is a handle to one site. Meta is a snapshot; Update refreshes it.
 type Site struct {
@@ -185,6 +195,7 @@ func New(dataDir, baseDomain string, maxSiteBytes int64, maxFiles int) (*Store, 
 		locks:        make(map[string]*sync.Mutex),
 		statsLocks:   make(map[string]*sync.Mutex),
 		replacing:    make(map[string]bool),
+		scanner:      abuse.NewLoader(filepath.Join(dataDir, AbuseRulesFile)),
 	}
 	for _, d := range []string{s.sitesDir(), s.editIndexDir(), s.domainIndexDir()} {
 		if err := os.MkdirAll(d, 0o755); err != nil {

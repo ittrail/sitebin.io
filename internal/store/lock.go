@@ -77,18 +77,25 @@ func CleanLockReason(s string) string {
 }
 
 // SetLock locks the site, or lifts its lock when lock is nil, and reports
-// whether anything changed. An account lock is applied only to an unlocked
-// site: it never replaces the operator's lock, and a repeated suspension
-// keeps the first date. Lifting a lock hands a container project back to the
-// runtime as a restart (see unlockMeta).
+// whether anything changed. An account lock (and a scanner's) is applied
+// only to an unlocked site: it never replaces the operator's lock, and a
+// repeated suspension keeps the first date. Lifting a lock hands a container
+// project back to the runtime as a restart (see unlockMeta).
+//
+// Lifting is the operator's act — the register and `sitebin unlock` are its
+// only callers — and it is also their review: the abuse guard's findings
+// become reviewed fingerprints, so the same content is not held again.
 func (s *Store) SetLock(site *Site, lock *SiteLock) (changed bool, err error) {
 	err = s.Update(site, func(m *Meta) error {
 		changed = false
 		if lock == nil {
 			changed = unlockMeta(m)
+			if reviewMeta(m) {
+				changed = true
+			}
 			return nil
 		}
-		if lock.By == LockByAccount && m.Locked != nil {
+		if (lock.By == LockByAccount || lock.By == LockByScanner) && m.Locked != nil {
 			return nil
 		}
 		l := *lock
