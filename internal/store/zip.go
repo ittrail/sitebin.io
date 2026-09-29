@@ -31,6 +31,9 @@ func (s *Store) ExtractZip(site *Site, r io.ReaderAt, size int64) error {
 	l := s.lockSite(site.ViewID)
 	l.Lock()
 	defer l.Unlock()
+	if err := s.CheckUnlocked(site); err != nil {
+		return err
+	}
 	used, count, err := usage(site.ContentDir())
 	if err != nil {
 		return err

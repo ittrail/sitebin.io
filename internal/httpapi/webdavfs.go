@@ -57,6 +57,17 @@ func newSiteFS(st *store.Store, site *store.Site, lockHeld bool) *siteFS {
 	return &siteFS{st: st, site: site, maxFiles: st.EffMaxFiles(site), lockHeld: lockHeld}
 }
 
+// unlocked refuses a change the store does not make itself (a delete, a
+// folder) once the site is locked: the gate let this request in, but a hold
+// may have landed since — a staged write of this very request, or a
+// parallel one. Mutating methods hold the site lock, so the read is current.
+func (f *siteFS) unlocked() error {
+	if err := f.st.CheckUnlocked(f.site); err != nil {
+		return os.ErrPermission
+	}
+	return nil
+}
+
 // noteHeld remembers a hold for the response.
 func (f *siteFS) noteHeld(err error) {
 	var h *store.HeldError
@@ -160,6 +171,9 @@ func (f *siteFS) Mkdir(ctx context.Context, name string, perm os.FileMode) error
 	if err := f.check(name); err != nil {
 		return err
 	}
+	if err := f.unlocked(); err != nil {
+		return err
+	}
 	return f.withRoot(func(r *os.Root) error { return r.Mkdir(rootName(name), perm) })
 }
 
@@ -207,6 +221,9 @@ func (f *siteFS) RemoveAll(ctx context.Context, name string) error {
 	n := rootName(name)
 	if n == "." {
 		return os.ErrInvalid // the root itself, as webdav.Dir answers
+	}
+	if err := f.unlocked(); err != nil {
+		return err
 	}
 	return f.withRoot(func(r *os.Root) error { return r.RemoveAll(n) })
 }

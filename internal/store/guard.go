@@ -64,10 +64,12 @@ const (
 type AbuseState struct {
 	// Findings are the hits not yet reviewed, newest last.
 	Findings []Finding `json:"findings,omitempty"`
-	// Reviewed are the SHA-256 fingerprints of file contents the operator
-	// released (by unlocking the site or dismissing its findings). The same
-	// bytes are never recorded or held again; any other content is scanned
-	// as usual.
+	// Reviewed are the fingerprints of file contents the operator released
+	// (by unlocking the site or dismissing its findings): the SHA-256 of a
+	// content reviewed with a blocking finding, or "<sha256>:flag" for one
+	// reviewed only as a flag. The same bytes are not recorded or held again
+	// at that severity or below — a kit dismissed as a flag in notes.txt is
+	// still held as index.html. Any other content is scanned as usual.
 	Reviewed []string `json:"reviewed,omitempty"`
 }
 
@@ -162,7 +164,10 @@ func (s *Store) emit(ev ScanEvent) {
 // flag); and the site is held — locked By scanner — when a block finding
 // exists and the site is lockable: unlocked, untrusted, not a container
 // site, not the operator's.
-func (s *Store) judge(site *Site, meta *Meta, results []abuse.Result, source, blocked string) (ev ScanEvent, changed bool) {
+//
+// asServed judges a container site as the file site it is about to become
+// (leaving container mode), without the container exemption.
+func (s *Store) judge(site *Site, meta *Meta, results []abuse.Result, source, blocked string, asServed bool) (ev ScanEvent, changed bool) {
 	ev = ScanEvent{ViewID: site.ViewID, Owner: meta.OwnerAccountID, Source: source, Blocked: blocked}
 	now := time.Now().UTC()
 	var found []Finding
@@ -172,7 +177,7 @@ func (s *Store) judge(site *Site, meta *Meta, results []abuse.Result, source, bl
 			continue
 		}
 		ev.Paths = append(ev.Paths, r.Path)
-		if meta.Abuse != nil && r.SHA256 != "" && slices.Contains(meta.Abuse.Reviewed, r.SHA256) {
+		if reviewedContent(meta, r) {
 			reviewed++
 			continue
 		}
@@ -209,19 +214,15 @@ func (s *Store) judge(site *Site, meta *Meta, results []abuse.Result, source, bl
 		ev.Decision = DecisionFlagged
 	case meta.Locked != nil:
 		ev.Decision = DecisionLocked
-	case s.Trusted(site):
-		ev.Decision = DecisionTrusted
-	case meta.Mode == ModeContainer:
-		ev.Decision = DecisionContainer
-	case meta.OwnerAccountID != "" && s.isOperator != nil && s.isOperator(meta.OwnerAccountID):
-		ev.Decision = DecisionOperator
 	default:
-		ev.Decision = DecisionHeld
-		reason := "held for review: " + first.Rule + " in " + first.Path
-		if blocked != "" {
-			reason = "held for review: a CSP report blocked " + abuse.Clean(blocked) + " (" + first.Rule + ")"
+		if ev.Decision = s.exemption(site, meta, asServed); ev.Decision == "" {
+			ev.Decision = DecisionHeld
+			reason := "held for review: " + first.Rule + " in " + first.Path
+			if blocked != "" {
+				reason = "held for review: a CSP report blocked " + abuse.Clean(blocked) + " (" + first.Rule + ")"
+			}
+			meta.Locked = &SiteLock{At: now, By: LockByScanner, Reason: CleanLockReason(reason)}
 		}
-		meta.Locked = &SiteLock{At: now, By: LockByScanner, Reason: CleanLockReason(reason)}
 	}
 	if meta.Abuse == nil {
 		meta.Abuse = &AbuseState{}
@@ -230,6 +231,37 @@ func (s *Store) judge(site *Site, meta *Meta, results []abuse.Result, source, bl
 	ev.Lock = meta.Locked
 	return ev, true
 }
+
+// exemption says why an unlocked site with a blocking finding is not held —
+// a trusted tier, a container site (unless asServed), the operator's — or ""
+// when it is held. The operator is asked last: it is the one question that
+// leaves the store.
+func (s *Store) exemption(site *Site, meta *Meta, asServed bool) string {
+	switch {
+	case s.Trusted(site):
+		return DecisionTrusted
+	case meta.Mode == ModeContainer && !asServed:
+		return DecisionContainer
+	case meta.OwnerAccountID != "" && s.isOperator != nil && s.isOperator(meta.OwnerAccountID):
+		return DecisionOperator
+	}
+	return ""
+}
+
+// reviewedContent reports whether the operator has already released this
+// content at the severity it now has.
+func reviewedContent(meta *Meta, r abuse.Result) bool {
+	if meta.Abuse == nil || r.SHA256 == "" {
+		return false
+	}
+	if slices.Contains(meta.Abuse.Reviewed, r.SHA256) {
+		return true // reviewed with a blocking finding: covers any severity
+	}
+	return !r.Blocks() && slices.Contains(meta.Abuse.Reviewed, r.SHA256+reviewedFlag)
+}
+
+// reviewedFlag marks a fingerprint reviewed only as a flag.
+const reviewedFlag = ":flag"
 
 func (s *Store) logDecision(ev ScanEvent) {
 	var rules []string
@@ -266,8 +298,12 @@ func reviewMeta(m *Meta) bool {
 		return false
 	}
 	for _, f := range m.Abuse.Findings {
-		if f.SHA256 != "" && !slices.Contains(m.Abuse.Reviewed, f.SHA256) {
-			m.Abuse.Reviewed = append(m.Abuse.Reviewed, f.SHA256)
+		key := f.SHA256
+		if f.Severity != string(abuse.Block) {
+			key += reviewedFlag
+		}
+		if f.SHA256 != "" && !slices.Contains(m.Abuse.Reviewed, key) {
+			m.Abuse.Reviewed = append(m.Abuse.Reviewed, key)
 		}
 	}
 	if len(m.Abuse.Reviewed) > maxReviewed {
@@ -291,7 +327,7 @@ func (s *Store) ClearFindings(site *Site) (cleared bool, err error) {
 // settleLocked applies the verdict on results to the site's meta.json. The
 // caller holds the site lock. It returns the event (for emit) and, when the
 // site was held by this verdict, a *HeldError.
-func (s *Store) settleLocked(site *Site, results []abuse.Result, source, blocked string) (ScanEvent, error) {
+func (s *Store) settleLocked(site *Site, results []abuse.Result, source, blocked string, asServed bool) (ScanEvent, error) {
 	meta, err := readMeta(site.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -299,7 +335,7 @@ func (s *Store) settleLocked(site *Site, results []abuse.Result, source, blocked
 		}
 		return ScanEvent{}, err
 	}
-	ev, changed := s.judge(site, &meta, results, source, blocked)
+	ev, changed := s.judge(site, &meta, results, source, blocked, asServed)
 	if ev.Decision != "" {
 		s.logDecision(ev)
 	}
@@ -329,7 +365,7 @@ func (g liveGuard) settle(res abuse.Result) error {
 	if len(res.Hits) == 0 {
 		return nil
 	}
-	ev, err := g.s.settleLocked(g.site, []abuse.Result{res}, FindingUpload, "")
+	ev, err := g.s.settleLocked(g.site, []abuse.Result{res}, FindingUpload, "", false)
 	g.s.emit(ev)
 	return err
 }
@@ -379,15 +415,21 @@ func (s *Store) scanContent(site *Site, rs *abuse.RuleSet, maxFiles int, maxByte
 		if sc == nil {
 			return nil
 		}
-		files++
 		f, err := root.Open(rel)
 		if err != nil {
 			return nil // vanished or swapped since the walk saw it
 		}
 		defer f.Close()
-		if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		fi, err := f.Stat()
+		if err != nil || !fi.Mode().IsRegular() {
 			return nil
 		}
+		// The budget counts every byte read, hashing included: a file that
+		// would overrun it is not read at all.
+		if maxBytes > 0 && total+fi.Size() > maxBytes {
+			return nil
+		}
+		files++
 		n, _ := feed(sc, f)
 		total += n
 		if r := sc.Result(); len(r.Hits) > 0 {
@@ -401,28 +443,8 @@ func (s *Store) scanContent(site *Site, rs *abuse.RuleSet, maxFiles int, maxByte
 	return out, err
 }
 
-// feed copies r into sc, stopping early once the scan has decided the file
-// is binary: an image is not read to its end to be ignored.
-func feed(sc *abuse.Scan, r io.Reader) (int64, error) {
-	buf := make([]byte, 64<<10)
-	var n int64
-	for {
-		k, err := r.Read(buf)
-		if k > 0 {
-			sc.Write(buf[:k])
-			n += int64(k)
-			if sc.Skipped() {
-				return n, nil
-			}
-		}
-		if err == io.EOF {
-			return n, nil
-		}
-		if err != nil {
-			return n, err
-		}
-	}
-}
+// feed copies r into sc.
+func feed(sc *abuse.Scan, r io.Reader) (int64, error) { return io.Copy(sc, r) }
 
 // CheckExfil is the tripwire's verification. A CSP report named destination
 // d as blocked on this site; reports are unauthenticated, so the site is
@@ -449,7 +471,7 @@ func (s *Store) CheckExfil(site *Site, d abuse.Destination, blocked string) (Sca
 		s.emit(ev)
 		return ev, nil
 	}
-	ev, err := s.settleLocked(site, results, FindingCSP, blocked)
+	ev, err := s.settleLocked(site, results, FindingCSP, blocked, false)
 	if err != nil && !errors.Is(err, ErrHeld) {
 		return ScanEvent{}, err
 	}
@@ -474,20 +496,63 @@ func (s *Store) Preview(site *Site, results []abuse.Result) (ScanEvent, error) {
 	if err != nil {
 		return ScanEvent{}, err
 	}
-	ev, _ := s.judge(site, &meta, results, FindingScan, "")
+	ev, _ := s.judge(site, &meta, results, FindingScan, "", false)
 	return ev, nil
 }
 
 // ApplyScan records results from ScanSite the way an upload would have:
 // findings, and a hold where the policy says so.
 func (s *Store) ApplyScan(site *Site, results []abuse.Result) (ScanEvent, error) {
+	return s.applyScan(site, results, false)
+}
+
+func (s *Store) applyScan(site *Site, results []abuse.Result, asServed bool) (ScanEvent, error) {
 	l := s.lockSite(site.ViewID)
 	l.Lock()
 	defer l.Unlock()
-	ev, err := s.settleLocked(site, results, FindingScan, "")
+	ev, err := s.settleLocked(site, results, FindingScan, "", asServed)
 	if err != nil && !errors.Is(err, ErrHeld) {
 		return ScanEvent{}, err
 	}
 	s.emit(ev)
 	return ev, nil
+}
+
+// ScanBeforeServing scans a container site that is about to leave container
+// mode: its tree holds what the containers wrote, which no upload scan ever
+// saw, and from the mode switch on it is served as files. The verdict is
+// the upload guard's, without the container exemption. It returns a
+// *HeldError when the site is now held; the caller must not switch the mode
+// then (the site is locked either way).
+func (s *Store) ScanBeforeServing(site *Site) error {
+	results, err := s.ScanSite(site)
+	if err != nil || len(results) == 0 {
+		return err
+	}
+	ev, err := s.applyScan(site, results, true)
+	if err != nil {
+		return err
+	}
+	if ev.Held() {
+		return &HeldError{Lock: ev.Lock}
+	}
+	return nil
+}
+
+// CheckUnlocked answers ErrLocked for a site whose meta.json carries a lock
+// (ErrNotFound for one that is gone): the check a file surface makes before
+// a change it does not route through the store — a WebDAV or FTP delete or
+// mkdir — so a session that began before the lock cannot touch the evidence.
+func (s *Store) CheckUnlocked(site *Site) error {
+	meta, err := readMeta(site.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if meta.Locked != nil {
+		return ErrLocked
+	}
+	return nil
 }

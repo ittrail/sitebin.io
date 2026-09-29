@@ -16,6 +16,7 @@ type recGuard struct {
 	staged  []string
 	renamed [][2]string
 	holdOn  string // a rel whose Close reports a hold
+	locked  bool   // Check refuses
 }
 
 func (g *recGuard) Stage(rel string, flag int, perm os.FileMode) (File, error) {
@@ -28,6 +29,13 @@ func (g *recGuard) Stage(rel string, flag int, perm os.FileMode) (File, error) {
 		return heldFile{f}, nil
 	}
 	return f, nil
+}
+
+func (g *recGuard) Check() error {
+	if g.locked {
+		return errHeld
+	}
+	return nil
 }
 
 func (g *recGuard) Rename(o, n string) error {
@@ -81,5 +89,16 @@ func TestSessionWritesGoThroughTheGuard(t *testing.T) {
 	}
 	if err := q.Rename("/", "/x"); err == nil {
 		t.Error("renaming the root through the guard")
+	}
+	// once the site is locked, deletes and folders are refused
+	g.locked = true
+	if err := q.Remove("/other.txt"); !errors.Is(err, errHeld) {
+		t.Errorf("Remove on a locked site = %v", err)
+	}
+	if err := q.RemoveAll("/other.txt"); !errors.Is(err, errHeld) {
+		t.Errorf("RemoveAll on a locked site = %v", err)
+	}
+	if err := q.Mkdir("/d", 0o755); !errors.Is(err, errHeld) {
+		t.Errorf("Mkdir on a locked site = %v", err)
 	}
 }

@@ -154,6 +154,7 @@ and `/.well-known/security.txt` and 404s everything else — the app never
 answers on the user-content domain. `www` can never be a site (ids are 26
 base32 characters). The untrusted CSP's CDN lists are `SITEBIN_CSP_*_HOSTS`,
 validated as host sources because they are written into the Caddyfile.
+
 ## Every write is scanned before it is visible
 
 The abuse guard (`internal/abuse` = rules, `internal/store/guard.go` =
@@ -172,10 +173,14 @@ scanner lock into `meta.json` BEFORE the file is renamed into place. Read
   existing lock: recorded and alerted, never locked. A scanner lock, like an
   account lock, never replaces another. The operator check is asked only
   after a hit; a clean upload never reaches the extension.
-- **Released = reviewed.** An operator unlock (`SetLock(nil)`) or a dismissal
-  moves the findings' SHA-256s into `abuse.reviewed`; those bytes are never
-  recorded or held again. An unsuspension (`ReleaseLock` by account) reviews
-  nothing.
+- **Released = reviewed, at a severity.** An operator unlock (`SetLock(nil)`)
+  or a dismissal moves the findings' SHA-256s into `abuse.reviewed` (a flag
+  as `sha:flag`, which does not release the same bytes as an active page).
+  An unsuspension (`ReleaseLock` by account) reviews nothing, and turns into
+  a scanner lock when an unreviewed blocking finding is on the site.
+- **Evidence stays put.** Every content change re-checks the lock under the
+  site lock (`CheckUnlocked`): a request that passed its gate before a hold
+  must not overwrite or delete the kit. NUL bytes never mean "skip".
 - **The CSP tripwire only acts on what the site's own files reference**
   (`CheckExfil`): reports are unauthenticated.
 - **Operator mail is plain text** (the forms mailer, `SITEBIN_ABUSE_ALERTS_TO`),

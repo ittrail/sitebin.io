@@ -6,6 +6,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/ittrail/sitebin.io/internal/abuse"
 )
 
 // A lock is the operator's evidence hold on a site: it is served to nobody,
@@ -117,12 +119,28 @@ func (s *Store) SetLock(site *Site, lock *SiteLock) (changed bool, err error) {
 // ReleaseLock lifts the site's lock only if it was placed by by, and reports
 // whether it did. It is how an unsuspension leaves the operator's own locks
 // in place.
+//
+// An unsuspension does not serve a kit the abuse guard found while the
+// account lock stood (the tripwire, `sitebin scan --lock`, a write racing
+// the suspension): if an unreviewed blocking finding remains and the site
+// would have been held, the account lock becomes a scanner lock instead,
+// and released is false.
 func (s *Store) ReleaseLock(site *Site, by string) (released bool, err error) {
 	err = s.Update(site, func(m *Meta) error {
 		released = false
-		if m.Locked != nil && m.Locked.By == by {
-			released = unlockMeta(m)
+		if m.Locked == nil || m.Locked.By != by {
+			return nil
 		}
+		if by == LockByAccount && m.Abuse != nil {
+			for _, f := range m.Abuse.Findings {
+				if f.Severity == string(abuse.Block) && s.exemption(site, m, false) == "" {
+					m.Locked = &SiteLock{At: time.Now().UTC(), By: LockByScanner,
+						Reason: CleanLockReason("held for review: " + f.Rule + " in " + f.Path + " (found while the owner was suspended)")}
+					return nil
+				}
+			}
+		}
+		released = unlockMeta(m)
 		return nil
 	})
 	return released, err

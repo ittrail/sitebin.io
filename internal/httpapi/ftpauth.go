@@ -94,3 +94,5 @@ func (g ftpGuard) Stage(rel string, flag int, perm os.FileMode) (ftp.File, error
 func (g ftpGuard) Rename(oldRel, newRel string) error {
 	return g.st.RenameChecked(g.site, oldRel, newRel, false)
 }
+
+func (g ftpGuard) Check() error { return g.st.CheckUnlocked(g.site) }

@@ -140,9 +140,6 @@ func TestExemptions(t *testing.T) {
 			s.SetOperatorCheck(func(owner string) bool { return owner == "op" })
 			s.Update(site, func(m *Meta) error { m.OwnerAccountID = "op"; return nil })
 		}, DecisionOperator},
-		"already locked": {func(s *Store, site *Site) {
-			s.SetLock(site, &SiteLock{By: LockByAdmin, Reason: "mine"})
-		}, DecisionLocked},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -154,11 +151,7 @@ func TestExemptions(t *testing.T) {
 				t.Fatalf("SaveFile = %v", err)
 			}
 			got := reload(t, s, site)
-			if name == "already locked" {
-				if got.Meta.Locked == nil || got.Meta.Locked.By != LockByAdmin || got.Meta.Locked.Reason != "mine" {
-					t.Errorf("the operator's lock was replaced: %+v", got.Meta.Locked)
-				}
-			} else if got.Meta.Locked != nil {
+			if got.Meta.Locked != nil {
 				t.Errorf("locked: %+v", got.Meta.Locked)
 			}
 			if got.Meta.Abuse == nil || len(got.Meta.Abuse.Findings) == 0 {
@@ -579,5 +572,137 @@ func TestRenameRefusedOnALockedSite(t *testing.T) {
 	}
 	if !exists(site, "a.txt") {
 		t.Error("the evidence moved")
+	}
+}
+
+// A write that passed its gate before a hold landed — a parallel upload,
+// a queued delete — must not change the evidence.
+func TestWritesRecheckTheLockUnderTheSiteLock(t *testing.T) {
+	s, _ := guardedStore(t)
+	site, _, _ := s.Create()
+	s.SaveFile(site, "keep.html", strings.NewReader("<p>evidence</p>"))
+	stale := reload(t, s, site) // what a gate saw
+	s.SetLock(site, &SiteLock{By: LockByScanner, Reason: "held"})
+	if err := s.SaveFile(stale, "keep.html", strings.NewReader("<p>swapped</p>")); !errors.Is(err, ErrLocked) {
+		t.Errorf("SaveFile = %v", err)
+	}
+	z := makeZip(t, map[string]string{"keep.html": "x"}, false)
+	if err := s.ExtractZip(stale, bytes.NewReader(z), int64(len(z))); !errors.Is(err, ErrLocked) {
+		t.Errorf("ExtractZip = %v", err)
+	}
+	if err := s.DeleteFile(stale, "keep.html"); !errors.Is(err, ErrLocked) {
+		t.Errorf("DeleteFile = %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(site.ContentDir(), "keep.html")); string(b) != "<p>evidence</p>" {
+		t.Errorf("evidence changed: %q", b)
+	}
+	if err := s.CheckUnlocked(stale); !errors.Is(err, ErrLocked) {
+		t.Errorf("CheckUnlocked = %v", err)
+	}
+}
+
+// A scan of a site already locked (the tripwire, sitebin scan) records its
+// findings and leaves the lock as it is.
+func TestFindingsOnALockedSiteKeepItsLock(t *testing.T) {
+	s, h := guardedStore(t)
+	site, _, _ := s.Create()
+	s.SetScanner(nil)
+	s.SaveFile(site, "index.html", strings.NewReader(kit))
+	s.SetScanner(abuse.NewLoader(""))
+	s.SetLock(site, &SiteLock{By: LockByAdmin, Reason: "mine"})
+	results, _ := s.ScanSite(site)
+	if _, err := s.ApplyScan(site, results); err != nil {
+		t.Fatal(err)
+	}
+	got := reload(t, s, site)
+	if got.Meta.Locked == nil || got.Meta.Locked.By != LockByAdmin || got.Meta.Locked.Reason != "mine" || len(got.Meta.Abuse.Findings) == 0 {
+		t.Fatalf("lock %+v abuse %+v", got.Meta.Locked, got.Meta.Abuse)
+	}
+	if d := h.decisions(); len(d) != 1 || d[0] != DecisionLocked {
+		t.Errorf("decisions %v", d)
+	}
+}
+
+// Dismissing a kit as a flag in a .txt does not release the same bytes as
+// an active page.
+func TestAFlagReviewDoesNotReleaseABlock(t *testing.T) {
+	s, _ := guardedStore(t)
+	site, _, _ := s.Create()
+	if err := s.SaveFile(site, "notes.txt", strings.NewReader(kit)); err != nil {
+		t.Fatal(err)
+	}
+	s.ClearFindings(site)
+	if err := s.SaveFile(site, "notes2.txt", strings.NewReader(kit)); err != nil {
+		t.Fatal(err)
+	}
+	if got := reload(t, s, site); got.Meta.Abuse != nil && len(got.Meta.Abuse.Findings) != 0 {
+		t.Error("the reviewed flag was recorded again")
+	}
+	if err := s.SaveFile(site, "index.html", strings.NewReader(kit)); !errors.Is(err, ErrHeld) {
+		t.Fatalf("a flag review laundered the kit into an active page: %v", err)
+	}
+	// and a release of the held page covers the flag too
+	s.SetLock(site, nil)
+	if err := s.SaveFile(site, "copy.html", strings.NewReader(kit)); err != nil {
+		t.Errorf("released content held again: %v", err)
+	}
+}
+
+// An unsuspension does not serve a kit found while the owner was suspended.
+func TestUnsuspensionKeepsAKitFoundMeanwhile(t *testing.T) {
+	s, _ := guardedStore(t)
+	site, _, _ := s.Create()
+	s.SetScanner(nil)
+	s.SaveFile(site, "index.html", strings.NewReader(kit))
+	s.SetScanner(abuse.NewLoader(""))
+	s.SetLock(site, &SiteLock{By: LockByAccount, Reason: "suspended"})
+	results, _ := s.ScanSite(site)
+	s.ApplyScan(site, results) // "already locked": recorded
+	released, err := s.ReleaseLock(site, LockByAccount)
+	if err != nil || released {
+		t.Fatalf("ReleaseLock = %v, %v", released, err)
+	}
+	got := reload(t, s, site)
+	if got.Meta.Locked == nil || got.Meta.Locked.By != LockByScanner || !strings.Contains(got.Meta.Locked.Reason, "suspended") {
+		t.Fatalf("lock %+v", got.Meta.Locked)
+	}
+	// a trusted site is released as before
+	s2, _ := guardedStore(t)
+	site2, _, _ := s2.Create()
+	s2.SetTrusted(site2, true)
+	s2.SaveFile(site2, "index.html", strings.NewReader(kit))
+	s2.SetLock(site2, &SiteLock{By: LockByAccount})
+	if released, _ := s2.ReleaseLock(site2, LockByAccount); !released {
+		t.Error("a trusted site stays locked after the unsuspension")
+	}
+}
+
+func TestScanBeforeServingIgnoresTheContainerExemption(t *testing.T) {
+	s, _ := guardedStore(t)
+	site, _, _ := s.Create()
+	s.Update(site, func(m *Meta) error { m.Mode = ModeContainer; return nil })
+	site = reload(t, s, site)
+	if err := s.SaveFile(site, "app/index.html", strings.NewReader(kit)); err != nil {
+		t.Fatalf("a container site only flags: %v", err)
+	}
+	if err := s.ScanBeforeServing(site); !errors.Is(err, ErrHeld) {
+		t.Fatalf("ScanBeforeServing = %v", err)
+	}
+	if got := reload(t, s, site); got.Meta.Locked == nil {
+		t.Fatal("not held")
+	}
+}
+
+func TestExfilBudgetSkipsAnOversizedFile(t *testing.T) {
+	s, _ := guardedStore(t)
+	site, _, _ := s.Create()
+	s.SetScanner(nil)
+	s.SaveFile(site, "big.txt", bytes.NewReader(bytes.Repeat([]byte("a"), 2048)))
+	s.SaveFile(site, "bot.js", strings.NewReader(`fetch("https://api.telegram.org/bot"+t)`))
+	s.SetScanner(abuse.NewLoader(""))
+	d, _ := abuse.Defaults().Destination("https://api.telegram.org/bot1")
+	results, err := s.scanContent(site, abuse.DestinationRules(d), 10, 1024)
+	if err != nil || len(results) != 1 || results[0].Path != "bot.js" {
+		t.Fatalf("results %+v %v", results, err)
 	}
 }

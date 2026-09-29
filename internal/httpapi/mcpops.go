@@ -398,14 +398,23 @@ func (o mcpOps) WriteFiles(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, fi
 			}
 		}
 		if err := rep.Commit(); err != nil {
+			if errors.Is(err, store.ErrHeld) {
+				// committed, as evidence: the trail names it
+				o.a.recordMCP(auth, site, provenance.ActionReplace, len(files), mcpPaths(files)+", held for review")
+			}
 			return nil, o.mcpError(err)
 		}
 	} else {
 		for i, f := range files {
 			if err := o.a.st.SaveFile(site, f.Path, bytes.NewReader(f.Data)); err != nil {
-				// The files before this one are in: record what happened.
-				if i > 0 {
-					o.a.recordMCP(auth, site, provenance.ActionUpload, i, mcpPaths(files[:i]))
+				// The files before this one are in — and this one too, when
+				// it held the site: record what happened.
+				done, detail := i, ""
+				if errors.Is(err, store.ErrHeld) {
+					done, detail = i+1, ", held for review"
+				}
+				if done > 0 {
+					o.a.recordMCP(auth, site, provenance.ActionUpload, done, mcpPaths(files[:done])+detail)
 				}
 				return nil, o.mcpError(err)
 			}

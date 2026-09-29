@@ -59,7 +59,7 @@ type API struct {
 	csp            *cspAggregator
 	forms          *formsState   // nil when the instance has no forms
 	alerts         *alerter      // abuse mail to the operator
-	tripLimiter    *auth.Limiter // CSP tripwire verifications per (site, destination)
+	tripLimiter    *auth.Limiter // CSP tripwire verifications per site
 	tripSlots      chan struct{} // CSP tripwire verifications running at once
 	reportKey      []byte        // signs the report page's form tickets
 }

@@ -178,6 +178,12 @@ func (s *Store) SaveFile(site *Site, relPath string, r io.Reader) error {
 }
 
 func (s *Store) saveFileLocked(site *Site, rel string, r io.Reader) error {
+	// The gate let the request in before it took the site lock; a hold (or
+	// the operator's lock) placed since then — by a parallel upload, say —
+	// freezes the content this write would change.
+	if err := s.CheckUnlocked(site); err != nil {
+		return err
+	}
 	used, count, err := usage(site.ContentDir())
 	if err != nil {
 		return err
@@ -299,6 +305,9 @@ func (s *Store) DeleteFile(site *Site, relPath string) error {
 	l := s.lockSite(site.ViewID)
 	l.Lock()
 	defer l.Unlock()
+	if err := s.CheckUnlocked(site); err != nil {
+		return err
+	}
 
 	root, err := openContent(site)
 	if err != nil {

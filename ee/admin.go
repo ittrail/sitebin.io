@@ -37,16 +37,18 @@ func (p *provider) isAdmin(acc *account.Account) bool {
 	if acc == nil || len(p.cfg.AdminAccounts) == 0 {
 		return false
 	}
-	if !p.effectiveTier(acc).Admin {
-		return false
-	}
+	// The allowlist first: it is a string compare, and the tier can be a
+	// PayGate call — which the abuse guard's operator check, asked for every
+	// account whose upload trips a rule, should not make for strangers.
 	email := strings.ToLower(strings.TrimSpace(acc.Email))
+	listed := false
 	for _, allowed := range p.cfg.AdminAccounts {
 		if allowed == email {
-			return true
+			listed = true
+			break
 		}
 	}
-	return false
+	return listed && p.effectiveTier(acc).Admin
 }
 
 // adminAccount resolves the request to an admin account. Callers that get

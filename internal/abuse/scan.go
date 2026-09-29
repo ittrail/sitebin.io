@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"hash"
+	"mime"
 	"path"
 	"strings"
 	"unicode"
@@ -19,21 +20,21 @@ const (
 	// chunkSize is how much is matched at a time; overlap is how much of the
 	// previous chunk is matched again, so a pattern straddling the edge is
 	// still found. No pattern is meant to span more than overlap bytes.
-	chunkSize = 64 << 10
-	overlap   = 4 << 10
-	// sniffBytes is how much of a file is checked for a NUL byte, which
-	// marks it as binary: no kit is, and matching an image is wasted work.
-	sniffBytes = 8 << 10
+	chunkSize  = 64 << 10
+	overlap    = 4 << 10
 	excerptMax = 160
 )
 
 // activeExt are the files a browser renders or runs when a static host
 // serves them. A rule blocks only in one of these; the same hit in a .txt or
 // a .php (served as text or a download here — Caddy never sniffs a type) is
-// only a flag.
+// only a flag. IsActive also asks the MIME table the server itself uses, so
+// an extension the container's mailcap maps to a markup or script type counts
+// too; this list is what holds wherever that table is thinner.
 var activeExt = map[string]bool{
-	"html": true, "htm": true, "xhtml": true, "shtml": true, "svg": true,
-	"js": true, "mjs": true, "cjs": true,
+	"html": true, "htm": true, "xhtml": true, "xht": true, "shtml": true, "svg": true,
+	"xml": true, "xsl": true, "xslt": true, "rss": true, "atom": true,
+	"js": true, "mjs": true, "cjs": true, "es": true, "jsm": true,
 }
 
 // binaryExt are skipped without reading a byte.
@@ -49,8 +50,29 @@ var binaryExt = map[string]bool{
 
 func ext(p string) string { return strings.ToLower(strings.TrimPrefix(path.Ext(p), ".")) }
 
-// IsActive reports whether a file at p is one a browser renders or runs.
-func IsActive(p string) bool { return activeExt[ext(p)] }
+// IsActive reports whether a file at p is one a browser renders or runs:
+// HTML, XHTML, SVG or any XML (an XHTML-namespaced root runs script in any
+// XML type), or JavaScript — by extension, and by the type Caddy will send,
+// which comes from the same MIME table (mime.TypeByExtension reads the
+// container's /etc/mime.types).
+func IsActive(p string) bool {
+	e := ext(p)
+	if activeExt[e] {
+		return true
+	}
+	if e == "" {
+		return false // no extension: no type, never rendered
+	}
+	t, _, _ := strings.Cut(strings.ToLower(mime.TypeByExtension("."+e)), ";")
+	t = strings.TrimSpace(t)
+	switch {
+	case t == "text/html", t == "text/xml", t == "text/xsl", t == "application/xml",
+		strings.HasSuffix(t, "+xml"),
+		strings.Contains(t, "javascript"), strings.Contains(t, "ecmascript"):
+		return true
+	}
+	return false
+}
 
 // Hit is one rule that matched a file.
 type Hit struct {
@@ -64,8 +86,7 @@ type Hit struct {
 // Result is what a scan found in one file.
 type Result struct {
 	Path string
-	// SHA256 fingerprints the file's bytes; empty for a file that was not
-	// scanned (binary).
+	// SHA256 fingerprints the file's bytes.
 	SHA256 string
 	// Active reports whether the file is rendered or run by a browser.
 	Active bool
@@ -92,8 +113,6 @@ type Scan struct {
 	rs      *RuleSet
 	path    string
 	h       hash.Hash
-	sniffed int
-	binary  bool
 	scanned int64
 	buf     []byte
 	carry   []byte
@@ -118,24 +137,17 @@ func (rs *RuleSet) NewScan(p string) *Scan {
 }
 
 // Write consumes the next bytes of the file.
+//
+// NUL bytes are dropped before matching, never taken as "binary, skip": a
+// browser renders an HTML page with a NUL in a comment all the same, and a
+// UTF-16 page is NULs between ASCII letters — without them it is the text a
+// rule looks for. (Real binary types are skipped by extension, unread.)
 func (s *Scan) Write(p []byte) (int, error) {
 	n := len(p)
-	if s.binary {
-		return n, nil
-	}
-	if s.sniffed < sniffBytes {
-		look := p
-		if len(look) > sniffBytes-s.sniffed {
-			look = look[:sniffBytes-s.sniffed]
-		}
-		s.sniffed += len(look)
-		if bytes.IndexByte(look, 0) >= 0 {
-			s.binary = true
-			s.buf, s.carry = nil, nil
-			return n, nil
-		}
-	}
 	s.h.Write(p)
+	if bytes.IndexByte(p, 0) >= 0 {
+		p = bytes.ReplaceAll(p, []byte{0}, nil)
+	}
 	// Past the cap only the hash moves.
 	left := MaxScanBytes - s.scanned - int64(len(s.buf))
 	if left <= 0 {
@@ -188,16 +200,9 @@ func (s *Scan) flush() {
 	s.buf = s.buf[:0]
 }
 
-// Skipped reports whether the scan has decided the file is binary, after
-// which nothing more it is given matters.
-func (s *Scan) Skipped() bool { return s.binary }
-
 // Result finishes the scan and evaluates the rules.
 func (s *Scan) Result() Result {
 	r := Result{Path: s.path, Active: IsActive(s.path)}
-	if s.binary {
-		return r
-	}
 	s.flush()
 	r.SHA256 = hex.EncodeToString(s.h.Sum(nil))
 	e := ext(s.path)

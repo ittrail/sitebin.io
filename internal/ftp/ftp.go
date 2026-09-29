@@ -50,6 +50,10 @@ type Guard interface {
 	Stage(rel string, flag int, perm os.FileMode) (File, error)
 	// Rename renames within the site, checking a file whose kind changes.
 	Rename(oldRel, newRel string) error
+	// Check refuses a delete or a new folder once the site is locked: FTP
+	// asks about the lock only at login, and the evidence must not change
+	// under a session that began before it.
+	Check() error
 }
 
 // Recorder is implemented by an Authenticator that keeps a record of every

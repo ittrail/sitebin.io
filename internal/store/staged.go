@@ -30,6 +30,10 @@ type StagedFile struct {
 	// of committing an identical copy.
 	dirty  bool
 	closed bool
+	// pending says the existing content has yet to be copied in (see fill);
+	// appends that the handle was opened O_APPEND.
+	pending, appends bool
+	fillErr          error
 }
 
 // OpenStaged opens rel (native, relative to the content root, already
@@ -73,36 +77,100 @@ func (s *Store) OpenStaged(site *Site, rel string, flag int, perm os.FileMode, l
 	sf := &StagedFile{File: f, s: s, site: site, rel: rel, tmp: tmp, lockHeld: lockHeld,
 		// a new file, or an existing one truncated, is a change even if
 		// nothing is ever written to it
-		dirty: !exists || flag&os.O_TRUNC != 0}
-	if exists && flag&os.O_TRUNC == 0 {
-		src, err := root.Open(rel)
-		if err == nil {
-			_, err = io.Copy(f, src)
-			src.Close()
-		}
-		if err == nil && flag&os.O_APPEND == 0 {
-			_, err = f.Seek(0, io.SeekStart)
-		}
-		if err != nil {
-			f.Close()
-			root.Remove(tmp)
-			return nil, err
-		}
+		dirty: !exists || flag&os.O_TRUNC != 0,
+		// the existing content is copied in on first use, not here: a
+		// handle opened read-write and never touched (WebDAV's PROPPATCH,
+		// which some clients send after every PUT) costs no copy
+		pending: exists && flag&os.O_TRUNC == 0,
+		appends: flag&os.O_APPEND != 0,
 	}
 	return sf, nil
 }
 
-func (f *StagedFile) Write(p []byte) (int, error) { f.dirty = true; return f.File.Write(p) }
+// fill copies the existing content into the temp file the first time the
+// handle is used, leaving the offset at the start (or at the end, for an
+// append), as a plain open of the file would have.
+func (f *StagedFile) fill() error {
+	if !f.pending {
+		return f.fillErr
+	}
+	f.pending = false
+	root, err := openContent(f.site)
+	if err == nil {
+		var src *os.File
+		if src, err = root.Open(f.rel); err == nil {
+			_, err = io.Copy(f.File, src)
+			src.Close()
+		}
+		root.Close()
+	}
+	if err == nil && !f.appends {
+		_, err = f.File.Seek(0, io.SeekStart)
+	}
+	f.fillErr = err
+	return err
+}
+
+func (f *StagedFile) Read(p []byte) (int, error) {
+	if err := f.fill(); err != nil {
+		return 0, err
+	}
+	return f.File.Read(p)
+}
+
+func (f *StagedFile) ReadAt(p []byte, off int64) (int, error) {
+	if err := f.fill(); err != nil {
+		return 0, err
+	}
+	return f.File.ReadAt(p, off)
+}
+
+func (f *StagedFile) Seek(off int64, whence int) (int64, error) {
+	if err := f.fill(); err != nil {
+		return 0, err
+	}
+	return f.File.Seek(off, whence)
+}
+
+func (f *StagedFile) Stat() (os.FileInfo, error) {
+	if err := f.fill(); err != nil {
+		return nil, err
+	}
+	return f.File.Stat()
+}
+
+func (f *StagedFile) Write(p []byte) (int, error) {
+	if err := f.fill(); err != nil {
+		return 0, err
+	}
+	f.dirty = true
+	return f.File.Write(p)
+}
+
 func (f *StagedFile) WriteAt(p []byte, off int64) (int, error) {
+	if err := f.fill(); err != nil {
+		return 0, err
+	}
 	f.dirty = true
 	return f.File.WriteAt(p, off)
 }
-func (f *StagedFile) WriteString(s string) (int, error) { f.dirty = true; return f.File.WriteString(s) }
-func (f *StagedFile) Truncate(size int64) error         { f.dirty = true; return f.File.Truncate(size) }
+
+func (f *StagedFile) WriteString(s string) (int, error) { return f.Write([]byte(s)) }
+
+func (f *StagedFile) Truncate(size int64) error {
+	if err := f.fill(); err != nil {
+		return err
+	}
+	f.dirty = true
+	return f.File.Truncate(size)
+}
 
 // ReadFrom is what io.Copy uses on an *os.File; without this override it
 // would reach the embedded file's and the write would go unnoticed.
 func (f *StagedFile) ReadFrom(r io.Reader) (int64, error) {
+	if err := f.fill(); err != nil {
+		return 0, err
+	}
 	f.dirty = true
 	return f.File.ReadFrom(r)
 }
@@ -120,7 +188,7 @@ func (f *StagedFile) Close() error {
 		f.discard()
 		return err
 	}
-	if !f.dirty {
+	if !f.dirty || f.fillErr != nil {
 		f.discard()
 		return nil
 	}
@@ -197,7 +265,7 @@ func (s *Store) checkLocked(site *Site, root *os.Root, src, dst string) (*HeldEr
 	if len(res.Hits) == 0 {
 		return nil, nil
 	}
-	ev, err := s.settleLocked(site, []abuse.Result{res}, FindingUpload, "")
+	ev, err := s.settleLocked(site, []abuse.Result{res}, FindingUpload, "", false)
 	s.emit(ev)
 	var held *HeldError
 	if errors.As(err, &held) {
@@ -221,13 +289,8 @@ func (s *Store) RenameChecked(site *Site, oldRel, newRel string, lockHeld bool) 
 	}
 	// A site locked since the session began (FTP asks only at login) keeps
 	// its evidence where it is.
-	if meta, err := readMeta(site.dir); err != nil {
-		if os.IsNotExist(err) {
-			return ErrNotFound
-		}
+	if err := s.CheckUnlocked(site); err != nil {
 		return err
-	} else if meta.Locked != nil {
-		return ErrLocked
 	}
 	root, err := openContent(site)
 	if err != nil {

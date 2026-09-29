@@ -944,7 +944,9 @@ hits are recorded and alerted. Flag-severity rules only alert.
   nothing.
 - **Released means reviewed.** Unlocking a site in the register (or `sitebin
   unlock`), or dismissing its findings, records the content's fingerprints:
-  the same bytes are not held again, anything new is scanned as usual.
+  the same bytes are not held again at the severity you reviewed (a kit you
+  dismissed as a flag in a `.txt` is still held as `index.html`), anything
+  new is scanned as usual.
 - **Reports reach a human.** `https://<base>/report` is a public report page
   that works without JavaScript (honeypot + signed form ticket + the API's
   rate limits); it and `POST /api/report` store the report and mail the

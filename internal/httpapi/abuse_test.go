@@ -19,6 +19,7 @@ import (
 	"github.com/ittrail/sitebin.io/internal/abuse"
 	"github.com/ittrail/sitebin.io/internal/ext"
 	"github.com/ittrail/sitebin.io/internal/forms"
+	"github.com/ittrail/sitebin.io/internal/provenance"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
@@ -369,7 +370,7 @@ func TestHeldAlertIsPlainTextDefangedAndLinksTheRegister(t *testing.T) {
 		t.Errorf("subject:\n%s", raw[:400])
 	}
 	txt := mailText(t, m)
-	for _, want := range []string{"telegram-bot-api", "index.html", "hxxps://api[.]telegram[.]org/bot", "http://sitebin.example/account/admin?q=" + id, "LOCKED by scanner", "acct-1"} {
+	for _, want := range []string{"telegram-bot-api", "in index[.]html", "hxxps://api[.]telegram[.]org/bot", "http://sitebin.example/account/admin?q=" + id, "LOCKED by scanner", "acct-1"} {
 		if !strings.Contains(txt, want) {
 			t.Errorf("alert lacks %q:\n%s", want, txt)
 		}
@@ -488,14 +489,20 @@ func TestTripwireIgnoresAForgedReport(t *testing.T) {
 	e, _, rs := abuseEnv(t, false)
 	id, _, _ := cleanSite(t, e, nil)
 	host := id + ".sitebin.example"
+	var digest func()
+	e.api.alerts.after = func(_ time.Duration, f func()) { digest = f }
 	cspReportFor(t, e, host, "https://api.telegram.org/bot1/sendMessage", "http://"+host+"/")
 	site, _ := e.st.ByViewID(id)
 	if site.Meta.Locked != nil || site.Meta.Abuse != nil {
 		t.Fatalf("a forged report acted: %+v %+v", site.Meta.Locked, site.Meta.Abuse)
 	}
+	if digest == nil {
+		t.Fatal("the unverified report did not reach the digest")
+	}
+	digest()
 	e.api.alerts.wg.Wait()
-	if m := rs.last(t); !strings.Contains(string(m.Data), "not verified") {
-		t.Errorf("alert %s", m.Data[:300])
+	if txt := mailText(t, rs.last(t)); !strings.Contains(txt, "unverified") || !strings.Contains(txt, id) {
+		t.Errorf("digest:\n%s", txt)
 	}
 }
 
@@ -721,3 +728,102 @@ func TestSiteServiceShowsFindingsAndReports(t *testing.T) {
 }
 
 var _ forms.Sender = (*recSender)(nil)
+
+// A hold is never delayed by the caps; an unverified tripwire event never
+// spends them.
+func TestAlertPriorities(t *testing.T) {
+	e, _, rs := abuseEnv(t, true)
+	al := e.api.alerts
+	armed := false
+	al.after = func(time.Duration, func()) { armed = true }
+	for i := 0; i < alertBurst; i++ {
+		al.notify(alertEvent{key: fmt.Sprintf("s%d", i), subject: "fill", body: "b"})
+	}
+	al.notify(alertEvent{key: "s0", subject: "held one", body: "b", priority: true})
+	al.notify(alertEvent{key: "forged", subject: "unverified", body: "b", digestOnly: true})
+	al.wg.Wait()
+	rs.mu.Lock()
+	var subjects []string
+	for _, m := range rs.sent {
+		subjects = append(subjects, string(m.Data))
+	}
+	rs.mu.Unlock()
+	joined := strings.Join(subjects, "\n")
+	if !strings.Contains(joined, "held one") {
+		t.Error("a hold waited behind the cap")
+	}
+	if strings.Contains(joined, "unverified") || !armed {
+		t.Error("an unverified event was mailed at once instead of going to the digest")
+	}
+}
+
+// The tripwire sends an unverified report to the digest.
+func TestUnverifiedTripwireGoesToTheDigest(t *testing.T) {
+	e2, _, rs2 := abuseEnv(t, false)
+	e2.api.alerts.after = func(time.Duration, func()) {}
+	id, _, _ := cleanSite(t, e2, nil)
+	cspReportFor(t, e2, id+".sitebin.example", "https://api.telegram.org/bot1", "")
+	e2.api.alerts.wg.Wait()
+	rs2.mu.Lock()
+	n := len(rs2.sent)
+	rs2.mu.Unlock()
+	if n != 0 {
+		t.Error("an unverified tripwire report was mailed at once")
+	}
+}
+
+func TestReportMailDefangsTheReason(t *testing.T) {
+	e, _, rs := abuseEnv(t, false)
+	body := `{"target":"x.example","reason":"see https://evil.example/login now"}`
+	e.public(t, httptest.NewRequest("POST", "/api/report", strings.NewReader(body)))
+	e.api.alerts.wg.Wait()
+	m := rs.last(t)
+	if strings.Contains(string(m.Data), "https://evil") || strings.Contains(mailText(t, m), "evil.example") {
+		t.Errorf("a live URL from the reason reached the mail:\n%s", m.Data)
+	}
+}
+
+func TestWebDAVDeleteRefusedOnceTheSiteIsLocked(t *testing.T) {
+	e, _, _ := abuseEnv(t, false)
+	id, _, _ := cleanSite(t, e, map[string]string{"webdav": "true"})
+	site, _ := e.st.ByViewID(id)
+	fsys := newSiteFS(e.st, site, false) // a request that passed its gate
+	e.st.SetLock(site, &store.SiteLock{By: store.LockByScanner})
+	if err := fsys.RemoveAll(nil, "index.html"); !os.IsPermission(err) {
+		t.Errorf("RemoveAll = %v", err)
+	}
+	if err := fsys.Mkdir(nil, "d", 0o755); !os.IsPermission(err) {
+		t.Errorf("Mkdir = %v", err)
+	}
+	if _, err := os.Stat(site.ContentDir() + "/index.html"); err != nil {
+		t.Error("the evidence was deleted")
+	}
+}
+
+// A held write failed for its caller, but it happened, and who made it is
+// the first thing the operator asks: the trail records it.
+func TestHeldWritesAreInTheTrail(t *testing.T) {
+	e, fp, _ := abuseEnv(t, false)
+	// a held creation
+	body, ct := filesBody(t, nil, map[string]string{"index.html": kitHTML}, nil)
+	req := httptest.NewRequest("POST", "/api/sites", body)
+	req.Header.Set("Content-Type", ct)
+	req.RemoteAddr = "203.0.113.9:4444"
+	e.public(t, bearer(req, "sbp_tok"))
+	created := e.trail(t, createdID(t, fp))
+	if len(created) == 0 || created[0].Action != provenance.ActionCreate {
+		t.Fatalf("held creation not in the trail: %+v", created)
+	}
+	// a held upload
+	id, edit, _ := cleanSite(t, e, nil)
+	body, ct = filesBody(t, nil, map[string]string{"index.html": kitHTML}, nil)
+	req = httptest.NewRequest("POST", "/api/sites/"+edit+"/files", body)
+	req.Header.Set("Content-Type", ct)
+	if w := e.public(t, bearer(req, "sbp_tok")); w.Code != 403 {
+		t.Fatalf("upload = %d", w.Code)
+	}
+	last := lastEntry(t, e.trail(t, id))
+	if last.Action != provenance.ActionUpload || !strings.Contains(last.Detail, "index.html") || !strings.Contains(last.Detail, "held for review") {
+		t.Errorf("held upload entry %+v", last)
+	}
+}

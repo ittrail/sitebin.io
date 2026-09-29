@@ -39,7 +39,19 @@ func (a *API) onScan(ev store.ScanEvent) {
 	if ev.Decision == store.DecisionReviewed {
 		return
 	}
-	a.alerts.notify(a.scanAlert(ev))
+	al := a.scanAlert(ev)
+	switch {
+	case ev.Held():
+		// A hold is rare (a site is held once) and is the alert the rest
+		// exist for: no window or cap may delay it.
+		al.priority = true
+	case ev.Decision == store.DecisionUnverified:
+		// Anyone can send a report naming any site; one that the site's
+		// files do not bear out goes to the digest and spends no one's
+		// budget, so forged reports cannot push real alerts back an hour.
+		al.digestOnly = true
+	}
+	a.alerts.notify(al)
 }
 
 // scanAlert turns a guard decision into an alert.
@@ -80,19 +92,19 @@ func (a *API) scanAlert(ev store.ScanEvent) alertEvent {
 	if len(ev.Findings) > 0 {
 		b.WriteString("\nFindings:\n")
 		for _, f := range ev.Findings {
-			fmt.Fprintf(&b, "  - %s (%s) in %s\n", f.Rule, f.Severity, f.Path)
+			fmt.Fprintf(&b, "  - %s (%s) in %s\n", f.Rule, f.Severity, defang(f.Path))
 			if f.Excerpt != "" {
 				fmt.Fprintf(&b, "      %s\n", defang(f.Excerpt))
 			}
 		}
 	} else if len(ev.Paths) > 0 {
-		fmt.Fprintf(&b, "Files:     %s\n", strings.Join(ev.Paths, ", "))
+		fmt.Fprintf(&b, "Files:     %s\n", defang(strings.Join(ev.Paths, ", ")))
 	}
 	a.registerLines(&b, ev.ViewID)
 	if ev.Held() {
 		b.WriteString("\nA lock keeps the site as evidence. Unlocking it (register or `sitebin unlock`) marks this content as reviewed: the same bytes are not held again.\n")
 	}
-	line := fmt.Sprintf("%s  %s  %s  %s", ev.ViewID, ev.Decision, what, strings.Join(ev.Paths, ","))
+	line := fmt.Sprintf("%s  %s  %s  %s", ev.ViewID, ev.Decision, what, defang(strings.Join(ev.Paths, ",")))
 	if ev.Blocked != "" {
 		line += "  blocked " + defang(ev.Blocked)
 	}
@@ -107,13 +119,16 @@ func (a *API) reportAlert(rep store.Report) alertEvent {
 		via = "the report page"
 	}
 	fmt.Fprintf(&b, "An abuse report was filed through %s.\n\n", via)
+	// Everything the reporter typed is defanged: the report may name a
+	// phishing URL, and an API reason is free text.
+	reason := defang(rep.Reason)
 	fmt.Fprintf(&b, "Target:    %s\n", defang(rep.Target))
-	fmt.Fprintf(&b, "Reason:    %s\n", rep.Reason)
+	fmt.Fprintf(&b, "Reason:    %s\n", reason)
 	contact := rep.Contact
 	if contact == "" {
 		contact = "none given"
 	}
-	fmt.Fprintf(&b, "Contact:   %s\n", contact)
+	fmt.Fprintf(&b, "Contact:   %s\n", contact) // validated as an address: the operator's way back
 	fmt.Fprintf(&b, "From:      %s\n", rep.Source)
 	if strings.TrimSpace(rep.Details) != "" {
 		b.WriteString("Details:\n")
@@ -123,7 +138,7 @@ func (a *API) reportAlert(rep store.Report) alertEvent {
 	}
 	b.WriteString("\n")
 	key := "report:" + strings.ToLower(rep.Target)
-	subject := "Report: " + rep.Reason
+	subject := "Report: " + reason
 	if rep.ViewID != "" {
 		a.siteLines(&b, rep.ViewID)
 		key = rep.ViewID
@@ -135,7 +150,7 @@ func (a *API) reportAlert(rep store.Report) alertEvent {
 	if a.registerURL() != "" {
 		fmt.Fprintf(&b, "Reports:   %s/account/admin/reports\n", a.baseURL())
 	}
-	line := fmt.Sprintf("report  %s  %s  %s", rep.Reason, defang(rep.Target), rep.ViewID)
+	line := fmt.Sprintf("report  %s  %s  %s", reason, defang(rep.Target), rep.ViewID)
 	return alertEvent{key: key, subject: subject, body: b.String(), line: line}
 }
 
@@ -254,6 +269,10 @@ type alertEvent struct {
 	body    string
 	// line is the event in one line, for the digest.
 	line string
+	// priority is mailed at once, outside the per-key window and the hourly
+	// cap, and spends neither: a hold. digestOnly never is: an event anyone
+	// can cause for free.
+	priority, digestOnly bool
 }
 
 // alerter mails the operator: at most one mail per key per hour and
@@ -308,7 +327,11 @@ func (al *alerter) notify(ev alertEvent) {
 	}
 	al.sent = keep
 	al.log.Info("abuse alert", "subject", ev.subject)
-	if _, recent := al.last[ev.key]; recent || len(al.sent) >= alertBurst {
+	if ev.priority {
+		al.deliver(ev.subject, ev.body)
+		return
+	}
+	if _, recent := al.last[ev.key]; recent || len(al.sent) >= alertBurst || ev.digestOnly {
 		if len(al.queue) < maxQueued {
 			al.queue = append(al.queue, ev)
 		} else {
@@ -387,9 +410,10 @@ func (al *alerter) deliver(subject, body string) {
 // ---- the CSP tripwire ----
 
 const (
-	// A (site, destination) pair is verified at most tripPerHour times an
-	// hour, and at most tripSlots verifications run at once: a report is
-	// unauthenticated, and each verification reads the site's files.
+	// A site is verified at most tripPerHour times an hour, whatever the
+	// destinations its reports name, and at most tripSlots verifications run
+	// at once: a report is unauthenticated, and each verification reads the
+	// site's files (within store's own byte budget).
 	tripPerHour = 6
 	tripBurst   = 2
 	tripSlots   = 2
@@ -417,7 +441,7 @@ func (a *API) tripwire(site *store.Site, blocked, doc string) {
 			return
 		}
 	}
-	if !a.tripLimiter.Allow(site.ViewID + "|" + d.ID) {
+	if !a.tripLimiter.Allow(site.ViewID) {
 		return
 	}
 	select {

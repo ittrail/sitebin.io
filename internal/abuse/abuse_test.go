@@ -211,14 +211,39 @@ func TestCombinedRuleAcrossChunks(t *testing.T) {
 	}
 }
 
-func TestBinaryAndSkippedFiles(t *testing.T) {
+func TestBinaryTypesAreSkippedButNULsAreNotAnEscape(t *testing.T) {
 	if Defaults().NewScan("logo.png") != nil {
 		t.Error("a .png is not scanned")
 	}
-	s := Defaults().NewScan("blob.bin.html")
-	s.Write([]byte("\x00\x01\x02 https://api.telegram.org/bot1:a"))
-	if r := s.Result(); len(r.Hits) > 0 || r.SHA256 != "" {
-		t.Errorf("a file with a NUL up front is binary: %+v", r)
+	// A NUL in a comment does not stop a browser rendering the page, so it
+	// must not stop the scan either.
+	r := scanString(t, "index.html", "<!--\x00-->"+telegramKit)
+	if !r.Blocks() {
+		t.Errorf("a NUL up front hid the kit: %v", hitIDs(r))
+	}
+	// Nor does UTF-16, which is NULs between ASCII letters.
+	var u16 []byte
+	u16 = append(u16, 0xff, 0xfe)
+	for _, c := range []byte(telegramKit) {
+		u16 = append(u16, c, 0)
+	}
+	s := Defaults().NewScan("index.html")
+	s.Write(u16)
+	if r := s.Result(); !r.Blocks() || !hasHit(r, "telegram-bot-api") {
+		t.Errorf("a UTF-16 kit was not caught: %v", hitIDs(r))
+	}
+}
+
+func TestActiveTypes(t *testing.T) {
+	for _, p := range []string{"a.html", "a.HTM", "a.xhtml", "a.xht", "a.svg", "a.xml", "a.js", "a.mjs"} {
+		if !IsActive(p) {
+			t.Errorf("%s is rendered or run by a browser", p)
+		}
+	}
+	for _, p := range []string{"a.txt", "a.md", "a.json", "a.css", "a.php", "noext", "a.sbtmp"} {
+		if IsActive(p) {
+			t.Errorf("%s is not rendered or run by a browser", p)
+		}
 	}
 }
 

@@ -147,6 +147,12 @@ func (a *API) applySettings(site *store.Site, set updateSet) error {
 		if err := a.leaveContainerMode(site); err != nil {
 			return err
 		}
+		// And what the containers wrote, which no upload scan ever saw, is
+		// scanned as the file site it is about to become: a hold stops the
+		// switch (the site is locked either way).
+		if err := a.st.ScanBeforeServing(site); err != nil {
+			return err
+		}
 	}
 	if err := a.writeSettings(site, set, expires); err != nil {
 		return err
@@ -649,8 +655,11 @@ func (a *API) createSiteWith(r *http.Request, opts createOpts) (*store.Site, str
 	set, err := opts.fill(site)
 	if errors.Is(err, store.ErrHeld) {
 		// The abuse guard locked the site on its first files. It stays, as
-		// evidence; its caller gets neither its address nor its password.
+		// evidence — its creation recorded like any other, since who made
+		// it is the first thing the operator will ask — and its caller gets
+		// neither its address nor its password.
 		a.keepHeld(site, owner)
+		a.recordCreate(r, site, a.creator(r, owner, opts))
 		return nil, "", nil, &apiError{403, msgHeldCreate}
 	}
 	if err != nil {
@@ -690,13 +699,17 @@ func (a *API) createSiteWith(r *http.Request, opts createOpts) (*store.Site, str
 			}
 		}
 	}
-	act := a.createActor(r, owner)
-	if opts.actor != nil {
-		act = *opts.actor
-	}
-	a.recordCreate(r, site, act)
+	a.recordCreate(r, site, a.creator(r, owner, opts))
 	a.log.Info("site created", "id", site.ViewID, "owner", owner, "origin", opts.origin)
 	return site, editPassword, warnings, nil
+}
+
+// creator is who is creating a site, for its provenance record.
+func (a *API) creator(r *http.Request, owner string, opts createOpts) actor {
+	if opts.actor != nil {
+		return *opts.actor
+	}
+	return a.createActor(r, owner)
 }
 
 // keepHeld finishes the bookkeeping of a creation the abuse guard held: the
@@ -865,6 +878,9 @@ func (a *API) uploadFiles(w http.ResponseWriter, r *http.Request, site *store.Si
 			return
 		}
 		if err := rep.Commit(); err != nil {
+			// A held replace is committed, as evidence: its files are the
+			// ones the trail names.
+			note.held = errors.Is(err, store.ErrHeld)
 			respondErr(w, err)
 			return
 		}

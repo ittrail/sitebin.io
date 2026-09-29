@@ -415,7 +415,8 @@ const adminConsoleCSS = `
   .adm .rep .con, .adm .rep .site { margin-top: 4px; color: var(--ink-dim); font-size: 12px; overflow-wrap: anywhere; }
   .adm .rep .site .lock { display: inline; margin-left: 6px; font: 11px var(--mono); color: var(--danger); }
   .adm .rep .site .lock b { padding: 0 6px; margin-right: 6px; border: 1px solid var(--danger); border-radius: 4px; }
-  .adm .rep .site form.inline { display: inline; margin-left: 8px; }
+  .adm .rep .site form.inline { display: inline-flex; gap: 6px; margin-left: 8px; align-items: center; }
+  .adm .rep .site input[type=text] { background: var(--bg-raise); color: var(--ink); border: 1px solid var(--line); border-radius: 7px; padding: 4px 8px; font: 12px var(--body); width: 260px; }
 
   /* filter bar */
   .adm .bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
@@ -615,7 +616,7 @@ var reportsTmpl = template.Must(template.New("reports").Parse(pageHead + adminCo
       <div class="tgt">{{.Target}}</div>
       {{if .Details}}<div class="det">{{.Details}}</div>{{end}}
       {{if .Contact}}<div class="con">contact: <a href="mailto:{{.Contact}}">{{.Contact}}</a></div>{{end}}
-      <div class="site">{{if .Site}}site <a href="/account/admin?q={{.Site.ViewID}}">{{.Site.ViewID}}</a> · {{.OwnerLabel}}{{if .LockText}}<span class="lock"><b>LOCKED</b>{{.LockText}}</span>{{else}}<form method="post" action="/account/admin/sites/{{.Site.ViewID}}/lock?return=reports" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="reason" value="{{.LockReason}}"><button class="btn small danger" type="submit">Lock site</button></form>{{end}}{{else if .ViewID}}site {{.ViewID}} no longer exists{{else}}not resolved to a site on this instance{{end}}</div>
+      <div class="site">{{if .Site}}site <a href="/account/admin?q={{.Site.ViewID}}">{{.Site.ViewID}}</a> · {{.OwnerLabel}}{{if .LockText}}<span class="lock"><b>LOCKED</b>{{.LockText}}</span>{{else}}<form method="post" action="/account/admin/sites/{{.Site.ViewID}}/lock?return=reports" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="text" name="reason" maxlength="200" value="{{.LockReason}}" aria-label="Reason for locking {{.Site.ViewID}}, shown to its owner" title="Shown to the owner"><button class="btn small danger" type="submit">Lock site</button></form>{{end}}{{else if .ViewID}}site {{.ViewID}} no longer exists{{else}}not resolved to a site on this instance{{end}}</div>
     </div>
     {{else}}
     <p class="empty">No reports on file.</p>

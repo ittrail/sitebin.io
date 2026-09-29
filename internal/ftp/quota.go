@@ -113,6 +113,9 @@ func (q *quotaFs) Mkdir(name string, perm os.FileMode) error {
 	if _, err := cleanName(name); err != nil {
 		return err
 	}
+	if err := q.check(); err != nil {
+		return err
+	}
 	return q.done(provenance.ActionMkdir, name, q.Fs.Mkdir(name, perm))
 }
 
@@ -120,7 +123,18 @@ func (q *quotaFs) MkdirAll(path string, perm os.FileMode) error {
 	if _, err := cleanName(path); err != nil {
 		return err
 	}
+	if err := q.check(); err != nil {
+		return err
+	}
 	return q.done(provenance.ActionMkdir, path, q.Fs.MkdirAll(path, perm))
+}
+
+// check asks the guard, when there is one, whether the site may still change.
+func (q *quotaFs) check() error {
+	if q.guard == nil {
+		return nil
+	}
+	return q.guard.Check()
 }
 
 func (q *quotaFs) Rename(oldname, newname string) error {
@@ -146,6 +160,9 @@ func (q *quotaFs) Remove(name string) error {
 	if _, err := cleanName(name); err != nil {
 		return err
 	}
+	if err := q.check(); err != nil {
+		return err
+	}
 	return q.done(provenance.ActionDeleteFile, name, q.Fs.Remove(name))
 }
 
@@ -153,12 +170,16 @@ func (q *quotaFs) RemoveAll(path string) error {
 	if _, err := cleanName(path); err != nil {
 		return err
 	}
+	if err := q.check(); err != nil {
+		return err
+	}
 	return q.done(provenance.ActionDeleteFile, path, q.Fs.RemoveAll(path))
 }
 
-// done reports a write to onWrite when it succeeded, and passes err on.
+// done reports a write to onWrite when it succeeded — or happened and held
+// the site, which is a write the trail must show — and passes err on.
 func (q *quotaFs) done(action, path string, err error) error {
-	if err == nil {
+	if err == nil || errors.Is(err, store.ErrHeld) {
 		q.wrote(action, path)
 	}
 	return err

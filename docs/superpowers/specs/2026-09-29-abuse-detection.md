@@ -127,14 +127,18 @@ Initial exfil destinations (all `lock`): `api.telegram.org/bot`,
 
 ## What is scanned
 
-Every file on every write path, as it is written: text only — known binary
-extensions are skipped, and so is a file whose first bytes hold a NUL — and at
-most the first 8 MiB of each (`abuse.MaxScanBytes`). A rule can only
-**block** in an *active* file, one a browser renders or runs from a static
-host: `.html .htm .xhtml .shtml .svg .js .mjs .cjs`. The same hit in a
-`.txt`, `.md`, `.json` or `.php` (served as text or download here) is
-recorded as a flag. Caddy never sniffs a content type, so an unknown extension
-is never rendered as HTML.
+Every file on every write path, as it is written, at most the first 8 MiB of
+each (`abuse.MaxScanBytes`); known binary extensions (images, fonts, media,
+archives, PDF, wasm) are skipped unread. NUL bytes are dropped before
+matching — never taken to mean "binary, skip": a browser renders a page with
+a NUL in a comment, and UTF-16 text is NULs between ASCII letters. A rule can
+only **block** in an *active* file, one a browser renders or runs from a
+static host: HTML, XHTML, SVG, any XML (an XHTML root runs script in any XML
+type) or JavaScript — decided by extension and by the type the server's own
+MIME table gives it (`mime.TypeByExtension`, which reads the container's
+mailcap, as Caddy does). The same hit in a `.txt`, `.md`, `.json` or `.php`
+(served as text or download here) is recorded as a flag. Caddy never sniffs a
+content type, so an unknown extension is never rendered as HTML.
 
 Known limits, accepted: a kit split so that no single file satisfies a
 combined rule is caught only by its single-pattern rules and the tripwire; a
@@ -148,8 +152,10 @@ browser (told `nosniff`) never renders it as a page.
 
 For each file with hits, under the site lock:
 
-1. A file whose SHA-256 is in the site's **reviewed** set is not recorded at
-   all: the operator has already looked at exactly this content.
+1. A file whose SHA-256 is in the site's **reviewed** set at its current
+   severity is not recorded at all: the operator has already looked at
+   exactly this content. A content reviewed only as a flag (say, in a
+   `.txt`) is still held as an active page.
 2. Each hit becomes a **finding** (`rule`, `severity`, `path`, `excerpt`,
    `sha256`, `at`, `source`), recorded in `meta.json` (`abuse.findings`,
    at most 20, newest kept; one per rule and file).
@@ -190,10 +196,25 @@ without the edit password: the site exists only as evidence.
 
 The **released** state is the reviewed set: when the operator unlocks a site
 (register or `sitebin unlock`) or dismisses its findings in the register,
-every finding's `sha256` moves into `abuse.reviewed` (at most 200) and the
+every finding's fingerprint moves into `abuse.reviewed` (at most 200) — the
+bare `sha256` for a blocking finding, `sha256:flag` for a flag — and the
 findings are cleared. The same bytes uploaded again are then not recorded and
-never re-locked; any new content is scanned as usual. An unsuspension (an
-account lock released) reviews nothing.
+never re-locked at that severity; any new content is scanned as usual. An
+unsuspension (an account lock released) reviews nothing, and when an
+unreviewed blocking finding was recorded while the account lock stood (the
+tripwire, `sitebin scan --lock`), the account lock becomes a scanner lock
+instead of being lifted.
+
+**Evidence stays put.** A request that passed its gate before a hold landed
+must not change the site after it: `SaveFile`, `ExtractZip` and `DeleteFile`
+re-read the lock under the site lock, a staged commit and `RenameChecked`
+refuse a locked site, and WebDAV and FTP check it before a delete or a new
+folder (`store.CheckUnlocked`).
+
+**Leaving container mode** scans the tree first (`ScanBeforeServing`): what
+the containers wrote was never an upload, and from the switch on it is served
+as files. The verdict is the upload guard's without the container exemption;
+a hold stops the switch.
 
 ## The tripwire
 
@@ -203,9 +224,12 @@ exactly as before. Then, when the blocked URL matches an exfil destination:
 1. The report's document URL (`document-uri` / `documentURL`), when it has
    one, must resolve to the same site as the report's `Host`; otherwise the
    report is not the site's and is ignored by the tripwire.
-2. At most 6 checks per hour per (site, destination) and 2 at a time.
+2. At most 6 checks per hour per site, whatever destinations its reports
+   name, and 2 at a time.
 3. **Verification against the site's own files**: the content is walked
-   (regular files, 5000 files / 64 MiB at most) for the destination's text.
+   (regular files, 5000 files / 64 MiB at most, counting every byte read —
+   a file that would overrun the budget is not read) for the destination's
+   text.
    A report is unauthenticated, so this is what stops a forged report from
    locking an arbitrary site: only content that actually references the
    destination can be locked by it.
@@ -234,8 +258,11 @@ state, the rule, file and excerpt, and links to the register row
 Aggregation, so a flood cannot mail-bomb: at most **one mail per site (or
 report target) per hour** and **ten immediate mails per hour** in all;
 everything else goes into a **digest**, sent an hour after the first event it
-holds (at most 200 lines, then a count). Sending is asynchronous with a
-30-second timeout per mail; a failure is logged.
+holds (at most 200 lines, then a count). A **hold** is always mailed at once
+and spends no budget (a site is held once); an **unverified** tripwire event
+— which anyone can cause with a forged report — only ever goes to the digest.
+Sending is asynchronous with a 30-second timeout per mail; a failure is
+logged.
 
 ## Reports reach a human
 
@@ -264,8 +291,10 @@ holds (at most 200 lines, then a count). Sending is asynchronous with a
 - A **Reports** tab (`/account/admin/reports`), newest first, 300 shown: when,
   reason, target, details, contact, source network, and the resolved site with
   owner and lock state. An unlocked resolved site has **Lock site**: one POST
-  (CSRF-checked) that locks it with reason "abuse report: <reason>" and returns
-  to the tab.
+  (CSRF-checked) that locks it and returns to the tab, with the reason
+  prefilled as "abuse report: <reason>" in a visible, editable field — an API
+  report's reason is anyone's free text, and a lock reason is shown to the
+  owner.
 - The **Flagged** filter now means scanner findings *or* CSP-blocked requests;
   a **Scanner** figure counts sites with findings.
 - A row with findings lists them (rule · file · excerpt, first three) and
@@ -309,3 +338,35 @@ never locked). Run on the host as `docker exec sitebin sitebin scan --all`.
 - Report page: GET renders without scripts, POST stores + mails, honeypot,
   ticket age, limits; API report mails. Register: tab, lock from report,
   findings, dismiss, filter.
+
+## Corrections (review before merge)
+
+An independent review of the branch found ten problems; all were fixed
+before it was pushed, and the sections above describe the result:
+
+1. A NUL byte in the first 8 KiB made a file "binary" and unscanned, and
+   UTF-16 always did — a trivial bypass. NULs are now dropped before
+   matching; only binary extensions are skipped.
+2. Active types were a short extension list; `.xht`, `.xml` and other XML or
+   script types the container's mailcap serves as such could not block.
+   `IsActive` now also asks the MIME table.
+3. Dismissing a kit as a flag in a `.txt` reviewed its bytes for any name, so
+   the same bytes as `index.html` were never held. Reviews now carry their
+   severity.
+4. A write, zip, delete, or DAV/FTP remove that passed its gate before a
+   hold could still change the evidence. They re-check the lock now.
+5. One forged CSP report could make the tripwire hash a whole large file;
+   the budget now counts every byte read, and the limit is per site.
+6. Forged reports could use up the hourly alert budget and push real
+   alerts into the digest. Unverified events go to the digest only; holds
+   bypass the caps.
+7. The Reports tab's one-click lock published a reporter's free text as the
+   lock reason unseen. The reason is a visible, editable field.
+8. Leaving container mode served what the containers wrote unscanned.
+9. `OpenStaged` copied whole files for a handle never written (PROPPATCH);
+   the copy is now made on first use.
+10. An unsuspension could serve a kit found while the account lock stood; it
+    now turns into a scanner lock.
+
+Also: the operator check reads the admin allowlist before the tier, so an
+upload that trips a rule costs no PayGate call for someone who is not on it.

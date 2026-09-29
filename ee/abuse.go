@@ -96,6 +96,9 @@ func (p *provider) handleAdminReports(w http.ResponseWriter, r *http.Request) {
 				if info.Locked != nil {
 					row.LockText = lockText(info.Locked)
 				}
+				// Prefilled, and shown in an editable field before it is
+				// used: an API report's reason is anyone's free text, and a
+				// lock reason is published to the owner.
 				row.LockReason = store.CleanLockReason("abuse report: " + rep.Reason)
 			}
 		}

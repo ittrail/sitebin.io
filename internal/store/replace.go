@@ -286,7 +286,7 @@ func (r *Replacement) Commit() error {
 	// committed, as evidence, into a site nobody is served.
 	var held error
 	if len(r.pending) > 0 {
-		ev, err := r.s.settleLocked(r.site, r.pending, FindingUpload, "")
+		ev, err := r.s.settleLocked(r.site, r.pending, FindingUpload, "", false)
 		if err != nil && !errors.Is(err, ErrHeld) {
 			return err
 		}

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"archive/zip"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -105,6 +106,10 @@ type provNote struct {
 	files  int
 	paths  []string
 	detail string
+	// held says the abuse guard locked the site on this request's write:
+	// the request fails, but the write happened and is the evidence, so it
+	// is recorded like a success.
+	held bool
 }
 
 type provNoteKey struct{}
@@ -144,8 +149,11 @@ func (a *API) recorded(action string, next func(http.ResponseWriter, *http.Reque
 		r = r.WithContext(context.WithValue(r.Context(), provNoteKey{}, note))
 		sw := &statusWriter{ResponseWriter: w, code: 200}
 		next(sw, r, site)
-		if sw.code >= 300 {
+		if sw.code >= 300 && !note.held {
 			return
+		}
+		if note.held {
+			note.detail = strings.TrimPrefix(note.detail+", held for review", ", ")
 		}
 		if note.action != "" {
 			action = note.action
@@ -292,7 +300,13 @@ type countingSink struct {
 }
 
 func (c countingSink) SaveFile(p string, r io.Reader) error {
-	if err := c.uploadSink.SaveFile(p, r); err != nil {
+	err := c.uploadSink.SaveFile(p, r)
+	if errors.Is(err, store.ErrHeld) {
+		// written, and it held the site: the file the trail must name
+		c.note.addFile(p)
+		c.note.held = true
+	}
+	if err != nil {
 		return err
 	}
 	c.note.addFile(p)
@@ -301,6 +315,10 @@ func (c countingSink) SaveFile(p string, r io.Reader) error {
 
 func (c countingSink) ExtractZip(r io.ReaderAt, n int64) error {
 	if err := c.uploadSink.ExtractZip(r, n); err != nil {
+		if errors.Is(err, store.ErrHeld) {
+			c.note.held = true
+			c.note.detail = strings.TrimPrefix(c.note.detail+", a zip", ", ")
+		}
 		return err
 	}
 	if zr, err := zip.NewReader(r, n); err == nil {
