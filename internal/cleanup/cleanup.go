@@ -191,6 +191,14 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 // site; the store decides again under the site lock, so an evidence hold or
 // an unlock that arrived since the sweep read the site keeps it.
 func purgeLocked(st *store.Store, site *store.Site, now time.Time) bool {
+	// The sweep's snapshot can be minutes old by now (zones and domain
+	// checks run first): read the site again before stopping anything, or a
+	// container site unlocked meanwhile — already restarted by the runtime —
+	// would be torn down and stay down.
+	site, err := st.ByViewID(site.ViewID)
+	if err != nil || !st.LockPurgeDue(site.Meta, now) {
+		return false
+	}
 	l := site.Meta.Locked
 	if err := stopContainers(site); err != nil {
 		slog.Error("cleanup: could not stop a locked site's containers, keeping it", "id", site.ViewID, "owner", site.Meta.OwnerAccountID, "err", err)

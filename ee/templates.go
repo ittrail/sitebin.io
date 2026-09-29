@@ -574,7 +574,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
     {{else if .Holding}}
     <div class="row confirm">
       <span class="id">{{if .Name}}<span class="nm">{{.Name}}</span>{{end}}{{.ViewID}}{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}</span>
-      <span class="warnmsg">Place an evidence hold on this site? Do it while a case, investigation or proceeding about it is still open: the site and its records are kept past the {{$.RetentionDays}}-day lock retention{{if .PurgeDate}} (purge due {{.PurgeDate}}){{end}}, and its owner's provenance with them, until you release the hold. Unlocking the site ends the hold too.</span>
+      <span class="warnmsg">Place an evidence hold on this site? Do it while a case, investigation or proceeding about it is still open: the site and its records are kept past the {{$.RetentionDays}}-day lock retention{{if .PurgeDate}} (purge due {{.PurgeDate}}){{end}}, and its owner's provenance with them, until you release the hold. An unsuspension does not lift a held lock — it becomes your own. Unlocking the site ends the hold too.</span>
       <span class="acts">
         <form method="post" action="/account/admin/sites/{{.ViewID}}/hold{{if $.Params}}?{{$.ParamsQ}}{{end}}" class="inline">
           <input type="hidden" name="csrf" value="{{$.CSRF}}">

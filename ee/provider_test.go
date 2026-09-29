@@ -233,6 +233,14 @@ func (s *fakeSites) ReleaseLock(id, by string) (bool, error) {
 	if info.Locked == nil || info.Locked.By != by {
 		return false, nil
 	}
+	if info.Locked.Hold != nil {
+		// a held lock is the operator's own from then on, as the store does
+		l := *info.Locked
+		l.By = ext.LockByAdmin
+		info.Locked = &l
+		s.infos[id] = info
+		return false, nil
+	}
 	info.Locked = nil
 	s.infos[id] = info
 	return true, nil

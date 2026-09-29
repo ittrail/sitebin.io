@@ -52,13 +52,12 @@ func TestReLockKeepsTheLockDate(t *testing.T) {
 }
 
 // An unsuspension that turns into a scanner lock is the same continuous
-// lock: date and evidence hold stay.
-func TestAccountLockTurnedScannerKeepsDateAndHold(t *testing.T) {
+// lock: the date stays. (A held one becomes the operator's instead, below.)
+func TestAccountLockTurnedScannerKeepsTheDate(t *testing.T) {
 	s := newTestStore(t)
 	site, _, _ := s.Create()
 	first := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	s.SetLock(site, &SiteLock{At: first, By: LockByAccount})
-	s.SetHold(site, &LockHold{By: HoldByCLI})
 	s.Update(site, func(m *Meta) error {
 		m.Abuse = &AbuseState{Findings: []Finding{{Rule: "telegram-bot-api", Severity: "block", Path: "index.html"}}}
 		return nil
@@ -67,8 +66,30 @@ func TestAccountLockTurnedScannerKeepsDateAndHold(t *testing.T) {
 		t.Fatalf("release = %v, %v; want the lock turned into a scanner lock", released, err)
 	}
 	l := site.Meta.Locked
-	if l == nil || l.By != LockByScanner || !l.At.Equal(first) || l.Hold == nil {
+	if l == nil || l.By != LockByScanner || !l.At.Equal(first) {
 		t.Fatalf("scanner lock = %+v", l)
+	}
+}
+
+// An unsuspension never ends a case: a suspension's lock carrying an
+// evidence hold becomes the operator's own lock instead of being lifted.
+func TestReleaseLockKeepsAHeldLock(t *testing.T) {
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	first := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	s.SetLock(site, &SiteLock{At: first, By: LockByAccount, Reason: "account suspended"})
+	s.SetHold(site, &LockHold{By: "acct-admin"})
+	if released, err := s.ReleaseLock(site, LockByAccount); err != nil || released {
+		t.Fatalf("release of a held account lock = %v, %v", released, err)
+	}
+	got, _ := s.ByViewID(site.ViewID)
+	l := got.Meta.Locked
+	if l == nil || l.By != LockByAdmin || !l.At.Equal(first) || l.Hold == nil || l.Reason != "account suspended" {
+		t.Fatalf("lock after the unsuspension = %+v", l)
+	}
+	// A second unsuspension finds the operator's lock and leaves it.
+	if released, _ := s.ReleaseLock(site, LockByAccount); released || !site.Meta.IsLocked() {
+		t.Fatal("the operator's held lock was released")
 	}
 }
 

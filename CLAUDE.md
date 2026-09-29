@@ -128,7 +128,9 @@ including its lock-retention addendum.
   scanner) keeps it and its hold; only an unlock resets the clock. Never let a
   new code path write `Locked` with a fresh date over an existing lock, or
   retention never ends. `Locked.Hold` (the operator's evidence hold, "case
-  open": `SetHold`, register, `sitebin hold`/`unhold`) stops the purge;
+  open": `SetHold`, register, `sitebin hold`/`unhold`) stops the purge, and
+  an unsuspension turns a held account lock into the operator's instead of
+  lifting it;
   `LockPurgeAt` / `LockRetentionEnds` are the one statement of the rule — the
   register reads it from `ext.SiteLock.PurgeAt`, never computes it. A purge
   is a digest line (never an immediate mail), and a store nobody configured

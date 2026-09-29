@@ -274,6 +274,11 @@ that on its own, or the promise is only as good as the operator's memory.
   one. A hold does not move the date the retention ends; it only stops the
   purge. Releasing it lets the next sweep purge a site whose lock is already
   older than the retention — the release step and `sitebin unhold` say so.
+- **An unsuspension never ends a case.** A suspension's lock that carries a
+  hold is not lifted by `ReleaseLock(account)`: it becomes the operator's own
+  lock (as if kept), with its date and hold, and `released` is false. Lifting
+  it would serve the site again, hand it back to its owner and its expiry,
+  and let the account's deletion through while the case is open.
 - **The operator hears of every purge.** The sweep logs it at INFO
   (`cleanup: purged a locked site past the lock retention` — id, owner,
   `locked_at`, `locked_by`, reason, `retention_days`), and the running
@@ -283,6 +288,17 @@ that on its own, or the promise is only as good as the operator's memory.
   purpose: a routine purge must never spend the hourly budget of immediate
   mails that real alerts need — the reasoning of abuse-detection Correction
   6. The one-shot `sitebin cleanup` has no mailer: it logs and prints.
+
+**Known limit — another process.** The site mutex is per process. The CLI
+writes `meta.json` from its own process, so a `sitebin hold` that lands
+while the server's sweep is between its re-read and its delete can still
+lose to the purge (the CLI then re-reads and says the site was purged), and
+a server-side read-modify-write of a locked site's `meta.json` straddling
+the CLI's write (a tripwire finding, a container state write) can drop the
+hold. `sitebin lock` / `unlock` have had the same limit since Phase 1. The
+windows are milliseconds against a retention of months; when a purge is
+imminent, place the hold in the register, which runs in the server's
+process and is serialised with the sweep.
 
 Why the CLI is `sitebin hold` / `sitebin unhold` and not `sitebin lock
 --hold`: a hold is placed on and released from a lock that already exists,
@@ -362,7 +378,8 @@ configuration for the server and every CLI command.
 
 - `internal/store`: re-lock keeps the date (scanner → Keep → suspension →
   re-lock), an unlock starts a new clock, an account lock turned scanner
-  lock keeps date and hold; a hold only on a locked site, the first hold
+  lock keeps its date, a held account lock survives the unsuspension as the
+  operator's; a hold only on a locked site, the first hold
   stays, a re-lock keeps it, `SetLock` cannot place one, an unlock ends it;
   purge and retention-end dates; the purge before, at and after the
   retention (files, meta, edit and domain index, provenance, hook); the
@@ -370,7 +387,8 @@ configuration for the server and every CLI command.
 - `internal/cleanup`: purge past the retention and not before; a held lock
   kept and purged once released; the re-lock chain purged on the first
   lock's date; retention 0 never purges; a container site stopped first and
-  kept when it cannot be; the account-purge cutoffs for *R* = 180, 30 and 0,
+  kept when it cannot be, and never stopped on a stale snapshot of a site
+  unlocked meanwhile; the account-purge cutoffs for *R* = 180, 30 and 0,
   and the order (sites first).
 - `internal/httpapi`: the seam (`PurgeAt`, `Hold`, `SetHold`, Keep keeps the
   date, `ErrSiteNotLocked`, `ErrSiteGone`); the owner's payload never shows
@@ -381,6 +399,7 @@ configuration for the server and every CLI command.
   the date), `list` and `lock` output.
 - `ee`: register rows (purge due, held, kept), the Hold and Release steps,
   CSRF, admin only, `409` for an unlocked site, retention 0 hides Hold; the
-  account purge (suspended, owner of a locked site, held, *R* = 0); account
+  account purge (suspended, owner of a locked site, held, *R* = 0); an
+  unsuspension keeps a held site locked as the operator's; account
   deletion refused while locked or held and accepted once the site is purged
   (real store).

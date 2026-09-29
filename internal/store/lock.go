@@ -161,10 +161,20 @@ func (s *Store) SetLock(site *Site, lock *SiteLock) (changed bool, err error) {
 // would have been held, the account lock becomes a scanner lock instead,
 // and released is false. The site stays locked throughout, so the scanner
 // lock keeps the date and any evidence hold.
+//
+// Nor does it end a case: a lock the operator put an evidence hold on is
+// the operator's own from then on, as if kept — it becomes an operator lock
+// (date and hold unchanged) and released is false. Lifting it would serve
+// the site, hand it back to its owner and its expiry, and let the account's
+// deletion through while the case is still open.
 func (s *Store) ReleaseLock(site *Site, by string) (released bool, err error) {
 	err = s.Update(site, func(m *Meta) error {
 		released = false
 		if m.Locked == nil || m.Locked.By != by {
+			return nil
+		}
+		if m.Locked.Hold != nil {
+			m.Locked.By = LockByAdmin
 			return nil
 		}
 		if by == LockByAccount && m.Abuse != nil {

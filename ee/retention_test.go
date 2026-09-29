@@ -190,3 +190,33 @@ func TestAccountDeletionWorksOnceTheLockedSiteIsPurged(t *testing.T) {
 		t.Fatal("the account's deletion is still refused after its locked site was purged")
 	}
 }
+
+// An unsuspension never ends a case: a suspension's lock the operator put
+// an evidence hold on stays locked, as the operator's own, and the account
+// still cannot be deleted around it.
+func TestUnsuspensionKeepsAHeldSiteLocked(t *testing.T) {
+	p, host, mux := setupStackInstance(t, testGDPRSecret)
+	acc, _ := stackUser(t, p, host, suspendSubject, "subject@example.com")
+	if w := orderSuspend(mux, suspendOrderBody(suspendSubject, true, "phishing")); w.Code != 200 {
+		t.Fatalf("suspend = %d %s", w.Code, w.Body)
+	}
+	lockAt := host.sites.infos[siteA].Locked.At
+	if err := host.sites.SetHold(siteA, &ext.LockHold{At: time.Now(), By: "acct-admin"}); err != nil {
+		t.Fatal(err)
+	}
+
+	w := orderSuspend(mux, suspendOrderBody(suspendSubject, false, ""))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"sitesUnlocked":1`) {
+		t.Fatalf("unsuspend = %d %s", w.Code, w.Body)
+	}
+	l := host.sites.infos[siteA].Locked
+	if l == nil || l.By != ext.LockByAdmin || l.Hold == nil || !l.At.Equal(lockAt) {
+		t.Fatalf("the held site after the unsuspension: %+v", l)
+	}
+	if host.sites.infos[siteB].Locked != nil {
+		t.Error("the unheld suspension lock survived the unsuspension")
+	}
+	if !p.refuseLockedDeletion(httptest.NewRecorder(), acc) {
+		t.Error("the account can be deleted around a held site")
+	}
+}

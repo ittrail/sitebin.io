@@ -916,7 +916,8 @@ re-locking, keeping a scanner's or a suspension's lock as your own, or a
 suspension arriving on a locked site never resets it; only an unlock does.
 While a case, investigation or proceeding is still open, place an **evidence
 hold** on the lock (`sitebin hold <id>`, or **Hold** in the register) and the
-site is kept until you release it (`sitebin unhold <id>`, **Release hold**).
+site is kept until you release it (`sitebin unhold <id>`, **Release hold**);
+an unsuspension does not lift a held lock, it becomes your own.
 The register and `sitebin list` show every lock's "purge due" date or its
 hold. `0` keeps locked sites forever.
 Design: [`2026-09-28-site-lock-and-account-suspension.md`](docs/superpowers/specs/2026-09-28-site-lock-and-account-suspension.md)

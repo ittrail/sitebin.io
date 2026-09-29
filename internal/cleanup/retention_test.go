@@ -241,3 +241,28 @@ func TestSweepPurgeLeavesNoDanglingLinks(t *testing.T) {
 		t.Error("edit link left behind")
 	}
 }
+
+// The sweep's snapshot can be minutes old when a site's turn comes: a
+// container site unlocked meanwhile — already restarted by the runtime —
+// must not be stopped on the strength of it.
+func TestSweepPurgeReadsTheSiteAgainBeforeStoppingIt(t *testing.T) {
+	rt := &stopRuntime{}
+	ext.Register(&containerProvider{stubProvider: &stubProvider{}, rt: rt})
+	defer ext.Reset()
+	st := retentionStore(t, 180*day)
+	now := time.Now().UTC()
+	site := lockedAt(t, st, now.Add(-200*day), store.LockByAdmin)
+	st.Update(site, func(m *store.Meta) error { m.Mode = store.ModeContainer; return nil })
+	stale, _ := st.ByViewID(site.ViewID)
+	st.SetLock(site, nil) // the operator unlocks it while the sweep works
+
+	if purgeLocked(st, stale, now) {
+		t.Fatal("an unlocked site was purged")
+	}
+	if len(rt.stopped) != 0 {
+		t.Fatalf("the containers of a site unlocked mid-sweep were stopped: %v", rt.stopped)
+	}
+	if gone(st, site) {
+		t.Fatal("the site is gone")
+	}
+}

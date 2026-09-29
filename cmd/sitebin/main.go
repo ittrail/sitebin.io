@@ -606,6 +606,12 @@ func holdSite(st *store.Store, out io.Writer, key string, hold bool, now time.Ti
 	if err != nil {
 		return err
 	}
+	// The server's sweep runs in another process: a purge that read the
+	// site before this write can still delete it after. Say so rather than
+	// report a hold on a site that is gone.
+	if _, err := st.ByViewID(site.ViewID); errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("site %s was purged by the lock retention while the hold was being placed", site.ViewID)
+	}
 	l := site.Meta.Locked
 	switch {
 	case hold && !changed:
