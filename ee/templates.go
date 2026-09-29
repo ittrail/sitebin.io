@@ -445,6 +445,11 @@ const adminConsoleCSS = `
   .adm .row .lock { display: block; margin-top: 4px; font: 11px var(--mono); color: var(--danger); overflow-wrap: anywhere; }
   .adm .row .lock b { display: inline-block; padding: 0 6px; margin-right: 6px; border: 1px solid var(--danger); border-radius: 4px; font-weight: 700; letter-spacing: .08em; }
   .adm .row.locked { background: rgba(242,109,109,.035); }
+  /* The lock retention: when the sweep purges the site, or the evidence
+     hold that keeps it while a case is open. */
+  .adm .row .ret { display: block; margin-top: 2px; font: 11px var(--mono); color: var(--ink-faint); overflow-wrap: anywhere; }
+  .adm .row .ret.held { color: var(--amber); }
+  .adm .row .ret.held::before { content: "⚖ "; }
   .adm .row .susp { display: inline-block; margin-left: 6px; padding: 0 5px; border: 1px solid var(--danger); border-radius: 4px; font: 700 10px var(--mono); letter-spacing: .08em; color: var(--danger); text-transform: uppercase; }
   .adm .row.confirm input[type=text] {
     background: var(--bg-raise); color: var(--ink); border: 1px solid var(--line);
@@ -494,9 +499,11 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
 
   {{if eq .Flash "deleted"}}<p class="flash">Site deleted.</p>{{end}}
   {{if eq .Flash "expiry"}}<p class="flash">Expiry updated.</p>{{end}}
-  {{if eq .Flash "locked"}}<p class="flash">Site locked: it is served to nobody, frozen for its owner, and kept past its expiry.</p>{{end}}
+  {{if eq .Flash "locked"}}<p class="flash">Site locked: it is served to nobody, frozen for its owner, and kept past its expiry{{if .RetentionDays}} — for {{.RetentionDays}} days from the lock, unless you place an evidence hold{{end}}.</p>{{end}}
   {{if eq .Flash "unlocked"}}<p class="flash">Site unlocked: it is served again, and its expiry applies again.</p>{{end}}
   {{if eq .Flash "reviewed"}}<p class="flash">Findings dismissed: the same content is not flagged or held again.</p>{{end}}
+  {{if eq .Flash "held"}}<p class="flash">Evidence hold placed: the site is kept past the lock retention until you release the hold.</p>{{end}}
+  {{if eq .Flash "unheld"}}<p class="flash">Evidence hold released: the lock retention applies again.</p>{{end}}
 
   <section class="figures">
     <div class="fig"><span class="k">Sites</span><span class="v">{{.Figures.Sites}}</span></div>
@@ -542,7 +549,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
     {{if .Locking}}
     <div class="row confirm">
       <span class="id">{{if .Name}}<span class="nm">{{.Name}}</span>{{end}}{{.ViewID}}{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}</span>
-      <span class="warnmsg">{{if .Locked}}Keep this site locked as your own hold? A lock placed by a suspension is lifted when the owner is unsuspended; yours stays until you unlock it.{{else}}Lock this site? It stops being served at once, its owner can no longer change, download or delete it, and it is kept past its expiry — nothing is deleted until you unlock or delete it.{{end}}</span>
+      <span class="warnmsg">{{if .Locked}}Keep this site locked as your own lock? A lock placed by a suspension is lifted when the owner is unsuspended; yours stays until you unlock it. It keeps its date, and the lock retention with it: {{.RetentionText}}.{{else}}Lock this site? It stops being served at once, its owner can no longer change, download or delete it, and it is kept past its expiry as evidence — {{if $.RetentionDays}}the cleanup sweep purges it {{$.RetentionDays}} days after the lock unless you place an evidence hold while a case is open{{else}}nothing is deleted until you unlock or delete it{{end}}.{{end}}</span>
       <span class="acts">
         <form method="post" action="/account/admin/sites/{{.ViewID}}/lock{{if $.Params}}?{{$.ParamsQ}}{{end}}" class="inline">
           <input type="hidden" name="csrf" value="{{$.CSRF}}">
@@ -555,11 +562,35 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
     {{else if .Unlocking}}
     <div class="row confirm">
       <span class="id">{{if .Name}}<span class="nm">{{.Name}}</span>{{end}}{{.ViewID}}{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}</span>
-      <span class="warnmsg">Unlock this site? It is served again at once, its owner can change it again, and its expiry{{if .ExpiryValue}} ({{.ExpiryValue}}){{end}} applies again — a date already past means the next sweep deletes it.{{if .FindingLines}} Its scanner findings become reviewed: the same content is not held again.{{end}}</span>
+      <span class="warnmsg">Unlock this site? It is served again at once, its owner can change it again, and its expiry{{if .ExpiryValue}} ({{.ExpiryValue}}){{end}} applies again — a date already past means the next sweep deletes it.{{if .Held}} Its evidence hold ends with the lock.{{end}}{{if .FindingLines}} Its scanner findings become reviewed: the same content is not held again.{{end}}</span>
       <span class="acts">
         <form method="post" action="/account/admin/sites/{{.ViewID}}/unlock{{if $.Params}}?{{$.ParamsQ}}{{end}}" class="inline">
           <input type="hidden" name="csrf" value="{{$.CSRF}}">
           <button class="btn small" type="submit">Yes, unlock {{.ViewID}}</button>
+        </form>
+        <a class="btn small" href="/account/admin?{{$.ParamsQ}}">Cancel</a>
+      </span>
+    </div>
+    {{else if .Holding}}
+    <div class="row confirm">
+      <span class="id">{{if .Name}}<span class="nm">{{.Name}}</span>{{end}}{{.ViewID}}{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}</span>
+      <span class="warnmsg">Place an evidence hold on this site? Do it while a case, investigation or proceeding about it is still open: the site and its records are kept past the {{$.RetentionDays}}-day lock retention{{if .PurgeDate}} (purge due {{.PurgeDate}}){{end}}, and its owner's provenance with them, until you release the hold. Unlocking the site ends the hold too.</span>
+      <span class="acts">
+        <form method="post" action="/account/admin/sites/{{.ViewID}}/hold{{if $.Params}}?{{$.ParamsQ}}{{end}}" class="inline">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <button class="btn small" type="submit">Yes, hold {{.ViewID}}</button>
+        </form>
+        <a class="btn small" href="/account/admin?{{$.ParamsQ}}">Cancel</a>
+      </span>
+    </div>
+    {{else if .Unholding}}
+    <div class="row confirm">
+      <span class="id">{{if .Name}}<span class="nm">{{.Name}}</span>{{end}}{{.ViewID}}{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}</span>
+      <span class="warnmsg">Release the evidence hold? Do it once the case is closed: the lock retention applies again{{if .PurgeDate}}{{if .PurgePast}}, and the lock is older than it ({{.PurgeDate}}) — the next sweep purges the site, its files and its records{{else}} and the site is purged on {{.PurgeDate}}{{end}}{{end}}. It stays locked either way.</span>
+      <span class="acts">
+        <form method="post" action="/account/admin/sites/{{.ViewID}}/unhold{{if $.Params}}?{{$.ParamsQ}}{{end}}" class="inline">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <button class="btn small danger" type="submit">Yes, release {{.ViewID}}</button>
         </form>
         <a class="btn small" href="/account/admin?{{$.ParamsQ}}">Cancel</a>
       </span>
@@ -578,7 +609,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
     </div>
     {{else}}
     <div class="row{{if .Locked}} locked{{end}}">
-      <span class="id">{{if .Name}}<span class="nm">{{.Name}}</span>{{end}}<a href="{{.ViewURL}}" rel="noreferrer noopener" target="_blank">{{.ViewID}}</a>{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}{{if .LockText}}<span class="lock"><b>LOCKED</b>{{.LockText}}</span>{{end}}{{if .FindingLines}}<span class="hits">{{range .FindingLines}}<span class="hit">&#9873; {{.}}</span>{{end}}{{if .MoreFindings}}<span class="hit">… and {{.MoreFindings}} more</span>{{end}}<form method="post" action="/account/admin/sites/{{.ViewID}}/review{{if $.Params}}?{{$.ParamsQ}}{{end}}" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button class="btn small" type="submit" title="You have looked: the same content is not flagged or held again">Dismiss</button></form></span>{{end}}{{with index $.Prov .ViewID}}<span class="prov">{{if .CreatedIP}}from <a href="/account/admin?q={{.CreatedIP}}" title="{{.CreatedUA}}">{{.CreatedIP}}</a> · {{.CreatedText}}{{end}}{{if .LastText}}{{if .CreatedIP}}<br>{{end}}last {{.LastText}}{{if .LastIP}} · <a href="/account/admin?q={{.LastIP}}" title="{{.LastUA}}">{{.LastIP}}</a>{{end}}{{end}} · <a href="{{.Trail}}">trail &rarr;</a></span>{{end}}</span>
+      <span class="id">{{if .Name}}<span class="nm">{{.Name}}</span>{{end}}<a href="{{.ViewURL}}" rel="noreferrer noopener" target="_blank">{{.ViewID}}</a>{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}{{if .LockText}}<span class="lock"><b>LOCKED</b>{{.LockText}}</span><span class="ret{{if .Held}} held{{end}}">{{.RetentionText}}</span>{{end}}{{if .FindingLines}}<span class="hits">{{range .FindingLines}}<span class="hit">&#9873; {{.}}</span>{{end}}{{if .MoreFindings}}<span class="hit">… and {{.MoreFindings}} more</span>{{end}}<form method="post" action="/account/admin/sites/{{.ViewID}}/review{{if $.Params}}?{{$.ParamsQ}}{{end}}" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button class="btn small" type="submit" title="You have looked: the same content is not flagged or held again">Dismiss</button></form></span>{{end}}{{with index $.Prov .ViewID}}<span class="prov">{{if .CreatedIP}}from <a href="/account/admin?q={{.CreatedIP}}" title="{{.CreatedUA}}">{{.CreatedIP}}</a> · {{.CreatedText}}{{end}}{{if .LastText}}{{if .CreatedIP}}<br>{{end}}last {{.LastText}}{{if .LastIP}} · <a href="/account/admin?q={{.LastIP}}" title="{{.LastUA}}">{{.LastIP}}</a>{{end}}{{end}} · <a href="{{.Trail}}">trail &rarr;</a></span>{{end}}</span>
       <span class="own{{if not .Owner}} anon{{end}}">{{.OwnerLabel}}{{if .OwnerSuspended}}<span class="susp" title="{{.OwnerSuspended}}">Suspended</span>{{end}}{{if .Violations}}<span class="flag" title="{{.BlockedText}}">&#9888; {{.Violations}} blocked{{if .Reporters}} &middot; {{.Reporters}} source{{if ne .Reporters 1}}s{{end}}{{end}}</span>{{end}}</span>
       <span class="num orig">{{if .Origin}}{{.Origin}}{{else}}&mdash;{{end}}</span>
       <span class="num">{{.Mode}}</span>
@@ -591,7 +622,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
           <input type="date" name="expires" value="{{.ExpiryValue}}" aria-label="Expiry for {{.ViewID}}">
           <button class="btn small" type="submit">Set</button>
         </form>
-        {{if .Locked}}<a class="btn small" href="/account/admin?unlock={{.ViewID}}{{$.Params}}">Unlock</a>{{if .LockedByMachine}}<a class="btn small" href="/account/admin?lock={{.ViewID}}{{$.Params}}" title="Make it your own lock">Keep</a>{{end}}{{else}}<a class="btn small danger" href="/account/admin?lock={{.ViewID}}{{$.Params}}">Lock</a>{{end}}
+        {{if .Locked}}<a class="btn small" href="/account/admin?unlock={{.ViewID}}{{$.Params}}">Unlock</a>{{if .LockedByMachine}}<a class="btn small" href="/account/admin?lock={{.ViewID}}{{$.Params}}" title="Make it your own lock">Keep</a>{{end}}{{if .Held}}<a class="btn small" href="/account/admin?unhold={{.ViewID}}{{$.Params}}" title="The case is closed: the lock retention applies again">Release hold</a>{{else if $.RetentionDays}}<a class="btn small" href="/account/admin?hold={{.ViewID}}{{$.Params}}" title="A case is open: keep the site past the lock retention">Hold</a>{{end}}{{else}}<a class="btn small danger" href="/account/admin?lock={{.ViewID}}{{$.Params}}">Lock</a>{{end}}
         <a class="btn small danger" href="/account/admin?confirm={{.ViewID}}{{$.Params}}">Delete</a>
       </span>
     </div>

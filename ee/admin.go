@@ -3,6 +3,7 @@
 package ee
 
 import (
+	"errors"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -164,6 +165,18 @@ type adminRow struct {
 	// operator's own.
 	LockText        string
 	LockedByMachine bool
+	// RetentionText is what the lock retention does with a locked site:
+	// "purge due <date>", "held (case open) …" (Held), or that it is kept
+	// until unlocked when the instance keeps locks forever. PurgeDate is the
+	// bare date the retention runs out, held or not (the steps name it), and
+	// PurgePast that it has already passed.
+	RetentionText string
+	Held          bool
+	PurgeDate     string
+	PurgePast     bool
+	// Holding and Unholding are the confirmation steps of the evidence hold.
+	Holding   bool
+	Unholding bool
 	// FindingLines are the abuse guard's newest hits as the row shows them,
 	// MoreFindings how many are not shown.
 	FindingLines []string
@@ -197,6 +210,9 @@ type adminView struct {
 	// search's account panel, set when the query is an address or a range.
 	Prov map[string]*rowProv
 	IP   *ipPanel
+	// RetentionDays is the lock retention in days, 0 when locks are kept
+	// forever (and the evidence hold has nothing to hold off).
+	RetentionDays int
 }
 
 // matches decides whether a site survives the text query. It searches the
@@ -242,7 +258,10 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	confirm := r.URL.Query().Get("confirm")
 	locking := r.URL.Query().Get("lock")
 	unlocking := r.URL.Query().Get("unlock")
-	cutoff := time.Now().Add(expiringSoon)
+	holding := r.URL.Query().Get("hold")
+	unholding := r.URL.Query().Get("unhold")
+	now := time.Now()
+	cutoff := now.Add(expiringSoon)
 
 	// A query that is an address or a CIDR range searches provenance instead
 	// of names: every site whose log names an address in it.
@@ -274,9 +293,17 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 			Unlocking:      s.ViewID == unlocking && s.Locked != nil,
 			OwnerSuspended: suspended[s.Owner],
 		}
-		if s.Locked != nil {
-			row.LockText = lockText(s.Locked)
-			row.LockedByMachine = s.Locked.By == ext.LockByAccount || s.Locked.By == ext.LockByScanner
+		if l := s.Locked; l != nil {
+			row.LockText = lockText(l)
+			row.LockedByMachine = l.By == ext.LockByAccount || l.By == ext.LockByScanner
+			row.RetentionText = p.retentionText(l)
+			row.Held = l.Hold != nil
+			if l.PurgeAt != nil {
+				row.PurgeDate = l.PurgeAt.Local().Format("2006-01-02")
+				row.PurgePast = !l.PurgeAt.After(now)
+			}
+			row.Holding = s.ViewID == holding && l.Hold == nil && p.host.LockRetention() > 0
+			row.Unholding = s.ViewID == unholding && l.Hold != nil
 		}
 		shown := s.Findings
 		if n := len(shown); n > shownFindings {
@@ -345,18 +372,19 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 	p.securityHeaders(w)
 	adminTmpl.Execute(w, adminView{
-		Prov:    p.rowProvenance(rows),
-		IP:      panel,
-		Email:   acc.Email,
-		CSRF:    p.csrf(acc),
-		Figures: figures,
-		Rows:    rows,
-		Query:   r.URL.Query().Get("q"),
-		Filter:  filter,
-		Shown:   len(rows),
-		Flash:   r.URL.Query().Get("flash"),
-		Params:  template.URL(listParams(r)),
-		ParamsQ: template.URL(strings.TrimPrefix(listParams(r), "&")),
+		RetentionDays: int(p.host.LockRetention() / (24 * time.Hour)),
+		Prov:          p.rowProvenance(rows),
+		IP:            panel,
+		Email:         acc.Email,
+		CSRF:          p.csrf(acc),
+		Figures:       figures,
+		Rows:          rows,
+		Query:         r.URL.Query().Get("q"),
+		Filter:        filter,
+		Shown:         len(rows),
+		Flash:         r.URL.Query().Get("flash"),
+		Params:        template.URL(listParams(r)),
+		ParamsQ:       template.URL(strings.TrimPrefix(listParams(r), "&")),
 	})
 }
 
@@ -374,6 +402,35 @@ func lockText(l *ext.SiteLock) string {
 		out += " · " + l.Reason
 	}
 	return out
+}
+
+// retentionText is what the lock retention does with a lock, as the
+// register's row states it. The date comes from the core (PurgeAt), which
+// is the rule the sweep applies.
+func (p *provider) retentionText(l *ext.SiteLock) string {
+	if h := l.Hold; h != nil {
+		out := "held (case open) since " + h.At.Local().Format("2006-01-02") + " by " + p.holderLabel(h.By)
+		if l.PurgeAt != nil {
+			out += " · retention ends " + l.PurgeAt.Local().Format("2006-01-02")
+		}
+		return out
+	}
+	if l.PurgeAt != nil {
+		return "purge due " + l.PurgeAt.Local().Format("2006-01-02")
+	}
+	return "kept until unlocked"
+}
+
+// holderLabel names who placed an evidence hold: an admin's email where the
+// account still exists, the CLI, or the raw id.
+func (p *provider) holderLabel(by string) string {
+	if by == store.HoldByCLI {
+		return "the CLI"
+	}
+	if acc, err := p.accounts.ByID(by); err == nil {
+		return acc.Email
+	}
+	return by
 }
 
 // listParams re-encodes just the list's own query so a redirect or a cancel
@@ -462,6 +519,52 @@ func (p *provider) handleAdminUnlock(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("admin unlocked a site", "admin", acc.ID, "site", viewID)
 	p.redirect(w, r, "/account/admin?flash=unlocked"+listParams(r))
+}
+
+// handleAdminHold places the operator's evidence hold on a locked site: a
+// case, investigation or proceeding is open, so the cleanup sweep keeps the
+// site past the lock retention until the hold is released.
+func (p *provider) handleAdminHold(w http.ResponseWriter, r *http.Request) {
+	p.adminSetHold(w, r, true)
+}
+
+// handleAdminUnhold releases the evidence hold: the lock retention applies
+// again, and a lock already older than it is purged at the next sweep.
+func (p *provider) handleAdminUnhold(w http.ResponseWriter, r *http.Request) {
+	p.adminSetHold(w, r, false)
+}
+
+func (p *provider) adminSetHold(w http.ResponseWriter, r *http.Request, hold bool) {
+	acc, ok := p.adminAccount(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if !p.checkCSRF(r, acc) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	viewID := r.PathValue("id")
+	var h *ext.LockHold
+	if hold {
+		h = &ext.LockHold{At: time.Now(), By: acc.ID}
+	}
+	if err := p.host.Sites().SetHold(viewID, h); err != nil {
+		if errors.Is(err, ext.ErrSiteNotLocked) {
+			http.Error(w, "the site is not locked: an evidence hold keeps a locked site", http.StatusConflict)
+			return
+		}
+		slog.Error("admin could not change a site's evidence hold", "admin", acc.ID, "site", viewID, "hold", hold, "err", err)
+		http.Error(w, "could not change the evidence hold", http.StatusInternalServerError)
+		return
+	}
+	if hold {
+		slog.Info("admin placed an evidence hold", "admin", acc.ID, "site", viewID)
+		p.redirect(w, r, "/account/admin?flash=held"+listParams(r))
+		return
+	}
+	slog.Info("admin released an evidence hold", "admin", acc.ID, "site", viewID)
+	p.redirect(w, r, "/account/admin?flash=unheld"+listParams(r))
 }
 
 func (p *provider) handleAdminExpiry(w http.ResponseWriter, r *http.Request) {
