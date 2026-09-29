@@ -282,9 +282,13 @@ logged.
   accepts `contact` too. Reports are still purged after 14 days.
 - Targets resolve as before, plus `/v/<id>/` path URLs.
 - Every **stored** report mails the operator (aggregated like the rest).
-- Linked from the 410 "Site suspended" page and the landing page's footer.
-  (The view-domain apex page and `security.txt` link to it too; that is
-  separate work, sharing only the path.)
+- Linked from the landing page's footer here, and — through
+  `SITEBIN_ABUSE_REPORT_URL`, whose default is this page — from the 410 "Site
+  suspended" page, the view-domain apex page and `security.txt`
+  ([`2026-09-29-provenance-csp-apex.md`](2026-09-29-provenance-csp-apex.md)).
+- A held write fails for its caller but happened: the site's provenance
+  trail records it (creation, upload, replace, WebDAV, FTP), marked "held for
+  review".
 
 ## The register
 
