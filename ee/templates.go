@@ -446,6 +446,16 @@ const adminConsoleCSS = `
   .adm .row.confirm { grid-template-columns: minmax(200px,1.1fr) 1fr auto; background: rgba(242,109,109,.07); box-shadow: inset 3px 0 0 var(--danger); }
   .adm .row.confirm .warnmsg { font-size: 12px; color: var(--ink-dim); }
   .adm .empty { padding: 40px 16px; text-align: center; color: var(--ink-faint); font: 13px var(--mono); }
+  /* Provenance: where the site came from and its latest write. */
+  .adm .row .prov { display: block; margin-top: 3px; font: 11px var(--mono); color: var(--ink-faint); overflow-wrap: anywhere; }
+  .adm .row .prov a { color: var(--ink-dim); }
+  /* The address search: accounts seen from the address, above the sites. */
+  .adm .ipseen { border: 1px dashed rgba(245,184,77,.45); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 16px; background: linear-gradient(160deg, #151e33, #101727); }
+  .adm .ipseen h2 { font: 650 15px var(--display); margin-bottom: 8px; }
+  .adm .ipseen .acct { padding: 8px 0; border-top: 1px dashed var(--line-soft); font: 12px var(--mono); color: var(--ink-dim); }
+  .adm .ipseen .acct:first-of-type { border-top: 0; }
+  .adm .ipseen .acct a.who { color: var(--ink); font-weight: 600; }
+  .adm .ipseen .acct .ev { display: block; margin-top: 2px; overflow-wrap: anywhere; }
   @media (max-width: 900px) {
     .adm .rowhead { display: none; }
     .adm .row { grid-template-columns: 1fr; gap: 6px; }
@@ -475,7 +485,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
   </section>
 
   <form class="bar" method="get" action="/account/admin">
-    <input type="search" name="q" value="{{.Query}}" placeholder="name, view id, owner email or domain" aria-label="Search sites">
+    <input type="search" name="q" value="{{.Query}}" placeholder="name, view id, owner email, domain — or an IP / CIDR" aria-label="Search sites">
     <select name="filter" aria-label="Filter sites">
       <option value=""{{if eq .Filter ""}} selected{{end}}>All sites</option>
       <option value="owned"{{if eq .Filter "owned"}} selected{{end}}>Account-owned</option>
@@ -488,6 +498,15 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
     <button class="btn small" type="submit">Apply</button>
     <span class="count">{{.Shown}} shown</span>
   </form>
+
+  {{with .IP}}
+  <section class="ipseen">
+    <h2>Seen from {{.Query}}: {{.Sites}} site(s), {{len .Accounts}} account(s)</h2>
+    {{range .Accounts}}<div class="acct"><a class="who" href="/account/admin/accounts/{{.ID}}">{{.Email}}</a>{{if .Suspended}}<span class="susp">Suspended</span>{{end}}
+      {{range .Rows}}<span class="ev">{{.When}} · {{.Action}}{{if .Site}} {{.Site}}{{end}}{{if .What}} · {{.What}}{{end}} · {{.IP}}{{if .UA}} · {{.UA}}{{end}}</span>{{end}}
+    </div>{{else}}<p class="lede">No account was seen from this address.</p>{{end}}
+  </section>
+  {{end}}
 
   <section class="reg">
     <div class="rowhead">
@@ -533,7 +552,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
     </div>
     {{else}}
     <div class="row{{if .Locked}} locked{{end}}">
-      <span class="id">{{if .Name}}<span class="nm">{{.Name}}</span>{{end}}<a href="{{.ViewURL}}" rel="noreferrer noopener" target="_blank">{{.ViewID}}</a>{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}{{if .LockText}}<span class="lock"><b>LOCKED</b>{{.LockText}}</span>{{end}}</span>
+      <span class="id">{{if .Name}}<span class="nm">{{.Name}}</span>{{end}}<a href="{{.ViewURL}}" rel="noreferrer noopener" target="_blank">{{.ViewID}}</a>{{if .DomainsText}}<span class="dom">{{.DomainsText}}</span>{{end}}{{if .LockText}}<span class="lock"><b>LOCKED</b>{{.LockText}}</span>{{end}}{{with index $.Prov .ViewID}}<span class="prov">{{if .CreatedIP}}from <a href="/account/admin?q={{.CreatedIP}}" title="{{.CreatedUA}}">{{.CreatedIP}}</a> · {{.CreatedText}}{{end}}{{if .LastText}}{{if .CreatedIP}}<br>{{end}}last {{.LastText}}{{if .LastIP}} · <a href="/account/admin?q={{.LastIP}}" title="{{.LastUA}}">{{.LastIP}}</a>{{end}}{{end}} · <a href="{{.Trail}}">trail &rarr;</a></span>{{end}}</span>
       <span class="own{{if not .Owner}} anon{{end}}">{{.OwnerLabel}}{{if .OwnerSuspended}}<span class="susp" title="{{.OwnerSuspended}}">Suspended</span>{{end}}{{if .Violations}}<span class="flag" title="{{.BlockedText}}">&#9888; {{.Violations}} blocked{{if .Reporters}} &middot; {{.Reporters}} source{{if ne .Reporters 1}}s{{end}}{{end}}</span>{{end}}</span>
       <span class="num orig">{{if .Origin}}{{.Origin}}{{else}}&mdash;{{end}}</span>
       <span class="num">{{.Mode}}</span>

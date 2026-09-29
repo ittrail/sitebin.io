@@ -13,6 +13,7 @@ import (
 
 	"github.com/ittrail/sitebin.io/ee/account"
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/provenance"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
@@ -177,6 +178,10 @@ type adminView struct {
 	// "filter%3danon", and every cancel and redirect lost the view.
 	Params  template.URL
 	ParamsQ template.URL
+	// Prov is each shown row's provenance, by view id; IP is the address
+	// search's account panel, set when the query is an address or a range.
+	Prov map[string]*rowProv
+	IP   *ipPanel
 }
 
 // matches decides whether a site survives the text query. It searches the
@@ -223,6 +228,21 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	locking := r.URL.Query().Get("lock")
 	unlocking := r.URL.Query().Get("unlock")
 	cutoff := time.Now().Add(expiringSoon)
+
+	// A query that is an address or a CIDR range searches provenance instead
+	// of names: every site whose log names an address in it.
+	ipMatch, ipMode := provenance.ParseMatch(q)
+	var seen map[string][]provenance.Entry
+	if ipMode {
+		if sp, ok := p.siteProvenance(); ok {
+			var err error
+			if seen, err = sp.SitesSeenFrom(ipMatch); err != nil {
+				slog.Error("admin console could not search provenance", "admin", acc.ID, "err", err)
+				http.Error(w, "could not search the instance's provenance", http.StatusInternalServerError)
+				return
+			}
+		}
+	}
 
 	rows := make([]adminRow, 0, len(sites))
 	for _, s := range sites {
@@ -280,15 +300,25 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
-		if !matches(row, q) {
+		if ipMode {
+			if _, ok := seen[s.ViewID]; !ok {
+				continue
+			}
+		} else if !matches(row, q) {
 			continue
 		}
 		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(a, b int) bool { return rows[a].CreatedAt.After(rows[b].CreatedAt) })
 
+	var panel *ipPanel
+	if ipMode {
+		panel = p.ipSearch(ipMatch, seen)
+	}
 	p.securityHeaders(w)
 	adminTmpl.Execute(w, adminView{
+		Prov:    p.rowProvenance(rows),
+		IP:      panel,
 		Email:   acc.Email,
 		CSRF:    p.csrf(acc),
 		Figures: figures,

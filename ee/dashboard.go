@@ -39,6 +39,8 @@ func (p *provider) PublicRoutes() map[string]http.Handler {
 		"POST /account/tokens":                  http.HandlerFunc(p.handleCreateToken),
 		"POST /account/tokens/{id}/delete":      http.HandlerFunc(p.handleDeleteToken),
 		"GET /account/admin":                    http.HandlerFunc(p.handleAdmin),
+		"GET /account/admin/sites/{id}/trail":   http.HandlerFunc(p.handleAdminTrail),
+		"GET /account/admin/accounts/{id}":      http.HandlerFunc(p.handleAdminAccount),
 		"POST /account/admin/sites/{id}/delete": http.HandlerFunc(p.handleAdminDelete),
 		"POST /account/admin/sites/{id}/expiry": http.HandlerFunc(p.handleAdminExpiry),
 		"POST /account/admin/sites/{id}/lock":   http.HandlerFunc(p.handleAdminLock),
