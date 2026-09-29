@@ -161,6 +161,10 @@ type FormsSMTP struct {
 // the lock unless a case is still open").
 const DefaultLockRetentionDays = 180
 
+// MaxLockRetentionDays bounds SITEBIN_LOCK_RETENTION_DAYS at a century, well
+// inside what a time.Duration can hold; 0 is the way to say "forever".
+const MaxLockRetentionDays = 36500
+
 // Custom-domain verification modes.
 const (
 	DomainVerifyDNS = "dns" // prove control with a TXT record or a CNAME (default)
@@ -382,6 +386,12 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	if days < 0 {
 		return cfg, fmt.Errorf("SITEBIN_LOCK_RETENTION_DAYS must not be negative (0 keeps locked sites forever)")
+	}
+	// A time.Duration holds about 292 years. Past that the product wraps
+	// around — some values to a retention of minutes, which would purge every
+	// locked site at the next sweep. "Keep them longer" must never do that.
+	if days > MaxLockRetentionDays {
+		return cfg, fmt.Errorf("SITEBIN_LOCK_RETENTION_DAYS must be at most %d (0 keeps locked sites forever)", MaxLockRetentionDays)
 	}
 	cfg.LockRetention = time.Duration(days) * 24 * time.Hour
 	if v := getenv("SITEBIN_CLEANUP_INTERVAL"); v != "" {

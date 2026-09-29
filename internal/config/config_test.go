@@ -568,13 +568,15 @@ func TestLockRetention(t *testing.T) {
 		}
 		return Load(env(m))
 	}
-	for v, want := range map[string]time.Duration{"": 180 * 24 * time.Hour, "30": 30 * 24 * time.Hour, "0": 0, " 365 ": 365 * 24 * time.Hour} {
+	for v, want := range map[string]time.Duration{"": 180 * 24 * time.Hour, "30": 30 * 24 * time.Hour, "0": 0, " 365 ": 365 * 24 * time.Hour, "36500": 36500 * 24 * time.Hour} {
 		cfg, err := load(v)
 		if err != nil || cfg.LockRetention != want {
 			t.Errorf("%q: %v, %v; want %v", v, cfg.LockRetention, err, want)
 		}
 	}
-	for _, v := range []string{"-1", "half a year", "1.5"} {
+	// 213503 days overflows a time.Duration to about 13 minutes: it must be
+	// refused, never turned into "purge everything now".
+	for _, v := range []string{"-1", "half a year", "1.5", "36501", "213503"} {
 		if _, err := load(v); err == nil || !strings.Contains(err.Error(), "SITEBIN_LOCK_RETENTION_DAYS") {
 			t.Errorf("%q: err = %v", v, err)
 		}

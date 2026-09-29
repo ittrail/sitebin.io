@@ -234,7 +234,10 @@ that on its own, or the promise is only as good as the operator's memory.
 
 - **`SITEBIN_LOCK_RETENTION_DAYS`** — default `180`; `0` keeps locked sites
   forever (the behaviour before this addendum, for an instance whose policy
-  says so); a negative or unparsable value refuses to start.
+  says so); a negative or unparsable value refuses to start, and so does
+  one above `36500` (a century): a `time.Duration` holds about 292 years,
+  and past that some values wrap to a retention of minutes, which would
+  purge every locked site at the next sweep.
 - **The clock is `Locked.At`, the start of the continuous lock.** A lock that
   replaces a lock keeps it — the operator's **Keep** over a scanner's or a
   suspension's lock, the operator re-locking with a new reason, an

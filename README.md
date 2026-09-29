@@ -123,7 +123,7 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | `SITEBIN_RATE_CREATE_PER_HOUR` / `SITEBIN_RATE_CREATE_BURST` | `30` / `10` | Anonymous creation limit per IP. |
 | `SITEBIN_RATE_AUTH_PER_5MIN` | `10` | Password-attempt limit per (IP, site) — edit, view, and WebDAV auth. |
 | `SITEBIN_CLEANUP_INTERVAL` | `10m` | Expiry sweep interval. |
-| `SITEBIN_LOCK_RETENTION_DAYS` | `180` | How long a [lock](#locked-sites) keeps a site as evidence: the cleanup sweep purges a locked site whose lock is older, unless you placed an evidence hold on it (`sitebin hold`, or the register). It also bounds how long a suspended account's provenance outlives the 90 days. `0` keeps locked sites forever. |
+| `SITEBIN_LOCK_RETENTION_DAYS` | `180` | How long a [lock](#locked-sites) keeps a site as evidence: the cleanup sweep purges a locked site whose lock is older, unless you placed an evidence hold on it (`sitebin hold`, or the register). It also bounds how long a suspended account's provenance outlives the 90 days. `0` keeps locked sites forever; a negative value or one above `36500` (a century) refuses to start. |
 | `SITEBIN_PUBLIC_ADDR` | `:8080` | Address of the Go backend listener that Caddy proxies. Change it only if `8080` is taken inside the container. |
 | `SITEBIN_INTERNAL_ADDR` | `:9000` | Address of the authz / `tls-check` / health listener. It is **never proxied publicly**; do not expose it. |
 | `SITEBIN_FORMS_SMTP_HOST` | — | SMTP server for [forms](#forms). Unset: the instance has no forms. Separate from the account mailer's `SITEBIN_SMTP_*`. |
