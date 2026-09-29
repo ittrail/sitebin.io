@@ -28,8 +28,9 @@ const msgHeldCreate = "this upload matched the instance's abuse rules: the site 
 
 // onScan is the store's scan hook: every guard decision, with the site lock
 // held. A hold ends what the site's lock ends — cached passwords, upload
-// tokens, a running container — and every decision but a reviewed one is
-// mailed to the operator (aggregated, asynchronously).
+// tokens, a running container — and every decision but a reviewed one or one
+// about the operator's own site is mailed to the operator (aggregated,
+// asynchronously).
 func (a *API) onScan(ev store.ScanEvent) {
 	if ev.Held() {
 		if site, err := a.st.ByViewID(ev.ViewID); err == nil {
@@ -37,6 +38,13 @@ func (a *API) onScan(ev store.ScanEvent) {
 		}
 	}
 	if ev.Decision == store.DecisionReviewed {
+		return
+	}
+	if !ev.Held() && a.st.OperatorOwns(ev.Owner) {
+		// The operator is who the alerts go to: mailing them about their own
+		// upload — the hosted instance's docs quote the very indicators the
+		// rules match — is noise. The finding stays on the site's register
+		// row, and the guard's decision is logged either way.
 		return
 	}
 	al := a.scanAlert(ev)

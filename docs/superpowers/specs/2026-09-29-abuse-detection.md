@@ -386,3 +386,13 @@ the operator as one line in the digest, never as an immediate mail: it is
 routine and must not spend the hourly budget. See the lock-retention
 addendum of
 [`2026-09-28-site-lock-and-account-suspension.md`](2026-09-28-site-lock-and-account-suspension.md).
+
+## Corrections (post-implementation, 2026-09-29)
+
+**The operator's own sites are recorded, not mailed.** The first deploy of the
+hosted website mailed the operator a "Flagged" alert about their own docs page,
+which quotes the indicators the rules match — and would again on every edit of
+that page. The operator is the alerts' recipient, so a finding on a site an
+operator account owns now stays on its register row and in the log, and no mail
+is sent (`onScan`; `Store.OperatorOwns`). Such a site is never held anyway, so no
+hold alert is lost; another account's trusted site is still mailed.

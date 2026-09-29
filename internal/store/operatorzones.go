@@ -40,6 +40,12 @@ func (s *Store) SetOperatorCheck(isOperator func(ownerAccountID string) bool) {
 	s.isOperator = isOperator
 }
 
+// OperatorOwns reports whether the account is the operator's. It is false
+// when nothing can answer (the community build).
+func (s *Store) OperatorOwns(ownerAccountID string) bool {
+	return ownerAccountID != "" && s.isOperator != nil && s.isOperator(ownerAccountID)
+}
+
 // InOperatorZone reports whether d is one of the operator's zones or a name
 // under one.
 func (s *Store) InOperatorZone(d string) bool {

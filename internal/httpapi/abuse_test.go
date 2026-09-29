@@ -329,6 +329,42 @@ func TestOperatorSitesAreNeverHeld(t *testing.T) {
 	}
 }
 
+// The operator is the alerts' recipient: a finding on their own site — the
+// hosted instance's docs quote the very indicators the rules match — is
+// recorded in the register but mailed to no one, while the same upload on
+// anyone else's trusted site still is.
+func TestOperatorFindingsAreRecordedButNotMailed(t *testing.T) {
+	e, fp, rs := abuseEnv(t, true)
+	e.st.SetOperatorCheck(func(owner string) bool { return owner == "acct-1" })
+	upload := func() string {
+		id, edit, _ := cleanSite(t, e, nil)
+		body, ct := filesBody(t, nil, map[string]string{"index.html": kitHTML}, nil)
+		req := httptest.NewRequest("POST", "/api/sites/"+edit+"/files", body)
+		req.Header.Set("Content-Type", ct)
+		if w := e.public(t, bearer(req, "sbp_tok")); w.Code != 200 {
+			t.Fatalf("upload = %d %s", w.Code, w.Body)
+		}
+		e.api.alerts.wg.Wait()
+		return id
+	}
+	id := upload()
+	if site, _ := e.st.ByViewID(id); site.Meta.Locked != nil || site.Meta.Abuse == nil || len(site.Meta.Abuse.Findings) == 0 {
+		t.Fatalf("the operator's finding was not recorded as a flag: lock %+v abuse %+v", site.Meta.Locked, site.Meta.Abuse)
+	}
+	rs.mu.Lock()
+	n := len(rs.sent)
+	rs.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d alert mail(s) about the operator's own site", n)
+	}
+
+	fp.owner, fp.bearer["sbp_tok"] = "acct-2", "acct-2"
+	upload()
+	if !strings.Contains(mailText(t, rs.last(t)), store.DecisionTrusted) {
+		t.Error("another account's trusted site went unmailed")
+	}
+}
+
 // The community build has no tiers and marks every site trusted: the
 // scanner records and alerts, it never locks.
 func TestCommunityBuildFlagsOnly(t *testing.T) {
