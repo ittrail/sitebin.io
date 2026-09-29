@@ -139,7 +139,10 @@ is never rendered as HTML.
 Known limits, accepted: a kit split so that no single file satisfies a
 combined rule is caught only by its single-pattern rules and the tripwire; a
 file padded past 8 MiB is scanned in its first 8 MiB; rename-to-evade across
-extensions is handled (below), string-splitting obfuscation is not.
+extensions is handled (below), string-splitting obfuscation is not. While a
+file streams it exists under a temp name (`<name>.sbtmp`, `<name>.sbtmp-<rand>`)
+that has no known extension, so Caddy serves it without a content type and a
+browser (told `nosniff`) never renders it as a page.
 
 ## The decision
 

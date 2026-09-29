@@ -140,6 +140,7 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | `SITEBIN_ABUSE_CONTACT` | — | Public abuse mailbox (a bare address). Named on the view domain's info page, in `security.txt` and on the "Site suspended" page; omitted everywhere when unset. |
 | `SITEBIN_ABUSE_REPORT_URL` | `<base>/report` | The page where people report a site. `none` omits it. |
 | `SITEBIN_HOME_URL` | the base URL | The operator's main site, linked from the view domain's info page. |
+| `SITEBIN_ABUSE_ALERTS_TO` | the `SITEBIN_ADMIN_ACCOUNTS` addresses | Comma-separated bare addresses that get the [abuse detection](#abuse-detection) alerts: held and flagged uploads, the CSP tripwire, every abuse report. Plain-text mail through the forms mailer (`SITEBIN_FORMS_SMTP_*`); without it, alerts are only logged. A malformed address refuses to start. |
 
 A tier's `max_expiry_days` works the same way per site and adds one rule:
 while a site **owned by an account** stays under a cap, every content change
@@ -292,9 +293,10 @@ curl -H "X-Edit-Password: $PW" -o site.zip https://sitebin.example.com/api/sites
 # delete the site
 curl -X DELETE -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID
 
-# report abuse (public, no auth)
+# report abuse (public, no auth; contact is optional). People use the page
+# at https://sitebin.example.com/report instead.
 curl -X POST -H "Content-Type: application/json" \
-     -d '{"target":"https://abc.sitebin.example.com","reason":"phishing"}' \
+     -d '{"target":"https://abc.sitebin.example.com","reason":"phishing","contact":"you@example.com"}' \
      https://sitebin.example.com/api/report
 ```
 
@@ -906,6 +908,53 @@ operator's explicit delete — the instance register's, or `sitebin delete
 --force` — removes it. Lock and unlock from the instance register or the CLI.
 Design: [`2026-09-28-site-lock-and-account-suspension.md`](docs/superpowers/specs/2026-09-28-site-lock-and-account-suspension.md).
 
+### Abuse detection
+
+Every file a site receives — upload, zip, replace, MCP, upload token, WebDAV,
+FTP — is scanned for phishing- and fraud-kit signatures **before it becomes
+visible**. A blocking hit on an untrusted tier (anonymous drops, free) locks the
+site (`By: scanner`) before the file is renamed into place; the upload is
+kept as evidence and the caller gets `403` "held for review". Trusted tiers,
+container sites and the operator's own sites are never locked by it: their
+hits are recorded and alerted. Flag-severity rules only alert.
+
+- **Rules are data.** Built-in defaults (from real kits: Telegram and Discord
+  exfiltration, `botcheck`/Clearbit/DNS/IP lookups next to a password field,
+  brand sign-in lures, UPI wallet deeplinks, obfuscation) plus your own
+  `/data/abuse-rules.json`, reloaded within 10 seconds of a change; a file that
+  does not parse is logged and the previous rules stay in force.
+
+  ```json
+  {"rules": [{"id": "new-kit", "severity": "block", "all": ["type=\"password\"", "re:sendto(telegram|discord)"]},
+             {"id": "upi-deeplink", "severity": "block"},
+             {"id": "obfuscation-charcode", "severity": "off"}],
+   "exfil": [{"id": "formspree", "url": "formspree.io", "action": "alert"}]}
+  ```
+
+  A rule matches a file when all of `all` and one of `any` occur
+  (case-insensitive text, or `re:` + RE2 on the lowercased file). A file entry
+  with a built-in id replaces it; `"severity"` alone changes only that;
+  `"defaults": "replace"` drops every built-in rule. `exfil` lists the
+  tripwire's destinations (`url` = host + optional path prefix, `action`
+  `lock`, `alert` or `off`).
+- **CSP tripwire.** A CSP report from an untrusted site naming a known
+  exfiltration destination (`api.telegram.org/bot`, Discord/Slack webhooks, IP
+  lookups, form backends, `webhook.site`…) locks the site — but only when the
+  site's own files reference that destination, so a forged report locks
+  nothing.
+- **Released means reviewed.** Unlocking a site in the register (or `sitebin
+  unlock`), or dismissing its findings, records the content's fingerprints:
+  the same bytes are not held again, anything new is scanned as usual.
+- **Reports reach a human.** `https://<base>/report` is a public report page
+  that works without JavaScript (honeypot + signed form ticket + the API's
+  rate limits); it and `POST /api/report` store the report and mail the
+  operator. The register has a **Reports** tab with a one-click lock.
+- **Alerts** go to `SITEBIN_ABUSE_ALERTS_TO` as plain text with URLs defanged,
+  at most one mail per site per hour and ten per hour in all, the rest in an
+  hourly digest. Every decision is also logged (`abuse guard …`).
+
+Design: [`2026-09-29-abuse-detection.md`](docs/superpowers/specs/2026-09-29-abuse-detection.md).
+
 ---
 
 ## Operations
@@ -917,6 +966,7 @@ Operator commands (run inside the container, e.g. `docker exec sitebin sitebin <
 | `sitebin list` | List all sites (id, size, files, mode, created, the address it was created from, lock, owner/domains). |
 | `sitebin reports` | List filed abuse reports. |
 | `sitebin provenance <id\|domain\|ip\|cidr>` | A site's trail — every creation and write with address, client, surface and credential — or every site seen from an address or range. |
+| `sitebin scan <id\|domain>\|--all [--lock]` | Run the abuse rules over sites already on disk. Reports only; `--lock` records the findings and holds what an upload would have held (never a trusted site). |
 | `sitebin lock <id\|domain> [reason…]` | Lock a site: served to nobody, frozen for its owner, kept past its expiry. The reason is shown to the owner. |
 | `sitebin unlock <id\|domain>` | Lift a lock; the site's expiry applies again. |
 | `sitebin delete [--force] <id\|domain>` | Take down a site by view id, edit id, or domain. A locked site needs `--force`. |
@@ -1022,8 +1072,9 @@ but not implemented.
 - Open, no-login file hosting attracts phishing and malware. As the operator
   **you are responsible** for what your instance serves: keep the takedown
   command handy, consider tight `SITEBIN_MAX_*` limits and
-  `SITEBIN_MAX_EXPIRY_DAYS`, and put the instance behind abuse monitoring if
-  it is exposed to strangers.
+  `SITEBIN_MAX_EXPIRY_DAYS`, set `SITEBIN_ABUSE_ALERTS_TO` and the forms
+  mailer so [abuse detection](#abuse-detection) can reach you, and link
+  `/report` wherever people might look for it.
 
 ---
 
@@ -1231,7 +1282,8 @@ third-party widgets, trackers and IPFS-hosted kits off drops, not to break
 every page that inlines a script.
 
 Violations are reported to `/_sitebin/csp-report`, counted per site, and shown
-in the instance register with the destinations that were blocked. A site whose
+in the instance register with the destinations that were blocked; one naming a
+known exfiltration destination is the [CSP tripwire](#abuse-detection). A site whose
 first visitor trips `form-action` against a foreign host is almost always
 phishing. Grant `trusted` to tiers whose holders you can hold accountable; an
 anonymous site never qualifies, whatever its tier says. **The community build is

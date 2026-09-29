@@ -154,6 +154,32 @@ and `/.well-known/security.txt` and 404s everything else — the app never
 answers on the user-content domain. `www` can never be a site (ids are 26
 base32 characters). The untrusted CSP's CDN lists are `SITEBIN_CSP_*_HOSTS`,
 validated as host sources because they are written into the Caddyfile.
+## Every write is scanned before it is visible
+
+The abuse guard (`internal/abuse` = rules, `internal/store/guard.go` =
+policy) scans every file a site receives and, on an untrusted site, writes a
+scanner lock into `meta.json` BEFORE the file is renamed into place. Read
+`docs/superpowers/specs/2026-09-29-abuse-detection.md`.
+
+- **Three funnels, nothing else.** `writeFileIn` (SaveFile, ExtractZip: API,
+  MCP, upload tokens, zips), `Replacement.Commit` (staged replaces) and
+  `StagedFile`/`RenameChecked` (WebDAV, FTP). A new way to put bytes into a
+  site goes through one of them; `TestWritePathCensus` fails on any new
+  write call in the content packages until it is classified, and
+  `TestEveryWriteSurfaceIsScanned` is the table a new surface joins.
+- **Only untrusted sites are held**, and only for a block hit in an active
+  file (html, svg, js…). Trusted marker, container mode, operator owner, an
+  existing lock: recorded and alerted, never locked. A scanner lock, like an
+  account lock, never replaces another. The operator check is asked only
+  after a hit; a clean upload never reaches the extension.
+- **Released = reviewed.** An operator unlock (`SetLock(nil)`) or a dismissal
+  moves the findings' SHA-256s into `abuse.reviewed`; those bytes are never
+  recorded or held again. An unsuspension (`ReleaseLock` by account) reviews
+  nothing.
+- **The CSP tripwire only acts on what the site's own files reference**
+  (`CheckExfil`): reports are unauthenticated.
+- **Operator mail is plain text** (the forms mailer, `SITEBIN_ABUSE_ALERTS_TO`),
+  URLs defanged, aggregated (1/site/hour, 10/hour, hourly digest).
 
 ## Custom domains prove ownership
 
