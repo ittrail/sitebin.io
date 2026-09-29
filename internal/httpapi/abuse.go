@@ -103,6 +103,9 @@ func (a *API) scanAlert(ev store.ScanEvent) alertEvent {
 	a.registerLines(&b, ev.ViewID)
 	if ev.Held() {
 		b.WriteString("\nA lock keeps the site as evidence. Unlocking it (register or `sitebin unlock`) marks this content as reviewed: the same bytes are not held again.\n")
+		if r := a.st.LockRetention(); r > 0 {
+			fmt.Fprintf(&b, "The cleanup sweep purges it %d days after the lock unless you place an evidence hold (register, or `sitebin hold %s`) while a case is open.\n", retentionDays(r), ev.ViewID)
+		}
 	}
 	line := fmt.Sprintf("%s  %s  %s  %s", ev.ViewID, ev.Decision, what, defang(strings.Join(ev.Paths, ",")))
 	if ev.Blocked != "" {
@@ -179,10 +182,52 @@ func (a *API) siteLines(b *strings.Builder, viewID string) {
 			fmt.Fprintf(b, " — %s", defang(l.Reason))
 		}
 		b.WriteString("\n")
+		if l.Hold != nil {
+			fmt.Fprintf(b, "Retention: evidence hold (case open) since %s\n", l.Hold.At.UTC().Format("2006-01-02"))
+		} else if at, ok := a.st.LockPurgeAt(l); ok {
+			fmt.Fprintf(b, "Retention: purged after %s unless an evidence hold is placed\n", at.UTC().Format("2006-01-02 15:04 UTC"))
+		}
 	} else {
 		b.WriteString("State:     served (not locked)\n")
 	}
 }
+
+// onLockPurged is the store's purge hook: the cleanup sweep deleted a
+// locked site whose lock outlived the retention. The operator hears of it
+// as one line in the digest — a routine event must never spend the hourly
+// budget real alerts need.
+func (a *API) onLockPurged(p store.LockPurge) {
+	a.alerts.notify(a.purgeAlert(p))
+}
+
+// purgeAlert turns a retention purge into a digest line.
+func (a *API) purgeAlert(p store.LockPurge) alertEvent {
+	days := retentionDays(p.Retention)
+	owner := a.ownerLabel(p.Owner)
+	line := fmt.Sprintf("%s  purged  locked %s by %s, %d-day retention  owner %s",
+		p.ViewID, p.Lock.At.UTC().Format("2006-01-02"), p.Lock.By, days, owner)
+	if len(p.Domains) > 0 {
+		line += "  domains " + defang(strings.Join(p.Domains, ","))
+	}
+	if p.Lock.Reason != "" {
+		line += "  (" + defang(p.Lock.Reason) + ")"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "The cleanup sweep purged a locked site whose lock was older than the %d-day lock retention and carried no evidence hold: its files, metadata and provenance are gone.\n\n", days)
+	fmt.Fprintf(&b, "Site:      %s\n", p.ViewID)
+	fmt.Fprintf(&b, "Owner:     %s\n", owner)
+	fmt.Fprintf(&b, "Locked:    %s by %s\n", p.Lock.At.UTC().Format("2006-01-02 15:04 UTC"), p.Lock.By)
+	return alertEvent{
+		key:        p.ViewID,
+		subject:    "Purged past the lock retention: " + p.ViewID,
+		body:       b.String(),
+		line:       line,
+		digestOnly: true,
+	}
+}
+
+// retentionDays is a retention in whole days, as the operator configured it.
+func retentionDays(r time.Duration) int { return int(r / (24 * time.Hour)) }
 
 // ownerLabel names an account for the operator: its email where the
 // extension can say, its id always.
@@ -363,7 +408,7 @@ func (al *alerter) flush() {
 		keys[e.key] = true
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d abuse event(s) on %d site(s) or target(s) were held back from immediate mail (one mail per site per hour, %d per hour in all).\n\n", total, len(keys), alertBurst)
+	fmt.Fprintf(&b, "%d abuse event(s) on %d site(s) or target(s): routine ones (retention purges, unverified CSP reports) and those held back from immediate mail (one mail per site per hour, %d per hour in all).\n\n", total, len(keys), alertBurst)
 	lines := make([]string, 0, len(q))
 	for _, e := range q {
 		lines = append(lines, e.line)

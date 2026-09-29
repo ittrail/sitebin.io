@@ -102,6 +102,9 @@ func New(cfg config.Config, st *store.Store, secret []byte, webFS fs.FS) (*API, 
 	// Every decision of the store's abuse guard comes here: lock side
 	// effects and the operator's mail.
 	st.SetScanHook(a.onScan)
+	// Every retention purge of a locked site (the cleanup sweep, in this
+	// process) becomes a line in the operator's digest.
+	st.SetPurgeHook(a.onLockPurged)
 	return a, nil
 }
 

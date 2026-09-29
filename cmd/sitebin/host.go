@@ -1,6 +1,8 @@
 package main
 
 import (
+	"time"
+
 	"github.com/ittrail/sitebin.io/internal/config"
 	"github.com/ittrail/sitebin.io/internal/ext"
 )
@@ -19,6 +21,8 @@ func (h extHost) HTTPOnly() bool         { return h.cfg.HTTPOnly }
 func (h extHost) Secret() []byte         { return h.secret }
 func (h extHost) PathViews() bool        { return h.cfg.PathViews() }
 func (h extHost) Sites() ext.SiteService { return h.sites }
+
+func (h extHost) LockRetention() time.Duration { return h.cfg.LockRetention }
 
 func (h extHost) BaseURL() string        { return h.cfg.SiteURL(h.cfg.BaseDomain) }
 func (h extHost) MCPOAuthIssuer() string { return h.cfg.MCPOAuthIssuer }

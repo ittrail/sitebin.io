@@ -58,9 +58,12 @@ func (p *provider) recordAccount(r *http.Request, accountID, action, surface, cr
 }
 
 // PurgeProvenance drops account entries older than before. An account held as
-// evidence keeps its log: a suspended one, or one owning a locked site — the
-// same holds that keep a locked site's own log and stop a GDPR deletion.
-func (p *provider) PurgeProvenance(before time.Time) {
+// evidence — a suspended one, or one owning a locked site, the same holds
+// that keep a locked site's own log and stop a GDPR deletion — keeps its log
+// past that, but only back to heldBefore (the lock retention; zero keeps it
+// whole). An account one of whose locked sites carries the operator's
+// evidence hold ("case open") keeps everything.
+func (p *provider) PurgeProvenance(before, heldBefore time.Time) {
 	if p.accounts == nil {
 		return
 	}
@@ -72,22 +75,56 @@ func (p *provider) PurgeProvenance(before time.Time) {
 	for _, id := range ids {
 		// The sweep runs every few minutes, and asking for the holds walks
 		// the account's sites: ask only when there is something to purge.
+		// heldBefore is never later than before, so an account with nothing
+		// before `before` has nothing before heldBefore either.
 		if !hasEntryBefore(p.accounts, id, before) {
 			continue
 		}
 		acc, err := p.accounts.ByID(id)
-		if err != nil || acc.Suspended() {
+		if err != nil {
 			continue
 		}
-		if locked, err := p.lockedSites(acc); err != nil || len(locked) > 0 {
+		// A suspended account is held whatever its sites say: with nothing
+		// older than heldBefore there is nothing to purge, and its sites
+		// need not be walked.
+		if acc.Suspended() && (heldBefore.IsZero() || !hasEntryBefore(p.accounts, id, heldBefore)) {
+			continue
+		}
+		locked, caseOpen, err := p.lockHolds(acc)
+		if err != nil || caseOpen {
 			continue // an error: keep, and ask again at the next sweep
 		}
-		if n, err := p.accounts.PurgeProvenance(id, before); err != nil {
+		cutoff := before
+		if acc.Suspended() || locked {
+			if heldBefore.IsZero() || !hasEntryBefore(p.accounts, id, heldBefore) {
+				continue
+			}
+			cutoff = heldBefore
+		}
+		if n, err := p.accounts.PurgeProvenance(id, cutoff); err != nil {
 			slog.Error("provenance: purge an account's log", "account", id, "err", err)
 		} else if n > 0 {
 			slog.Info("provenance: purged account entries past retention", "account", id, "entries", n)
 		}
 	}
+}
+
+// lockHolds reports whether one of the account's sites is locked, and
+// whether one of those locks carries an evidence hold.
+func (p *provider) lockHolds(acc *account.Account) (locked, caseOpen bool, err error) {
+	ids, err := p.accounts.ListSiteIDs(acc)
+	if err != nil {
+		return false, false, err
+	}
+	for _, id := range ids {
+		if info, ok := p.host.Sites().Info(id); ok && info.Locked != nil {
+			locked = true
+			if info.Locked.Hold != nil {
+				return true, true, nil
+			}
+		}
+	}
+	return locked, false, nil
 }
 
 // hasEntryBefore reports whether the account's log holds an entry the purge

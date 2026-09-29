@@ -32,6 +32,10 @@ var ErrSiteGone = errors.New("ext: site no longer exists")
 // in SiteInfo.Locked; see SiteLock.
 var ErrSiteLocked = errors.New("ext: site is locked by the operator")
 
+// ErrSiteNotLocked refuses an evidence hold on a site that is not locked:
+// there would be nothing for it to hold.
+var ErrSiteNotLocked = errors.New("ext: site is not locked")
+
 // Who placed a lock (SiteLock.By). An operator lock replaces any lock; an
 // account lock, and the abuse guard's, is applied only to an unlocked site.
 const (
@@ -43,17 +47,38 @@ const (
 	LockByScanner = "scanner"
 )
 
-// SiteLock is the operator's evidence hold on a site: it is served to
-// nobody, changed by nobody but the operator, and outlives its expiry — the
-// cleanup sweep and every tier restamp leave it alone. Only ForceDelete
-// removes it. See docs/superpowers/specs/2026-09-28-site-lock-and-account-suspension.md.
+// SiteLock is the operator's hold on a site: it is served to nobody,
+// changed by nobody but the operator, and outlives its expiry — every tier
+// restamp leaves it alone. ForceDelete removes it, and so does the cleanup
+// sweep once the lock is older than the instance's lock retention and
+// carries no evidence hold. See
+// docs/superpowers/specs/2026-09-28-site-lock-and-account-suspension.md.
 type SiteLock struct {
+	// At is when the site was locked: the start of its continuous lock,
+	// which a lock replacing a lock (the register's Keep) keeps — it is the
+	// retention's clock. SetLock uses it only for a site not yet locked.
 	At time.Time
 	// Reason is shown to the owner and in the register. Optional.
 	Reason string
 	// By is LockByAdmin (the operator, from the register or the CLI) or
 	// LockByAccount (a stack-level suspension of the owner, lifted again by
 	// the unsuspension).
+	By string
+	// Hold is the operator's evidence hold ("case open"), or nil. Read-only
+	// here: SetLock ignores it, SetHold places and releases it.
+	Hold *LockHold
+	// PurgeAt is when the lock retention runs out, computed by the core:
+	// the cleanup sweep purges the site then — unless Hold stands, which
+	// does not move the date. Nil when the instance keeps locked sites
+	// forever. Read-only.
+	PurgeAt *time.Time
+}
+
+// LockHold is an evidence hold on a lock: a case, investigation or
+// proceeding is still open, so the site is kept past the lock retention.
+type LockHold struct {
+	At time.Time
+	// By is who placed it: the admin's account id, or "cli".
 	By string
 }
 
@@ -255,6 +280,10 @@ type Host interface {
 	MCPResource() string
 	// Sites exposes the core site operations the dashboard needs.
 	Sites() SiteService
+	// LockRetention is how long a lock keeps a site before the cleanup sweep
+	// purges it (SITEBIN_LOCK_RETENTION_DAYS); zero means forever. For
+	// wording only — SiteLock.PurgeAt is the date.
+	LockRetention() time.Duration
 }
 
 // SiteService lets the extension read and manage sites without importing the
@@ -296,7 +325,8 @@ type SiteService interface {
 	// SetLock locks a site, or lifts any lock when lock is nil. An account
 	// lock (By LockByAccount) is applied only to a site that is not locked
 	// already, so a suspension never replaces the operator's own lock and a
-	// repeated one keeps the first date; the operator's lock replaces any.
+	// repeated one keeps the first date; the operator's lock replaces any,
+	// keeping the lock's date (the retention clock) and its evidence hold.
 	// Locking also ends the site's upload tokens and stops its containers.
 	// A site that no longer exists is ErrSiteGone.
 	SetLock(viewID string, lock *SiteLock) error
@@ -304,6 +334,12 @@ type SiteService interface {
 	// reports whether it did — how an unsuspension lifts its own locks and
 	// leaves the operator's. A site that no longer exists is ErrSiteGone.
 	ReleaseLock(viewID, by string) (released bool, err error)
+	// SetHold places the operator's evidence hold on a locked site ("case
+	// open": the lock retention does not apply while it stands), or
+	// releases it when hold is nil. A second hold keeps the first. A site
+	// that is not locked is ErrSiteNotLocked; one that no longer exists is
+	// ErrSiteGone.
+	SetHold(viewID string, hold *LockHold) error
 	// ClearFindings dismisses the abuse guard's findings on a site without
 	// unlocking it: the operator has looked, and the content they were about
 	// becomes reviewed, so the same bytes are not flagged or held again. (An

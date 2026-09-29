@@ -180,34 +180,64 @@ func TestDashboardWritesAreRecorded(t *testing.T) {
 	}
 }
 
-// The purge keeps a suspended account's log, and that of an account owning a
-// locked site: both are evidence holds.
+// The purge's evidence holds, precisely: a suspended account's log and that
+// of an account owning a locked site outlive the 90 days only up to the lock
+// retention (heldBefore); an evidence hold on one of the account's locked
+// sites keeps the whole log; with no retention (heldBefore zero) a held log
+// is kept whole.
 func TestAccountPurgeKeepsEvidenceHolds(t *testing.T) {
 	p, host, _ := setupProvAccounts(t)
-	old := time.Now().Add(-provenance.Retention - time.Hour).UTC()
+	now := time.Now().UTC()
+	day := 24 * time.Hour
+	before, heldBefore := now.Add(-provenance.Retention), now.Add(-180*day)
 	mk := func(email string) *account.Account {
 		a, err := p.accounts.CreateLocal(email, "h", "")
 		if err != nil {
 			t.Fatal(err)
 		}
-		p.accounts.RecordProvenance(a.ID, provenance.Entry{Time: old, Action: provenance.ActionSignup, IP: "203.0.113.7"})
+		// older than the lock retention, and between it and the 90 days
+		p.accounts.RecordProvenance(a.ID, provenance.Entry{Time: now.Add(-181 * day), Action: provenance.ActionSignup, IP: "203.0.113.7"})
+		p.accounts.RecordProvenance(a.ID, provenance.Entry{Time: now.Add(-91 * day), Action: provenance.ActionSignin, IP: "203.0.113.8"})
 		return a
 	}
-	plain, suspended, holder := mk("a@example.com"), mk("b@example.com"), mk("c@example.com")
-	now := time.Now().UTC()
-	p.accounts.Update(suspended, func(a *account.Account) error { a.SuspendedAt = &now; return nil })
-	host.sites.infos["lockedaaaaaaaaaaaaaaaaaaaa"] = ext.SiteInfo{ViewID: "lockedaaaaaaaaaaaaaaaaaaaa", Locked: &ext.SiteLock{At: now, By: ext.LockByAdmin}}
-	p.accounts.LinkSite(holder, "lockedaaaaaaaaaaaaaaaaaaaa")
+	lockSite := func(acc *account.Account, id string, hold bool) {
+		l := &ext.SiteLock{At: now.Add(-10 * day), By: ext.LockByAdmin}
+		if hold {
+			l.Hold = &ext.LockHold{At: now, By: "acct-admin"}
+		}
+		host.sites.infos[id] = ext.SiteInfo{ViewID: id, Locked: l}
+		p.accounts.LinkSite(acc, id)
+	}
+	suspend := func(acc *account.Account) {
+		p.accounts.Update(acc, func(a *account.Account) error { a.SuspendedAt = &now; return nil })
+	}
+	plain, suspended, holder, caseOpen := mk("a@example.com"), mk("b@example.com"), mk("c@example.com"), mk("d@example.com")
+	suspend(suspended)
+	lockSite(holder, "lockedaaaaaaaaaaaaaaaaaaaa", false)
+	suspend(caseOpen)
+	lockSite(caseOpen, "lockedbbbbbbbbbbbbbbbbbbbb", false)
+	lockSite(caseOpen, "heldcccccccccccccccccccccc", true)
 
-	p.PurgeProvenance(time.Now().Add(-provenance.Retention))
+	p.PurgeProvenance(before, heldBefore)
 	if es := accountLog(t, p, plain.ID); len(es) != 0 {
 		t.Errorf("plain account not purged: %+v", es)
 	}
-	if es := accountLog(t, p, suspended.ID); len(es) != 1 {
-		t.Errorf("suspended account's log was purged")
+	for name, acc := range map[string]*account.Account{"suspended account": suspended, "account owning a locked site": holder} {
+		es := accountLog(t, p, acc.ID)
+		if len(es) != 1 || es[0].Action != provenance.ActionSignin {
+			t.Errorf("%s: want only the entry younger than the lock retention, got %+v", name, es)
+		}
 	}
-	if es := accountLog(t, p, holder.ID); len(es) != 1 {
-		t.Errorf("the log of an account holding a locked site was purged")
+	if es := accountLog(t, p, caseOpen.ID); len(es) != 2 {
+		t.Errorf("an account with a held site lost entries: %+v", es)
+	}
+
+	// Locked sites kept forever (retention 0): a held log is kept whole.
+	forever := mk("e@example.com")
+	suspend(forever)
+	p.PurgeProvenance(before, time.Time{})
+	if es := accountLog(t, p, forever.ID); len(es) != 2 {
+		t.Errorf("retention 0: the suspended account's log was purged: %+v", es)
 	}
 }
 

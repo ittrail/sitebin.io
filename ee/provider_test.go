@@ -46,6 +46,10 @@ type fakeSites struct {
 	// reports is what Reports lists; cleared records ClearFindings calls.
 	reports []ext.AbuseReport
 	cleared []string
+	// retention is the lock retention the fake computes purge dates with
+	// (0: none, as a store nobody configured); holds records SetHold calls.
+	retention time.Duration
+	holds     []string
 }
 
 func (s *fakeSites) Info(id string) (ext.SiteInfo, bool) { i, ok := s.infos[id]; return i, ok }
@@ -160,7 +164,8 @@ func (s *fakeSites) RotateEditPassword(id string) (string, error) {
 }
 
 // SetLock and ReleaseLock mirror store.SetLock and store.ReleaseLock: an
-// account lock never replaces a lock, and ReleaseLock lifts only its own kind.
+// account lock never replaces a lock, a replacing lock keeps the lock's date
+// and evidence hold, and ReleaseLock lifts only its own kind.
 func (s *fakeSites) SetLock(id string, lock *ext.SiteLock) error {
 	if err := s.lockErrs[id]; err != nil {
 		return err
@@ -176,12 +181,44 @@ func (s *fakeSites) SetLock(id string, lock *ext.SiteLock) error {
 		return nil
 	default:
 		l := *lock
+		l.Hold, l.PurgeAt = nil, nil
 		if l.At.IsZero() {
 			l.At = time.Now()
+		}
+		if info.Locked != nil {
+			l.At, l.Hold = info.Locked.At, info.Locked.Hold
+		}
+		if s.retention > 0 {
+			at := l.At.Add(s.retention)
+			l.PurgeAt = &at
 		}
 		info.Locked = &l
 	}
 	s.infos[id] = info
+	return nil
+}
+
+// SetHold mirrors store.SetHold: only on a locked site, and the first hold
+// stays. The retention's end (PurgeAt) does not move.
+func (s *fakeSites) SetHold(id string, hold *ext.LockHold) error {
+	info, ok := s.infos[id]
+	if !ok {
+		return fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
+	}
+	if info.Locked == nil {
+		return fmt.Errorf("%w: %s", ext.ErrSiteNotLocked, id)
+	}
+	l := *info.Locked
+	switch {
+	case hold == nil:
+		l.Hold = nil
+	case l.Hold == nil:
+		h := *hold
+		l.Hold = &h
+	}
+	info.Locked = &l
+	s.infos[id] = info
+	s.holds = append(s.holds, id)
 	return nil
 }
 
@@ -298,6 +335,10 @@ func (h *fakeHost) HTTPOnly() bool         { return true }
 func (h *fakeHost) Secret() []byte         { return []byte("0123456789abcdef0123456789abcdef") }
 func (h *fakeHost) PathViews() bool        { return h.pathViews }
 func (h *fakeHost) Sites() ext.SiteService { return h.sites }
+
+// LockRetention is the fake SiteService's, so the register's wording and the
+// fake's purge dates agree.
+func (h *fakeHost) LockRetention() time.Duration { return h.sites.retention }
 
 // mcpIssuer is empty by default: the enterprise suite must keep proving that
 // everything works with MCP OAuth switched off, which is how every instance

@@ -47,7 +47,7 @@ func (s siteService) infoOf(site *store.Site) ext.SiteInfo {
 		EditURL:     s.a.cfg.EditURL(site.Meta.EditID),
 		CreatedAt:   site.Meta.CreatedAt,
 		ExpiresAt:   site.Meta.ExpiresAt,
-		Locked:      extLock(site.Meta.Locked),
+		Locked:      s.a.extLock(site.Meta.Locked),
 		Findings:    extFindings(site.Meta.Abuse),
 	}
 }
@@ -64,12 +64,20 @@ func extFindings(a *store.AbuseState) []ext.ScanFinding {
 	return out
 }
 
-// extLock maps the store's lock record onto the seam's.
-func extLock(l *store.SiteLock) *ext.SiteLock {
+// extLock maps the store's lock record onto the seam's, with the date its
+// retention runs out — the core's rule, so the register never states another.
+func (a *API) extLock(l *store.SiteLock) *ext.SiteLock {
 	if l == nil {
 		return nil
 	}
-	return &ext.SiteLock{At: l.At, Reason: l.Reason, By: l.By}
+	out := &ext.SiteLock{At: l.At, Reason: l.Reason, By: l.By}
+	if h := l.Hold; h != nil {
+		out.Hold = &ext.LockHold{At: h.At, By: h.By}
+	}
+	if at, ok := a.st.LockRetentionEnds(l); ok {
+		out.PurgeAt = &at
+	}
+	return out
 }
 
 // domainLinks lists the verified domains with the URL each serves at, then the
@@ -198,6 +206,22 @@ func (s siteService) SetLock(viewID string, lock *ext.SiteLock) error {
 		s.a.lockChanged(site)
 	}
 	return nil
+}
+
+func (s siteService) SetHold(viewID string, hold *ext.LockHold) error {
+	site, err := s.a.st.ByViewID(viewID)
+	if err != nil {
+		return mapSiteGone(err, viewID)
+	}
+	var h *store.LockHold
+	if hold != nil {
+		h = &store.LockHold{At: hold.At, By: hold.By}
+	}
+	_, err = s.a.st.SetHold(site, h)
+	if errors.Is(err, store.ErrNotLocked) {
+		return fmt.Errorf("%w: %s", ext.ErrSiteNotLocked, viewID)
+	}
+	return mapSiteGone(err, viewID)
 }
 
 func (s siteService) ReleaseLock(viewID, by string) (bool, error) {

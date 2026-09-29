@@ -553,3 +553,30 @@ func TestAbuseAlertsTo(t *testing.T) {
 		}
 	}
 }
+
+// SITEBIN_LOCK_RETENTION_DAYS: 180 by default, 0 keeps locked sites
+// forever, a negative or unparsable value refuses to start.
+func TestLockRetention(t *testing.T) {
+	base := map[string]string{"SITEBIN_BASE_DOMAIN": "sitebin.example", "SITEBIN_HTTP_ONLY": "true"}
+	load := func(v string) (Config, error) {
+		m := map[string]string{}
+		for k, x := range base {
+			m[k] = x
+		}
+		if v != "" {
+			m["SITEBIN_LOCK_RETENTION_DAYS"] = v
+		}
+		return Load(env(m))
+	}
+	for v, want := range map[string]time.Duration{"": 180 * 24 * time.Hour, "30": 30 * 24 * time.Hour, "0": 0, " 365 ": 365 * 24 * time.Hour} {
+		cfg, err := load(v)
+		if err != nil || cfg.LockRetention != want {
+			t.Errorf("%q: %v, %v; want %v", v, cfg.LockRetention, err, want)
+		}
+	}
+	for _, v := range []string{"-1", "half a year", "1.5"} {
+		if _, err := load(v); err == nil || !strings.Contains(err.Error(), "SITEBIN_LOCK_RETENTION_DAYS") {
+			t.Errorf("%q: err = %v", v, err)
+		}
+	}
+}

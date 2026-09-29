@@ -35,8 +35,10 @@ type AccountProvenance interface {
 	// RecordAccountProvenance adds an entry to the account's log. Best
 	// effort; an unknown account records nothing.
 	RecordAccountProvenance(accountID string, e provenance.Entry)
-	// PurgeProvenance drops account entries older than before, except where
-	// the extension holds an account as evidence (a suspension, a locked
-	// site).
-	PurgeProvenance(before time.Time)
+	// PurgeProvenance drops account entries older than before. An account
+	// the extension holds as evidence — a suspended one, or one owning a
+	// locked site — keeps entries back to heldBefore instead (the lock
+	// retention; zero keeps them all), and one whose locked site carries an
+	// evidence hold keeps everything.
+	PurgeProvenance(before, heldBefore time.Time)
 }

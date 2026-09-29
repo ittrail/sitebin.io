@@ -7,8 +7,10 @@
 //	sitebin list         list all sites (operator)
 //	sitebin reports      list filed abuse reports (operator)
 //	sitebin provenance <id|domain|ip|cidr>  a site's trail, or every site seen from an address
-//	sitebin lock <id|domain> [reason…]    hold a site: served to nobody, frozen, never swept
-//	sitebin unlock <id|domain>            lift a hold
+//	sitebin lock <id|domain> [reason…]    lock a site: served to nobody, frozen, kept as evidence
+//	sitebin unlock <id|domain>            lift a lock
+//	sitebin hold <id|domain>              evidence hold on a locked site: a case is open, keep it past the lock retention
+//	sitebin unhold <id|domain>            release the evidence hold
 //	sitebin delete [--force] <id|domain>  operator takedown of a site (--force for a locked one)
 //	sitebin scan <id|domain>|--all [--lock]  run the abuse rules over sites on disk
 //	sitebin backup [file]       write a tar.gz of the data dir
@@ -63,7 +65,7 @@ func main() {
 			slog.Error("cleanup", "err", err)
 			os.Exit(1)
 		}
-		fmt.Printf("removed %d expired site(s)\n", n)
+		fmt.Printf("removed %d site(s): expired, or locked past the lock retention\n", n)
 	case "healthcheck":
 		cfg := mustConfig()
 		if err := healthcheck(cfg); err != nil {
@@ -97,6 +99,15 @@ func main() {
 		}
 		if err := unlockSite(mustStore(mustConfig()), os.Stdout, os.Args[2]); err != nil {
 			fmt.Fprintln(os.Stderr, "unlock failed:", err)
+			os.Exit(1)
+		}
+	case "hold", "unhold":
+		if len(os.Args) != 3 {
+			fmt.Fprintf(os.Stderr, "usage: sitebin %s <view-id|edit-id|domain>\n", cmd)
+			os.Exit(2)
+		}
+		if err := holdSite(mustStore(mustConfig()), os.Stdout, os.Args[2], cmd == "hold", time.Now()); err != nil {
+			fmt.Fprintln(os.Stderr, cmd+" failed:", err)
 			os.Exit(1)
 		}
 	case "scan":
@@ -198,6 +209,9 @@ func mustStore(cfg config.Config) *store.Store {
 		st.SetDomainVerifier(store.NewDNSVerifier(), viewDomain)
 	}
 	st.SetOperatorZones(cfg.OperatorDomains)
+	// Every command that reads or sweeps locks agrees on when one expires:
+	// the server's sweep, `sitebin cleanup`, `sitebin list`, `sitebin hold`.
+	st.SetLockRetention(cfg.LockRetention)
 	return st
 }
 
@@ -434,7 +448,7 @@ func listSites(st *store.Store, out io.Writer) error {
 			site.ViewID, humanSize(bytes), files, site.Meta.Mode,
 			site.Meta.CreatedAt.Format("2006-01-02 15:04"), creatorIP(st, site), lock, strings.TrimSpace(owner))
 		if l := site.Meta.Locked; l != nil {
-			fmt.Fprintf(out, "    locked %s by %s%s\n", l.At.Format("2006-01-02 15:04"), l.By, reasonSuffix(l.Reason))
+			fmt.Fprintf(out, "    locked %s by %s%s · %s\n", l.At.Format("2006-01-02 15:04"), l.By, reasonSuffix(l.Reason), retentionState(st, l))
 		}
 	}
 	fmt.Fprintf(out, "\n%d site(s), %d locked.\n", len(sites), locked)
@@ -533,12 +547,14 @@ func deleteSite(st *store.Store, out io.Writer, key string, force bool) error {
 	return nil
 }
 
-// lockSite places the operator's hold on a site from the command line: it is
+// lockSite places the operator's lock on a site from the command line: it is
 // served to nobody from the next request on, frozen for its owner, and kept
-// past its expiry. The running server needs no signal — every gate reads the
-// lock from meta.json — and its container runtime stops a locked project on
-// its next pass. Locking a locked site replaces the lock, which turns a
-// suspension's lock into the operator's own.
+// past its expiry — up to the lock retention, unless an evidence hold is
+// placed. The running server needs no signal — every gate reads the lock
+// from meta.json — and its container runtime stops a locked project on its
+// next pass. Locking a locked site replaces the lock, which turns a
+// suspension's lock into the operator's own; the lock's date, the
+// retention's clock, stays.
 func lockSite(st *store.Store, out io.Writer, key, reason string) error {
 	site, err := findSite(st, key)
 	if err != nil {
@@ -547,8 +563,64 @@ func lockSite(st *store.Store, out io.Writer, key, reason string) error {
 	if _, err := st.SetLock(site, &store.SiteLock{Reason: reason, By: store.LockByAdmin}); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "locked site %s%s\n", site.ViewID, reasonSuffix(site.Meta.Locked.Reason))
-	fmt.Fprintln(out, "It is served to nobody, frozen for its owner and kept past its expiry. Lift it with: sitebin unlock "+site.ViewID)
+	l := site.Meta.Locked
+	fmt.Fprintf(out, "locked site %s%s (locked since %s)\n", site.ViewID, reasonSuffix(l.Reason), l.At.Format("2006-01-02 15:04"))
+	fmt.Fprintf(out, "It is served to nobody, frozen for its owner and kept past its expiry; %s.\n", retentionState(st, l))
+	fmt.Fprintln(out, "Lift it with: sitebin unlock "+site.ViewID)
+	return nil
+}
+
+// retentionState says what the lock retention does with a lock: purge the
+// site on a date, nothing while an evidence hold stands, or nothing at all.
+func retentionState(st *store.Store, l *store.SiteLock) string {
+	if h := l.Hold; h != nil {
+		out := fmt.Sprintf("held (case open) since %s by %s", h.At.Format("2006-01-02"), h.By)
+		if end, ok := st.LockRetentionEnds(l); ok {
+			out += ", retention ends " + end.Format("2006-01-02")
+		}
+		return out
+	}
+	if at, ok := st.LockPurgeAt(l); ok {
+		return "purge due " + at.Format("2006-01-02 15:04")
+	}
+	return "kept until unlocked (SITEBIN_LOCK_RETENTION_DAYS=0)"
+}
+
+// holdSite places or releases the evidence hold on a locked site: while a
+// case, investigation or proceeding is open, the sweep does not purge it
+// past the lock retention. Like a lock it lives in meta.json, where the
+// running server's sweep reads it; no signal is needed.
+func holdSite(st *store.Store, out io.Writer, key string, hold bool, now time.Time) error {
+	site, err := findSite(st, key)
+	if err != nil {
+		return err
+	}
+	var h *store.LockHold
+	if hold {
+		h = &store.LockHold{At: now, By: store.HoldByCLI}
+	}
+	changed, err := st.SetHold(site, h)
+	if errors.Is(err, store.ErrNotLocked) {
+		return fmt.Errorf("site %s is not locked; an evidence hold keeps a locked site — lock it first with: sitebin lock %s <reason>", site.ViewID, site.ViewID)
+	}
+	if err != nil {
+		return err
+	}
+	l := site.Meta.Locked
+	switch {
+	case hold && !changed:
+		fmt.Fprintf(out, "site %s is already held: %s\n", site.ViewID, retentionState(st, l))
+	case hold:
+		fmt.Fprintf(out, "evidence hold placed on site %s: it is kept past the lock retention until you release it with: sitebin unhold %s\n", site.ViewID, site.ViewID)
+	case !changed:
+		fmt.Fprintf(out, "site %s had no evidence hold; %s\n", site.ViewID, retentionState(st, l))
+	default:
+		fmt.Fprintf(out, "evidence hold released on site %s; %s", site.ViewID, retentionState(st, l))
+		if at, ok := st.LockPurgeAt(l); ok && !at.After(now) {
+			fmt.Fprint(out, " — already past, so the next sweep purges the site")
+		}
+		fmt.Fprintln(out)
+	}
 	return nil
 }
 

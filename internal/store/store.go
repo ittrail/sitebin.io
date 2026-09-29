@@ -157,6 +157,11 @@ type Store struct {
 	// scanHook hears every decision. See guard.go.
 	scanner  *abuse.Loader
 	scanHook func(ScanEvent)
+
+	// lockRetention is how long a lock keeps a site (0: forever), and
+	// purgeHook hears every retention purge. See retention.go.
+	lockRetention time.Duration
+	purgeHook     func(LockPurge)
 }
 
 // AbuseRulesFile is the instance's own abuse rules, in the data directory,
@@ -382,10 +387,25 @@ func (s *Store) Delete(site *Site) error { return s.delete(site, false) }
 
 // ForceDelete is Delete for a locked site too. Only the operator's own
 // takedowns call it: the instance register's two-step delete and
-// `sitebin delete --force`.
+// `sitebin delete --force`. (The cleanup sweep's retention purge,
+// PurgeLocked, deletes a locked site the same way, on its own condition.)
 func (s *Store) ForceDelete(site *Site) error { return s.delete(site, true) }
 
 func (s *Store) delete(site *Site, force bool) error {
+	return s.deleteChecked(site, func(m *Meta) error {
+		// An unreadable meta.json is not a lock: Delete has always removed a
+		// site whose meta was damaged, and a lock that cannot be read was
+		// never shown anywhere to be relied on.
+		if m != nil && m.Locked != nil && !force {
+			return ErrLocked
+		}
+		return nil
+	})
+}
+
+// deleteChecked removes the site once check, handed the meta.json read
+// under the site lock (nil when it cannot be read), allows it.
+func (s *Store) deleteChecked(site *Site, check func(*Meta) error) error {
 	l := s.lockSite(site.ViewID)
 	l.Lock()
 	defer l.Unlock()
@@ -395,14 +415,15 @@ func (s *Store) delete(site *Site, force bool) error {
 	sl.Lock()
 	defer sl.Unlock()
 
-	// An unreadable meta.json is not a lock: Delete has always removed a site
-	// whose meta was damaged, and a lock that cannot be read was never shown
-	// anywhere to be relied on.
 	meta, err := readMeta(site.dir)
-	if err == nil && meta.Locked != nil && !force {
-		return ErrLocked
-	}
+	var m *Meta
 	if err == nil {
+		m = &meta
+	}
+	if err := check(m); err != nil {
+		return err
+	}
+	if m != nil {
 		for _, d := range meta.CustomDomains {
 			os.Remove(filepath.Join(s.domainIndexDir(), d))
 		}

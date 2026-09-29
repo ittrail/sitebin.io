@@ -1,7 +1,9 @@
 // Package cleanup deletes expired sites and repairs the filesystem indexes.
 // Between expiry and deletion (a 24h grace window) the authz endpoint serves
 // 410 Gone, so visitors see a clear signal before the site disappears. A
-// locked site is never swept: see store.SiteLock.
+// locked site is never swept for its expiry: it goes only once its lock is
+// older than the lock retention and carries no evidence hold (see
+// store.SiteLock and store.PurgeLocked).
 package cleanup
 
 import (
@@ -79,9 +81,9 @@ func stopContainers(site *store.Site) error {
 	return rt.Stop(site.ViewID)
 }
 
-// Sweep removes sites expired for longer than the grace period and prunes
-// index links whose target no longer exists. It returns the number of sites
-// deleted.
+// Sweep removes sites expired for longer than the grace period and locked
+// sites past the lock retention, and prunes index links whose target no
+// longer exists. It returns the number of sites deleted.
 func Sweep(st *store.Store, now time.Time) (int, error) {
 	sites, err := st.AllSites()
 	if err != nil {
@@ -93,17 +95,21 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 	removed := 0
 	for _, site := range sites {
 		// A locked site is the operator's evidence hold, and the sweep leaves
-		// it entirely alone: no expiry (it outlives its date indefinitely), no
-		// restamp from the owner's tier, no trust or domain reconciliation —
-		// it is kept exactly as the lock found it. store.Delete refuses it as
-		// well; skipping here keeps that refusal from being logged as a
-		// failure every ten minutes.
+		// it alone: no expiry (it outlives its date), no restamp from the
+		// owner's tier, no trust or domain reconciliation, no provenance
+		// purge — it is kept exactly as the lock found it. store.Delete
+		// refuses it as well. The one thing the sweep does to a locked site
+		// is the lock retention: once the lock is older than it and carries
+		// no evidence hold, the site is purged whole.
 		if site.Meta.IsLocked() {
+			if st.LockPurgeDue(site.Meta, now) && purgeLocked(st, site, now) {
+				removed++
+			}
 			continue
 		}
 		// Provenance is kept for provenance.Retention (the privacy policy's
 		// 90 days). A locked site's log is part of what the lock holds, and
-		// the skip above keeps it.
+		// the skip above keeps it until the site itself goes.
 		if n, err := st.PurgeProvenance(site, now.Add(-provenance.Retention)); err != nil {
 			slog.Error("cleanup: purge provenance", "id", site.ViewID, "err", err)
 		} else if n > 0 {
@@ -150,10 +156,13 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 		removed++
 	}
 	// The extension's account logs (sign-ups, sign-ins, tokens) keep the same
-	// retention; it knows which accounts it holds as evidence.
+	// retention; it knows which accounts it holds as evidence. Those it holds
+	// keep theirs up to the lock retention — after the loop above, so an
+	// account whose last locked site was just purged is no longer held.
 	if p, ok := ext.Get(); ok {
 		if ap, ok := p.(ext.AccountProvenance); ok {
-			ap.PurgeProvenance(now.Add(-provenance.Retention))
+			before, heldBefore := provenanceCutoffs(now, st.LockRetention())
+			ap.PurgeProvenance(before, heldBefore)
 		}
 	}
 	// Abuse reports are a log somebody typed; they go after the retention the
@@ -175,6 +184,43 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 		}
 	}
 	return removed, nil
+}
+
+// purgeLocked deletes a locked site past the lock retention and reports
+// whether it did. A container project is stopped first, as for an expired
+// site; the store decides again under the site lock, so an evidence hold or
+// an unlock that arrived since the sweep read the site keeps it.
+func purgeLocked(st *store.Store, site *store.Site, now time.Time) bool {
+	l := site.Meta.Locked
+	if err := stopContainers(site); err != nil {
+		slog.Error("cleanup: could not stop a locked site's containers, keeping it", "id", site.ViewID, "owner", site.Meta.OwnerAccountID, "err", err)
+		return false
+	}
+	purged, err := st.PurgeLocked(site, now)
+	if err != nil {
+		slog.Error("cleanup: purge a locked site past the lock retention", "id", site.ViewID, "owner", site.Meta.OwnerAccountID, "err", err)
+		return false
+	}
+	if purged {
+		slog.Info("cleanup: purged a locked site past the lock retention",
+			"id", site.ViewID, "owner", site.Meta.OwnerAccountID, "locked_at", l.At, "locked_by", l.By,
+			"reason", l.Reason, "retention_days", int(st.LockRetention()/(24*time.Hour)))
+	}
+	return purged
+}
+
+// provenanceCutoffs are the account-log cutoffs at now: before for every
+// account (90 days), heldBefore for one held as evidence — a suspended
+// account, or one owning a locked site — which keeps its log past the 90
+// days up to the lock retention, never less than 90 days. A zero retention
+// keeps locked sites forever, and heldBefore is zero: held logs are kept
+// whole.
+func provenanceCutoffs(now time.Time, lockRetention time.Duration) (before, heldBefore time.Time) {
+	before = now.Add(-provenance.Retention)
+	if lockRetention <= 0 {
+		return before, time.Time{}
+	}
+	return before, now.Add(-max(provenance.Retention, lockRetention))
 }
 
 // reconcile restamps an owned site from its owner's CURRENT tier before the

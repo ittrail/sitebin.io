@@ -631,15 +631,16 @@ type storeHost struct {
 	sites ext.SiteService
 }
 
-func (h *storeHost) DataDir() string        { return h.dir }
-func (h *storeHost) BaseDomain() string     { return "sitebin.example" }
-func (h *storeHost) HTTPOnly() bool         { return true }
-func (h *storeHost) Secret() []byte         { return []byte("0123456789abcdef0123456789abcdef") }
-func (h *storeHost) PathViews() bool        { return false }
-func (h *storeHost) Sites() ext.SiteService { return h.sites }
-func (h *storeHost) BaseURL() string        { return "http://sitebin.example" }
-func (h *storeHost) MCPOAuthIssuer() string { return "" }
-func (h *storeHost) MCPResource() string    { return "https://sitebin.example/mcp" }
+func (h *storeHost) DataDir() string              { return h.dir }
+func (h *storeHost) BaseDomain() string           { return "sitebin.example" }
+func (h *storeHost) HTTPOnly() bool               { return true }
+func (h *storeHost) Secret() []byte               { return []byte("0123456789abcdef0123456789abcdef") }
+func (h *storeHost) PathViews() bool              { return false }
+func (h *storeHost) Sites() ext.SiteService       { return h.sites }
+func (h *storeHost) BaseURL() string              { return "http://sitebin.example" }
+func (h *storeHost) MCPOAuthIssuer() string       { return "" }
+func (h *storeHost) MCPResource() string          { return "https://sitebin.example/mcp" }
+func (h *storeHost) LockRetention() time.Duration { return 180 * 24 * time.Hour }
 
 // setupRealSites returns a tiers provider whose SiteService is the shipping one.
 // paygateURL may be empty for a provider with no PayGate.

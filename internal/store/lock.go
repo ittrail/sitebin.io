@@ -11,10 +11,12 @@ import (
 )
 
 // A lock is the operator's evidence hold on a site: it is served to nobody,
-// changed by nobody but the operator, and never deleted except by the
-// operator's explicit takedown (ForceDelete). Expiry does not touch it — the
-// cleanup sweep skips a locked site entirely. See
-// docs/superpowers/specs/2026-09-28-site-lock-and-account-suspension.md.
+// changed by nobody but the operator, and deleted only by the operator's
+// explicit takedown (ForceDelete) or — once it is older than the instance's
+// lock retention and carries no evidence hold — by the cleanup sweep
+// (PurgeLocked, retention.go). Expiry does not touch it. See
+// docs/superpowers/specs/2026-09-28-site-lock-and-account-suspension.md and
+// its lock-retention addendum.
 //
 // The store holds the record and guards the one irreversible operation,
 // Delete. Every other write surface refuses a locked site at its own gate
@@ -43,10 +45,35 @@ const msgLocked = "This site is locked by the operator"
 // SiteLock is the lock record in meta.json. Nil (the value every meta.json
 // written before locks existed has) means unlocked.
 type SiteLock struct {
+	// At is when the site was locked: the start of its CONTINUOUS lock, and
+	// the lock retention's clock. A lock that replaces a lock keeps it — the
+	// operator's "Keep" over a scanner's or a suspension's lock, a re-lock
+	// with a new reason — and only an unlock ends it. Otherwise re-locking
+	// (scanner → Keep → suspension) would hold a site forever.
 	At     time.Time `json:"at"`
 	Reason string    `json:"reason,omitempty"`
 	By     string    `json:"by"`
+	// Hold is the operator's evidence hold ("case open"): while it stands
+	// the lock retention does not apply. Nil — every lock written before the
+	// retention existed — means none. See SetHold.
+	Hold *LockHold `json:"hold,omitempty"`
 }
+
+// LockHold is an evidence hold on a lock: a case, investigation or
+// proceeding is still open, so the site is kept past the lock retention.
+type LockHold struct {
+	At time.Time `json:"at"`
+	// By is who placed it: the admin's account id (register) or HoldByCLI.
+	By string `json:"by,omitempty"`
+}
+
+// HoldByCLI marks an evidence hold placed with `sitebin hold`, which runs on
+// the host and knows no account.
+const HoldByCLI = "cli"
+
+// ErrNotLocked refuses an evidence hold on a site that is not locked: there
+// would be nothing for it to hold.
+var ErrNotLocked = errors.New("site is not locked")
 
 // IsLocked reports whether the site carries a lock.
 func (m Meta) IsLocked() bool { return m.Locked != nil }
@@ -81,8 +108,12 @@ func CleanLockReason(s string) string {
 // SetLock locks the site, or lifts its lock when lock is nil, and reports
 // whether anything changed. An account lock (and a scanner's) is applied
 // only to an unlocked site: it never replaces the operator's lock, and a
-// repeated suspension keeps the first date. Lifting a lock hands a container
-// project back to the runtime as a restart (see unlockMeta).
+// repeated suspension keeps the first date. An operator lock that replaces a
+// lock keeps the lock's date and evidence hold — the site has been locked
+// since then, and the retention clock must not restart — and takes only its
+// author and reason from the new one. Lifting a lock hands a container
+// project back to the runtime as a restart (see unlockMeta), and ends any
+// evidence hold with it.
 //
 // Lifting is the operator's act — the register and `sitebin unlock` are its
 // only callers — and it is also their review: the abuse guard's findings
@@ -102,11 +133,15 @@ func (s *Store) SetLock(site *Site, lock *SiteLock) (changed bool, err error) {
 		}
 		l := *lock
 		l.Reason = CleanLockReason(l.Reason)
+		l.Hold = nil // only SetHold places one
 		if l.At.IsZero() {
 			l.At = time.Now().UTC()
 		}
 		if l.By == "" {
 			l.By = LockByAdmin
+		}
+		if m.Locked != nil {
+			l.At, l.Hold = m.Locked.At, m.Locked.Hold
 		}
 		l.At = l.At.UTC()
 		m.Locked = &l
@@ -124,7 +159,8 @@ func (s *Store) SetLock(site *Site, lock *SiteLock) (changed bool, err error) {
 // account lock stood (the tripwire, `sitebin scan --lock`, a write racing
 // the suspension): if an unreviewed blocking finding remains and the site
 // would have been held, the account lock becomes a scanner lock instead,
-// and released is false.
+// and released is false. The site stays locked throughout, so the scanner
+// lock keeps the date and any evidence hold.
 func (s *Store) ReleaseLock(site *Site, by string) (released bool, err error) {
 	err = s.Update(site, func(m *Meta) error {
 		released = false
@@ -134,7 +170,7 @@ func (s *Store) ReleaseLock(site *Site, by string) (released bool, err error) {
 		if by == LockByAccount && m.Abuse != nil {
 			for _, f := range m.Abuse.Findings {
 				if f.Severity == string(abuse.Block) && s.exemption(site, m, false) == "" {
-					m.Locked = &SiteLock{At: time.Now().UTC(), By: LockByScanner,
+					m.Locked = &SiteLock{At: m.Locked.At, Hold: m.Locked.Hold, By: LockByScanner,
 						Reason: CleanLockReason("held for review: " + f.Rule + " in " + f.Path + " (found while the owner was suspended)")}
 					return nil
 				}
@@ -144,6 +180,34 @@ func (s *Store) ReleaseLock(site *Site, by string) (released bool, err error) {
 		return nil
 	})
 	return released, err
+}
+
+// SetHold places the operator's evidence hold on a locked site, or releases
+// it when hold is nil, and reports whether anything changed. A site that is
+// not locked is ErrNotLocked. A second hold keeps the first one's date and
+// author: the case has been open since then.
+func (s *Store) SetHold(site *Site, hold *LockHold) (changed bool, err error) {
+	err = s.Update(site, func(m *Meta) error {
+		changed = false
+		if m.Locked == nil {
+			return ErrNotLocked
+		}
+		switch {
+		case hold == nil:
+			changed = m.Locked.Hold != nil
+			m.Locked.Hold = nil
+		case m.Locked.Hold == nil:
+			h := *hold
+			if h.At.IsZero() {
+				h.At = time.Now()
+			}
+			h.At = h.At.UTC()
+			m.Locked.Hold = &h
+			changed = true
+		}
+		return nil
+	})
+	return changed, err
 }
 
 // unlockMeta lifts the lock. A container project the lock stopped is started

@@ -280,6 +280,7 @@ func (s *fakeSites) Delete(string) error                       { return nil }
 func (s *fakeSites) ForceDelete(string) error                  { return nil }
 func (s *fakeSites) SetLock(string, *ext.SiteLock) error       { return nil }
 func (s *fakeSites) ReleaseLock(string, string) (bool, error)  { return false, nil }
+func (s *fakeSites) SetHold(string, *ext.LockHold) error       { return nil }
 func (s *fakeSites) ClearFindings(string) error                { return nil }
 func (s *fakeSites) Reports() ([]ext.AbuseReport, error)       { return nil, nil }
 func (s *fakeSites) ApplyQuota(string, ext.CreateGrant) error  { return nil }

@@ -82,6 +82,13 @@ type Config struct {
 	RateCreateBurst   int
 	RateAuthPer5Min   int
 	CleanupInterval   time.Duration
+	// LockRetention is how long a lock keeps a site as evidence
+	// (SITEBIN_LOCK_RETENTION_DAYS, default 180, 0 = forever): the cleanup
+	// sweep purges a locked site whose lock is older, unless the operator
+	// placed an evidence hold on it. It also caps how long a suspended
+	// account's provenance outlives the 90 days. See the lock-retention
+	// addendum of docs/superpowers/specs/2026-09-28-site-lock-and-account-suspension.md.
+	LockRetention time.Duration
 
 	// FTP (optional, off by default). Serves a site's files over FTP; login is
 	// the edit UUID + edit password. Plaintext unless FTPS certs are set.
@@ -148,6 +155,11 @@ type FormsSMTP struct {
 	From string // a bare address; each form supplies the display name
 	TLS  bool   // implicit TLS (port 465); otherwise STARTTLS when offered
 }
+
+// DefaultLockRetentionDays is the lock retention when none is configured:
+// what the hosted instance's privacy policy promises ("at most 180 days after
+// the lock unless a case is still open").
+const DefaultLockRetentionDays = 180
 
 // Custom-domain verification modes.
 const (
@@ -364,6 +376,14 @@ func Load(getenv func(string) string) (Config, error) {
 	if cfg.RateAuthPer5Min, err = intVar(getenv, "SITEBIN_RATE_AUTH_PER_5MIN", cfg.RateAuthPer5Min); err != nil {
 		return cfg, err
 	}
+	days, err := intVar(getenv, "SITEBIN_LOCK_RETENTION_DAYS", DefaultLockRetentionDays)
+	if err != nil {
+		return cfg, err
+	}
+	if days < 0 {
+		return cfg, fmt.Errorf("SITEBIN_LOCK_RETENTION_DAYS must not be negative (0 keeps locked sites forever)")
+	}
+	cfg.LockRetention = time.Duration(days) * 24 * time.Hour
 	if v := getenv("SITEBIN_CLEANUP_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {

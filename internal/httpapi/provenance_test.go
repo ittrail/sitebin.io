@@ -36,7 +36,11 @@ func (p *provProvider) RecordAccountProvenance(id string, e provenance.Entry) {
 	p.entries[id] = append(p.entries[id], e)
 }
 
-func (p *provProvider) PurgeProvenance(before time.Time) {
+// The interface is optional and asserted, so a fake that drifts from it
+// stops being one without a compile error; this keeps it honest.
+var _ ext.AccountProvenance = (*provProvider)(nil)
+
+func (p *provProvider) PurgeProvenance(before, _ time.Time) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.purged = append(p.purged, before)

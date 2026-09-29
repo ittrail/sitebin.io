@@ -347,7 +347,7 @@ func (p *provider) handleGDPRDelete(w http.ResponseWriter, r *http.Request) {
 			"account", acc.ID, "subject", order.UserID, "sites", locked)
 		w.WriteHeader(http.StatusConflict)
 		json.NewEncoder(w).Encode(map[string]any{
-			"error":       "the operator of this instance holds sites of this account locked; delete them in the instance register first",
+			"error":       "the operator of this instance holds sites of this account locked; delete them in the instance register, or retry once the lock retention has purged them",
 			"lockedSites": locked,
 		})
 		return
