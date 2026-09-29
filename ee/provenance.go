@@ -70,6 +70,11 @@ func (p *provider) PurgeProvenance(before time.Time) {
 		return
 	}
 	for _, id := range ids {
+		// The sweep runs every few minutes, and asking for the holds walks
+		// the account's sites: ask only when there is something to purge.
+		if !hasEntryBefore(p.accounts, id, before) {
+			continue
+		}
 		acc, err := p.accounts.ByID(id)
 		if err != nil || acc.Suspended() {
 			continue
@@ -83,6 +88,21 @@ func (p *provider) PurgeProvenance(before time.Time) {
 			slog.Info("provenance: purged account entries past retention", "account", id, "entries", n)
 		}
 	}
+}
+
+// hasEntryBefore reports whether the account's log holds an entry the purge
+// would drop.
+func hasEntryBefore(st *account.Store, id string, before time.Time) bool {
+	es, err := st.Provenance(id)
+	if err != nil {
+		return false
+	}
+	for _, e := range es {
+		if e.Latest().Before(before) {
+			return true
+		}
+	}
+	return false
 }
 
 // recordSite adds a change the dashboard made to a site's log, through the
