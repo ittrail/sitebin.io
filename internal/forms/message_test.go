@@ -422,3 +422,31 @@ func TestConfirmationMail(t *testing.T) {
 		}
 	}
 }
+
+func TestNoticeIsPlainText(t *testing.T) {
+	m, err := BuildNotice(Notice{From: "noreply@sitebin.example", To: "office@example.com",
+		Subject: "[sitebin abuse] Site held:\r\nBcc: x@evil.example", Text: "line one\nline two\n", At: time.Unix(0, 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := mail.ReadMessage(bytes.NewReader(m.Data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.Header.Get("Bcc") != "" || !strings.HasPrefix(msg.Header.Get("Subject"), "[sitebin abuse] Site held:") {
+		t.Errorf("subject header %q", msg.Header.Get("Subject"))
+	}
+	if msg.Header.Get("Auto-Submitted") != "auto-generated" || m.To != "office@example.com" {
+		t.Errorf("headers %v", msg.Header)
+	}
+	body, _ := io.ReadAll(msg.Body)
+	if bytes.Contains(bytes.ToLower(body), []byte("text/html")) {
+		t.Fatal("an alert must be plain text only")
+	}
+	if !bytes.Contains(body, []byte("text/plain")) || !bytes.Contains(body, []byte("line two")) {
+		t.Errorf("body %s", body)
+	}
+	if _, err := BuildNotice(Notice{From: "a@x.example", To: "b@x.example\r\nBcc: c@x.example"}); err == nil {
+		t.Error("a recipient with a line break was accepted")
+	}
+}

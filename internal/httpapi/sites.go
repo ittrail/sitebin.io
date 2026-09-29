@@ -647,6 +647,12 @@ func (a *API) createSiteWith(r *http.Request, opts createOpts) (*store.Site, str
 	}
 
 	set, err := opts.fill(site)
+	if errors.Is(err, store.ErrHeld) {
+		// The abuse guard locked the site on its first files. It stays, as
+		// evidence; its caller gets neither its address nor its password.
+		a.keepHeld(site, owner)
+		return nil, "", nil, &apiError{403, msgHeldCreate}
+	}
 	if err != nil {
 		return fail(err)
 	}
@@ -691,6 +697,30 @@ func (a *API) createSiteWith(r *http.Request, opts createOpts) (*store.Site, str
 	a.recordCreate(r, site, act)
 	a.log.Info("site created", "id", site.ViewID, "owner", owner, "origin", opts.origin)
 	return site, editPassword, warnings, nil
+}
+
+// keepHeld finishes the bookkeeping of a creation the abuse guard held: the
+// site is stamped with its plan's lifetime, which applies again should the
+// operator release it, and linked to its owner, so the owner's dashboard
+// shows it locked and a suspension of the owner finds it.
+func (a *API) keepHeld(site *store.Site, owner string) {
+	if err := a.st.Update(site, func(m *store.Meta) error {
+		if m.QuotaExpiryDays > 0 && m.ExpiresAt == nil {
+			exp := time.Now().Add(time.Duration(m.QuotaExpiryDays) * 24 * time.Hour).UTC()
+			m.ExpiresAt, m.ExpiryFromTier = &exp, true
+		}
+		return nil
+	}); err != nil {
+		a.log.Error("held site: stamp expiry", "id", site.ViewID, "err", err)
+	}
+	if owner != "" {
+		if p, ok := ext.Get(); ok {
+			if err := p.OnSiteCreated(owner, site.ViewID); err != nil {
+				a.log.Error("link owned site", "account", owner, "site", site.ViewID, "err", err)
+			}
+		}
+	}
+	a.log.Info("site created and held for review", "id", site.ViewID, "owner", owner)
 }
 
 func (a *API) createSite(w http.ResponseWriter, r *http.Request) {

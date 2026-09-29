@@ -48,7 +48,20 @@ func (s siteService) infoOf(site *store.Site) ext.SiteInfo {
 		CreatedAt:   site.Meta.CreatedAt,
 		ExpiresAt:   site.Meta.ExpiresAt,
 		Locked:      extLock(site.Meta.Locked),
+		Findings:    extFindings(site.Meta.Abuse),
 	}
+}
+
+// extFindings maps the abuse guard's unreviewed findings onto the seam's.
+func extFindings(a *store.AbuseState) []ext.ScanFinding {
+	if a == nil || len(a.Findings) == 0 {
+		return nil
+	}
+	out := make([]ext.ScanFinding, 0, len(a.Findings))
+	for _, f := range a.Findings {
+		out = append(out, ext.ScanFinding{Rule: f.Rule, Severity: f.Severity, Path: f.Path, Excerpt: f.Excerpt, Source: f.Source, At: f.At})
+	}
+	return out
 }
 
 // extLock maps the store's lock record onto the seam's.
@@ -200,6 +213,32 @@ func (s siteService) ReleaseLock(viewID, by string) (bool, error) {
 		s.a.lockChanged(site)
 	}
 	return released, nil
+}
+
+func (s siteService) ClearFindings(viewID string) error {
+	site, err := s.a.st.ByViewID(viewID)
+	if err != nil {
+		return mapSiteGone(err, viewID)
+	}
+	_, err = s.a.st.ClearFindings(site)
+	return mapSiteGone(err, viewID)
+}
+
+func (s siteService) Reports() ([]ext.AbuseReport, error) {
+	reps, err := s.a.st.ListReports()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ext.AbuseReport, 0, len(reps))
+	for _, r := range reps {
+		via := r.Via
+		if via == "" {
+			via = store.ReportViaAPI // before the page, the API was the only way in
+		}
+		out = append(out, ext.AbuseReport{Time: r.Time, Target: r.Target, ViewID: r.ViewID, Reason: r.Reason,
+			Details: r.Details, Contact: r.Contact, Source: r.Source, Via: via})
+	}
+	return out, nil
 }
 
 func (s siteService) ApplyQuota(viewID string, g ext.CreateGrant) error {

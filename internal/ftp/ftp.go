@@ -12,17 +12,44 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 
 	ftpserver "github.com/fclairamb/ftpserverlib"
+	"github.com/spf13/afero"
 
 	"github.com/ittrail/sitebin.io/internal/config"
 )
 
-// Authenticator verifies an FTP login and returns the directory to serve plus
-// the site's effective quota caps. Implemented by the HTTP API (which reuses
-// its edit-password rate limiting and verification cache).
+// Authenticator verifies an FTP login and returns the session: the directory
+// to serve, the site's effective quota caps and its write guard. Implemented
+// by the HTTP API (which reuses its edit-password rate limiting and
+// verification cache).
 type Authenticator interface {
-	FTPAuth(editID, password, clientIP string) (dir string, maxBytes int64, maxFiles int, err error)
+	FTPAuth(editID, password, clientIP string) (Session, error)
+}
+
+// Session is what a successful login opens.
+type Session struct {
+	Dir      string
+	MaxBytes int64
+	MaxFiles int
+	// Guard stages every write and checks every rename, so the abuse guard
+	// settles its verdict before a transferred file is visible. Nil writes
+	// straight into Dir (tests of the quota rules alone).
+	Guard Guard
+}
+
+// File is an open file as the FTP server needs it.
+type File = afero.File
+
+// Guard is how a session writes into its site. rel is native and relative
+// to the session's directory, already validated as an upload path.
+type Guard interface {
+	// Stage opens rel for writing; the content becomes visible on Close,
+	// which fails when the abuse guard held the site.
+	Stage(rel string, flag int, perm os.FileMode) (File, error)
+	// Rename renames within the site, checking a file whose kind changes.
+	Rename(oldRel, newRel string) error
 }
 
 // Recorder is implemented by an Authenticator that keeps a record of every
@@ -99,11 +126,12 @@ func (d *driver) AuthUser(cc ftpserver.ClientContext, user, pass string) (ftpser
 			ip = addr.String()
 		}
 	}
-	dir, maxBytes, maxFiles, err := d.auth.FTPAuth(user, pass, ip)
+	sess, err := d.auth.FTPAuth(user, pass, ip)
 	if err != nil {
 		return nil, err
 	}
-	q := newQuotaFs(dir, maxBytes, maxFiles)
+	q := newQuotaFs(sess.Dir, sess.MaxBytes, sess.MaxFiles)
+	q.guard = sess.Guard
 	if rec, ok := d.auth.(Recorder); ok {
 		q.onWrite = func(action, path string) { rec.FTPWrote(user, ip, action, path) }
 	}

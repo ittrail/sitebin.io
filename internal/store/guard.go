@@ -125,6 +125,10 @@ func (s *Store) SetScanner(l *abuse.Loader) { s.scanner = l }
 // it should record, log and hand anything slow (a mail) to a goroutine.
 func (s *Store) SetScanHook(fn func(ScanEvent)) { s.scanHook = fn }
 
+// AbuseRules is the rule set in force now (nil with scanning off). The CSP
+// tripwire asks it which destinations to watch.
+func (s *Store) AbuseRules() *abuse.RuleSet { return s.rules() }
+
 func (s *Store) rules() *abuse.RuleSet {
 	if s.scanner == nil {
 		return nil
@@ -190,7 +194,6 @@ func (s *Store) judge(site *Site, meta *Meta, results []abuse.Result, source, bl
 	if len(found) == 0 {
 		ev.Decision = DecisionReviewed
 		ev.Lock = meta.Locked
-		s.logDecision(ev)
 		return ev, false
 	}
 	ev.Findings = found
@@ -225,7 +228,6 @@ func (s *Store) judge(site *Site, meta *Meta, results []abuse.Result, source, bl
 	}
 	meta.Abuse.Findings = mergeFindings(meta.Abuse.Findings, found)
 	ev.Lock = meta.Locked
-	s.logDecision(ev)
 	return ev, true
 }
 
@@ -298,6 +300,9 @@ func (s *Store) settleLocked(site *Site, results []abuse.Result, source, blocked
 		return ScanEvent{}, err
 	}
 	ev, changed := s.judge(site, &meta, results, source, blocked)
+	if ev.Decision != "" {
+		s.logDecision(ev)
+	}
 	if changed {
 		meta.UpdatedAt = time.Now().UTC()
 		if err := writeMeta(site.dir, meta); err != nil {
@@ -460,6 +465,17 @@ func (s *Store) ScanSite(site *Site) ([]abuse.Result, error) {
 		return nil, nil
 	}
 	return s.scanContent(site, rs, 0, 0)
+}
+
+// Preview is what ApplyScan would decide for results, without writing,
+// logging or alerting anything.
+func (s *Store) Preview(site *Site, results []abuse.Result) (ScanEvent, error) {
+	meta, err := readMeta(site.dir)
+	if err != nil {
+		return ScanEvent{}, err
+	}
+	ev, _ := s.judge(site, &meta, results, FindingScan, "")
+	return ev, nil
 }
 
 // ApplyScan records results from ScanSite the way an upload would have:

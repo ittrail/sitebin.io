@@ -91,6 +91,10 @@ func (o mcpOps) mcpError(err error) error {
 		return errors.New("this form's recipient has already confirmed; there is nothing to resend")
 	case errors.Is(err, store.ErrReplaceBusy):
 		return errors.New(msgReplaceBusy)
+	case errors.As(err, new(*store.HeldError)):
+		var held *store.HeldError
+		errors.As(err, &held)
+		return errors.New(held.Error())
 	case errors.Is(err, store.ErrLocked):
 		return errors.New(store.LockedMessage(nil))
 	default:

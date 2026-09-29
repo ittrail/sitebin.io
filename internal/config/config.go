@@ -128,6 +128,12 @@ type Config struct {
 	AbuseContact   string
 	AbuseReportURL string
 	HomeURL        string
+	// AbuseAlertsTo are the addresses the abuse guard, the CSP tripwire and
+	// every stored abuse report are mailed to (SITEBIN_ABUSE_ALERTS_TO,
+	// comma-separated). Unset, it is the SITEBIN_ADMIN_ACCOUNTS addresses.
+	// The mail goes through the forms mailer; without one, alerts are only
+	// logged. See docs/superpowers/specs/2026-09-29-abuse-detection.md.
+	AbuseAlertsTo []string
 }
 
 // FormsSMTP is the forms mailer's server (SITEBIN_FORMS_SMTP_*). It is
@@ -324,6 +330,9 @@ func Load(getenv func(string) string) (Config, error) {
 	if cfg.FormsPerIPHour < 1 || cfg.FormsPerFormHour < 1 {
 		return cfg, fmt.Errorf("SITEBIN_FORMS_PER_IP_HOUR and SITEBIN_FORMS_PER_FORM_HOUR must be at least 1")
 	}
+	if cfg.AbuseAlertsTo, err = abuseAlertsTo(getenv); err != nil {
+		return cfg, err
+	}
 	// No fallback to the sign-in issuer. Inheriting it would make every
 	// instance that merely configured SSO an OAuth resource — publishing
 	// metadata, answering account calls with sign-in challenges, and on a
@@ -467,6 +476,35 @@ func formsSMTP(getenv func(string) string) (*FormsSMTP, error) {
 	}
 	s.From = from
 	return s, nil
+}
+
+// abuseAlertsTo reads SITEBIN_ABUSE_ALERTS_TO, strictly: a typo there would
+// silently send nobody the alarm. Unset, it falls back to the operator's
+// SITEBIN_ADMIN_ACCOUNTS, read leniently — the enterprise configuration owns
+// and validates that variable; here it is only a default.
+func abuseAlertsTo(getenv func(string) string) ([]string, error) {
+	var out []string
+	if v := strings.TrimSpace(getenv("SITEBIN_ABUSE_ALERTS_TO")); v != "" {
+		for _, part := range strings.Split(v, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			a, err := mail.ParseAddress(part)
+			if err != nil || a.Name != "" || a.Address != part {
+				return nil, fmt.Errorf("SITEBIN_ABUSE_ALERTS_TO: %q is not a bare address such as abuse@example.com", part)
+			}
+			out = append(out, strings.ToLower(part))
+		}
+		return out, nil
+	}
+	for _, part := range strings.Split(getenv("SITEBIN_ADMIN_ACCOUNTS"), ",") {
+		part = strings.ToLower(strings.TrimSpace(part))
+		if a, err := mail.ParseAddress(part); err == nil && a.Address == part {
+			out = append(out, part)
+		}
+	}
+	return out, nil
 }
 
 func intVar(getenv func(string) string, name string, def int) (int, error) {

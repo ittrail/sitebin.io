@@ -29,6 +29,8 @@ type quotaFs struct {
 	// onWrite, when set, is told about every write that succeeded, for the
 	// site's provenance log.
 	onWrite func(action, path string)
+	// guard, when set, stages writes and checks renames (see Guard).
+	guard Guard
 }
 
 // wrote reports a successful write to onWrite.
@@ -94,7 +96,12 @@ func (q *quotaFs) OpenFile(name string, flag int, perm os.FileMode) (afero.File,
 	} else if count+1 > q.maxFiles {
 		return nil, errQuota
 	}
-	f, err := q.Fs.OpenFile(name, flag, perm)
+	var f afero.File
+	if q.guard != nil {
+		f, err = q.guard.Stage(filepath.FromSlash(rel), flag, perm)
+	} else {
+		f, err = q.Fs.OpenFile(name, flag, perm)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -117,13 +124,22 @@ func (q *quotaFs) MkdirAll(path string, perm os.FileMode) error {
 }
 
 func (q *quotaFs) Rename(oldname, newname string) error {
-	if _, err := cleanName(oldname); err != nil {
+	o, err := cleanName(oldname)
+	if err != nil {
 		return err
 	}
-	if _, err := cleanName(newname); err != nil {
+	n, err := cleanName(newname)
+	if err != nil {
 		return err
 	}
-	return q.done(provenance.ActionMove, strings.TrimPrefix(filepath.ToSlash(oldname), "/")+" → "+strings.TrimPrefix(filepath.ToSlash(newname), "/"), q.Fs.Rename(oldname, newname))
+	moved := strings.TrimPrefix(filepath.ToSlash(oldname), "/") + " → " + strings.TrimPrefix(filepath.ToSlash(newname), "/")
+	if q.guard != nil {
+		if o == "" || n == "" {
+			return errQuota // the root itself
+		}
+		return q.done(provenance.ActionMove, moved, q.guard.Rename(filepath.FromSlash(o), filepath.FromSlash(n)))
+	}
+	return q.done(provenance.ActionMove, moved, q.Fs.Rename(oldname, newname))
 }
 
 func (q *quotaFs) Remove(name string) error {

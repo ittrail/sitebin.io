@@ -522,3 +522,34 @@ func TestFilesURLIsTheUploadRouteOnTheMainDomain(t *testing.T) {
 		t.Errorf("FilesURL = %q", got)
 	}
 }
+
+func TestAbuseAlertsTo(t *testing.T) {
+	load := func(vars map[string]string) (Config, error) {
+		vars["SITEBIN_BASE_DOMAIN"] = "sitebin.example"
+		vars["SITEBIN_HTTP_ONLY"] = "true"
+		return Load(func(k string) string { return vars[k] })
+	}
+	cfg, err := load(map[string]string{"SITEBIN_ABUSE_ALERTS_TO": " Office@IT-Trail.example , abuse@sitebin.example "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(cfg.AbuseAlertsTo, ",") != "office@it-trail.example,abuse@sitebin.example" {
+		t.Errorf("AbuseAlertsTo = %v", cfg.AbuseAlertsTo)
+	}
+	// unset: the admin accounts, whatever else they hold
+	cfg, err = load(map[string]string{"SITEBIN_ADMIN_ACCOUNTS": "furti@furti.example, not an address"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(cfg.AbuseAlertsTo, ",") != "furti@furti.example" {
+		t.Errorf("default = %v", cfg.AbuseAlertsTo)
+	}
+	if cfg, _ := load(map[string]string{}); len(cfg.AbuseAlertsTo) != 0 {
+		t.Errorf("nobody configured: %v", cfg.AbuseAlertsTo)
+	}
+	for _, bad := range []string{"Office <office@x.example>", "not-an-address", "a@x.example, b"} {
+		if _, err := load(map[string]string{"SITEBIN_ABUSE_ALERTS_TO": bad}); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}

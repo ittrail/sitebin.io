@@ -20,6 +20,7 @@ import (
 	"github.com/ittrail/sitebin.io/internal/auth"
 	"github.com/ittrail/sitebin.io/internal/config"
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/forms"
 	"github.com/ittrail/sitebin.io/internal/ids"
 	"github.com/ittrail/sitebin.io/internal/provenance"
 	"github.com/ittrail/sitebin.io/internal/store"
@@ -56,7 +57,11 @@ type API struct {
 	uploads        *uploadTokens
 	assets         assetCache
 	csp            *cspAggregator
-	forms          *formsState // nil when the instance has no forms
+	forms          *formsState   // nil when the instance has no forms
+	alerts         *alerter      // abuse mail to the operator
+	tripLimiter    *auth.Limiter // CSP tripwire verifications per (site, destination)
+	tripSlots      chan struct{} // CSP tripwire verifications running at once
+	reportKey      []byte        // signs the report page's form tickets
 }
 
 // New wires the API. secret signs view-session cookies; webFS provides the
@@ -65,7 +70,7 @@ func New(cfg config.Config, st *store.Store, secret []byte, webFS fs.FS) (*API, 
 	if len(secret) < 16 {
 		return nil, fmt.Errorf("httpapi: secret too short")
 	}
-	return &API{
+	a := &API{
 		csp:            newCSPAggregator(),
 		cfg:            cfg,
 		st:             st,
@@ -85,7 +90,19 @@ func New(cfg config.Config, st *store.Store, secret []byte, webFS fs.FS) (*API, 
 		davLockSystems: newDavLocks(),
 		uploads:        newUploadTokens(time.Now),
 		forms:          newFormsState(cfg, secret),
-	}, nil
+		tripLimiter:    auth.NewLimiter(tripPerHour, tripBurst),
+		tripSlots:      make(chan struct{}, tripSlots),
+		reportKey:      reportTicketKey(secret),
+	}
+	var send forms.Sender
+	if s := cfg.FormsSMTP; s != nil {
+		send = &forms.SMTPSender{Host: s.Host, Port: s.Port, User: s.User, Pass: s.Pass, ImplicitTLS: s.TLS, Timeout: alertTimeout}
+	}
+	a.alerts = newAlerter(cfg, send, a.log)
+	// Every decision of the store's abuse guard comes here: lock side
+	// effects and the operator's mail.
+	st.SetScanHook(a.onScan)
+	return a, nil
 }
 
 // Public returns the handler Caddy proxies: main-domain UI + API + WebDAV,
@@ -100,6 +117,8 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("POST /api/sites", a.createSite)
 	mux.HandleFunc("OPTIONS /api/sites", a.createPreflight)
 	mux.HandleFunc("POST /api/report", a.report)
+	mux.HandleFunc("GET /report", a.reportPage)
+	mux.HandleFunc("POST /report", a.reportSubmit)
 	mux.HandleFunc("GET /api/sites/{editID}", a.withEditAuthEvenLocked(a.getSite))
 	mux.HandleFunc("GET /api/sites/{editID}/download", a.withEditAuth(a.downloadSite))
 	mux.HandleFunc("GET /api/sites/{editID}/content/{path...}", a.withEditAuth(a.getFileContent))
@@ -269,6 +288,11 @@ func storeError(w http.ResponseWriter, err error) {
 		writeError(w, 410, err.Error())
 	case errors.Is(err, store.ErrReplaceBusy):
 		writeError(w, 409, msgReplaceBusy)
+	case errors.As(err, new(*store.HeldError)):
+		// The abuse guard locked the site on this very write.
+		var held *store.HeldError
+		errors.As(err, &held)
+		writeError(w, 403, held.Error())
 	case errors.Is(err, store.ErrLocked):
 		// A lock placed while the request was on its way (a replace commit,
 		// a delete): the gate let it in, the store held the line.

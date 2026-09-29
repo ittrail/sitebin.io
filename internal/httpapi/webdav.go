@@ -145,20 +145,22 @@ func (a *API) webdav(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, remaining)
 	}
 
+	fsys := newSiteFS(a.st, site, davMutating[r.Method])
 	h := &webdav.Handler{
 		Prefix:     "/dav/" + editID,
-		FileSystem: newSiteFS(a.st, site),
+		FileSystem: fsys,
 		LockSystem: a.davLockSystems.get(site.ViewID),
 	}
+	hw := &heldWriter{ResponseWriter: w, fs: fsys}
 	if davMutating[r.Method] {
 		// serialize with API writes / mode switches on the same site
-		sw := &statusWriter{ResponseWriter: w, code: 200}
+		sw := &statusWriter{ResponseWriter: hw, code: 200}
 		a.st.WithLock(site.ViewID, func() error { h.ServeHTTP(sw, r); return nil })
 		if sw.code < 300 {
 			a.recordDAV(r, site, act, sub)
 		}
 	} else {
-		h.ServeHTTP(w, r)
+		h.ServeHTTP(hw, r)
 	}
 
 	if davMutating[r.Method] {

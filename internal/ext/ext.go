@@ -33,10 +33,14 @@ var ErrSiteGone = errors.New("ext: site no longer exists")
 var ErrSiteLocked = errors.New("ext: site is locked by the operator")
 
 // Who placed a lock (SiteLock.By). An operator lock replaces any lock; an
-// account lock is applied only to an unlocked site.
+// account lock, and the abuse guard's, is applied only to an unlocked site.
 const (
 	LockByAdmin   = "admin"
 	LockByAccount = "account"
+	// LockByScanner is the abuse guard holding a site for review: an upload
+	// matched a blocking rule, or a CSP report proved an exfiltration
+	// attempt. See docs/superpowers/specs/2026-09-29-abuse-detection.md.
+	LockByScanner = "scanner"
 )
 
 // SiteLock is the operator's evidence hold on a site: it is served to
@@ -300,6 +304,15 @@ type SiteService interface {
 	// reports whether it did — how an unsuspension lifts its own locks and
 	// leaves the operator's. A site that no longer exists is ErrSiteGone.
 	ReleaseLock(viewID, by string) (released bool, err error)
+	// ClearFindings dismisses the abuse guard's findings on a site without
+	// unlocking it: the operator has looked, and the content they were about
+	// becomes reviewed, so the same bytes are not flagged or held again. (An
+	// operator unlock through SetLock(nil) does the same.) A site that no
+	// longer exists is ErrSiteGone.
+	ClearFindings(viewID string) error
+	// Reports lists the stored abuse reports, newest first, for the
+	// register. They are purged after 14 days.
+	Reports() ([]AbuseReport, error)
 	// ApplyQuota restamps a site's per-site caps from a grant and reconciles its
 	// expiry with the new lifetime cap. It returns an error wrapping ErrSiteGone
 	// when viewID names a site that no longer exists, which callers holding
@@ -351,6 +364,43 @@ type SiteService interface {
 	// proof; nothing is detached on the spot.
 	ReleaseZone(accountID, zone string) error
 	ReleaseZones(accountID string) error
+}
+
+// AbuseReport is one report filed through the public report page or
+// POST /api/report.
+type AbuseReport struct {
+	Time time.Time
+	// Target is what the reporter typed; ViewID the site it resolved to, or
+	// empty.
+	Target string
+	ViewID string
+	Reason string
+	// Details and Contact (the reporter's optional address) are the
+	// reporter's own words: show them, never follow them.
+	Details string
+	Contact string
+	// Source is the reporter's network, truncated (/24, /48).
+	Source string
+	// Via is "page" or "api".
+	Via string
+}
+
+// ScanFinding is one abuse-guard hit on a site: a rule that matched a file,
+// or a CSP report its files proved (Source "csp").
+type ScanFinding struct {
+	Rule     string
+	Severity string // "block" or "flag"
+	Path     string
+	Excerpt  string
+	Source   string // "upload", "csp" or "scan"
+	At       time.Time
+}
+
+// AccountDirectory is implemented by a Provider that can name an account
+// for the operator. OPTIONAL, like OperatorAccounts: the core asks it only
+// to put an owner's address into an abuse alert, never on a request path.
+type AccountDirectory interface {
+	AccountEmail(accountID string) (email string, ok bool)
 }
 
 // ZoneInfo is one account zone as the dashboard shows it.
@@ -532,6 +582,9 @@ type SiteInfo struct {
 	// and filters it; the owner's dashboard shows it and hides the actions
 	// the lock refuses.
 	Locked *SiteLock
+	// Findings are the abuse guard's hits not yet reviewed, newest last. The
+	// register shows them; the owner never sees them.
+	Findings []ScanFinding
 }
 
 // DomainLink is one custom domain of a site as the dashboard shows it. A

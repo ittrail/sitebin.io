@@ -43,6 +43,9 @@ type fakeSites struct {
 	// ReleaseLock for the listed site ids.
 	forceDeleted []string
 	lockErrs     map[string]error
+	// reports is what Reports lists; cleared records ClearFindings calls.
+	reports []ext.AbuseReport
+	cleared []string
 }
 
 func (s *fakeSites) Info(id string) (ext.SiteInfo, bool) { i, ok := s.infos[id]; return i, ok }
@@ -169,7 +172,7 @@ func (s *fakeSites) SetLock(id string, lock *ext.SiteLock) error {
 	switch {
 	case lock == nil:
 		info.Locked = nil
-	case lock.By == ext.LockByAccount && info.Locked != nil:
+	case (lock.By == ext.LockByAccount || lock.By == ext.LockByScanner) && info.Locked != nil:
 		return nil
 	default:
 		l := *lock
@@ -197,6 +200,20 @@ func (s *fakeSites) ReleaseLock(id, by string) (bool, error) {
 	s.infos[id] = info
 	return true, nil
 }
+
+// ClearFindings mirrors the store: the findings go (into the reviewed set).
+func (s *fakeSites) ClearFindings(id string) error {
+	info, ok := s.infos[id]
+	if !ok {
+		return fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
+	}
+	info.Findings = nil
+	s.infos[id] = info
+	s.cleared = append(s.cleared, id)
+	return nil
+}
+
+func (s *fakeSites) Reports() ([]ext.AbuseReport, error) { return s.reports, nil }
 
 func (s *fakeSites) ForceDelete(id string) error {
 	if _, ok := s.infos[id]; !ok {

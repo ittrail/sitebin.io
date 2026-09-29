@@ -105,15 +105,19 @@ func (c *cspAggregator) add(site *store.Site, blockedURI, source string) []*cspP
 // and the Reporting API array ([{"type":"csp-violation","body":{...}}]).
 type cspReport struct {
 	CSPReport struct {
-		BlockedURI string `json:"blocked-uri"`
+		BlockedURI  string `json:"blocked-uri"`
+		DocumentURI string `json:"document-uri"`
 	} `json:"csp-report"`
 }
 
 type reportingAPIEntry struct {
 	Type string `json:"type"`
+	URL  string `json:"url"`
 	Body struct {
-		BlockedURL string `json:"blockedURL"`
-		BlockedURI string `json:"blocked-uri"`
+		BlockedURL  string `json:"blockedURL"`
+		BlockedURI  string `json:"blocked-uri"`
+		DocumentURL string `json:"documentURL"`
+		DocumentURI string `json:"document-uri"`
 	} `json:"body"`
 }
 
@@ -143,30 +147,41 @@ func (a *API) handleCSPReport(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	blocked := blockedURIFrom(body)
+	blocked, doc := reportFields(body)
 	for _, p := range a.csp.add(site, blocked, source) {
 		a.st.RecordCSPViolation(p.site, p.count, p.blocked, len(p.sources))
 	}
+	// Counted first, whatever follows: the report is evidence either way.
+	// Then the tripwire: a known exfiltration destination sends the site's
+	// own files to verification (abuse.go).
+	a.tripwire(site, blocked, doc)
 }
 
-// blockedURIFrom pulls the blocked destination out of either report format,
-// returning "" when neither parses — a report that only tells us a violation
-// happened is still worth counting.
-func blockedURIFrom(body []byte) string {
+// reportFields pulls the blocked destination and the reporting page out of
+// either report format, returning "" for what is missing — a report that
+// only tells us a violation happened is still worth counting.
+func reportFields(body []byte) (blocked, doc string) {
 	var single cspReport
 	if json.Unmarshal(body, &single) == nil && single.CSPReport.BlockedURI != "" {
-		return single.CSPReport.BlockedURI
+		return single.CSPReport.BlockedURI, single.CSPReport.DocumentURI
 	}
 	var modern []reportingAPIEntry
 	if json.Unmarshal(body, &modern) == nil {
 		for _, e := range modern {
+			doc := e.Body.DocumentURL
+			if doc == "" {
+				doc = e.Body.DocumentURI
+			}
+			if doc == "" {
+				doc = e.URL
+			}
 			if e.Body.BlockedURL != "" {
-				return e.Body.BlockedURL
+				return e.Body.BlockedURL, doc
 			}
 			if e.Body.BlockedURI != "" {
-				return e.Body.BlockedURI
+				return e.Body.BlockedURI, doc
 			}
 		}
 	}
-	return ""
+	return "", ""
 }

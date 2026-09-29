@@ -220,7 +220,7 @@ func TestLockedSiteRefusesEveryPerSiteRoute(t *testing.T) {
 	if w := davReq(t, e, "PUT", "/dav/"+edit+"/index.html", c.EditPassword, strings.NewReader("clean")); w.Code != 403 {
 		t.Errorf("WebDAV PUT on a locked site = %d, want 403", w.Code)
 	}
-	if _, _, _, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4"); err == nil || !strings.Contains(err.Error(), "locked") {
+	if _, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4"); err == nil || !strings.Contains(err.Error(), "locked") {
 		t.Errorf("FTP login to a locked site = %v", err)
 	}
 }

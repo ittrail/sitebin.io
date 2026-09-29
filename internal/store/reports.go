@@ -28,7 +28,20 @@ type Report struct {
 	Reason  string    `json:"reason"`
 	Details string    `json:"details,omitempty"`
 	Source  string    `json:"source,omitempty"` // truncated reporter network, see AnonymizeIP
+	// Contact is the address the reporter chose to give, if any, so the
+	// operator can ask back. It is theirs to give and goes with the report
+	// after ReportRetention.
+	Contact string `json:"contact,omitempty"`
+	// Via is where the report came from: ReportViaPage or ReportViaAPI.
+	// Empty on reports from before the report page, which were all the API.
+	Via string `json:"via,omitempty"`
 }
+
+// Where a report was filed.
+const (
+	ReportViaPage = "page"
+	ReportViaAPI  = "api"
+)
 
 const (
 	// ReportRetention is how long a report is kept before the sweep purges

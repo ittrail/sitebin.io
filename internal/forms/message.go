@@ -185,6 +185,36 @@ func BuildConfirmation(in ConfirmationMail) (Mail, error) {
 	return Mail{From: in.From, To: in.Recipient, Data: data}, err
 }
 
+// Notice is a plain-text mail from the instance to its own operator: the
+// abuse alerts. Plain text for the reason the submission mail is — Microsoft
+// 365 quarantines this server's HTML mail — and because an alert is read, not
+// looked at.
+type Notice struct {
+	From    string // SITEBIN_FORMS_SMTP_FROM
+	To      string
+	Subject string
+	Text    string
+	At      time.Time
+}
+
+// BuildNotice builds a Notice. Its sender is "Sitebin", and it says it was
+// generated, so an auto-responder does not answer it.
+func BuildNotice(n Notice) (Mail, error) {
+	if err := headerSafe(n.From, n.To); err != nil {
+		return Mail{}, err
+	}
+	hs := []header{
+		{"From", (&mail.Address{Name: "Sitebin", Address: n.From}).String()},
+		{"To", (&mail.Address{Address: n.To}).String()},
+		{"Subject", mime.QEncoding.Encode("utf-8", cleanSubject(n.Subject))},
+		{"Date", n.At.UTC().Format(time.RFC1123Z)},
+		{"Message-ID", messageID(n.From)},
+		{"Auto-Submitted", "auto-generated"},
+	}
+	data, err := compose(hs, n.Text, "", nil)
+	return Mail{From: n.From, To: n.To, Data: data}, err
+}
+
 func submissionText(v mailView) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "New message via %s on %s\n\n", v.FormName, v.Host)

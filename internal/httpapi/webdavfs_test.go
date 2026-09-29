@@ -23,7 +23,7 @@ func TestSiteFSRefusesEscapingLinks(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(site.FilesDir(), "out")); err != nil {
 		t.Skipf("cannot create symlinks here: %v", err)
 	}
-	fs := newSiteFS(e.st, site)
+	fs := newSiteFS(e.st, site, false)
 	ctx := context.Background()
 
 	if f, err := fs.OpenFile(ctx, "/out/secret", os.O_RDONLY, 0); err == nil {

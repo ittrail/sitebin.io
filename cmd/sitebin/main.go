@@ -10,6 +10,7 @@
 //	sitebin lock <id|domain> [reason…]    hold a site: served to nobody, frozen, never swept
 //	sitebin unlock <id|domain>            lift a hold
 //	sitebin delete [--force] <id|domain>  operator takedown of a site (--force for a locked one)
+//	sitebin scan <id|domain>|--all [--lock]  run the abuse rules over sites on disk
 //	sitebin backup [file]       write a tar.gz of the data dir
 //	sitebin restore <file>      restore the data dir from a backup
 package main
@@ -96,6 +97,27 @@ func main() {
 		}
 		if err := unlockSite(mustStore(mustConfig()), os.Stdout, os.Args[2]); err != nil {
 			fmt.Fprintln(os.Stderr, "unlock failed:", err)
+			os.Exit(1)
+		}
+	case "scan":
+		all, lock, key := false, false, ""
+		for _, a := range os.Args[2:] {
+			switch a {
+			case "--all":
+				all = true
+			case "--lock":
+				lock = true
+			default:
+				key = a
+			}
+		}
+		if all == (key != "") {
+			fmt.Fprintln(os.Stderr, "usage: sitebin scan <view-id|edit-id|domain> [--lock]")
+			fmt.Fprintln(os.Stderr, "       sitebin scan --all [--lock]")
+			os.Exit(2)
+		}
+		if err := scanSites(mustStore(mustConfig()), os.Stdout, key, all, lock); err != nil {
+			fmt.Fprintln(os.Stderr, "scan failed:", err)
 			os.Exit(1)
 		}
 	case "list":
@@ -242,6 +264,20 @@ func serve() error {
 	st.SetZoneNamesPerHour(cfg.ZoneNamesPerHour)
 	if len(cfg.OperatorDomains) > 0 {
 		slog.Info("operator zones", "zones", strings.Join(cfg.OperatorDomains, ","))
+	}
+	// The abuse guard runs on every write whatever is configured; what the
+	// operator hears of it depends on these two.
+	if rs := st.AbuseRules(); rs != nil {
+		slog.Info("abuse guard", "rules", rs.Rules(), "destinations", rs.Destinations(),
+			"rules_file", filepath.Join(cfg.DataDir, store.AbuseRulesFile))
+	}
+	switch {
+	case len(cfg.AbuseAlertsTo) == 0:
+		slog.Warn("abuse alerts go to nobody: set SITEBIN_ABUSE_ALERTS_TO (or SITEBIN_ADMIN_ACCOUNTS)")
+	case cfg.FormsSMTP == nil:
+		slog.Warn("abuse alerts are only logged: they are mailed through the SITEBIN_FORMS_SMTP_* mailer, which is not configured")
+	default:
+		slog.Info("abuse alerts", "to", strings.Join(cfg.AbuseAlertsTo, ","))
 	}
 	if cfg.DomainVerification == config.DomainVerifyOff {
 		slog.Warn("SITEBIN_DOMAIN_VERIFICATION=off: custom domains are attached without proof of ownership; only safe when every account holder is trusted")
@@ -425,8 +461,15 @@ func listReports() error {
 		return nil
 	}
 	for _, r := range reports {
-		fmt.Printf("%s  target=%s  site=%s  source=%s\n  reason: %s\n",
-			r.Time.Format("2006-01-02 15:04:05"), r.Target, r.ViewID, r.Source, r.Reason)
+		via := r.Via
+		if via == "" {
+			via = store.ReportViaAPI // before the report page, the API was the only way in
+		}
+		fmt.Printf("%s  target=%s  site=%s  source=%s  via=%s\n  reason: %s\n",
+			r.Time.Format("2006-01-02 15:04:05"), r.Target, r.ViewID, r.Source, via, r.Reason)
+		if r.Contact != "" {
+			fmt.Printf("  contact: %s\n", r.Contact)
+		}
 		if r.Details != "" {
 			fmt.Printf("  details: %s\n", r.Details)
 		}

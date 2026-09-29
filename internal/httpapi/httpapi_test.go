@@ -756,7 +756,8 @@ func TestFTPAuth(t *testing.T) {
 	c := e.createSite(t, map[string]string{"ftp": "true"}, map[string]string{"index.html": "x"})
 	edit := editIDFrom(t, c.EditURL)
 
-	dir, maxBytes, _, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4")
+	sess, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4")
+	dir, maxBytes := sess.Dir, sess.MaxBytes
 	if err != nil {
 		t.Fatalf("FTPAuth: %v", err)
 	}
@@ -764,11 +765,11 @@ func TestFTPAuth(t *testing.T) {
 		t.Errorf("dir=%q maxBytes=%d", dir, maxBytes)
 	}
 	// wrong password
-	if _, _, _, err := e.api.FTPAuth(edit, "wrong", "1.2.3.4"); err == nil {
+	if _, err := e.api.FTPAuth(edit, "wrong", "1.2.3.4"); err == nil {
 		t.Error("wrong password accepted")
 	}
 	// unknown site
-	if _, _, _, err := e.api.FTPAuth("aaaaaaaaaaaaaaaaaaaaaaaaaa", c.EditPassword, "1.2.3.4"); err == nil {
+	if _, err := e.api.FTPAuth("aaaaaaaaaaaaaaaaaaaaaaaaaa", c.EditPassword, "1.2.3.4"); err == nil {
 		t.Error("unknown site accepted")
 	}
 }
@@ -777,7 +778,7 @@ func TestFTPAuthDisabledPerSite(t *testing.T) {
 	e := newEnv(t, map[string]string{"SITEBIN_FTP_ENABLED": "true"})
 	c := e.createSite(t, nil, nil) // ftp not enabled on the site
 	edit := editIDFrom(t, c.EditURL)
-	if _, _, _, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4"); err == nil {
+	if _, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4"); err == nil {
 		t.Error("ftp should be off for this site")
 	}
 }
@@ -790,7 +791,7 @@ func TestFTPAuthGloballyDisabled(t *testing.T) {
 	if site.Meta.FTPEnabled {
 		t.Error("per-site ftp should not enable when global ftp is off")
 	}
-	if _, _, _, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4"); err == nil {
+	if _, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4"); err == nil {
 		t.Error("ftp should be globally disabled")
 	}
 }
@@ -807,7 +808,7 @@ func TestFTPAuthRefusesAnonymousSiteWhenAccountsEnabled(t *testing.T) {
 	c := e.createSite(t, map[string]string{"ftp": "true"}, map[string]string{"index.html": "x"})
 	edit := editIDFrom(t, c.EditURL)
 
-	if _, _, _, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4"); err == nil {
+	if _, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4"); err == nil {
 		t.Error("anonymous site should have no FTP access when accounts are enabled")
 	}
 }
@@ -819,7 +820,7 @@ func TestFTPAuthAllowsOwnedSiteWhenAccountsEnabled(t *testing.T) {
 	c := e.createSite(t, map[string]string{"ftp": "true"}, map[string]string{"index.html": "x"})
 	edit := editIDFrom(t, c.EditURL)
 
-	if _, _, _, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4"); err != nil {
+	if _, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4"); err != nil {
 		t.Errorf("owned site should have FTP access: %v", err)
 	}
 }
@@ -829,7 +830,7 @@ func TestFTPAuthCommunityBuildStaysOpen(t *testing.T) {
 	c := e.createSite(t, map[string]string{"ftp": "true"}, map[string]string{"index.html": "x"})
 	edit := editIDFrom(t, c.EditURL)
 
-	if _, _, _, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4"); err != nil {
+	if _, err := e.api.FTPAuth(edit, c.EditPassword, "1.2.3.4"); err != nil {
 		t.Errorf("community build should have FTP access: %v", err)
 	}
 }
