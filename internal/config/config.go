@@ -111,6 +111,23 @@ type Config struct {
 	FormsMaxFileBytes int64 // bytes per attachment
 	FormsPerIPHour    int   // submissions per client IP per hour, all forms
 	FormsPerFormHour  int   // submissions per form per hour
+
+	// CSP*Hosts are the hosts an UNTRUSTED site may load scripts, styles,
+	// fonts and images from (SITEBIN_CSP_{SCRIPT,STYLE,FONT,IMG}_HOSTS).
+	// See abuse.go for the defaults and docs/superpowers/specs/2026-09-29-provenance-csp-apex.md.
+	CSPScriptHosts []string
+	CSPStyleHosts  []string
+	CSPFontHosts   []string
+	CSPImgHosts    []string
+
+	// AbuseContact is the public abuse mailbox (SITEBIN_ABUSE_CONTACT),
+	// AbuseReportURL the report page (SITEBIN_ABUSE_REPORT_URL, default
+	// <base>/report, "none" to omit) and HomeURL the operator's main site
+	// (SITEBIN_HOME_URL, default the base URL). They reach the view domain's
+	// info page, security.txt and the "site suspended" page.
+	AbuseContact   string
+	AbuseReportURL string
+	HomeURL        string
 }
 
 // FormsSMTP is the forms mailer's server (SITEBIN_FORMS_SMTP_*). It is
@@ -384,6 +401,10 @@ func Load(getenv func(string) string) (Config, error) {
 				cfg.EmbedOrigins = append(cfg.EmbedOrigins, o)
 			}
 		}
+	}
+
+	if err := loadAbuse(getenv, &cfg); err != nil {
+		return cfg, err
 	}
 
 	// The wildcard cert (and thus a DNS challenge) is only needed when sites are

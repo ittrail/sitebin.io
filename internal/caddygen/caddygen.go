@@ -21,6 +21,7 @@ func Generate(cfg config.Config) string {
 	// right, so N is the label count of the domain the sites live on — which is
 	// no longer necessarily the main domain.
 	labelIdx := len(strings.Split(cfg.ViewDomain, "."))
+	untrusted := untrustedCSP(cfg)
 
 	// ---- global options ----
 	b.WriteString("{\n\tadmin off\n")
@@ -45,7 +46,7 @@ func Generate(cfg config.Config) string {
 	b.WriteString("\tencode zstd gzip\n")
 	writeHSTS(&b, cfg, true)
 	if cfg.PathViews() {
-		writePathViewRoutes(&b, backend, cfg.DataDir)
+		writePathViewRoutes(&b, backend, cfg.DataDir, untrusted)
 		fmt.Fprintf(&b, "\thandle {\n\t\treverse_proxy %s\n\t}\n", backend("8080"))
 	} else {
 		fmt.Fprintf(&b, "\treverse_proxy %s\n", backend("8080"))
@@ -71,7 +72,7 @@ func Generate(cfg config.Config) string {
 			b.WriteString("\t}\n")
 		}
 		writeHSTS(&b, cfg, true)
-		writeContentRoutes(&b, backend, fmt.Sprintf("%s/sites/{labels.%d}/files", cfg.DataDir, labelIdx))
+		writeContentRoutes(&b, backend, fmt.Sprintf("%s/sites/{labels.%d}/files", cfg.DataDir, labelIdx), untrusted)
 		b.WriteString("}\n\n")
 	}
 
@@ -82,7 +83,7 @@ func Generate(cfg config.Config) string {
 		b.WriteString("https:// {\n\ttls {\n\t\ton_demand\n\t}\n")
 	}
 	writeHSTS(&b, cfg, false)
-	writeContentRoutes(&b, backend, cfg.DataDir+"/domain-index/{host}/files")
+	writeContentRoutes(&b, backend, cfg.DataDir+"/domain-index/{host}/files", untrusted)
 	b.WriteString("}\n")
 
 	if !cfg.HTTPOnly {
@@ -123,7 +124,7 @@ func writeHSTS(b *strings.Builder, cfg config.Config, subdomains bool) {
 // writePathViewRoutes emits main-domain routing for /v/<view-id> path views.
 // A `route` block preserves directive order so forward_auth sees the full URI
 // (for the gate redirect) before it is stripped for the file server.
-func writePathViewRoutes(b *strings.Builder, backend func(string) string, dataDir string) {
+func writePathViewRoutes(b *strings.Builder, backend func(string) string, dataDir, untrusted string) {
 	b.WriteString("\t# --- path-served sites: /v/<view-id>/ (SITEBIN_VIEW_ACCESS=path|both) ---\n")
 	b.WriteString("\t@viewbare path_regexp vb ^/v/([a-z2-7]{26})$\n")
 	b.WriteString("\tredir @viewbare /v/{re.vb.1}/ 308\n")
@@ -133,7 +134,7 @@ func writePathViewRoutes(b *strings.Builder, backend func(string) string, dataDi
 	fmt.Fprintf(b, "\t\t\tforward_auth %s {\n\t\t\t\turi /internal/authz\n\t\t\t\theader_up X-Sitebin-View {re.view.1}\n\t\t\t\tcopy_headers Set-Cookie\n\t\t\t}\n", backend("9000"))
 	b.WriteString("\t\t\turi strip_prefix /v/{re.view.1}\n")
 	fmt.Fprintf(b, "\t\t\troot * %s/sites/{re.view.1}/files\n", dataDir)
-	writeSecurityHeaders(b, "\t\t\t")
+	writeSecurityHeaders(b, "\t\t\t", untrusted)
 	writeFileServing(b, "\t\t\t")
 	b.WriteString("\t\t}\n")
 	b.WriteString("\t}\n")
@@ -152,7 +153,7 @@ func writePathViewRoutes(b *strings.Builder, backend func(string) string, dataDi
 // every site without the trust marker. Inside `route` the written order
 // holds: the gate answers first, and only a request that passed it reaches
 // the header directives.
-func writeContentRoutes(b *strings.Builder, backend func(string) string, root string) {
+func writeContentRoutes(b *strings.Builder, backend func(string) string, root, untrusted string) {
 	b.WriteString("\tencode zstd gzip\n")
 	b.WriteString("\t@backend path /_sitebin/*\n")
 	fmt.Fprintf(b, "\thandle @backend {\n\t\treverse_proxy %s\n\t}\n", backend("8080"))
@@ -167,7 +168,7 @@ func writeContentRoutes(b *strings.Builder, backend func(string) string, root st
 	// the one whose files are served — a password-gate bypass.
 	fmt.Fprintf(b, "\t\t\tforward_auth %s {\n\t\t\t\turi /internal/authz\n\t\t\t\theader_up X-Forwarded-Host {host}\n\t\t\t\tcopy_headers Set-Cookie %s\n\t\t\t}\n", backend("9000"), upstreamHeader)
 	fmt.Fprintf(b, "\t\t\troot * %s\n", root)
-	writeSecurityHeaders(b, "\t\t\t")
+	writeSecurityHeaders(b, "\t\t\t", untrusted)
 	// A container site: authz admitted it WITH an upstream, so it is proxied
 	// there and never reaches the file server below. authz never admits a
 	// container site without one.
