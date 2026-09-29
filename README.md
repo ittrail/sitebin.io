@@ -1223,7 +1223,7 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_ALLOW_ANON_CREATE` | In accounts mode, still allow anonymous sites. |
 | `SITEBIN_OAUTH_GOOGLE_CLIENT_ID` / `_SECRET` | Google OIDC login. |
 | `SITEBIN_OAUTH_MICROSOFT_CLIENT_ID` / `_SECRET` / `_TENANT` | Microsoft OIDC. `_TENANT` is a tenant id or verified domain for single-tenant sign-in (issuer matched exactly), or one of the multi-tenant aliases `common` (default), `organizations`, `consumers`, whose tokens name the signing tenant in `iss` and are accepted from any Microsoft tenant. |
-| `SITEBIN_OAUTH_OIDC_ISSUER` / `_CLIENT_ID` / `_CLIENT_SECRET` / `_LABEL` | Generic OIDC sign-in against any issuer (Keycloak, Okta, Authentik, the [SaaS Stack](#saas-stack-integration)). `_ISSUER` is the value that must appear in every token's `iss`. `_LABEL` is the login-button text (default `SSO`). |
+| `SITEBIN_OAUTH_OIDC_ISSUER` / `_CLIENT_ID` / `_CLIENT_SECRET` / `_LABEL` | Generic OIDC sign-in against any issuer (Keycloak, Okta, Authentik, the [SaaS Stack](#saas-stack-integration)). `_ISSUER` is the value that must appear in every token's `iss`. `_LABEL` is the login-button text (default `SSO`). **Sign-out ends the issuer's own session too** when its discovery document names an `end_session_endpoint` (RP-initiated logout with `client_id`, the sign-in's ID token as `id_token_hint`, and `post_logout_redirect_uri=<base>/account/signed-out`, which the client must accept as a post-logout redirect URI); Google and Microsoft signed in directly are never signed out at the provider. |
 | `SITEBIN_OAUTH_OIDC_DISCOVERY_URL` | Where the discovery document is **fetched**, when that is not the issuer's own URL. Unset = fetch it from `_ISSUER`, which is what a plain provider wants. Set it to put Sitebin behind the [SaaS Stack](#saas-stack-integration)'s **consent gate**: the stack's Auth Gateway serves the realm's document with `authorization_endpoint` pointed at itself, and an app that discovers straight from the identity provider never reaches the gate and its users are never asked to accept any terms. The document's own `issuer` is still required to equal `_ISSUER`, so this cannot be used to trust another realm by accident. Either the base URL or the full `/.well-known/openid-configuration` is accepted. |
 | `SITEBIN_LOCAL_AUTH` | `true` (default) or `false` = SSO only: no email/password form, signup/reset disabled; with a single OAuth provider, `/account/login` redirects straight to it. Requires an `SITEBIN_OAUTH_*` provider. |
 | `SITEBIN_BILLING` | Which backend may charge customers: `stripe`, `paddle` or `paygate` (case-insensitive). Unset = inferred when exactly one is configured; **two configured and no choice is a startup error**. Exactly one backend is ever active: with `paygate` selected, configured Stripe/Paddle credentials are inert *and their webhook routes are not mounted*, so provider deliveries get a silent `404` — remove the webhook from the provider's dashboard, or you will be debugging retries. Startup also refuses a catalogue the selected direct backend cannot sell: every tier with a `price` must carry the matching `price.stripe` / `price.paddle`. See [Billing](#billing). |
@@ -1238,7 +1238,7 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_STACK_LICENSING` | JSON `licensing` block sent with the self-registration above, declaring what a Sitebin **Enterprise license** is worth and how long a lapsed one stays usable: `{"graceMonths":3,"plans":{"team":{"max_custom_domains":25},"platform":{}}}`. The stack mints licenses, so it has to be told; a plan absent from `plans` carries no entitlements, which means **unlimited**. Only meaningful alongside `SITEBIN_STACK_URL`, and only the vendor's own deployment (the one holding the platform admin key) ever sets it. Absent = declare nothing, and the stack keeps whatever it already holds — registration merges, so an empty block would erase the entitlements rather than leave them. |
 | `SITEBIN_STACK_CONSENTS` | JSON `consents` list sent with the self-registration below, declaring **this deployment's own consent documents** — its terms of service and its data processing agreement — so the stack's consent gate can ask for each of them inside the sign-in, in this order, after the platform's own: `[{"key":"terms","version":"2026-09-08","url":"https://sitebin.io/terms/","title":{"en":"Sitebin Terms of Service","de":"Sitebin Nutzungsbedingungen"}},{"key":"dpa","version":"2026-09-08","url":"https://sitebin.io/dpa/","title":{"en":"Data Processing Agreement"}}]`. `key`, `version` and `url` are required per document; `title` is an optional `locale → heading` map; `required` defaults to true on the stack, and `false` makes a document that is shown and recorded but does not block (a marketing consent). Sitebin renders no consent screen of its own — declaring this list is the whole integration. `key` is the document's identity for ever; `version` is opaque and **raising it asks every user again for that document**, and it is immutable, so re-declaring one the stack already recorded with different content is refused. Sent as the stack's `consents` block, never its one-document `terms` shorthand. Not hardcoded for the same reason `SITEBIN_STACK_LICENSING` is not: these are one deployment's legal documents and this repo is public. Absent = declare nothing, and the stack keeps whatever it already holds; an empty list is refused at startup. |
 | `SITEBIN_STACK_GDPR_SECRET` | The shared secret the SaaS Stack signs its **GDPR orders** with — delete this user (Art. 17), export this user's data (Art. 20). At least 32 characters; **required whenever `SITEBIN_STACK_URL` is set**, and accepted on its own for an app registered by hand. With it set, `POST /account/gdpr/delete`, `POST /account/gdpr/export` and the suspension order `POST /account/gdpr/suspend` are mounted and declared to the stack as its `gdpr` block; without it none exists. See [GDPR: the stack orders, Sitebin erases](#gdpr-the-stack-orders-sitebin-erases). |
-| `SITEBIN_STACK_URL` / `_APP_ID` / `_ADMIN_KEY` (or `_ADMIN_KEY_FILE`) | Self-registration against the IT-Trail SaaS Stack. With all three set, the instance announces itself to the stack on every start — its identity, its OIDC callback, its tier catalogue, its consent documents, its GDPR endpoints and its MCP block — so auth, billing, consent and MCP are configured by deploying rather than by hand. `_ADMIN_KEY` is the stack's platform admin key: a master credential, so keep it in a secret store and prefer `_ADMIN_KEY_FILE` (a docker secret or mounted file) so it never sits in the container's environment; the variable is scrubbed from the process environment after it is read. Unset = no self-registration. |
+| `SITEBIN_STACK_URL` / `_APP_ID` / `_ADMIN_KEY` (or `_ADMIN_KEY_FILE`) | Self-registration against the IT-Trail SaaS Stack. With all three set, the instance announces itself to the stack on every start — its identity, its OIDC callback and sign-out return address, its tier catalogue, its consent documents, its GDPR endpoints and its MCP block — so auth, billing, consent and MCP are configured by deploying rather than by hand. `_ADMIN_KEY` is the stack's platform admin key: a master credential, so keep it in a secret store and prefer `_ADMIN_KEY_FILE` (a docker secret or mounted file) so it never sits in the container's environment; the variable is scrubbed from the process environment after it is read. Unset = no self-registration. |
 
 ### Signed-in owners *(Enterprise)*
 
@@ -1434,8 +1434,9 @@ call is convergent: run it a thousand times and the stack simply matches what
 Sitebin declared.
 
 What it declares is only what Sitebin alone knows — its identity, the OIDC
-callback it will actually use, its tier catalogue from `tiers.json`, and its
-MCP resource and scopes. It never declares identity providers, password policy,
+callback it will actually use and the page a sign-out returns to
+(`postLogoutRedirectUris`: `<base>/account/signed-out`), its tier catalogue
+from `tiers.json`, and its MCP resource and scopes. It never declares identity providers, password policy,
 MFA or realm registration: those are realm-wide settings shared with every other
 app on the stack, and an app that set them would overwrite an operator's choice
 on each restart.
@@ -1501,6 +1502,24 @@ stack, "manage my account" and "manage my plan" are links, not screens:
   with a direct Stripe/Paddle backend the live subscription is **cancelled
   first, with immediate effect** — if it cannot be, the account is kept and
   the page says why, because nobody is deleted while still being charged.
+
+**Sign-out ends the stack session too.** Sign out revokes every Sitebin
+session of the account, as it always did, and then sends the browser through
+the stack's `end_session_endpoint` with the sign-in's ID token as
+`id_token_hint` (kept for exactly that in a cookie only `/account/logout`
+receives), `client_id` and `post_logout_redirect_uri=<base>/account/signed-out`.
+The hop is a small "Signing you out" page rather than a redirect, because the
+dashboard's `form-action 'self'` stops a form POST from being redirected to
+another origin. Keycloak ends the SSO session without asking and returns to
+`/account/signed-out` — "You are signed out", with a **Sign in** that starts a
+fresh request (`prompt=login`), so the stack's login page appears and another
+account can be chosen. Without the hint (a session from before this, or one
+older than the week it is kept) Keycloak may ask "Do you want to log out?"
+first. Signing in from the stack's hub stays one click: only that explicit
+sign-in, and "Use a different account" on the login page, carry the prompt.
+The return address is declared as the registration's
+`auth.postLogoutRedirectUris`; the stack's schema is strict, so run a stack
+that knows the field before upgrading Sitebin past it.
 
 #### GDPR: the stack orders, Sitebin erases
 

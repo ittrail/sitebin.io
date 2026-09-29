@@ -580,6 +580,29 @@ All caps and toggles are startup env vars (`SITEBIN_*`) — see the README's
   the stack issued (OIDC) delete themselves at the stack's account console,
   never locally; see `docs/superpowers/specs/2026-09-07-gdpr-webhooks-and-two-consents-design.md`.
 
+## Sign-out ends the SSO session
+
+`handleLogout` bumps the token version (every session ends), clears the
+session and the logout-hint cookie, and — for an account of the generic OIDC
+issuer whose discovery names an `end_session_endpoint` — hands the browser to
+it with `client_id`, `id_token_hint` and `post_logout_redirect_uri=<base>/account/signed-out`.
+Read `docs/superpowers/specs/2026-09-29-sign-out-ends-the-sso-session.md`.
+
+- **Off-origin from a dashboard form is a handoff page (`leaveTo`), never a
+  303**: `form-action 'self'` drops the redirect in Chrome. Same-origin
+  (straight to `/account/signed-out`) is a 303.
+- **`/account/signed-out` never redirects**, and its sign-in is `?fresh=1`
+  (`prompt=login` for the issuer, `select_account` for Google/Microsoft).
+  Never point it at `/account/login`, which auto-redirects on an SSO-only
+  instance — that silent round trip was the bug. Plain sign-in carries no
+  prompt, so SSO from the stack's hub stays one click.
+- The hint cookie (`__Secure-sitebin_idt`, Path `/account/logout`) holds the
+  raw ID token: never log it; it is sent only when its `iss`/`sub`/`azp`
+  name this account and client, and sent even when expired (Keycloak checks
+  only its signature). Google/Microsoft are never signed out at the provider.
+- `auth.postLogoutRedirectUris` in the registration is strict-schema: only
+  to a stack that knows it.
+
 ## Working here
 
 - **Keep `e2e/*.ps1` pure ASCII.** The scripts are UTF-8 with no BOM, so
