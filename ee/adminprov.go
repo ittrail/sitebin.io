@@ -234,6 +234,9 @@ type ipPanel struct {
 func (p *provider) ipSearch(m provenance.Match, seen map[string][]provenance.Entry) *ipPanel {
 	panel := &ipPanel{Query: m.String(), Sites: len(seen)}
 	found := map[string][]provenance.Entry{}
+	// A site's creation is in its own log and mirrored into its owner's:
+	// the pair is one event, shown once.
+	mirrored := map[string]bool{}
 	if ids, err := p.accounts.ListIDs(); err == nil {
 		for _, id := range ids {
 			es, err := p.accounts.Provenance(id)
@@ -242,12 +245,17 @@ func (p *provider) ipSearch(m provenance.Match, seen map[string][]provenance.Ent
 			}
 			if hit := m.Filter(es); len(hit) > 0 {
 				found[id] = append(found[id], hit...)
+				for _, e := range hit {
+					if e.Site != "" {
+						mirrored[e.Site+"|"+e.Time.String()] = true
+					}
+				}
 			}
 		}
 	}
 	for site, es := range seen {
 		for _, e := range es {
-			if e.Account == "" {
+			if e.Account == "" || mirrored[site+"|"+e.Time.String()] {
 				continue
 			}
 			e.Site = site

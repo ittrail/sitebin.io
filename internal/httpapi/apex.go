@@ -86,7 +86,7 @@ func (a *API) viewApexPage(w http.ResponseWriter) {
 		Message: a.cfg.ViewDomain + " serves the websites people publish with Sitebin on " + a.cfg.BaseDomain +
 			". Every address under it is a site made by one of its users — third parties, not the operator of this service.",
 		More: []string{
-			"Sites go live the moment they are uploaded and are not reviewed first. If a site here is phishing, malware or spam, or otherwise abusive, please report it: the operator takes it offline once confirmed.",
+			"Sites go live the moment they are uploaded and are not reviewed first. If a site here is phishing, malware or spam, or otherwise abusive, please report it so the operator can take it down.",
 		},
 		Abuse:     a.abuse(),
 		Home:      home,

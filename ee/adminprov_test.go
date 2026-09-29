@@ -159,3 +159,28 @@ func TestProvenancePagesAre404ForOthers(t *testing.T) {
 		}
 	}
 }
+
+// A creation is in the site's log and mirrored into the owner's: the address
+// search shows it once.
+func TestAddressSearchShowsAMirroredCreationOnce(t *testing.T) {
+	p, host, mux, cookie := setupProvAdmin(t)
+	acc, _ := p.accounts.CreateOAuth(account.OIDCProv, "sub-x", "x@example.com", true, "free")
+	at := time.Now().UTC()
+	host.sites.infos["siteaaaaaaaaaaaaaaaaaaaaaa"] = ext.SiteInfo{ViewID: "siteaaaaaaaaaaaaaaaaaaaaaa", Owner: acc.ID, CreatedAt: at}
+	e := provenance.Entry{Time: at, Action: provenance.ActionCreate, Surface: provenance.SurfaceAPI, Account: acc.ID, IP: "203.0.113.9"}
+	host.sites.RecordSiteProvenance("siteaaaaaaaaaaaaaaaaaaaaaa", e)
+	m := e
+	m.Action, m.Site = provenance.ActionSiteCreate, "siteaaaaaaaaaaaaaaaaaaaaaa"
+	p.RecordAccountProvenance(acc.ID, m)
+
+	body := getAs(mux, "/account/admin?q=203.0.113.9", cookie).Body.String()
+	i := strings.Index(body, `class="ipseen"`)
+	j := strings.Index(body, `class="reg"`)
+	if i < 0 || j < i {
+		t.Fatal("no accounts panel")
+	}
+	panel := body[i:j]
+	if n := strings.Count(panel, `class="ev"`); n != 1 {
+		t.Fatalf("the creation is listed %d times:\n%s", n, panel)
+	}
+}

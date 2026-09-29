@@ -447,15 +447,15 @@ const adminConsoleCSS = `
   .adm .row.confirm .warnmsg { font-size: 12px; color: var(--ink-dim); }
   .adm .empty { padding: 40px 16px; text-align: center; color: var(--ink-faint); font: 13px var(--mono); }
   /* Provenance: where the site came from and its latest write. */
-  .adm .row .prov { display: block; margin-top: 3px; font: 11px var(--mono); color: var(--ink-faint); overflow-wrap: anywhere; }
+  .adm .row .prov { display: block; margin-top: 3px; font: 11px var(--mono); color: var(--ink-faint); overflow-wrap: break-word; }
   .adm .row .prov a { color: var(--ink-dim); }
   /* The address search: accounts seen from the address, above the sites. */
   .adm .ipseen { border: 1px dashed rgba(245,184,77,.45); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 16px; background: linear-gradient(160deg, #151e33, #101727); }
   .adm .ipseen h2 { font: 650 15px var(--display); margin-bottom: 8px; }
-  .adm .ipseen .acct { padding: 8px 0; border-top: 1px dashed var(--line-soft); font: 12px var(--mono); color: var(--ink-dim); }
-  .adm .ipseen .acct:first-of-type { border-top: 0; }
-  .adm .ipseen .acct a.who { color: var(--ink); font-weight: 600; }
-  .adm .ipseen .acct .ev { display: block; margin-top: 2px; overflow-wrap: anywhere; }
+  .adm .ipseen .seen { padding: 8px 0; border-top: 1px dashed var(--line-soft); font: 12px var(--mono); color: var(--ink-dim); }
+  .adm .ipseen .seen:first-of-type { border-top: 0; }
+  .adm .ipseen .seen a.who { color: var(--ink); font-weight: 600; }
+  .adm .ipseen .seen .ev { display: block; margin-top: 2px; overflow-wrap: anywhere; }
   @media (max-width: 900px) {
     .adm .rowhead { display: none; }
     .adm .row { grid-template-columns: 1fr; gap: 6px; }
@@ -502,7 +502,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
   {{with .IP}}
   <section class="ipseen">
     <h2>Seen from {{.Query}}: {{.Sites}} site(s), {{len .Accounts}} account(s)</h2>
-    {{range .Accounts}}<div class="acct"><a class="who" href="/account/admin/accounts/{{.ID}}">{{.Email}}</a>{{if .Suspended}}<span class="susp">Suspended</span>{{end}}
+    {{range .Accounts}}<div class="seen"><a class="who" href="/account/admin/accounts/{{.ID}}">{{.Email}}</a>{{if .Suspended}}<span class="susp">Suspended</span>{{end}}
       {{range .Rows}}<span class="ev">{{.When}} · {{.Action}}{{if .Site}} {{.Site}}{{end}}{{if .What}} · {{.What}}{{end}} · {{.IP}}{{if .UA}} · {{.UA}}{{end}}</span>{{end}}
     </div>{{else}}<p class="lede">No account was seen from this address.</p>{{end}}
   </section>
