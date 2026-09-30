@@ -1452,6 +1452,18 @@ so the order of `tiers.json` is the order customers see, and `"featured": true`
 on a tier marks the plan the page leads with. Neither is guessed: a catalogue
 that says nothing renders unemphasised, in whatever order it happens to be in.
 
+It declares its **look** as well, so every page the stack hosts for it reads as
+Sitebin rather than as the stack's stock grey: the palette, the bin mark as
+logo and tab icon (served by the instance itself), and — as the theme's
+`customCss` — the sign-in stylesheet in `ee/keycloak-theme.css`, which turns
+the stack's Keycloak sign-in, registration and password pages into the
+claim-ticket look. The colours alone would not: the stack's own sheet paints
+the sign-in button white whatever `primaryColor` says. Two rules bind that
+file, and tests hold both: it loads nothing (the stack strips `url()` and
+import rules from a stylesheet on a password page, so a font or image written
+there silently vanishes), and every rule is scoped to `html.login-pf`, because
+the stack injects the same stylesheet into the account console too.
+
 And, when `SITEBIN_STACK_LICENSING` is set, it declares what a **Sitebin
 Enterprise license** is worth — see [Enterprise licensing](#enterprise-licensing).
 Registration merges rather than replaces, so a block that is absent leaves what

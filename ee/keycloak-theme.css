@@ -1,0 +1,880 @@
+/* Sitebin — the stack's sign-in pages in the claim-ticket look.
+
+   Declared as theme.customCss at every stack registration (stackreg.go) and
+   appended by the stack's Keycloak theme after its own stylesheet, on every
+   login-flow page of the sitebin-app client: sign-in, registration, password
+   reset, e-mail verification, terms, errors.
+
+   Three rules this file lives by:
+
+   1. Everything is scoped to html.login-pf. The stack injects the SAME css
+      into the account console (a React/PatternFly 5 app) when it is opened
+      from the dashboard; an unscoped `body` or `a` rule would repaint that.
+   2. Nothing is loaded from here: no url function and no import rule, not
+      even in a comment. The stack rewrites both before injecting (a custom
+      stylesheet on a password page must not be able to load or send
+      anything): a url becomes `none`, and an import rule is cut up to the
+      next semicolon, which inside a comment swallows the comment's end.
+      The logo arrives as --brand-logo-url, set from theme.logoUrl; the
+      fonts are the system's (Space Grotesk where it is installed).
+   3. !important on everything that the stack's own sheet sets that way,
+      with selectors at least as specific — this sheet comes later, so on a
+      tie it wins.
+
+   The tokens are web/static/app.css's; keep them in step. */
+
+html.login-pf {
+  --sb-bg: #0a0e18;
+  --sb-raise: #101727;
+  --sb-field: #0d1322;
+  --sb-line: #242f4b;
+  --sb-line-soft: #1a2338;
+  --sb-dash: rgba(126, 144, 185, .38);
+  --sb-ink: #eceff7;
+  --sb-dim: #9aa5bd;
+  --sb-faint: #646f88;
+  --sb-amber: #f5b84d;
+  --sb-amber-deep: #d99a26;
+  --sb-blue: #5b8cff;
+  --sb-danger: #f26d6d;
+  --sb-ok: #5ecf8a;
+  --sb-display: "Space Grotesk", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  --sb-body: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+  --sb-mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+  --sb-pad: clamp(22px, 6vw, 38px);
+  background: var(--sb-bg) !important;
+  color-scheme: dark;
+}
+
+html.login-pf body {
+  background: var(--sb-bg) !important;
+  color: var(--sb-ink) !important;
+  font-family: var(--sb-body) !important;
+  font-weight: 400 !important;
+  font-size: 15px !important;
+  line-height: 1.55 !important;
+}
+html.login-pf ::selection { background: rgba(245, 184, 77, .3); }
+
+/* ── Page: deep-space ink with the slow aurora ─────────────────────── */
+
+html.login-pf body .login-pf-page {
+  background:
+    radial-gradient(1100px 720px at 12% -14%, #141e35 0%, transparent 62%),
+    radial-gradient(950px 640px at 112% 8%, #101830 0%, transparent 58%),
+    var(--sb-bg) !important;
+  justify-content: flex-start !important;
+  padding: clamp(28px, 7vh, 72px) 16px 40px !important;
+  overflow: hidden !important;
+}
+html.login-pf body .login-pf-page::before {
+  top: -25% !important;
+  left: -25% !important;
+  right: -25% !important;
+  bottom: -25% !important;
+  background-image:
+    radial-gradient(38% 32% at 22% 26%, rgba(91, 140, 255, .13), transparent 70%),
+    radial-gradient(34% 30% at 78% 18%, rgba(245, 184, 77, .09), transparent 70%),
+    radial-gradient(42% 38% at 60% 82%, rgba(122, 92, 255, .08), transparent 70%) !important;
+  background-size: 100% 100% !important;
+  background-repeat: no-repeat !important;
+  animation: sb-aurora 38s ease-in-out infinite alternate;
+}
+@keyframes sb-aurora {
+  0%   { transform: translate3d(0, 0, 0) rotate(0deg) scale(1); }
+  50%  { transform: translate3d(2.5%, -2%, 0) rotate(4deg) scale(1.07); }
+  100% { transform: translate3d(-2.5%, 2%, 0) rotate(-4deg) scale(1.12); }
+}
+
+/* ── Wordmark: the bin mark beside a lowercase "sitebin" ───────────── */
+
+html.login-pf body #kc-header {
+  margin-bottom: 26px !important;
+}
+html.login-pf body #kc-header-wrapper {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  font-family: var(--sb-display) !important;
+  font-weight: 600 !important;
+  font-size: 30px !important;
+  line-height: 1 !important;
+  letter-spacing: -.02em !important;
+  text-transform: lowercase !important;
+  color: var(--sb-ink) !important;
+}
+html.login-pf body #kc-header-wrapper::before {
+  position: static !important;
+  transform: none !important;
+  flex: none !important;
+  width: 40px !important;
+  height: 40px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: var(--brand-logo-url) center / contain no-repeat !important;
+  filter: drop-shadow(0 6px 18px rgba(245, 184, 77, .18));
+}
+html.login-pf body #kc-header-wrapper::after {
+  display: none !important;
+}
+
+/* ── The ticket ─────────────────────────────────────────────────────
+   An amber-to-blue gradient rim, two punched notches on each tear line.
+   The notches are page-coloured half-discs on the card's edge, placed by
+   whichever block carries the tear line (the head, then the stub). */
+
+html.login-pf body .login-pf-page .card-pf {
+  position: relative !important;
+  max-width: 440px !important;
+  width: 100% !important;
+  margin: 0 auto !important;
+  padding: var(--sb-pad) !important;
+  border: 1px solid transparent !important;
+  border-radius: 14px !important;
+  background:
+    linear-gradient(160deg, #151e33, #101727) padding-box,
+    linear-gradient(140deg, rgba(245, 184, 77, .65), rgba(245, 184, 77, .1) 38%, rgba(91, 140, 255, .22) 72%, rgba(245, 184, 77, .45)) border-box !important;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, .5), 0 0 60px rgba(245, 184, 77, .07) !important;
+  animation: sb-rise .45s cubic-bezier(.2, .7, .25, 1) both;
+}
+@keyframes sb-rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* A tear line: dashed rule across the full card width, notched at both ends.
+   Applied to the head (title or notice) and to the stub (legal footer). */
+html.login-pf body .login-pf-page .card-pf .login-pf-header,
+html.login-pf body .login-pf-page .card-pf .saas-stack-ecosystem-notice,
+html.login-pf body .login-pf-page .card-pf .saas-stack-legal-footer {
+  position: relative !important;
+}
+html.login-pf body .login-pf-page .card-pf .login-pf-header::before,
+html.login-pf body .login-pf-page .card-pf .login-pf-header::after,
+html.login-pf body .login-pf-page .card-pf .saas-stack-ecosystem-notice::before,
+html.login-pf body .login-pf-page .card-pf .saas-stack-ecosystem-notice::after,
+html.login-pf body .login-pf-page .card-pf .saas-stack-legal-footer::before,
+html.login-pf body .login-pf-page .card-pf .saas-stack-legal-footer::after {
+  content: "" !important;
+  position: absolute !important;
+  width: 20px !important;
+  height: 20px !important;
+  border-radius: 50% !important;
+  background: var(--sb-bg) !important;
+  border: 1px solid rgba(245, 184, 77, .35) !important;
+  box-sizing: border-box !important;
+}
+/* head notches sit on the rule BELOW the block */
+html.login-pf body .login-pf-page .card-pf .login-pf-header::before,
+html.login-pf body .login-pf-page .card-pf .saas-stack-ecosystem-notice::before {
+  bottom: -11px !important;
+  left: -11px !important;
+  clip-path: inset(0 0 0 50%);
+}
+html.login-pf body .login-pf-page .card-pf .login-pf-header::after,
+html.login-pf body .login-pf-page .card-pf .saas-stack-ecosystem-notice::after {
+  bottom: -11px !important;
+  right: -11px !important;
+  clip-path: inset(0 50% 0 0);
+}
+/* stub notches sit on the rule ABOVE it */
+html.login-pf body .login-pf-page .card-pf .saas-stack-legal-footer::before {
+  top: -11px !important;
+  left: -11px !important;
+  clip-path: inset(0 0 0 50%);
+}
+html.login-pf body .login-pf-page .card-pf .saas-stack-legal-footer::after {
+  top: -11px !important;
+  right: -11px !important;
+  clip-path: inset(0 50% 0 0);
+}
+
+/* The card's own pseudo-elements stay off: the stack hides them too. */
+html.login-pf body .login-pf-page .card-pf::before,
+html.login-pf body .login-pf-page .card-pf::after {
+  display: none !important;
+}
+
+/* ── Ticket head ────────────────────────────────────────────────────── */
+
+/* The page title (Register, Forgot your password?, …) is the headline. The
+   sign-in page has none — its head is the stamp and the notice below. */
+html.login-pf body .login-pf-page .card-pf .login-pf-header {
+  display: block !important;
+  margin: 0 calc(-1 * var(--sb-pad)) 26px !important;
+  padding: 0 var(--sb-pad) 20px !important;
+  border-bottom: 1.5px dashed var(--sb-dash) !important;
+}
+html.login-pf body[data-page-id="login-login"] .login-pf-page .card-pf .login-pf-header,
+html.login-pf body[data-page-id="login-logout-confirm"] .login-pf-page .card-pf .login-pf-header {
+  display: none !important;
+}
+html.login-pf body .login-pf-page .card-pf .login-pf-header .row,
+html.login-pf body .login-pf-page .card-pf .login-pf-header [class*="col-"] {
+  float: none !important;
+  width: auto !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+html.login-pf body .login-pf-page .card-pf .login-pf-header > div {
+  display: flex !important;
+  flex-direction: column-reverse !important;
+  gap: 6px !important;
+}
+html.login-pf body .login-pf-page .card-pf #kc-page-title {
+  margin: 0 !important;
+  font-family: var(--sb-display) !important;
+  font-weight: 650 !important;
+  font-size: 24px !important;
+  line-height: 1.2 !important;
+  letter-spacing: -.02em !important;
+  text-transform: none !important;
+  text-align: left !important;
+  color: var(--sb-ink) !important;
+}
+html.login-pf body .login-pf-page .card-pf .login-pf-header .subtitle,
+html.login-pf body .login-pf-page .card-pf .login-pf-header .subtitle span {
+  font-family: var(--sb-mono) !important;
+  font-size: 11px !important;
+  letter-spacing: .08em !important;
+  text-transform: uppercase !important;
+  color: var(--sb-faint) !important;
+  text-align: left !important;
+}
+
+/* Sign-in: a rotated "admit one" stamp, then the one-account notice. */
+html.login-pf body .login-pf-page .card-pf .saas-stack-ecosystem-notice {
+  margin: 0 calc(-1 * var(--sb-pad)) 26px !important;
+  padding: 0 var(--sb-pad) 22px !important;
+  border-bottom: 1.5px dashed var(--sb-dash) !important;
+  text-align: left !important;
+  font-family: var(--sb-body) !important;
+  font-weight: 400 !important;
+  font-size: 14.5px !important;
+  line-height: 1.55 !important;
+  color: var(--sb-dim) !important;
+}
+html.login-pf body .login-pf-page .card-pf #kc-content-wrapper::before {
+  content: none;
+}
+html.login-pf body[data-page-id="login-login"] .login-pf-page .card-pf #kc-content-wrapper::before {
+  content: "admit one" !important;
+  display: inline-flex !important;
+  align-self: flex-start !important;
+  margin-bottom: 16px !important;
+  padding: 6px 12px !important;
+  border: 1.5px dashed rgba(245, 184, 77, .5) !important;
+  border-radius: 8px !important;
+  background: rgba(245, 184, 77, .05) !important;
+  font: 600 12px/1.2 var(--sb-mono) !important;
+  letter-spacing: .14em !important;
+  text-transform: uppercase !important;
+  color: var(--sb-amber) !important;
+  transform: rotate(-1.5deg) !important;
+}
+
+/* ── Order inside the ticket ────────────────────────────────────────
+   Head, alerts, the form, then the "New user? Register" line, and the stub
+   (legal links, powered-by) always last. The reset page's instructions sit
+   in #kc-info too; there they belong above the form. */
+
+html.login-pf body .login-pf-page .card-pf #kc-content,
+html.login-pf body .login-pf-page .card-pf #kc-content-wrapper {
+  display: flex !important;
+  flex-direction: column !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+html.login-pf body .login-pf-page .card-pf #kc-content-wrapper > * { order: 10; }
+html.login-pf body .login-pf-page .card-pf #kc-content-wrapper > .saas-stack-ecosystem-notice { order: 1 !important; }
+html.login-pf body .login-pf-page .card-pf #kc-content-wrapper > .alert,
+html.login-pf body .login-pf-page .card-pf #kc-content-wrapper > .pf-c-alert { order: 2 !important; }
+html.login-pf body .login-pf-page .card-pf #kc-content-wrapper > #kc-info { order: 20 !important; }
+html.login-pf body .login-pf-page .card-pf #kc-content-wrapper > .saas-stack-powered-by { order: 30 !important; }
+html.login-pf body .login-pf-page .card-pf #kc-content-wrapper > .saas-stack-legal-footer { order: 31 !important; }
+html.login-pf body[data-page-id="login-login-reset-password"] .login-pf-page .card-pf #kc-content-wrapper > #kc-info,
+html.login-pf body[data-page-id="login-login-verify-email"] .login-pf-page .card-pf #kc-content-wrapper > #kc-info { order: 3 !important; }
+
+/* ── Text ───────────────────────────────────────────────────────────── */
+
+html.login-pf body .login-pf-page .card-pf,
+html.login-pf body .login-pf-page .card-pf p,
+html.login-pf body .login-pf-page .card-pf div,
+html.login-pf body .login-pf-page .card-pf span,
+html.login-pf body .login-pf-page .card-pf #kc-content span {
+  font-family: var(--sb-body) !important;
+  color: var(--sb-dim) !important;
+}
+html.login-pf body .login-pf-page .card-pf strong,
+html.login-pf body .login-pf-page .card-pf b {
+  color: var(--sb-ink) !important;
+}
+html.login-pf body .login-pf-page .card-pf h1,
+html.login-pf body .login-pf-page .card-pf h2,
+html.login-pf body .login-pf-page .card-pf h3 {
+  font-family: var(--sb-display) !important;
+  text-transform: none !important;
+  letter-spacing: -.01em !important;
+  color: var(--sb-ink) !important;
+}
+html.login-pf body .login-pf-page .card-pf .instruction,
+html.login-pf body .login-pf-page .card-pf #kc-info-wrapper {
+  font-weight: 400 !important;
+  font-size: 14.5px !important;
+  line-height: 1.55 !important;
+  color: var(--sb-dim) !important;
+}
+
+/* ── Links ──────────────────────────────────────────────────────────── */
+
+html.login-pf body .login-pf-page a,
+html.login-pf body .login-pf-page .card-pf a {
+  color: var(--sb-blue) !important;
+  border-bottom: 0 !important;
+  text-decoration: none !important;
+  transition: color .15s !important;
+}
+html.login-pf body .login-pf-page a:hover,
+html.login-pf body .login-pf-page a:focus,
+html.login-pf body .login-pf-page .card-pf a:hover,
+html.login-pf body .login-pf-page .card-pf a:focus {
+  color: var(--sb-amber) !important;
+  text-decoration: underline !important;
+  text-underline-offset: 3px !important;
+}
+html.login-pf body .login-pf-page :focus-visible {
+  outline: 2px solid var(--sb-blue) !important;
+  outline-offset: 2px !important;
+}
+
+/* ── Labels and fields ─────────────────────────────────────────────── */
+
+html.login-pf body .login-pf-page .card-pf .form-group {
+  margin: 0 0 18px !important;
+}
+html.login-pf body .login-pf-page .card-pf #kc-form,
+html.login-pf body .login-pf-page .card-pf #kc-form-wrapper {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+html.login-pf body .login-pf-page .card-pf .form-group [class*="col-"] {
+  float: none !important;
+  width: 100% !important;
+  padding: 0 !important;
+}
+html.login-pf body .login-pf-page .card-pf .form-group .row,
+html.login-pf body .login-pf-page .card-pf form.form-horizontal .form-group {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+html.login-pf body .login-pf-page .card-pf label,
+html.login-pf body .login-pf-page .card-pf label span,
+html.login-pf body .login-pf-page .card-pf .pf-c-form__label,
+html.login-pf body .login-pf-page .card-pf .pf-c-form__label-text,
+html.login-pf body .login-pf-page .card-pf #kc-content label span {
+  display: inline-block !important;
+  margin: 0 0 7px !important;
+  font-family: var(--sb-body) !important;
+  font-weight: 600 !important;
+  font-size: 12px !important;
+  line-height: 1.2 !important;
+  letter-spacing: .09em !important;
+  text-transform: uppercase !important;
+  color: var(--sb-dim) !important;
+}
+html.login-pf body .login-pf-page .card-pf span.required,
+html.login-pf body .login-pf-page .card-pf #kc-content span.required {
+  color: var(--sb-amber) !important;
+  font-size: 12px !important;
+  margin-left: 2px !important;
+}
+
+html.login-pf body .login-pf-page .card-pf input[type="text"],
+html.login-pf body .login-pf-page .card-pf input[type="email"],
+html.login-pf body .login-pf-page .card-pf input[type="password"],
+html.login-pf body .login-pf-page .card-pf input[type="tel"],
+html.login-pf body .login-pf-page .card-pf select,
+html.login-pf body .login-pf-page .card-pf textarea,
+html.login-pf body .login-pf-page .card-pf .pf-c-form-control {
+  height: 46px !important;
+  padding: 0 14px !important;
+  background: var(--sb-field) !important;
+  background-color: var(--sb-field) !important;
+  border: 1px solid var(--sb-line) !important;
+  border-radius: 10px !important;
+  box-shadow: none !important;
+  color: var(--sb-ink) !important;
+  caret-color: var(--sb-amber) !important;
+  font-family: var(--sb-body) !important;
+  font-weight: 400 !important;
+  font-size: 15px !important;
+  line-height: normal !important;
+  transition: border-color .15s, box-shadow .15s !important;
+}
+html.login-pf body .login-pf-page .card-pf textarea {
+  height: auto !important;
+  padding: 10px 14px !important;
+}
+html.login-pf body .login-pf-page .card-pf input:hover,
+html.login-pf body .login-pf-page .card-pf .pf-c-form-control:hover {
+  border-color: #2e3a5a !important;
+}
+html.login-pf body .login-pf-page .card-pf input:focus,
+html.login-pf body .login-pf-page .card-pf select:focus,
+html.login-pf body .login-pf-page .card-pf .pf-c-form-control:focus {
+  outline: none !important;
+  border-color: var(--sb-blue) !important;
+  box-shadow: 0 0 0 3px rgba(91, 140, 255, .2) !important;
+}
+html.login-pf body .login-pf-page .card-pf input::placeholder {
+  color: var(--sb-faint) !important;
+}
+/* Chrome's autofill paints a light field; keep it ink on the field colour. */
+html.login-pf body .login-pf-page .card-pf input:-webkit-autofill,
+html.login-pf body .login-pf-page .card-pf input:-webkit-autofill:hover,
+html.login-pf body .login-pf-page .card-pf input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--sb-ink) !important;
+  -webkit-box-shadow: 0 0 0 40px var(--sb-field) inset !important;
+  box-shadow: 0 0 0 40px var(--sb-field) inset !important;
+}
+html.login-pf body .login-pf-page .card-pf input[aria-invalid="true"] {
+  border-color: rgba(242, 109, 109, .6) !important;
+}
+
+/* Password field with the show/hide toggle as one control */
+html.login-pf body .login-pf-page .card-pf .pf-c-input-group {
+  display: flex !important;
+  border-radius: 10px !important;
+}
+html.login-pf body .login-pf-page .card-pf .pf-c-input-group .pf-c-form-control {
+  border-right: 0 !important;
+  border-radius: 10px 0 0 10px !important;
+}
+html.login-pf body .login-pf-page .card-pf .pf-c-input-group .pf-c-form-control:focus {
+  border-right: 0 !important;
+}
+html.login-pf body .login-pf-page .card-pf .pf-c-input-group .pf-c-button.pf-m-control {
+  height: 46px !important;
+  min-width: 46px !important;
+  background: var(--sb-field) !important;
+  border: 1px solid var(--sb-line) !important;
+  border-left: 0 !important;
+  border-radius: 0 10px 10px 0 !important;
+  box-shadow: none !important;
+  color: var(--sb-faint) !important;
+}
+html.login-pf body .login-pf-page .card-pf .pf-c-input-group .pf-c-button.pf-m-control:hover {
+  color: var(--sb-ink) !important;
+  background: var(--sb-raise) !important;
+}
+html.login-pf body .login-pf-page .card-pf .pf-c-input-group:focus-within .pf-c-form-control,
+html.login-pf body .login-pf-page .card-pf .pf-c-input-group:focus-within .pf-c-button.pf-m-control {
+  border-color: var(--sb-blue) !important;
+}
+html.login-pf body .login-pf-page .card-pf .pf-c-input-group:focus-within {
+  box-shadow: 0 0 0 3px rgba(91, 140, 255, .2) !important;
+}
+html.login-pf body .login-pf-page .card-pf .pf-c-input-group:focus-within .pf-c-form-control:focus {
+  box-shadow: none !important;
+}
+
+/* Field-level errors */
+html.login-pf body .login-pf-page .card-pf #kc-content .pf-c-form__helper-text.pf-m-error,
+html.login-pf body .login-pf-page .card-pf #kc-content span.pf-m-error,
+html.login-pf body .login-pf-page .card-pf #input-error {
+  display: block !important;
+  margin-top: 6px !important;
+  font-family: var(--sb-body) !important;
+  font-size: 13px !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+  color: var(--sb-danger) !important;
+}
+
+/* Remember-me and the forgot-password link */
+html.login-pf body .login-pf-page .card-pf .login-pf-settings {
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: center !important;
+  margin: -4px 0 18px !important;
+}
+html.login-pf body .login-pf-page .card-pf .form-options-links,
+html.login-pf body .login-pf-page .card-pf .form-options-links span {
+  margin-left: auto !important;
+  font-size: 13.5px !important;
+}
+html.login-pf body .login-pf-page .card-pf .checkbox label,
+html.login-pf body .login-pf-page .card-pf .checkbox label span,
+html.login-pf body .login-pf-page .card-pf #kc-content .checkbox label span {
+  font-family: var(--sb-body) !important;
+  font-weight: 400 !important;
+  font-size: 13.5px !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+  color: var(--sb-dim) !important;
+}
+html.login-pf body .login-pf-page .card-pf input[type="checkbox"] {
+  accent-color: var(--sb-amber) !important;
+}
+
+/* ── Buttons ────────────────────────────────────────────────────────── */
+
+/* Primary: the amber claim-ticket button */
+html.login-pf body .login-pf-page #kc-login,
+html.login-pf body .login-pf-page .card-pf .pf-c-button.pf-m-primary,
+html.login-pf body .login-pf-page .card-pf input[type="submit"].pf-c-button {
+  height: 48px !important;
+  width: 100% !important;
+  padding: 0 20px !important;
+  border: 0 !important;
+  border-radius: 11px !important;
+  background: linear-gradient(135deg, #ffd47c 0%, var(--sb-amber) 45%, var(--sb-amber-deep) 100%) !important;
+  box-shadow: 0 8px 22px rgba(217, 154, 38, .28), inset 0 1px 0 rgba(255, 255, 255, .4) !important;
+  color: #221902 !important;
+  font-family: var(--sb-body) !important;
+  font-weight: 650 !important;
+  font-size: 15.5px !important;
+  line-height: 48px !important;
+  letter-spacing: .01em !important;
+  text-transform: none !important;
+  cursor: pointer !important;
+  transition: filter .15s, box-shadow .15s, transform .15s !important;
+}
+html.login-pf body .login-pf-page #kc-login:hover,
+html.login-pf body .login-pf-page .card-pf .pf-c-button.pf-m-primary:hover,
+html.login-pf body .login-pf-page .card-pf input[type="submit"].pf-c-button:hover {
+  background: linear-gradient(135deg, #ffd47c 0%, var(--sb-amber) 45%, var(--sb-amber-deep) 100%) !important;
+  color: #221902 !important;
+  filter: brightness(1.05);
+  transform: translateY(-1px);
+  box-shadow: 0 12px 30px rgba(217, 154, 38, .4), inset 0 1px 0 rgba(255, 255, 255, .4) !important;
+}
+html.login-pf body .login-pf-page #kc-login:active,
+html.login-pf body .login-pf-page .card-pf .pf-c-button.pf-m-primary:active {
+  transform: none;
+  box-shadow: 0 4px 12px rgba(217, 154, 38, .25), inset 0 1px 0 rgba(255, 255, 255, .3) !important;
+}
+html.login-pf body .login-pf-page #kc-login:disabled {
+  opacity: .6 !important;
+  cursor: progress !important;
+}
+html.login-pf body .login-pf-page .card-pf #kc-form-buttons {
+  margin-top: 6px !important;
+  margin-bottom: 0 !important;
+}
+
+/* Secondary (cancel, back, "try another way") */
+html.login-pf body .login-pf-page .card-pf .pf-c-button.pf-m-secondary,
+html.login-pf body .login-pf-page .card-pf .btn-default,
+html.login-pf body .login-pf-page .card-pf input[type="submit"].btn-default {
+  height: 46px !important;
+  padding: 0 18px !important;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .05), rgba(255, 255, 255, 0) 55%), var(--sb-raise) !important;
+  border: 1px solid var(--sb-line) !important;
+  border-radius: 10px !important;
+  box-shadow: none !important;
+  color: var(--sb-ink) !important;
+  font-family: var(--sb-body) !important;
+  font-weight: 500 !important;
+  font-size: 14.5px !important;
+  line-height: 44px !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+  text-decoration: none !important;
+  transition: border-color .15s, box-shadow .15s, transform .15s !important;
+}
+html.login-pf body .login-pf-page .card-pf .pf-c-button.pf-m-secondary:hover,
+html.login-pf body .login-pf-page .card-pf .btn-default:hover {
+  border-color: #344160 !important;
+  color: var(--sb-ink) !important;
+  text-decoration: none !important;
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, .35) !important;
+}
+
+/* ── Sign in with Google / Microsoft ───────────────────────────────── */
+
+html.login-pf body .login-pf-page .card-pf #kc-social-providers {
+  margin: 24px 0 0 !important;
+  padding: 22px 0 0 !important;
+  border-top: 1px dashed var(--sb-line) !important;
+}
+html.login-pf body .login-pf-page .card-pf #kc-social-providers ul {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)) !important;
+  gap: 10px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+html.login-pf body .login-pf-page .card-pf #kc-social-providers li {
+  margin: 0 !important;
+}
+html.login-pf body .login-pf-page .card-pf #kc-social-providers ul a.pf-c-button,
+html.login-pf body .login-pf-page .card-pf #kc-social-providers ul a {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 9px !important;
+  height: 46px !important;
+  margin: 0 !important;
+  padding: 0 14px !important;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .05), rgba(255, 255, 255, 0) 55%), var(--sb-raise) !important;
+  border: 1px solid var(--sb-line) !important;
+  border-radius: 10px !important;
+  box-shadow: none !important;
+  color: var(--sb-ink) !important;
+  font-family: var(--sb-body) !important;
+  font-weight: 500 !important;
+  font-size: 14.5px !important;
+  line-height: 1 !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+  text-decoration: none !important;
+  transition: border-color .15s, box-shadow .15s, transform .15s !important;
+}
+html.login-pf body .login-pf-page .card-pf #kc-social-providers ul a span,
+html.login-pf body .login-pf-page .card-pf #kc-social-providers ul a i {
+  color: inherit !important;
+  font-size: inherit !important;
+}
+html.login-pf body .login-pf-page .card-pf #kc-social-providers ul a i {
+  font-size: 16px !important;
+  color: var(--sb-dim) !important;
+}
+html.login-pf body .login-pf-page .card-pf #kc-social-providers ul a:hover {
+  border-color: #344160 !important;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .07), rgba(255, 255, 255, 0) 55%), #151e33 !important;
+  color: var(--sb-ink) !important;
+  text-decoration: none !important;
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, .35) !important;
+}
+/* The stack styles EVERY link in this block as a button, including the
+   privacy link inside the notice under them. Put that one back in the text. */
+html.login-pf body .login-pf-page .card-pf #kc-social-providers .saas-stack-social-notice {
+  margin-top: 12px !important;
+  font-weight: 400 !important;
+  font-size: 12.5px !important;
+  line-height: 1.5 !important;
+  text-align: center !important;
+  color: var(--sb-faint) !important;
+}
+html.login-pf body .login-pf-page .card-pf #kc-social-providers .saas-stack-social-notice a {
+  display: inline !important;
+  height: auto !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  background: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  font: inherit !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+  line-height: inherit !important;
+  color: var(--sb-dim) !important;
+  text-decoration: underline !important;
+  text-decoration-color: rgba(154, 165, 189, .4) !important;
+  text-underline-offset: 3px !important;
+}
+html.login-pf body .login-pf-page .card-pf #kc-social-providers .saas-stack-social-notice a:hover {
+  color: var(--sb-amber) !important;
+  text-decoration-color: currentColor !important;
+}
+
+/* ── "New user? Register" ──────────────────────────────────────────── */
+
+html.login-pf body .login-pf-page .card-pf #kc-info {
+  margin: 22px 0 0 !important;
+  padding: 0 !important;
+  text-align: center !important;
+  background: transparent !important;
+  border: 0 !important;
+}
+html.login-pf body .login-pf-page .card-pf #kc-info-wrapper,
+html.login-pf body .login-pf-page .card-pf #kc-registration-container,
+html.login-pf body .login-pf-page .card-pf #kc-registration,
+html.login-pf body .login-pf-page .card-pf #kc-registration span {
+  padding: 0 !important;
+  margin: 0 !important;
+  font-size: 14px !important;
+  font-weight: 400 !important;
+  color: var(--sb-dim) !important;
+  background: transparent !important;
+}
+html.login-pf body .login-pf-page .card-pf #kc-registration a {
+  margin-left: 4px !important;
+  font-weight: 600 !important;
+  color: var(--sb-amber) !important;
+  border: 0 !important;
+}
+html.login-pf body .login-pf-page .card-pf #kc-registration a:hover {
+  color: #ffd47c !important;
+}
+/* The reset page's instructions live in #kc-info: read them as body text. */
+html.login-pf body[data-page-id="login-login-reset-password"] .login-pf-page .card-pf #kc-info,
+html.login-pf body[data-page-id="login-login-reset-password"] .login-pf-page .card-pf #kc-info-wrapper,
+html.login-pf body[data-page-id="login-login-verify-email"] .login-pf-page .card-pf #kc-info,
+html.login-pf body[data-page-id="login-login-verify-email"] .login-pf-page .card-pf #kc-info-wrapper {
+  text-align: left !important;
+}
+html.login-pf body[data-page-id="login-login-reset-password"] .login-pf-page .card-pf #kc-info,
+html.login-pf body[data-page-id="login-login-verify-email"] .login-pf-page .card-pf #kc-info {
+  margin: 0 0 20px !important;
+}
+
+/* ── Stub: operator, legal links ───────────────────────────────────
+   The stub is torn off below the form. Its tear line belongs to the legal
+   footer, which every page carries; on the sign-in page the powered-by line
+   comes first and takes the tear line over. */
+
+html.login-pf body .login-pf-page .card-pf .saas-stack-powered-by {
+  position: relative !important;
+  margin: 26px calc(-1 * var(--sb-pad)) 0 !important;
+  padding: 18px var(--sb-pad) 0 !important;
+  border-top: 1.5px dashed var(--sb-dash) !important;
+  background: rgba(10, 14, 24, .35) !important;
+  text-align: center !important;
+  font-family: var(--sb-mono) !important;
+  font-size: 10.5px !important;
+  line-height: 1.6 !important;
+  letter-spacing: .14em !important;
+  text-transform: uppercase !important;
+  color: var(--sb-faint) !important;
+}
+html.login-pf body .login-pf-page .card-pf .saas-stack-powered-by::before,
+html.login-pf body .login-pf-page .card-pf .saas-stack-powered-by::after {
+  content: "" !important;
+  position: absolute !important;
+  top: -11px !important;
+  width: 20px !important;
+  height: 20px !important;
+  border-radius: 50% !important;
+  background: var(--sb-bg) !important;
+  border: 1px solid rgba(245, 184, 77, .35) !important;
+  box-sizing: border-box !important;
+}
+html.login-pf body .login-pf-page .card-pf .saas-stack-powered-by::before { left: -11px !important; clip-path: inset(0 0 0 50%); }
+html.login-pf body .login-pf-page .card-pf .saas-stack-powered-by::after { right: -11px !important; clip-path: inset(0 50% 0 0); }
+html.login-pf body .login-pf-page .card-pf .saas-stack-powered-by:empty {
+  display: none !important;
+}
+
+html.login-pf body .login-pf-page .card-pf .saas-stack-legal-footer {
+  margin: 26px calc(-1 * var(--sb-pad)) calc(-1 * var(--sb-pad)) !important;
+  padding: 18px var(--sb-pad) 20px !important;
+  border-top: 1.5px dashed var(--sb-dash) !important;
+  border-radius: 0 0 13px 13px !important;
+  background: rgba(10, 14, 24, .35) !important;
+  text-align: center !important;
+  font-weight: 400 !important;
+  font-size: 12px !important;
+  line-height: 1.8 !important;
+  color: var(--sb-faint) !important;
+}
+/* sign-in: the powered-by line above has the tear, the footer continues it */
+html.login-pf body[data-page-id="login-login"] .login-pf-page .card-pf .saas-stack-powered-by:not(:empty) ~ .saas-stack-legal-footer {
+  margin-top: 0 !important;
+  padding-top: 6px !important;
+  border-top: 0 !important;
+}
+html.login-pf body[data-page-id="login-login"] .login-pf-page .card-pf .saas-stack-powered-by:not(:empty) ~ .saas-stack-legal-footer::before,
+html.login-pf body[data-page-id="login-login"] .login-pf-page .card-pf .saas-stack-powered-by:not(:empty) ~ .saas-stack-legal-footer::after {
+  display: none !important;
+}
+html.login-pf body .login-pf-page .card-pf .saas-stack-legal-footer a {
+  font-family: var(--sb-body) !important;
+  font-size: 12px !important;
+  color: var(--sb-faint) !important;
+}
+html.login-pf body .login-pf-page .card-pf .saas-stack-legal-footer a:hover {
+  color: var(--sb-dim) !important;
+}
+html.login-pf body .login-pf-page .card-pf .saas-stack-legal-sep,
+html.login-pf body .login-pf-page .card-pf #kc-content .saas-stack-legal-sep {
+  margin: 0 7px !important;
+  color: var(--sb-line) !important;
+}
+
+/* ── Alerts ─────────────────────────────────────────────────────────── */
+
+html.login-pf body .login-pf-page .card-pf .alert,
+html.login-pf body .login-pf-page .card-pf .pf-c-alert {
+  display: flex !important;
+  gap: 10px !important;
+  align-items: flex-start !important;
+  margin: 0 0 20px !important;
+  padding: 12px 14px !important;
+  border: 0 !important;
+  border-radius: 10px !important;
+  font-size: 14px !important;
+  line-height: 1.5 !important;
+  background: rgba(91, 140, 255, .07) !important;
+  box-shadow: inset 0 0 0 1px rgba(91, 140, 255, .3) !important;
+}
+html.login-pf body .login-pf-page .card-pf .alert *,
+html.login-pf body .login-pf-page .card-pf .pf-c-alert *,
+html.login-pf body .login-pf-page .card-pf #kc-content .alert span,
+html.login-pf body .login-pf-page .card-pf #kc-content .pf-c-alert span {
+  color: inherit !important;
+}
+html.login-pf body .login-pf-page .card-pf .alert,
+html.login-pf body .login-pf-page .card-pf .pf-c-alert.pf-m-info {
+  color: #c9d7ff !important;
+}
+html.login-pf body .login-pf-page .card-pf .alert-error,
+html.login-pf body .login-pf-page .card-pf .alert-danger,
+html.login-pf body .login-pf-page .card-pf .pf-c-alert.pf-m-danger {
+  background: rgba(242, 109, 109, .08) !important;
+  box-shadow: inset 0 0 0 1px rgba(242, 109, 109, .38) !important;
+  color: #ffb3b3 !important;
+}
+html.login-pf body .login-pf-page .card-pf .alert-warning,
+html.login-pf body .login-pf-page .card-pf .pf-c-alert.pf-m-warning {
+  background: rgba(245, 184, 77, .07) !important;
+  box-shadow: inset 0 0 0 1px rgba(245, 184, 77, .3) !important;
+  color: #ffd9a0 !important;
+}
+html.login-pf body .login-pf-page .card-pf .alert-success,
+html.login-pf body .login-pf-page .card-pf .pf-c-alert.pf-m-success {
+  background: rgba(94, 207, 138, .08) !important;
+  box-shadow: inset 0 0 0 1px rgba(94, 207, 138, .35) !important;
+  color: #a8ecc3 !important;
+}
+
+/* ── Terms, info and error pages ───────────────────────────────────── */
+
+html.login-pf body .login-pf-page .card-pf #kc-terms-text,
+html.login-pf body .login-pf-page .card-pf #kc-error-message,
+html.login-pf body .login-pf-page .card-pf #kc-error-message p {
+  text-align: left !important;
+  font-size: 14.5px !important;
+  color: var(--sb-dim) !important;
+}
+html.login-pf body .login-pf-page .card-pf hr {
+  border: 0 !important;
+  border-bottom: 1px dashed var(--sb-line) !important;
+}
+html.login-pf body .login-pf-page .card-pf code {
+  font-family: var(--sb-mono) !important;
+  font-size: 13px !important;
+  color: var(--sb-ink) !important;
+  background: var(--sb-raise) !important;
+  border: 1px solid var(--sb-line-soft) !important;
+  border-radius: 6px !important;
+}
+
+/* ── Small screens and motion ──────────────────────────────────────── */
+
+@media (max-width: 480px) {
+  html.login-pf { font-size: 16px !important; }
+  html.login-pf body .login-pf-page { padding-top: 28px !important; padding-left: 12px !important; padding-right: 12px !important; }
+  html.login-pf body #kc-header { margin-bottom: 20px !important; }
+  html.login-pf body #kc-header-wrapper { font-size: 26px !important; }
+  html.login-pf body #kc-header-wrapper::before { width: 34px !important; height: 34px !important; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html.login-pf body .login-pf-page::before,
+  html.login-pf body .login-pf-page .card-pf { animation: none !important; }
+}

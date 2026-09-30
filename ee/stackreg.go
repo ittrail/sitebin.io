@@ -5,11 +5,13 @@ package ee
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -61,12 +63,13 @@ type stackRegistration struct {
 	Billing *stackBilling `json:"billing,omitempty"`
 	MCP     *stackMCP     `json:"mcp,omitempty"`
 	// The look of every surface the stack hosts on Sitebin's behalf: the
-	// consent gate, the account console when it is opened from the dashboard,
-	// and the plan page where the card is taken. The stack paints all three
-	// from this block and renders its own stock grey for an app that declares
-	// none -- which a customer reads as somebody else's product asking for
-	// their money. It is Sitebin's own palette (web/static/app.css), not a
-	// setting: the instance knows what it looks like.
+	// sign-in and registration pages, the consent gate, the account console
+	// when it is opened from the dashboard, and the plan page where the card
+	// is taken. The stack paints them from this block and renders its own
+	// stock grey for an app that declares none -- which a customer reads as
+	// somebody else's product asking for their money. It is Sitebin's own
+	// palette (web/static/app.css), not a setting: the instance knows what it
+	// looks like.
 	Theme *stackTheme `json:"theme,omitempty"`
 	// Licensing tells the stack what a Sitebin Enterprise licence is WORTH:
 	// the entitlements each plan carries and how long a lapsed one stays
@@ -111,7 +114,14 @@ type stackTheme struct {
 	PrimaryColor    string `json:"primaryColor"`
 	SecondaryColor  string `json:"secondaryColor,omitempty"`
 	BackgroundColor string `json:"backgroundColor"`
+	LogoURL         string `json:"logoUrl,omitempty"`
 	FaviconURL      string `json:"faviconUrl,omitempty"`
+	// CustomCSS is appended after the stack's own sheet on the Keycloak
+	// sign-in pages (and in the account console). The colours above reach
+	// only a few custom properties there -- the stack's sheet hard-codes the
+	// sign-in button white -- so this is what actually makes the page
+	// Sitebin's. See keycloak-theme.css for the rules it has to follow.
+	CustomCSS string `json:"customCss,omitempty"`
 }
 
 type stackGDPR struct {
@@ -351,15 +361,39 @@ var registrationClient = &http.Client{Timeout: 30 * time.Second}
 
 // sitebinTheme is the claim-ticket look -- deep-space ink with the amber
 // accent -- as the stack's theme declaration. The values are app.css's
-// tokens (--bg, --amber, --amber-deep); the favicon is the one the instance
-// serves on its own base host, so the browser tab on the plan page shows the
-// same icon as the dashboard the customer came from.
+// tokens (--bg, --amber, --amber-deep); the icon is the one the instance
+// serves on its own base host, so the sign-in page, the plan page and the
+// browser tab show the same bin mark as the dashboard the customer came from.
 func sitebinTheme(base string) *stackTheme {
+	icon := base + "/_sitebin/assets/static/favicon.svg"
 	return &stackTheme{
 		DisplayName:     "Sitebin",
 		PrimaryColor:    "#f5b84d",
 		SecondaryColor:  "#d99a26",
 		BackgroundColor: "#0a0e18",
-		FaviconURL:      base + "/_sitebin/assets/static/favicon.svg",
+		LogoURL:         icon,
+		FaviconURL:      icon,
+		CustomCSS:       keycloakThemeCSS,
 	}
+}
+
+// keycloakThemeSource is the sign-in stylesheet as it is kept in this repo,
+// comments and all.
+//
+//go:embed keycloak-theme.css
+var keycloakThemeSource string
+
+// keycloakThemeCSS is what is declared: the same rules without the comments,
+// which are for whoever edits the file, not for every sign-in page that
+// fetches it -- and the stack caps customCss at 50,000 characters.
+var keycloakThemeCSS = stripCSSComments(keycloakThemeSource)
+
+var (
+	cssComment   = regexp.MustCompile(`(?s)/\*.*?\*/`)
+	cssBlankRuns = regexp.MustCompile(`\n[ \t]*(\n[ \t]*)+`)
+)
+
+func stripCSSComments(css string) string {
+	css = cssComment.ReplaceAllString(css, "")
+	return strings.TrimSpace(cssBlankRuns.ReplaceAllString(css, "\n"))
 }

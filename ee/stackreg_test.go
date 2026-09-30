@@ -5,6 +5,7 @@ package ee
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -381,4 +382,145 @@ func TestStackDeclarationCarriesSitebinsOwnBrand(t *testing.T) {
 	if !strings.Contains(string(body), `"theme":{`) {
 		t.Errorf("the theme is not serialised into the registration: %s", body)
 	}
+}
+
+// Without a logo and a stylesheet of its own, the stack's sign-in page shows
+// its operator's mark in a white circle and paints the button white whatever
+// primaryColor says -- its sheet hard-codes #kc-login. The logo is the same
+// bin mark the dashboard and the tab show; the stylesheet is the claim-ticket
+// look, and travels under the keys the stack's strict theme schema knows.
+func TestStackThemeCarriesTheLogoAndTheSignInStylesheet(t *testing.T) {
+	p := stackProvider(t, "")
+	reg := p.stackDeclaration("sitebin")
+	if reg.Theme == nil {
+		t.Fatal("no theme declared")
+	}
+	if want := p.baseURL() + "/_sitebin/assets/static/favicon.svg"; reg.Theme.LogoURL != want {
+		t.Errorf("logoUrl = %q, want %q", reg.Theme.LogoURL, want)
+	}
+	if !strings.Contains(reg.Theme.CustomCSS, "html.login-pf") {
+		t.Fatalf("customCss does not carry the sign-in stylesheet: %.200q", reg.Theme.CustomCSS)
+	}
+
+	b, _ := json.Marshal(reg)
+	var wire struct {
+		Theme map[string]json.RawMessage `json:"theme"`
+	}
+	if err := json.Unmarshal(b, &wire); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"logoUrl", "customCss"} {
+		if _, ok := wire.Theme[key]; !ok {
+			t.Errorf("theme.%s missing from the payload", key)
+		}
+	}
+}
+
+// The stack's theme schema refuses a customCss over 50,000 characters, and a
+// refused registration converges nothing -- not the redirect URIs, not the
+// tiers. The comments are for this repo, not for every sign-in page, so they
+// are stripped on the way out.
+func TestSignInStylesheetFitsTheStacksLimit(t *testing.T) {
+	css := sitebinTheme("https://app.example").CustomCSS
+	if n := len([]rune(css)); n == 0 || n > 50_000 {
+		t.Fatalf("customCss is %d characters; the stack takes 1..50000", n)
+	}
+	if strings.Contains(css, "/*") || strings.Contains(css, "*/") {
+		t.Error("customCss still carries comments")
+	}
+	if strings.Count(css, "{") != strings.Count(css, "}") {
+		t.Error("customCss braces do not balance after stripping")
+	}
+}
+
+// Before injecting it, the stack rewrites a custom stylesheet so it cannot
+// load or send anything from a password page: url(...) becomes `none`, an
+// import rule is cut to the next semicolon, expression(/behavior/-moz-binding
+// are defused. Anything here that matches those patterns would silently change
+// meaning on the way -- an import rule's cut even runs through a comment's end
+// and swallows the rules after it -- so the file must not contain them at
+// all, comments included.
+func TestSignInStylesheetSurvivesTheStacksFilter(t *testing.T) {
+	stack := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)@import`),
+		regexp.MustCompile(`(?i)url\s*\(`),
+		regexp.MustCompile(`(?i)expression\s*\(`),
+		regexp.MustCompile(`(?i)-moz-binding\s*:`),
+		regexp.MustCompile(`(?i)behavior\s*:`),
+	}
+	for _, re := range stack {
+		if loc := re.FindStringIndex(keycloakThemeSource); loc != nil {
+			t.Errorf("keycloak-theme.css contains %q at byte %d, which the stack rewrites",
+				keycloakThemeSource[loc[0]:loc[1]], loc[0])
+		}
+	}
+}
+
+// The stack injects the same customCss into the Keycloak account console
+// (a PatternFly 5 React app) when a user arrives there from the dashboard.
+// Every rule is therefore scoped to html.login-pf -- the class only the login
+// flow's pages carry -- or it would restyle the console as well.
+func TestSignInStylesheetIsScopedToTheLoginPages(t *testing.T) {
+	css := sitebinTheme("https://app.example").CustomCSS
+	for _, sel := range cssSelectors(t, css) {
+		if !strings.HasPrefix(sel, "html.login-pf") {
+			t.Errorf("selector %q is not scoped to html.login-pf", sel)
+		}
+	}
+}
+
+// cssSelectors returns every selector of every style rule in css, descending
+// into @media and @supports and skipping @keyframes, whose steps are not
+// selectors. It is only as clever as the stylesheet above needs: no strings
+// containing braces.
+func cssSelectors(t *testing.T, css string) []string {
+	t.Helper()
+	var out []string
+	var walk func(s string)
+	walk = func(s string) {
+		for {
+			open := strings.IndexByte(s, '{')
+			if open < 0 {
+				if strings.TrimSpace(s) != "" {
+					t.Fatalf("trailing text outside a rule: %.80q", s)
+				}
+				return
+			}
+			prelude := strings.TrimSpace(s[:open])
+			depth, end := 0, -1
+			for i := open; i < len(s); i++ {
+				switch s[i] {
+				case '{':
+					depth++
+				case '}':
+					depth--
+				}
+				if depth == 0 {
+					end = i
+					break
+				}
+			}
+			if end < 0 {
+				t.Fatalf("unbalanced block after %.80q", prelude)
+			}
+			body := s[open+1 : end]
+			switch {
+			case strings.HasPrefix(prelude, "@keyframes"):
+			case strings.HasPrefix(prelude, "@media"), strings.HasPrefix(prelude, "@supports"):
+				walk(body)
+			case strings.HasPrefix(prelude, "@"):
+				t.Errorf("unexpected at-rule %q", prelude)
+			default:
+				for _, sel := range strings.Split(prelude, ",") {
+					out = append(out, strings.TrimSpace(sel))
+				}
+			}
+			s = s[end+1:]
+		}
+	}
+	walk(css)
+	if len(out) == 0 {
+		t.Fatal("no selectors found")
+	}
+	return out
 }
