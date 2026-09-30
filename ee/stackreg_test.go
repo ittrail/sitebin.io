@@ -361,6 +361,33 @@ func TestStackDeclarationRegistersTheSignedOutPage(t *testing.T) {
 	}
 }
 
+// When a login outlives the stack's sign-in flow -- Keycloak restarts a
+// timed-out login form with the original state, long after the gate let the
+// flow go -- the gate starts the sign-in again at the address the app
+// declares here instead of ending on an error. It is the sign-in's own start,
+// built from the same base as the callback, under the key the stack's strict
+// schema knows.
+func TestStackDeclarationDeclaresWhereASignInStarts(t *testing.T) {
+	p := stackProvider(t, "")
+	b, err := json.Marshal(p.stackDeclaration("sitebin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Auth map[string]json.RawMessage `json:"auth"`
+	}
+	if err := json.Unmarshal(b, &wire); err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	if err := json.Unmarshal(wire.Auth["initiateLoginUri"], &got); err != nil {
+		t.Fatalf("auth.initiateLoginUri missing or not a string: %s", b)
+	}
+	if want := p.baseURL() + "/account/auth/oidc"; got != want {
+		t.Errorf("initiateLoginUri = %q, want %q", got, want)
+	}
+}
+
 func TestStackDeclarationCarriesSitebinsOwnBrand(t *testing.T) {
 	p := stackProvider(t, "")
 	reg := p.stackDeclaration("sitebin")

@@ -18,6 +18,16 @@ import (
 
 const oauthCookie = "sitebin_oauth"
 
+// oauthStateTTL is how long a started sign-in may take to come back. It has
+// to outlive everything that runs while a person sits on the identity
+// provider's login form: the stack's Keycloak keeps that form alive for 30
+// minutes, and the stack's consent gate parks the flow for an hour. At ten
+// minutes the state was the first thing to die, and a person who took a
+// quarter of an hour to find their password was told the sign-in session
+// had expired although nothing else had. The cookie is a CSRF binding, not a
+// credential; its lifetime adds no reach.
+const oauthStateTTL = 2 * time.Hour
+
 // oauthRoutes adds the OAuth start + callback endpoints when any provider is
 // configured.
 func (p *provider) oauthRoutes(routes map[string]http.Handler) {
@@ -44,10 +54,10 @@ func (p *provider) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state, nonce := ids.New(), ids.New()
-	// Bind state+nonce in a short-lived signed cookie to defeat CSRF/replay.
-	token := p.oauthSigner().Sign(string(prov)+"|"+state+"|"+nonce, time.Now(), 10*time.Minute)
+	// Bind state+nonce in a signed cookie to defeat CSRF/replay.
+	token := p.oauthSigner().Sign(string(prov)+"|"+state+"|"+nonce, time.Now(), oauthStateTTL)
 	http.SetCookie(w, &http.Cookie{
-		Name: oauthCookie, Value: token, Path: "/account/auth", MaxAge: 600,
+		Name: oauthCookie, Value: token, Path: "/account/auth", MaxAge: int(oauthStateTTL / time.Second),
 		HttpOnly: true, Secure: !p.host.HTTPOnly(), SameSite: http.SameSiteLaxMode,
 	})
 	url, err := p.oidc.AuthCodeURL(r.Context(), prov, state, nonce, r.URL.Query().Get("fresh") == "1")

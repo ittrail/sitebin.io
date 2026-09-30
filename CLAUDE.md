@@ -601,7 +601,11 @@ Read `docs/superpowers/specs/2026-09-29-sign-out-ends-the-sso-session.md`.
   name this account and client, and sent even when expired (Keycloak checks
   only its signature). Google/Microsoft are never signed out at the provider.
 - `auth.postLogoutRedirectUris` in the registration is strict-schema: only
-  to a stack that knows it.
+  to a stack that knows it. So is `auth.initiateLoginUri`
+  (`<base>/account/auth/oidc`, stack dbb4c59+): where the stack's gate
+  restarts a sign-in whose login outlived the gate's flow. The OAuth state
+  cookie (`oauthStateTTL`, 2 h) must outlive that flow (1 h) and Keycloak's
+  login form (30 min), or it is the first thing to expire.
 
 ## Working here
 

@@ -1434,8 +1434,11 @@ call is convergent: run it a thousand times and the stack simply matches what
 Sitebin declared.
 
 What it declares is only what Sitebin alone knows — its identity, the OIDC
-callback it will actually use and the page a sign-out returns to
-(`postLogoutRedirectUris`: `<base>/account/signed-out`), its tier catalogue
+callback it will actually use, the page a sign-out returns to
+(`postLogoutRedirectUris`: `<base>/account/signed-out`), where a sign-in starts
+(`initiateLoginUri`: `<base>/account/auth/oidc` — the stack's consent gate
+restarts a sign-in there when a login outlived its flow, instead of ending on
+an error; the sign-in state cookie lives two hours for the same reason), its tier catalogue
 from `tiers.json`, and its MCP resource and scopes. It never declares identity providers, password policy,
 MFA or realm registration: those are realm-wide settings shared with every other
 app on the stack, and an app that set them would overwrite an operator's choice

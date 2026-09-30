@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ittrail/sitebin.io/ee/account"
 	"github.com/ittrail/sitebin.io/ee/authn"
@@ -89,6 +90,38 @@ func TestOAuthCallbackRejectsBadState(t *testing.T) {
 	mux.ServeHTTP(w, httptest.NewRequest("GET", "/account/auth/google/callback?code=x&state=y", nil))
 	if !strings.Contains(w.Body.String(), "Sign-in failed") {
 		t.Fatalf("missing-cookie callback = %d, body missing error", w.Code)
+	}
+}
+
+// The sign-in state has to outlive everything that runs while a person sits
+// on the identity provider's login form: the stack's Keycloak keeps that form
+// alive for 30 minutes and the stack's consent gate parks the flow for an
+// hour. At 10 minutes, a person who took a quarter of an hour to find their
+// password came back to "The sign-in session expired" although every other
+// part of the sign-in was still valid.
+func TestOAuthStateOutlivesTheStacksSignInFlow(t *testing.T) {
+	p := setupOAuth(t)
+	mux := serveMux(p)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/account/auth/google", nil))
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("start = %d, want 303", w.Code)
+	}
+	var state *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == oauthCookie {
+			state = c
+		}
+	}
+	if state == nil {
+		t.Fatal("no state cookie set")
+	}
+	const stackFlow = time.Hour
+	if time.Duration(state.MaxAge)*time.Second <= stackFlow {
+		t.Errorf("state cookie Max-Age = %ds, want longer than the stack's %v flow", state.MaxAge, stackFlow)
+	}
+	if _, ok := p.oauthSigner().Parse(state.Value, time.Now().Add(stackFlow+10*time.Minute)); !ok {
+		t.Error("the signed state is refused after the stack's flow lifetime; it must outlive it")
 	}
 }
 

@@ -59,6 +59,13 @@ type stackRegistration struct {
 		// schema is strict: this field may only be declared to a stack that
 		// knows it, or the whole registration is refused.
 		PostLogoutRedirectURIs []string `json:"postLogoutRedirectUris,omitempty"`
+		// InitiateLoginURI is where a sign-in starts (OIDC Core § 4's
+		// initiate_login_uri). The stack's consent gate sends the browser
+		// here when a login comes back to a flow that expired under the
+		// login form, so the sign-in starts again and completes from the
+		// session that login created, instead of ending on an error. Strict
+		// schema: only to a stack that knows the field.
+		InitiateLoginURI string `json:"initiateLoginUri,omitempty"`
 	} `json:"auth"`
 	Billing *stackBilling `json:"billing,omitempty"`
 	MCP     *stackMCP     `json:"mcp,omitempty"`
@@ -224,6 +231,10 @@ func (p *provider) stackDeclaration(appID string) stackRegistration {
 	// The page every sign-out ends on, from the same base as the callback and
 	// the same constant the logout builds post_logout_redirect_uri from.
 	reg.Auth.PostLogoutRedirectURIs = []string{base + signedOutPath}
+	// The start of that same sign-in, beside its callback: a plain GET that
+	// goes straight to the issuer, which finds the session the stranded
+	// login created and hands the browser back at once.
+	reg.Auth.InitiateLoginURI = base + "/account/auth/oidc"
 	reg.Theme = sitebinTheme(base)
 
 	// Declared in catalogue order, because that IS the order the stack renders
