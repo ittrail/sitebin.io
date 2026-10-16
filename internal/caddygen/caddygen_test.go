@@ -412,3 +412,34 @@ func TestContentRoutesProxyContainerSites(t *testing.T) {
 		}
 	}
 }
+
+// Cache-Control comes from authz and nowhere else: a client-sent copy of the
+// header is stripped before the gate, the gate's answer is copied onto the
+// request, and the header is set on a 2xx or 304 only — never on an error
+// page, a redirect or the gate. Every content origin does it, path views too.
+func TestEveryContentOriginSetsCacheControlFromAuthz(t *testing.T) {
+	cfg := mustLoad(t, map[string]string{"SITEBIN_BASE_DOMAIN": "sitebin.example", "SITEBIN_HTTP_ONLY": "true", "SITEBIN_VIEW_ACCESS": "both"})
+	out := Generate(cfg)
+	for _, block := range []string{"*.sitebin.example {", "http://:80 {", "handle @view {"} {
+		i := strings.Index(out, block)
+		if i < 0 {
+			t.Fatalf("no %q block", block)
+		}
+		body := out[i:]
+		body = body[:strings.Index(body, "\n}\n")]
+		strip := strings.Index(body, "request_header -X-Sitebin-Cache")
+		gate := strings.Index(body, "forward_auth")
+		copied := strings.Contains(body, "X-Sitebin-Cache\n") && strings.Contains(body, "copy_headers Set-Cookie")
+		set := strings.Index(body, "Cache-Control {http.request.header.X-Sitebin-Cache}")
+		files := strings.Index(body, "file_server")
+		if strip < 0 || gate < 0 || !copied || set < 0 || files < 0 {
+			t.Fatalf("%s: missing a directive:\n%s", block, body)
+		}
+		if !(strip < gate && gate < set && set < files) {
+			t.Errorf("%s: order strip=%d gate=%d set=%d files=%d", block, strip, gate, set, files)
+		}
+		if !strings.Contains(body, "status 2xx 304") {
+			t.Errorf("%s: Cache-Control is not limited to 2xx and 304", block)
+		}
+	}
+}

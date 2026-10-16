@@ -189,6 +189,7 @@ func (o mcpOps) siteResult(site *store.Site) *mcp.SiteResult {
 		Mode:          m.Mode,
 		EntryFile:     m.EntryFile,
 		SPAFallback:   m.SPAFallback,
+		Cache:         m.Cache,
 		ViewProtected: m.ViewPasswordProtected,
 		WebDAVEnabled: m.WebDAVEnabled,
 		FTPEnabled:    m.FTPEnabled,
@@ -244,6 +245,7 @@ func settingsToUpdateSet(s mcp.Settings) updateSet {
 		WebDAV:       s.WebDAV,
 		FTP:          s.FTP,
 		SPA:          s.SPA,
+		Cache:        s.Cache,
 	}
 	if s.ExpiresAt != nil {
 		if *s.ExpiresAt == "" {

@@ -155,6 +155,9 @@ function render() {
   $("entrywrap").classList.toggle("hidden", site.mode !== "viewer");
   $("spawrap").classList.toggle("hidden", site.mode !== "webserver");
   $("e-spa").checked = !!site.spa_fallback;
+  // A container site's upstream sends its own cache headers.
+  $("cachewrap").classList.toggle("hidden", site.mode === "container");
+  if (document.activeElement !== $("e-cache")) $("e-cache").value = site.cache || "auto";
   if (site.mode === "viewer") {
     const sel = $("entry-file");
     sel.innerHTML = "";
@@ -893,6 +896,9 @@ $("e-ftp").addEventListener("change", (e) =>
 
 $("e-spa").addEventListener("change", (e) =>
   put({ spa_fallback: e.target.checked }, e.target.checked ? "SPA fallback on" : "SPA fallback off"));
+
+$("e-cache").addEventListener("change", (e) =>
+  put({ cache: e.target.value }, "Browser caching: " + e.target.selectedOptions[0].textContent.split(" — ")[0]));
 
 $("save-expiry").addEventListener("click", () => {
   const v = $("e-expires").value;

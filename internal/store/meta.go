@@ -33,8 +33,11 @@ type Meta struct {
 	DomainRedirects map[string]Redirect `json:"domain_redirects,omitempty"`
 	ViewAddress     *ViewAddress        `json:"view_address,omitempty"`
 	EntryFile       string              `json:"entry_file"`
-	SPAFallback     bool                `json:"spa_fallback"`               // webserver mode: serve index.html for unknown paths
-	OwnerAccountID  string              `json:"owner_account_id,omitempty"` // enterprise: owning account (empty = anonymous)
+	SPAFallback     bool                `json:"spa_fallback"` // webserver mode: serve index.html for unknown paths
+	// Cache is the owner's browser-cache policy (CleanCachePolicy); "" is
+	// auto, the default. See cache.go.
+	Cache          string `json:"cache,omitempty"`
+	OwnerAccountID string `json:"owner_account_id,omitempty"` // enterprise: owning account (empty = anonymous)
 
 	// Name is the owner's optional label for the site, validated by
 	// CleanSiteName. It is private: shown wherever the site is managed and

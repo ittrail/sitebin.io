@@ -108,6 +108,10 @@ func (a *API) admit(w http.ResponseWriter, r *http.Request, site *store.Site, pa
 		return
 	}
 	a.countView(r, site)
+	// A file site's Cache-Control, which Caddy sets on a 2xx or 304 only.
+	if v := a.cacheValue(site, r.Header.Get("X-Forwarded-Uri"), pathMode); v != "" {
+		w.Header().Set(cacheHeader, v)
+	}
 	w.WriteHeader(200)
 }
 

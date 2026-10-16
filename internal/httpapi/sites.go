@@ -33,6 +33,7 @@ type updateSet struct {
 	WebDAV        *bool           `json:"webdav_enabled"`
 	FTP           *bool           `json:"ftp_enabled"`
 	SPA           *bool           `json:"spa_fallback"`
+	Cache         *string         `json:"cache"`      // auto, revalidate, hour, day, week, year or off
 	ExpiresAt     json.RawMessage `json:"expires_at"` // absent=keep, null=clear, string=set
 	Domains       []string        `json:"custom_domains"`
 }
@@ -76,6 +77,9 @@ func settingsFromForm(fields url.Values) (updateSet, error) {
 	}
 	if v := fields.Get("expires_at"); v != "" {
 		set.ExpiresAt = json.RawMessage(fmt.Sprintf("%q", v))
+	}
+	if v := fields.Get("cache"); v != "" {
+		set.Cache = strPtr(v)
 	}
 	set.Domains = fields["domain"]
 	return set, nil
@@ -213,6 +217,13 @@ func (a *API) writeSettings(site *store.Site, set updateSet, expires **time.Time
 		}
 		if set.SPA != nil {
 			m.SPAFallback = *set.SPA
+		}
+		if set.Cache != nil {
+			policy, err := store.CleanCachePolicy(*set.Cache)
+			if err != nil {
+				return &apiError{400, err.Error()}
+			}
+			m.Cache = policy
 		}
 		if expires != nil {
 			m.ExpiresAt = *expires
@@ -479,6 +490,7 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"mode":                    m.Mode,
 		"entry_file":              m.EntryFile,
 		"spa_fallback":            m.SPAFallback,
+		"cache":                   m.CachePolicy(),
 		"view_password_protected": m.ViewPasswordProtected,
 		"webdav_enabled":          m.WebDAVEnabled,
 		"webdav_available":        webdavAvailable,

@@ -139,6 +139,24 @@
       <span class="sub">Serve <code>index.html</code> for unknown paths — needed for single-page apps
         (React/Vue/etc.) so deep links and reloads work. Use relative asset paths.</span>
     </div>
+    <div class="opt" id="cachewrap" style="margin-top:16px">
+      <label for="e-cache">Browser caching</label>
+      <div class="row">
+        <select id="e-cache">
+          <option value="auto">Automatic &mdash; pages always fresh, hashed build files cached for a year</option>
+          <option value="revalidate">Always check &mdash; browsers re-check every file on every visit</option>
+          <option value="hour">Cache files for an hour</option>
+          <option value="day">Cache files for a day</option>
+          <option value="week">Cache files for a week</option>
+          <option value="year">Cache files for a year</option>
+          <option value="off">Off &mdash; send no cache headers</option>
+        </select>
+      </div>
+      <span class="sub">Pages and data (HTML, JSON, XML, TXT) always revalidate, so visitors see an upload at once.
+        <em>Automatic</em> caches files whose names carry a content hash (<code>index-BqCz7v8e.js</code>, as Vite,
+        webpack, Next.js or Expo build them) for a year &mdash; what Lighthouse asks for. The fixed times cache every
+        other file that long: only pick one if those files never change under the same name.</span>
+    </div>
   </section>
 
   <section class="card">

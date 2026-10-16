@@ -136,6 +136,7 @@ type Settings struct {
 	WebDAV       *bool   `json:"webdav_enabled,omitempty" jsonschema:"expose the site over WebDAV"`
 	FTP          *bool   `json:"ftp_enabled,omitempty" jsonschema:"expose the site over FTP"`
 	SPA          *bool   `json:"spa_fallback,omitempty" jsonschema:"webserver mode: serve index.html for unknown paths, for single-page apps"`
+	Cache        *string `json:"cache,omitempty" jsonschema:"browser caching: auto (the default — pages and data revalidate, content-hashed build files like index-BqCz7v8e.js are cached for a year), revalidate (every file is re-checked on every visit), hour, day, week or year (every file but pages and data is cached that long — only for files that never change under their name), or off (no Cache-Control header)"`
 	ExpiresAt    *string `json:"expires_at,omitempty" jsonschema:"RFC3339 timestamp when the site stops serving; the empty string clears it, where the plan allows"`
 }
 
@@ -175,6 +176,8 @@ type SiteResult struct {
 	// DomainRedirects and ViewAddress are present only on a site that uses
 	// them, for the same reason Locked is omitempty: a result for any other
 	// site is exactly what it was before they existed.
+	// Cache is present only when the policy is not auto, for the same reason.
+	Cache           string           `json:"cache,omitempty" jsonschema:"the browser-cache policy, when it is not auto"`
 	DomainRedirects []DomainRedirect `json:"domain_redirects,omitempty" jsonschema:"custom domains that redirect to another of this site's custom domains instead of serving it"`
 	ViewAddress     *ViewAddress     `json:"view_address,omitempty" jsonschema:"present only when the generated address (view_url) does not serve the site: off, or a redirect to one of its custom domains"`
 }

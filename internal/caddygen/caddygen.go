@@ -176,10 +176,12 @@ func writePathViewRoutes(b *strings.Builder, backend func(string) string, dataDi
 	b.WriteString("\t@view path_regexp view ^/v/([a-z2-7]{26})/.*$\n")
 	b.WriteString("\thandle @view {\n")
 	b.WriteString("\t\troute {\n")
-	fmt.Fprintf(b, "\t\t\tforward_auth %s {\n\t\t\t\turi /internal/authz\n\t\t\t\theader_up X-Sitebin-View {re.view.1}\n\t\t\t\tcopy_headers Set-Cookie\n\t\t\t}\n", backend("9000"))
+	fmt.Fprintf(b, "\t\t\trequest_header -%s\n", cacheHeader)
+	fmt.Fprintf(b, "\t\t\tforward_auth %s {\n\t\t\t\turi /internal/authz\n\t\t\t\theader_up X-Sitebin-View {re.view.1}\n\t\t\t\tcopy_headers Set-Cookie %s\n\t\t\t}\n", backend("9000"), cacheHeader)
 	b.WriteString("\t\t\turi strip_prefix /v/{re.view.1}\n")
 	fmt.Fprintf(b, "\t\t\troot * %s/sites/{re.view.1}/files\n", dataDir)
 	writeSecurityHeaders(b, "\t\t\t", untrusted)
+	writeCacheHeader(b, "\t\t\t")
 	writeFileServing(b, "\t\t\t")
 	b.WriteString("\t\t}\n")
 	b.WriteString("\t}\n")
@@ -207,13 +209,15 @@ func writeContentRoutes(b *strings.Builder, backend func(string) string, root, u
 	// A client sending the header itself would choose where Caddy proxies —
 	// any host the instance can reach — so it is removed before the gate.
 	fmt.Fprintf(b, "\t\t\trequest_header -%s\n", upstreamHeader)
+	fmt.Fprintf(b, "\t\t\trequest_header -%s\n", cacheHeader)
 	// Pin X-Forwarded-Host to Caddy's own {host} placeholder so authz resolves
 	// the SAME site that file_server will serve. Without this, a client-supplied
 	// X-Forwarded-Host could make the gate evaluate a different (open) site than
 	// the one whose files are served — a password-gate bypass.
-	fmt.Fprintf(b, "\t\t\tforward_auth %s {\n\t\t\t\turi /internal/authz\n\t\t\t\theader_up X-Forwarded-Host {host}\n\t\t\t\tcopy_headers Set-Cookie %s\n\t\t\t}\n", backend("9000"), upstreamHeader)
+	fmt.Fprintf(b, "\t\t\tforward_auth %s {\n\t\t\t\turi /internal/authz\n\t\t\t\theader_up X-Forwarded-Host {host}\n\t\t\t\tcopy_headers Set-Cookie %s %s\n\t\t\t}\n", backend("9000"), upstreamHeader, cacheHeader)
 	fmt.Fprintf(b, "\t\t\troot * %s\n", root)
 	writeSecurityHeaders(b, "\t\t\t", untrusted)
+	writeCacheHeader(b, "\t\t\t")
 	// A container site: authz admitted it WITH an upstream, so it is proxied
 	// there and never reaches the file server below. authz never admits a
 	// container site without one.
@@ -239,6 +243,22 @@ func writeFileServing(b *strings.Builder, ind string) {
 
 // upstreamHeader mirrors httpapi's: authz sets it for a container site.
 const upstreamHeader = "X-Sitebin-Upstream"
+
+// cacheHeader mirrors httpapi's: authz sets it to a file site's whole
+// Cache-Control value for the response, or leaves it out.
+const cacheHeader = "X-Sitebin-Cache"
+
+// writeCacheHeader sets Cache-Control from authz's answer, on a 2xx or 304
+// only: an error page, a redirect or a 404 is never cached, whatever the
+// file's policy. The client's own copy of the header was removed before the
+// gate, so only authz can have set it.
+func writeCacheHeader(b *strings.Builder, ind string) {
+	fmt.Fprintf(b, "%s@cachepolicy header %s *\n", ind, cacheHeader)
+	fmt.Fprintf(b, "%sheader @cachepolicy {\n", ind)
+	fmt.Fprintf(b, "%s\tCache-Control {http.request.header.%s}\n", ind, cacheHeader)
+	fmt.Fprintf(b, "%s\tmatch {\n%s\t\tstatus 2xx 304\n%s\t}\n", ind, ind, ind)
+	fmt.Fprintf(b, "%s}\n", ind)
+}
 
 // spaMarkerName mirrors store.SPAMarker (kept local to avoid an import cycle
 // risk; asserted equal by a test).

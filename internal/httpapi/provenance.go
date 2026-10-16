@@ -283,6 +283,9 @@ func settingsDetail(set updateSet) string {
 	if set.SPA != nil {
 		parts = append(parts, "spa")
 	}
+	if set.Cache != nil {
+		parts = append(parts, "cache="+strings.ToLower(strings.TrimSpace(*set.Cache)))
+	}
 	if len(set.ExpiresAt) > 0 {
 		parts = append(parts, "expires_at")
 	}
