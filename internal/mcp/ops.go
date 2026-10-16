@@ -172,6 +172,26 @@ type SiteResult struct {
 	// purpose: every other site's result is exactly what it was before locks
 	// existed, so a client that cached this schema earlier never sees it.
 	Locked *SiteLock `json:"locked,omitempty" jsonschema:"present only when the operator has locked the site: it is not served to anyone, its files cannot be read, and it cannot be changed or deleted"`
+	// DomainRedirects and ViewAddress are present only on a site that uses
+	// them, for the same reason Locked is omitempty: a result for any other
+	// site is exactly what it was before they existed.
+	DomainRedirects []DomainRedirect `json:"domain_redirects,omitempty" jsonschema:"custom domains that redirect to another of this site's custom domains instead of serving it"`
+	ViewAddress     *ViewAddress     `json:"view_address,omitempty" jsonschema:"present only when the generated address (view_url) does not serve the site: off, or a redirect to one of its custom domains"`
+}
+
+// DomainRedirect is a custom domain that redirects to another of the site's
+// custom domains, keeping the path and query.
+type DomainRedirect struct {
+	Domain string `json:"domain"`
+	To     string `json:"to" jsonschema:"the custom domain of this site it redirects to"`
+	Code   int    `json:"code" jsonschema:"301, 302, 307 or 308"`
+}
+
+// ViewAddress is what the generated address does instead of serving the site.
+type ViewAddress struct {
+	Mode string `json:"mode" jsonschema:"off (not served) or redirect"`
+	To   string `json:"to,omitempty" jsonschema:"with redirect: the custom domain of this site it redirects to"`
+	Code int    `json:"code,omitempty" jsonschema:"with redirect: 301, 302, 307 or 308"`
 }
 
 // SiteLock is the operator's lock on a site, as its owner sees it.
@@ -298,6 +318,12 @@ type Ops interface {
 	DeleteSite(ctx context.Context, a Auth, ref SiteRef) error
 	AddDomain(ctx context.Context, a Auth, ref SiteRef, domain string) (*SiteResult, error)
 	RemoveDomain(ctx context.Context, a Auth, ref SiteRef, domain string) (*SiteResult, error)
+	// SetDomainRedirect makes a custom domain redirect to another of the
+	// site's custom domains; an empty to makes it serve the site again.
+	SetDomainRedirect(ctx context.Context, a Auth, ref SiteRef, domain, to string, code int) (*SiteResult, error)
+	// SetViewAddress sets what the generated address does: serve, off, or
+	// redirect to a custom domain.
+	SetViewAddress(ctx context.Context, a Auth, ref SiteRef, mode, to string, code int) (*SiteResult, error)
 	DownloadSite(ctx context.Context, a Auth, ref SiteRef) (zip []byte, err error)
 	// OpenUpload issues a short-lived upload token for one site, authorized
 	// exactly like WriteFiles.

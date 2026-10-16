@@ -6,7 +6,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -205,6 +207,13 @@ func (o mcpOps) siteResult(site *store.Site) *mcp.SiteResult {
 	}
 	for _, p := range o.a.pendingDomains(site) {
 		out.PendingDomains = append(out.PendingDomains, mcp.PendingDomain{Domain: p.Domain, TXTName: p.TXTName, TXTValue: p.TXTValue, CNAMETarget: p.CNAMETarget})
+	}
+	for _, d := range slices.Sorted(maps.Keys(m.DomainRedirects)) {
+		r := m.DomainRedirects[d]
+		out.DomainRedirects = append(out.DomainRedirects, mcp.DomainRedirect{Domain: d, To: r.To, Code: r.Code})
+	}
+	if va := m.ViewAddress; va != nil {
+		out.ViewAddress = &mcp.ViewAddress{Mode: va.Mode, To: va.To, Code: va.Code}
 	}
 	return out
 }
@@ -496,6 +505,37 @@ func (o mcpOps) RemoveDomain(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, 
 		return nil, o.mcpError(err)
 	}
 	o.a.recordMCP(auth, site, provenance.ActionDomainRemove, 0, domain)
+	return o.siteResult(site), nil
+}
+
+// SetDomainRedirect goes through changeDomainRedirect, the API's own path.
+func (o mcpOps) SetDomainRedirect(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, domain, to string, code int) (*mcp.SiteResult, error) {
+	site, err := o.openSite(auth, ref)
+	if err != nil {
+		return nil, err
+	}
+	if err := o.a.changeDomainRedirect(site, domain, to, code); err != nil {
+		return nil, o.mcpError(err)
+	}
+	d := strings.ToLower(strings.TrimSpace(domain))
+	o.a.recordMCP(auth, site, provenance.ActionDomainRedirect, 0, addressDetail(d, "", to, site.Meta.DomainRedirects[d].Code))
+	return o.siteResult(site), nil
+}
+
+// SetViewAddress goes through changeViewAddress, the API's own path.
+func (o mcpOps) SetViewAddress(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, mode, to string, code int) (*mcp.SiteResult, error) {
+	site, err := o.openSite(auth, ref)
+	if err != nil {
+		return nil, err
+	}
+	if err := o.a.changeViewAddress(site, mode, to, code); err != nil {
+		return nil, o.mcpError(err)
+	}
+	stored := store.ViewAddress{}
+	if va := site.Meta.ViewAddress; va != nil {
+		stored = *va
+	}
+	o.a.recordMCP(auth, site, provenance.ActionViewAddress, 0, addressDetail("generated address", mode, stored.To, stored.Code))
 	return o.siteResult(site), nil
 }
 

@@ -251,6 +251,27 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 	})
 
 	addTool(s, auth, &sdk.Tool{
+		Name: "set_domain_redirect",
+		Description: "Make one of a site's verified custom domains redirect to another of its verified custom domains — " +
+			"example.de to example.at, www.example.com to example.com — keeping the path and query. The instance " +
+			"answers the redirect itself, on the domain's own certificate. code is 301 (the default), 302, 307 or 308. " +
+			"An empty to makes the domain serve the site again. A redirect is one hop: its target must serve the site " +
+			"itself. Enterprise instances only.",
+	}, func(ctx context.Context, _ *sdk.CallToolRequest, in redirectArgs) (*sdk.CallToolResult, *SiteResult, error) {
+		return out(ops.SetDomainRedirect(ctx, auth, in.ref(), in.Domain, in.To, in.Code))
+	})
+
+	addTool(s, auth, &sdk.Tool{
+		Name: "set_view_address",
+		Description: "Set what a site's generated address (its view_url) does once the site has a custom domain: serve " +
+			"(the default), off (visitors get \"not found\"), or redirect to one of its verified custom domains with " +
+			"code 301 (the default), 302, 307 or 308, keeping the path and query. off and redirect need a custom domain " +
+			"that serves the site; should that domain ever be detached, the generated address serves again on its own.",
+	}, func(ctx context.Context, _ *sdk.CallToolRequest, in viewAddressArgs) (*sdk.CallToolResult, *SiteResult, error) {
+		return out(ops.SetViewAddress(ctx, auth, in.ref(), in.Mode, in.To, in.Code))
+	})
+
+	addTool(s, auth, &sdk.Tool{
 		Name:        "download_site",
 		Description: "Download a site's files as a zip archive, returned as an attached resource.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in siteArgs) (*sdk.CallToolResult, any, error) {
@@ -358,6 +379,28 @@ type domainArgs struct {
 }
 
 func (a domainArgs) ref() SiteRef { return SiteRef{EditID: a.EditID, EditPassword: a.EditPassword} }
+
+type redirectArgs struct {
+	EditID       string `json:"edit_id" jsonschema:"the site's edit id"`
+	EditPassword string `json:"edit_password,omitempty" jsonschema:"the site's edit password; not needed with an owning account API token"`
+	Domain       string `json:"domain" jsonschema:"the custom domain that redirects, e.g. www.example.com"`
+	To           string `json:"to,omitempty" jsonschema:"another verified custom domain of this site, e.g. example.com; empty makes the domain serve the site again"`
+	Code         int    `json:"code,omitempty" jsonschema:"301 (the default), 302, 307 or 308"`
+}
+
+func (a redirectArgs) ref() SiteRef { return SiteRef{EditID: a.EditID, EditPassword: a.EditPassword} }
+
+type viewAddressArgs struct {
+	EditID       string `json:"edit_id" jsonschema:"the site's edit id"`
+	EditPassword string `json:"edit_password,omitempty" jsonschema:"the site's edit password; not needed with an owning account API token"`
+	Mode         string `json:"mode" jsonschema:"serve, off or redirect"`
+	To           string `json:"to,omitempty" jsonschema:"with redirect: a verified custom domain of this site"`
+	Code         int    `json:"code,omitempty" jsonschema:"with redirect: 301 (the default), 302, 307 or 308"`
+}
+
+func (a viewAddressArgs) ref() SiteRef {
+	return SiteRef{EditID: a.EditID, EditPassword: a.EditPassword}
+}
 
 type createArgs struct {
 	Files    []File   `json:"files,omitempty" jsonschema:"the files to publish; may be empty, and filled later with write_files"`

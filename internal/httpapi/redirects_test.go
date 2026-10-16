@@ -302,3 +302,72 @@ func TestNonServingAddressHasNoBackendRoutes(t *testing.T) {
 		t.Errorf("servingSiteByHost(a.example) = %v, %v", site, err)
 	}
 }
+
+// MCP reaches the same rules through the same helpers as the API.
+func TestMCPRedirectTools(t *testing.T) {
+	e, c, edit := redirectEnv(t, nil, "example.at", "example.de")
+	cs := mcpClient(t, e, nil)
+
+	res := mcpCall(t, cs, "get_site", map[string]any{"edit_id": edit, "edit_password": c.EditPassword})
+	if strings.Contains(mcpText(res), "domain_redirects") || strings.Contains(mcpText(res), "view_address") {
+		t.Errorf("a site without rules must return the result it always did: %s", mcpText(res))
+	}
+
+	res = mcpCall(t, cs, "set_domain_redirect", map[string]any{"edit_id": edit, "edit_password": c.EditPassword, "domain": "example.de", "to": "example.at"})
+	if res.IsError {
+		t.Fatalf("set_domain_redirect: %s", mcpText(res))
+	}
+	if !strings.Contains(mcpText(res), `"domain_redirects":[{"code":301,"domain":"example.de","to":"example.at"}]`) {
+		t.Errorf("result does not show the redirect: %s", mcpText(res))
+	}
+	if aw := e.internal(t, authzReq("example.de", "/x", "")); aw.Code != 301 || aw.Header().Get("Location") != "http://example.at/x" {
+		t.Errorf("authz after set_domain_redirect: %d %q", aw.Code, aw.Header().Get("Location"))
+	}
+
+	res = mcpCall(t, cs, "set_domain_redirect", map[string]any{"edit_id": edit, "edit_password": c.EditPassword, "domain": "example.at", "to": "example.at"})
+	if !res.IsError || !strings.Contains(mcpText(res), "cannot redirect to itself") {
+		t.Errorf("a refused rule must say why: %v %s", res.IsError, mcpText(res))
+	}
+
+	res = mcpCall(t, cs, "set_view_address", map[string]any{"edit_id": edit, "edit_password": c.EditPassword, "mode": "off"})
+	if res.IsError || !strings.Contains(mcpText(res), `"view_address":{"mode":"off"}`) {
+		t.Fatalf("set_view_address: %v %s", res.IsError, mcpText(res))
+	}
+	if aw := e.internal(t, authzReq(c.ID+".sitebin.example", "/", "")); aw.Code != 404 {
+		t.Errorf("generated address after off: %d", aw.Code)
+	}
+
+	res = mcpCall(t, cs, "set_domain_redirect", map[string]any{"edit_id": edit, "edit_password": c.EditPassword, "domain": "example.de"})
+	if res.IsError || strings.Contains(mcpText(res), "domain_redirects") {
+		t.Errorf("an empty to must clear the redirect: %v %s", res.IsError, mcpText(res))
+	}
+}
+
+// The seam's view of a site carries the rules in effect, for the dashboard.
+func TestSiteInfoCarriesAddressRules(t *testing.T) {
+	e, c, edit := redirectEnv(t, nil, "example.at", "example.de")
+	for _, r := range []*http.Request{
+		jsonReq("PUT", "/api/sites/"+edit+"/domains/example.de/redirect", `{"to":"example.at"}`, c.EditPassword),
+		jsonReq("PUT", "/api/sites/"+edit+"/view-address", `{"mode":"redirect","to":"example.at"}`, c.EditPassword),
+	} {
+		if w := e.public(t, r); w.Code != 200 {
+			t.Fatalf("%s: %d %s", r.URL, w.Code, w.Body)
+		}
+	}
+	info, ok := siteService{a: e.api}.Info(c.ID)
+	if !ok {
+		t.Fatal("no info for the site")
+	}
+	if !info.ViewOff || info.ViewRedirectTo != "example.at" {
+		t.Errorf("ViewOff/ViewRedirectTo = %v %q", info.ViewOff, info.ViewRedirectTo)
+	}
+	var redirects []string
+	for _, l := range info.DomainLinks {
+		if l.RedirectTo != "" {
+			redirects = append(redirects, l.Domain+"→"+l.RedirectTo)
+		}
+	}
+	if len(redirects) != 1 || redirects[0] != "example.de→example.at" {
+		t.Errorf("DomainLinks redirects = %v", redirects)
+	}
+}

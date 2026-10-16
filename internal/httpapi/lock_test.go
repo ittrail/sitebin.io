@@ -408,6 +408,8 @@ func TestMCPLockedSiteRefusesEveryToolButGetSite(t *testing.T) {
 		{"delete_site", ref(nil)},
 		{"add_domain", ref(map[string]any{"domain": "x.example.org"})},
 		{"remove_domain", ref(map[string]any{"domain": "x.example.org"})},
+		{"set_domain_redirect", ref(map[string]any{"domain": "x.example.org", "to": "y.example.org"})},
+		{"set_view_address", ref(map[string]any{"mode": "off"})},
 		{"download_site", ref(nil)},
 		{"open_upload", ref(nil)},
 		{"list_forms", ref(nil)},

@@ -67,7 +67,11 @@ var catalog = map[string]toolSpec{
 	// Claims a domain and checks its DNS; attaching adds, it replaces nothing.
 	"add_domain":    {scope: ScopeWrite, perSite: true, title: "Add a custom domain", annotations: writes(false, true, true)},
 	"remove_domain": {scope: ScopeWrite, perSite: true, title: "Remove a custom domain", annotations: writes(true, false, true)},
-	"download_site": {scope: ScopeRead, perSite: true, title: "Download a site as a zip", annotations: reads()},
+	// Changes what one of the site's own addresses answers — off takes it off
+	// the web — and publishes or claims nothing.
+	"set_domain_redirect": {scope: ScopeWrite, perSite: true, title: "Redirect a custom domain", annotations: writes(true, false, true)},
+	"set_view_address":    {scope: ScopeWrite, perSite: true, title: "Set the generated address", annotations: writes(true, false, true)},
+	"download_site":       {scope: ScopeRead, perSite: true, title: "Download a site as a zip", annotations: reads()},
 	// Issues a credential and publishes nothing itself; each call is a new token.
 	"open_upload": {scope: ScopeWrite, perSite: true, title: "Open a large-file upload", annotations: writes(false, false, false)},
 	"list_forms":  {scope: ScopeRead, perSite: true, title: "List a site's forms", annotations: reads()},

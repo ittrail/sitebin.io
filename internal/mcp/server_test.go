@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -23,10 +24,12 @@ type fakeOps struct {
 	gotFiles  []DecodedFile
 	gotPath   string
 	gotDomain string
-	gotForm   FormInput
-	gotKey    string
-	replace   bool
-	calls     []string
+	// gotRedirect is "<domain or mode>→<to> <code>" as the redirect tools passed it.
+	gotRedirect string
+	gotForm     FormInput
+	gotKey      string
+	replace     bool
+	calls       []string
 
 	err  error
 	site *SiteResult
@@ -109,6 +112,19 @@ func (f *fakeOps) AddDomain(_ context.Context, a Auth, ref SiteRef, d string) (*
 func (f *fakeOps) RemoveDomain(_ context.Context, a Auth, ref SiteRef, d string) (*SiteResult, error) {
 	f.note("remove_domain", a, ref)
 	f.gotDomain = d
+	return f.result(), f.err
+}
+
+func (f *fakeOps) SetDomainRedirect(_ context.Context, a Auth, ref SiteRef, d, to string, code int) (*SiteResult, error) {
+	f.note("set_domain_redirect", a, ref)
+	f.gotDomain = d
+	f.gotRedirect = fmt.Sprintf("%s→%s %d", d, to, code)
+	return f.result(), f.err
+}
+
+func (f *fakeOps) SetViewAddress(_ context.Context, a Auth, ref SiteRef, mode, to string, code int) (*SiteResult, error) {
+	f.note("set_view_address", a, ref)
+	f.gotRedirect = fmt.Sprintf("%s→%s %d", mode, to, code)
 	return f.result(), f.err
 }
 
@@ -220,6 +236,7 @@ func TestToolCatalog(t *testing.T) {
 		"create_site": true, "list_sites": true, "get_site": true, "update_site": true,
 		"list_files": true, "read_file": true, "write_files": true, "delete_file": true,
 		"delete_site": true, "add_domain": true, "remove_domain": true, "download_site": true,
+		"set_domain_redirect": true, "set_view_address": true,
 		"list_forms": true, "add_form": true, "update_form": true, "remove_form": true, "resend_form_confirmation": true,
 		"open_upload": true,
 	}
@@ -443,6 +460,14 @@ func TestPathAndDomainArgumentsReachOps(t *testing.T) {
 	if ops.gotDomain != "docs.example.com" {
 		t.Errorf("domain = %q", ops.gotDomain)
 	}
+	call(t, cs, "set_domain_redirect", map[string]any{"edit_id": "e1", "edit_password": "p", "domain": "example.de", "to": "example.at", "code": 308})
+	if ops.gotRedirect != "example.de→example.at 308" {
+		t.Errorf("set_domain_redirect passed %q", ops.gotRedirect)
+	}
+	call(t, cs, "set_view_address", map[string]any{"edit_id": "e1", "edit_password": "p", "mode": "off"})
+	if ops.gotRedirect != "off→ 0" {
+		t.Errorf("set_view_address passed %q", ops.gotRedirect)
+	}
 }
 
 func TestListSitesReturnsRowsWithEditIDs(t *testing.T) {
@@ -575,6 +600,8 @@ func TestEveryToolIsScoped(t *testing.T) {
 		"delete_site":              {"edit_id": "e1"},
 		"add_domain":               {"edit_id": "e1", "domain": "d.example.com"},
 		"remove_domain":            {"edit_id": "e1", "domain": "d.example.com"},
+		"set_domain_redirect":      {"edit_id": "e1", "domain": "d.example.com", "to": "e.example.com"},
+		"set_view_address":         {"edit_id": "e1", "mode": "off"},
 		"download_site":            {"edit_id": "e1"},
 		"list_forms":               {"edit_id": "e1"},
 		"add_form":                 {"edit_id": "e1", "form": map[string]any{"name": "A", "recipient": "a@example.com"}},
