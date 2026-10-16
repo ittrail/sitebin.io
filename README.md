@@ -203,6 +203,35 @@ a site without its edit password.
   `sitebin-container-compose.yaml` declares, and Caddy proxies to it. See
   [Container sites](#container-sites-enterprise).
 
+### Browser caching
+
+Every file site sends a `Cache-Control` header on its successful responses
+(`2xx`, `304`), chosen per site with the **cache** setting (edit page, API
+`"cache"`, MCP `update_site`):
+
+| `cache` | Pages and data | Fingerprinted build files | Other files |
+|---|---|---|---|
+| `auto` *(default)* | revalidate | `max-age=31536000, immutable` | revalidate |
+| `revalidate` | revalidate | revalidate | revalidate |
+| `hour` / `day` / `week` / `year` | revalidate | that long | that long |
+| `off` | — | — | — |
+
+*Revalidate* is `max-age=0, must-revalidate`: the browser asks every time and
+an unchanged file costs a body-less `304`, so an upload is visible at once.
+*Pages and data* are `.html`/`.htm`/`.xhtml`/`.json`/`.xml`/`.txt`/`.webmanifest`,
+names without an extension, directories, and every request that does not name
+an existing file (the SPA fallback's `index.html`, a 404 — never cached long).
+*Fingerprinted* names carry a content hash — `index-BqCz7v8e.js` (Vite),
+`main.8f9e7d6a.css` (webpack), a bare 16+ character hex name (webpack asset
+modules) — or live under `/_next/static/` or `/_app/immutable/`; a hand-named
+file (`style.css`, `report2024.pdf`) never counts. Those are what Lighthouse's
+"efficient cache policy" audit wants cached for a year. The fixed times cache
+every other file that long: only for files that never change under their name.
+A site behind a view password sends `private` instead of `public`; error
+pages, redirects and the password gate are never given the header; container
+sites are left to their upstream. authz computes the value and Caddy copies it
+— see `docs/superpowers/specs/2026-10-16-browser-caching-design.md`.
+
 ### API (for scripts and agents)
 
 The credential is the edit id (in the URL) + the edit password
@@ -238,7 +267,8 @@ curl -F "zip=@site.zip" https://sitebin.example.com/api/sites
 curl -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID
 
 # update settings (any subset; expires_at: null clears it, unless a tier caps the site;
-# name is a private label of up to 60 characters, "" removes it)
+# name is a private label of up to 60 characters, "" removes it; cache is the
+# browser-cache policy: auto, revalidate, hour, day, week, year or off)
 curl -X PUT -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
      -d '{"name":"Client docs","mode":"viewer","entry_file":"report.pdf","webdav_enabled":true}' \
      https://sitebin.example.com/api/sites/$EDIT_ID
@@ -363,7 +393,7 @@ require stdio) can bridge with `npx mcp-remote https://…/mcp --header …`.
 |---|---|
 | `create_site` | Publish files as a new site; returns the URL, the edit id and — once — the edit password |
 | `list_sites` | The connected account's sites, with their names and custom domains *(needs a token)* |
-| `get_site` / `update_site` | Read and change the name, settings, expiry, view password, WebDAV/FTP, SPA fallback |
+| `get_site` / `update_site` | Read and change the name, settings, expiry, view password, WebDAV/FTP, SPA fallback, browser caching |
 | `list_files` / `read_file` | Inspect a site's contents |
 | `write_files` | Add or overwrite files; with `replace`, the site ends up containing exactly what you pass |
 | `delete_file` / `delete_site` | Remove a file, or the whole site |
@@ -1160,11 +1190,13 @@ others, so a full pass means running them all.
 |---|---|---|
 | `e2e.ps1` | core HTTP: create, view, edit, quotas, rate limits | `sitebin:dev` |
 | `spa.ps1` | per-site `index.html` fallback | `sitebin:dev` |
+| `caching.ps1` | the `Cache-Control` a visitor receives, per policy, through Caddy | `sitebin:e2e-caching` |
 | `paths.ps1` | `SITEBIN_VIEW_ACCESS=path` | `sitebin:dev` |
 | `ftp.ps1` | FTP/FTPS access | `sitebin:dev` |
 | `mcp.ps1` | the `/mcp` endpoint | `sitebin:dev` |
 | `accounts.ps1` | accounts mode *(enterprise)* | `sitebin:dev-ee` |
 | `tiers.ps1` | tiers and quotas *(enterprise)* | `sitebin:dev-ee` |
+| `redirects.ps1` | custom-domain redirects and the generated address through Caddy *(enterprise)* | `sitebin:e2e-redirects` |
 | `license.ps1` | licensing *(enterprise)* — builds its own image | `sitebin:e2e-license` |
 | `containers.ps1` | container sites against the host's Docker Engine: node + MySQL behind Caddy, egress, the plan cap, restarts, symlink confinement *(enterprise; pulls images, needs internet)* | `sitebin:dev-ee` |
 | `consent.ps1` | the stack's consent gate: three documents asked once *(enterprise, needs a running SaaS Stack)* | `sitebin:dev-ee` |
@@ -1182,11 +1214,13 @@ docker build --build-arg EDITION=enterprise -t sitebin:dev-ee .
 ```powershell
 powershell -File e2e\e2e.ps1
 powershell -File e2e\spa.ps1
+powershell -File e2e\caching.ps1 -SkipBuild   # tag sitebin:e2e-caching first
 powershell -File e2e\paths.ps1
 powershell -File e2e\ftp.ps1
 powershell -File e2e\mcp.ps1
 powershell -File e2e\accounts.ps1
 powershell -File e2e\tiers.ps1
+powershell -File e2e\redirects.ps1 -SkipBuild # tag sitebin:e2e-redirects (enterprise) first
 powershell -File e2e\containers.ps1
 powershell -File e2e\license.ps1   # self-contained: mints a throwaway root and builds its own image
 ```

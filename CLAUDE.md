@@ -21,16 +21,17 @@ docker build --build-arg EDITION=enterprise -t sitebin:latest-ee .   # enterpris
 ```
 
 **`e2e.ps1` is not the full E2E.** It is the core HTTP suite and references no
-other script; there is no aggregate entry point. A full pass is all twelve run
+other script; there is no aggregate entry point. A full pass is all thirteen run
 by hand: `e2e.ps1`, `spa.ps1`, `paths.ps1`, `ftp.ps1`, `mcp.ps1` (community
 image), `forms.ps1` (community image; pulls `axllent/mailpit` as its SMTP
-server), `accounts.ps1`, `tiers.ps1`, `redirects.ps1`, `containers.ps1`
+server), `caching.ps1` (community image), `accounts.ps1`, `tiers.ps1`,
+`redirects.ps1`, `containers.ps1`
 (enterprise image; the last drives the host's real Docker Engine and pulls
 images), `license.ps1`, and
 `consent.ps1` -- the last of which is the only one that needs a **running SaaS
 Stack** (the stack's consent gate, the OIDC issuer/discovery split, and the
 `consents` declaration; see `docs/superpowers/specs/2026-09-01-consent-gate-through-the-stack-design.md`).
-`e2e/stack/verify.ps1` is the thirteenth, run against the compose container in
+`e2e/stack/verify.ps1` is the fourteenth, run against the compose container in
 `e2e/stack/` rather than one it starts itself: the registration the stack
 holds, the stack-hosted self-service links, and a signed GDPR export and
 deletion.
@@ -305,6 +306,20 @@ The third site mode (`store.ModeContainer`) runs the project its
   `os.Root` of its own. Any new code that touches site files must go
   through `store.OpenContentRoot` or the store — never `os.Open` on a joined
   path.
+
+## Browser caching
+
+`store.Meta.Cache` (`""` = auto) is a site's cache policy; authz turns it into
+the whole `Cache-Control` value for the response (`internal/httpapi/cache.go`)
+and answers it as `X-Sitebin-Cache`, which Caddy strips from the client's
+request before the gate, copies from authz, and sets as `Cache-Control` on a
+`2xx`/`304` only. Every rule is in Go; the Caddyfile only copies a value.
+Two rules that must hold: **anything that is not an existing regular file is a
+page** (directory, SPA fallback, 404) and is never cached long — otherwise a
+missing hashed bundle would leave a year of `index.html` in a browser; and
+**`fingerprinted` must never match a hand-named file** — a false positive is a
+year of stale content, so when in doubt it says no. Container sites get no
+header. Read `docs/superpowers/specs/2026-10-16-browser-caching-design.md`.
 
 ## Site forms
 
