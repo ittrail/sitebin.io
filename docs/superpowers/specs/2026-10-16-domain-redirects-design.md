@@ -178,6 +178,16 @@ marked off, and the site's first link is `primary_url`.
   of a single path, no "drop the path" option. Each would be a different
   feature with its own abuse surface.
 
+## Corrections (post-implementation)
+
+**2026-10-16 — container sites have the rules too.** The exclusion of
+container sites (refused with `409`, ignored in authz) is gone: their
+addresses moved out of the compose file into the site's settings
+(`2026-10-16-container-addresses-design.md`). A container site has one
+generated address per HTTP port, each custom domain serves a port, and every
+rule here applies per address — `off` needs a domain serving the same port,
+and a domain serves only while its port is declared.
+
 ## Testing
 
 - `store`: every refusal of the two setters, clearing, `RemoveDomain` pruning,

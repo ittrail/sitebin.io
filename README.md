@@ -308,10 +308,17 @@ curl -X DELETE -H "X-Edit-Password: $PW" \
      https://sitebin.example.com/api/sites/$EDIT_ID/domains/www.client.com/redirect
 
 # the generated address: {"mode":"serve"}, {"mode":"off"} (needs a custom
-# domain that serves the site) or {"mode":"redirect","to":"client.com","code":301}
+# domain that serves the site) or {"mode":"redirect","to":"client.com","code":301};
+# on a container site add "endpoint":"api:8080" to pick which port's address
 curl -X PUT -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
      -d '{"mode":"off"}' \
      https://sitebin.example.com/api/sites/$EDIT_ID/view-address
+
+# container sites: a domain serves one of the app's HTTP ports -- pick it when
+# adding ({"domain":"api.client.com","target":"api:8080"}) or change it later
+curl -X PUT -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
+     -d '{"endpoint":"api:8080"}' \
+     https://sitebin.example.com/api/sites/$EDIT_ID/domains/api.client.com/target
 
 # forms: list / add / change / delete / resend the recipient's confirmation
 curl -H "X-Edit-Password: $PW" "https://sitebin.example.com/api/sites/$EDIT_ID/forms"
@@ -398,8 +405,9 @@ require stdio) can bridge with `npx mcp-remote https://…/mcp --header …`.
 | `list_files` / `read_file` | Inspect a site's contents |
 | `write_files` | Add or overwrite files; with `replace`, the site ends up containing exactly what you pass |
 | `delete_file` / `delete_site` | Remove a file, or the whole site |
-| `add_domain` / `remove_domain` | Custom domains *(Enterprise)* |
-| `set_domain_redirect` / `set_view_address` | Redirect a custom domain to another of the site's domains; switch the generated address off or redirect it *(Enterprise)* |
+| `add_domain` / `remove_domain` | Custom domains; on a container site, `add_domain` takes the HTTP port the domain serves *(Enterprise)* |
+| `set_domain_redirect` / `set_view_address` | Redirect a custom domain to another of the site's domains; switch a generated address off or redirect it *(Enterprise)* |
+| `set_domain_target` | Point a container site's custom domain at another of its HTTP ports *(Enterprise)* |
 | `download_site` | The site as a zip, attached as a resource |
 | `open_upload` | A short-lived token and URLs to upload large files with your own HTTP client (WebDAV or the zip/files upload), with ready-to-run `curl` commands |
 | `list_forms` / `add_form` / `update_form` / `remove_form` / `resend_form_confirmation` | Email forms; a new form works once its recipient confirms |
@@ -708,8 +716,7 @@ but not served and not issued a certificate. Either record suffices:
 | CNAME | `<domain>` → `<view id>.<view domain>`, the site's own address — which is also how the domain routes here |
 
 The check runs when you add the domain, again on "Check now" (a repeat `POST`
-of the same domain re-checks with the same token; container sites have it in
-the container view beside each pending route), and every cleanup sweep, which
+of the same domain re-checks with the same token), and every cleanup sweep, which
 attaches a claim on its own once the record appears. Each check that does not
 prove the claim records what it found — no TXT record and which nameserver
 said so, a TXT value that is not the token, a CNAME pointing elsewhere, a
@@ -751,10 +758,13 @@ can be targets. A rule is in effect only while it can be followed: if the
 sweep detaches the target, the redirecting domain serves the site meanwhile,
 and the generated address serves again whenever no custom domain does, so a
 DNS mistake never takes a site offline. Removing a domain removes the rules it
-was part of. Container sites are excluded — their compose file maps each
-address to a service. Edit page: the dropdowns in the domain card; API and MCP:
-below and in the tool list. Design:
-`docs/superpowers/specs/2026-10-16-domain-redirects-design.md`.
+was part of. Container sites work the same way, per HTTP port: each port has a
+generated address of its own, each domain serves the port it is pointed at,
+and a port's generated address can be switched off once a domain serves that
+same port (see [Container sites](#container-sites-enterprise)). Edit page: the
+dropdowns in the domain card; API and MCP: below and in the tool list. Design:
+`docs/superpowers/specs/2026-10-16-domain-redirects-design.md` and
+`2026-10-16-container-addresses-design.md`.
 
 **Operator zones.** A zone the operator owns and points at the instance with a
 wildcard — `*.app.example.com` — is exactly the situation the proof guards
@@ -815,8 +825,8 @@ and every other account is refused there. The rules:
   releases anything.
 - **Account only.** Zones are managed on the account page, never through an
   API token or MCP (a token acts on sites, not on the account). Adding a *name*
-  inside a zone is an ordinary domain add, through the edit page, the API, MCP
-  or a container's compose file, and the edit page marks it "via zone".
+  inside a zone is an ordinary domain add, through the edit page, the API or
+  MCP, and the edit page marks it "via zone".
 - Certificates stay per name, issued on demand for **attached** names only, so
   a request for an unused name under the wildcard triggers nothing.
 
@@ -860,9 +870,7 @@ services:
       DB_NAME: appdb
     volumes:
       - app:/usr/src/app          # the site's root folder "app"
-    domains:
-      - "*:3000"                  # the site's own address -> port 3000
-      - "shop.example.com:3001"   # a custom domain -> port 3001
+    http: [3000, 3001]            # the ports it speaks HTTP on; each gets an address
     egress: allowed               # may reach the internet (default: denied)
     depends_on: [db]
 
@@ -882,7 +890,7 @@ services:
 | `image` | One of Sitebin's own images — never a registry reference. `alpine-node-22` (`node:22.23.2-alpine3.24`) and `mysql-8.4` (`mysql:8.4.11`), both pinned by digest. |
 | `environment` | A map or a `KEY=value` list, as in Compose. **No interpolation**: `$HOME` stays the five characters `$HOME`. |
 | `volumes` | `<folder>:<absolute path>[:ro]`. The folder is a **root folder of the site** — the same one the edit page, WebDAV and FTP show — created if it does not exist. That is how code reaches a container: upload it into the folder the service mounts. |
-| `domains` | `"<host>:<port>"`. `*` is the site's own address (once per project); anything else is a custom domain, claimed automatically and attached once its DNS proves it (see [Custom domains](#custom-domains-enterprise)). |
+| `http` | The ports the service speaks HTTP on — one, or a list (at most 10). Each `service:port` gets a **generated address**; which custom domain serves which port is the site's domain settings, never the file's. A service without `http:` has no address (services reach each other on any port by name). The old `domains:` key is refused with a message saying so. |
 | `egress` | `allowed` or `denied` (default). `egres` is accepted too. |
 | `command`, `working_dir`, `depends_on` | Optional. `depends_on` orders the start; it does not wait for health. The node image's default command runs `npm install` when there is no `node_modules` (needs egress) and then `npm start`, or `node index.js` without a `package.json`; the working directory defaults to the first volume. |
 
@@ -891,12 +899,27 @@ restarts the project**, however the file arrives — upload, ZIP, editor,
 WebDAV, FTP, API or MCP. Services reach each other by name on a network
 private to the project. `/_sitebin/*` stays Sitebin's on every site origin.
 
+**Addresses.** The first port of the file gets the site's own address
+(`<id>.<view domain>`); every further port an address of its own with a random
+label, as unguessable as a view id. A port keeps its address as long as the
+file declares it, and a new port takes the site's own address whenever no port
+holds it (so renaming a service keeps it). Custom domains are added in the
+domain card, the API or MCP exactly as for a file site, and each **serves a
+port** — the one you pick, by default the port of the site's own address.
+Every address serves, redirects or is off with the file site's rules (see
+[Redirects and the generated address](#custom-domains-enterprise)); a port's
+generated address can be off only while a custom domain serves that same port.
+A port that leaves the file takes its generated address with it; a domain
+pointed at it stays attached and answers `404` until you point it at another —
+it is never moved to another service on its own. None of this touches the
+compose file, so it never restarts the app.
+
 How it runs:
 
 - Caddy **reverse-proxies** to the service — a container site is never served
   from its files (its folders hold the database; its compose file holds
-  passwords). Not running: `503`. Nothing mapped to the host: `404`. Path
-  views (`/v/<id>`) do not proxy.
+  passwords). Not running: `503`. An address serving no declared port: `404`.
+  Path views (`/v/<id>`) do not proxy.
 - Per container: Sitebin's own uid (files stay manageable), no capabilities,
   `no-new-privileges`, a read-only root filesystem with bounded tmpfs scratch
   space, and **fixed** memory / CPU / process limits set by the instance. No
@@ -907,9 +930,9 @@ How it runs:
   cap counts everything the containers write; a project over it is stopped
   (never deleted) by the next check. The file-count cap does not apply in
   container mode.
-- The edit page shows each service, its state, its mappings (with the DNS
-  record a pending custom domain still needs), Start / Stop / Restart, and the
-  recent log. The custom-domain editor is replaced by the mappings.
+- The edit page shows each service, its state, its ports with their addresses
+  and domains, Start / Stop / Restart, and the recent log; the domain card
+  below it manages the addresses.
 
 ```bash
 curl -X POST -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/containers/restart  # or start / stop
@@ -1199,7 +1222,7 @@ others, so a full pass means running them all.
 | `tiers.ps1` | tiers and quotas *(enterprise)* | `sitebin:dev-ee` |
 | `redirects.ps1` | custom-domain redirects and the generated address through Caddy *(enterprise)* | `sitebin:e2e-redirects` |
 | `license.ps1` | licensing *(enterprise)* — builds its own image | `sitebin:e2e-license` |
-| `containers.ps1` | container sites against the host's Docker Engine: node + MySQL behind Caddy, egress, the plan cap, restarts, symlink confinement *(enterprise; pulls images, needs internet)* | `sitebin:dev-ee` |
+| `containers.ps1` | container sites against the host's Docker Engine: node + MySQL behind Caddy, an address per HTTP port, domains pointed at ports, redirects and off, egress, the plan cap, restarts, symlink confinement *(enterprise; pulls images, needs internet)* | `sitebin:dev-ee` |
 | `consent.ps1` | the stack's consent gate: three documents asked once *(enterprise, needs a running SaaS Stack)* | `sitebin:dev-ee` |
 | `stack/verify.ps1` | the compose container against a live stack: registration, sign-in, GDPR endpoints, self-service links | `sitebin:stack-e2e` |
 

@@ -279,6 +279,17 @@ docs say so plainly and recommend a socket proxy and a dedicated host.
 9. Stop removes the containers (keeping networks would buy nothing — the data
    is in the folders).
 
+## Corrections (post-implementation)
+
+**2026-10-16 — addresses left the compose file.** `domains:` (and with it
+decisions 1 and 2 and `SyncContainerDomains`) is gone. A service lists its
+HTTP ports under `http:`; every port gets a generated address — the first the
+site's own, the others random labels — and custom domains are added and
+pointed at a port through the domain settings, the API and MCP, like a file
+site's, with its redirects and off. An address change no longer restarts the
+project. No compatibility path: a file with `domains:` is refused with a
+message naming `http:`. See `2026-10-16-container-addresses-design.md`.
+
 ## Testing
 
 - Parser: table tests for every key, every error, the example above.

@@ -268,8 +268,9 @@ never let a rule leave a site with no address. Only `RemoveDomain` (owner,
 API, MCP, container sync) prunes stored rules; the sweep's detach must not.
 One hop, never a chain; targets are only the site's own verified domains
 (never a URL — that would be an open redirector on a proven domain).
-Container sites ignore and refuse them. On a non-serving address the forms
-and unlock routes answer 404 (`servingSiteByHost`). Read
+Container sites have the same rules per HTTP port (see Container sites). On
+a non-serving address the forms and unlock routes answer 404
+(`servingSiteByHost`). Read
 `docs/superpowers/specs/2026-10-16-domain-redirects-design.md`.
 
 ## Container sites
@@ -292,6 +293,18 @@ The third site mode (`store.ModeContainer`) runs the project its
   The header is stripped from the client's request *before* forward_auth; a
   container site is never admitted without an upstream, so it never reaches
   the file server (its folders hold database files and passwords).
+- **The compose file lists ports, the site's settings own the addresses**
+  (`internal/store/addresses.go`). A service's `http:` ports are endpoints
+  (`service:port`); after every compose file that parses, the runtime calls
+  `SyncContainerEndpoints` and the core gives each endpoint a generated
+  address — the first the site's own view id, the others random labels
+  indexed in `address-index/` — and `DomainTargets` says which port each
+  custom domain serves. Redirects and off work per address with the file
+  site's never-offline rules. Never move a domain to another port on its own
+  (a vanished target answers 404), and never put an address back into the
+  compose file: changing one must not restart the app. `domains:` is refused
+  (no compatibility, decided 2026-10-16). Read
+  `docs/superpowers/specs/2026-10-16-container-addresses-design.md`.
 - **A permanent failure is recorded against the file; a transient one backs
   off.** A broken compose file or a plan over its cap is not retried until the
   file or the sequence changes. Docker and plan-lookup errors retry after a
