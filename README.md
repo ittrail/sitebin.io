@@ -268,6 +268,20 @@ curl -X POST -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
 curl -X DELETE -H "X-Edit-Password: $PW" \
      https://sitebin.example.com/api/sites/$EDIT_ID/domains/docs.client.com
 
+# an attached domain redirects to another attached domain of the site
+# (301 default; 302, 307, 308), path and query kept; DELETE serves again
+curl -X PUT -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
+     -d '{"to":"client.com","code":301}' \
+     https://sitebin.example.com/api/sites/$EDIT_ID/domains/www.client.com/redirect
+curl -X DELETE -H "X-Edit-Password: $PW" \
+     https://sitebin.example.com/api/sites/$EDIT_ID/domains/www.client.com/redirect
+
+# the generated address: {"mode":"serve"}, {"mode":"off"} (needs a custom
+# domain that serves the site) or {"mode":"redirect","to":"client.com","code":301}
+curl -X PUT -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
+     -d '{"mode":"off"}' \
+     https://sitebin.example.com/api/sites/$EDIT_ID/view-address
+
 # forms: list / add / change / delete / resend the recipient's confirmation
 curl -H "X-Edit-Password: $PW" "https://sitebin.example.com/api/sites/$EDIT_ID/forms"
 curl -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
@@ -354,6 +368,7 @@ require stdio) can bridge with `npx mcp-remote https://…/mcp --header …`.
 | `write_files` | Add or overwrite files; with `replace`, the site ends up containing exactly what you pass |
 | `delete_file` / `delete_site` | Remove a file, or the whole site |
 | `add_domain` / `remove_domain` | Custom domains *(Enterprise)* |
+| `set_domain_redirect` / `set_view_address` | Redirect a custom domain to another of the site's domains; switch the generated address off or redirect it *(Enterprise)* |
 | `download_site` | The site as a zip, attached as a resource |
 | `open_upload` | A short-lived token and URLs to upload large files with your own HTTP client (WebDAV or the zip/files upload), with ready-to-run `curl` commands |
 | `list_forms` / `add_form` / `update_form` / `remove_form` / `resend_form_confirmation` | Email forms; a new form works once its recipient confirms |
@@ -689,6 +704,26 @@ use it only where every account holder is trusted (the e2e suite does).
 
 Pending claims count against the per-site cap below, so claims cannot be
 sprayed.
+
+**Redirects and the generated address.** An attached domain can redirect to
+another attached domain of the same site — `example.de → example.at`,
+`www.example.com → example.com` — with `301` (the default), `302`, `307` or
+`308`, keeping the path and query. The redirect is answered by this instance
+before anything is served (authz answers it and Caddy relays it), on the
+domain's own on-demand certificate; a `301`/`308` carries `Cache-Control:
+public, max-age=3600` so a changed redirect is not overruled by browser caches
+for ever. Once a custom domain serves the site, its **generated address**
+(`<id>.<view domain>` and `/v/<id>/`) can be switched **off** — visitors get
+"Site not found" — or redirected the same way. A redirect is one hop: its
+target must serve the site itself, and only the site's own verified domains
+can be targets. A rule is in effect only while it can be followed: if the
+sweep detaches the target, the redirecting domain serves the site meanwhile,
+and the generated address serves again whenever no custom domain does, so a
+DNS mistake never takes a site offline. Removing a domain removes the rules it
+was part of. Container sites are excluded — their compose file maps each
+address to a service. Edit page: the dropdowns in the domain card; API and MCP:
+below and in the tool list. Design:
+`docs/superpowers/specs/2026-10-16-domain-redirects-design.md`.
 
 **Operator zones.** A zone the operator owns and points at the instance with a
 wildcard — `*.app.example.com` — is exactly the situation the proof guards

@@ -21,15 +21,16 @@ docker build --build-arg EDITION=enterprise -t sitebin:latest-ee .   # enterpris
 ```
 
 **`e2e.ps1` is not the full E2E.** It is the core HTTP suite and references no
-other script; there is no aggregate entry point. A full pass is all eleven run
+other script; there is no aggregate entry point. A full pass is all twelve run
 by hand: `e2e.ps1`, `spa.ps1`, `paths.ps1`, `ftp.ps1`, `mcp.ps1` (community
 image), `forms.ps1` (community image; pulls `axllent/mailpit` as its SMTP
-server), `accounts.ps1`, `tiers.ps1`, `containers.ps1` (enterprise image; the
-last drives the host's real Docker Engine and pulls images), `license.ps1`, and
+server), `accounts.ps1`, `tiers.ps1`, `redirects.ps1`, `containers.ps1`
+(enterprise image; the last drives the host's real Docker Engine and pulls
+images), `license.ps1`, and
 `consent.ps1` -- the last of which is the only one that needs a **running SaaS
 Stack** (the stack's consent gate, the OIDC issuer/discovery split, and the
 `consents` declaration; see `docs/superpowers/specs/2026-09-01-consent-gate-through-the-stack-design.md`).
-`e2e/stack/verify.ps1` is the twelfth, run against the compose container in
+`e2e/stack/verify.ps1` is the thirteenth, run against the compose container in
 `e2e/stack/` rather than one it starts itself: the registration the stack
 holds, the stack-hosted self-service links, and a signed GDPR export and
 deletion.
@@ -251,6 +252,24 @@ drops its names back to per-name proof instead of detaching them. The plan
 (`max_zones`, via the optional `ext.ZoneAccounts`) is asked only where a zone
 or a name is ADDED — never in the sweep. Read
 `docs/superpowers/specs/2026-09-23-account-zones-design.md`.
+
+**Redirects and the generated address** (`internal/store/redirects.go`,
+`internal/httpapi/redirects.go`): an attached domain can redirect to another
+attached domain of the same site (301/302/307/308, path and query kept), and
+the generated address can be off or redirect. **authz answers them** — after
+the lock and the expiry, before the gate — and Caddy relays the 3xx/404; the
+Caddyfile does not change and certificates come from on-demand TLS as for any
+attached domain. Stored rules (`DomainRedirects`, `ViewAddress`) are the
+owner's choice; what is in effect is `Meta.DomainRedirect` / `Meta.ViewRule`,
+decided against the domains attached NOW: a redirect whose target the sweep
+detached serves instead, and `off` holds only while a custom domain serves —
+never let a rule leave a site with no address. Only `RemoveDomain` (owner,
+API, MCP, container sync) prunes stored rules; the sweep's detach must not.
+One hop, never a chain; targets are only the site's own verified domains
+(never a URL — that would be an open redirector on a proven domain).
+Container sites ignore and refuse them. On a non-serving address the forms
+and unlock routes answer 404 (`servingSiteByHost`). Read
+`docs/superpowers/specs/2026-10-16-domain-redirects-design.md`.
 
 ## Container sites
 
