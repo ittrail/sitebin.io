@@ -532,6 +532,11 @@ input::placeholder { color: var(--ink-faint); }
 .domainrow.pending { flex-wrap: wrap; }
 .domainrow.pending .sub { font: 12px var(--mono); color: var(--amber, #f5b84d); }
 .domainrow.pending .dnshint { margin-top: 8px; }
+.domainrow.rulerow { flex-wrap: wrap; }
+.domainrow.rulerow .d { min-width: 180px; }
+.domainrow .rule { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.domainrow .rule select { width: auto; max-width: 260px; padding: 6px 10px; font: 13px var(--mono); border-radius: 8px; }
+.domainrow .rulenote { flex-basis: 100%; font: 12px var(--mono); color: var(--amber, #f5b84d); }
 
 .dnshint {
   margin-top: 14px; padding: 12px 14px; border-radius: 10px;

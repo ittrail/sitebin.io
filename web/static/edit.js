@@ -119,7 +119,9 @@ function render() {
   // the meta line, so the page still says which site this is.
   $("site-id").textContent = site.name || site.id;
   document.title = "Manage " + (site.name || site.id) + " — Sitebin";
-  $("view-link").href = site.view_url;
+  // Where the site is served first: its generated address, unless that is
+  // off or redirects to one of its domains.
+  $("view-link").href = site.primary_url || site.view_url;
   let meta = (site.name ? site.id + " · " : "") + "created " + new Date(site.created_at).toLocaleString() +
     " · updated " + new Date(site.updated_at).toLocaleString();
   if (typeof site.views === "number") {
@@ -201,13 +203,17 @@ function render() {
   }
   $("clear-expiry").classList.toggle("hidden", capped);
 
-  // domains: verified ones serve; pending ones show the record that proves them
+  // domains: verified ones serve or redirect; pending ones show the record
+  // that proves them. The generated address leads the list once there is a
+  // domain it could give way to.
   const dr = $("domainrows");
   dr.innerHTML = "";
   const pending = site.pending_domains || [];
   if (!site.custom_domains.length && !pending.length) {
     dr.innerHTML = '<div class="domainrow" style="color:var(--ink-faint)">No custom domains yet.</div>';
   }
+  const va = site.view_address || { mode: "serve" };
+  if (site.custom_domains.length || va.mode !== "serve") dr.appendChild(viewAddressRow());
   for (const p of pending) {
     const row = document.createElement("div");
     row.className = "domainrow pending";
@@ -253,9 +259,10 @@ function render() {
     row.append(name, tag, check, rm, rec);
     dr.appendChild(row);
   }
+  const redirects = site.domain_redirects || {};
   for (const d of site.custom_domains) {
     const row = document.createElement("div");
-    row.className = "domainrow";
+    row.className = "domainrow rulerow";
     const name = document.createElement("span");
     name.className = "d";
     name.textContent = d;
@@ -267,6 +274,31 @@ function render() {
       via.textContent = "via zone " + zone;
       name.append(" ", via);
     }
+    row.append(name);
+    // A redirect is one hop: its target serves the site itself, so a domain
+    // something redirects to cannot redirect, and a redirecting domain is
+    // no target.
+    const r = redirects[d];
+    const source = redirectSource(d);
+    const targets = site.custom_domains.filter((t) => t !== d && !redirects[t]);
+    if (source && !r) {
+      const via = document.createElement("span");
+      via.className = "via";
+      via.textContent = "\u2190 " + source;
+      via.title = source + " redirects here";
+      name.append(" ", via);
+    } else if (r || targets.length) {
+      row.append(ruleControls({
+        label: d, value: r ? r.to : "", code: r && r.code, targets,
+        save: async (to, code) => {
+          site = to === ""
+            ? await api("DELETE", "/domains/" + encodeURIComponent(d) + "/redirect")
+            : await api("PUT", "/domains/" + encodeURIComponent(d) + "/redirect", { to, code });
+          render();
+          toast(to === "" ? d + " serves the site" : d + " redirects to " + to);
+        },
+      }));
+    }
     const rm = document.createElement("button");
     rm.className = "btn small";
     rm.textContent = "Remove";
@@ -277,10 +309,119 @@ function render() {
         toast("Removed " + d);
       } catch (err) { toast(err.message, true); }
     });
-    row.append(name, rm);
+    row.append(rm);
+    if (r && !r.in_effect) {
+      row.append(ruleNote(r.to + " is not serving the site right now, so " + d + " serves it meanwhile."));
+    }
     dr.appendChild(row);
   }
   $("dns-target").textContent = site.dns_target;
+}
+
+// ---- addresses: redirects and the generated address ----
+
+const redirectCodes = [
+  [301, "301 · permanent"],
+  [302, "302 · temporary"],
+  [307, "307 · temporary, same method"],
+  [308, "308 · permanent, same method"],
+];
+
+// redirectSource names what redirects to domain d, or "".
+function redirectSource(d) {
+  const from = Object.entries(site.domain_redirects || {}).filter(([, r]) => r.to === d).map(([f]) => f).sort();
+  const va = site.view_address || {};
+  if (va.mode === "redirect" && va.to === d) from.push("the generated address");
+  return from.join(", ");
+}
+
+// ruleControls is an address's two dropdowns: what it does -- serves the site,
+// is off (the generated address only), or redirects to one of the targets --
+// and with which status code. A change is saved at once through save(value,
+// code), value being "", "off" or a domain.
+function ruleControls(opts) {
+  const box = document.createElement("span");
+  box.className = "rule";
+  const target = document.createElement("select");
+  target.setAttribute("aria-label", "What " + opts.label + " does");
+  const add = (value, text) => {
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = text;
+    target.appendChild(o);
+  };
+  add("", "serves the site");
+  if (opts.allowOff) add("off", "off · not served");
+  const targets = opts.targets.slice();
+  // A stored target that can no longer be chosen stays visible as what it is.
+  if (opts.value && opts.value !== "off" && !targets.includes(opts.value)) targets.push(opts.value);
+  for (const t of targets) add(t, "→ " + t);
+  target.value = opts.value;
+  const code = document.createElement("select");
+  code.setAttribute("aria-label", "Status code of the redirect from " + opts.label);
+  for (const [c, text] of redirectCodes) {
+    const o = document.createElement("option");
+    o.value = String(c);
+    o.textContent = text;
+    code.appendChild(o);
+  }
+  code.value = String(opts.code || 301);
+  const sync = () => code.classList.toggle("hidden", target.value === "" || target.value === "off");
+  sync();
+  const save = async () => {
+    target.disabled = code.disabled = true;
+    try {
+      await opts.save(target.value, Number(code.value));
+    } catch (err) {
+      toast(err.message, true);
+      render();
+    }
+  };
+  target.addEventListener("change", () => { sync(); save(); });
+  code.addEventListener("change", save);
+  box.append(target, code);
+  return box;
+}
+
+function ruleNote(text) {
+  const n = document.createElement("div");
+  n.className = "rulenote";
+  n.textContent = "Not in effect: " + text;
+  return n;
+}
+
+// viewAddressRow is the site's generated address, which serves the site, is
+// off, or redirects to one of its domains that serves it.
+function viewAddressRow() {
+  const row = document.createElement("div");
+  row.className = "domainrow rulerow";
+  const name = document.createElement("span");
+  name.className = "d";
+  name.textContent = site.view_url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  const tag = document.createElement("span");
+  tag.className = "via";
+  tag.textContent = "generated address";
+  name.append(" ", tag);
+  const va = site.view_address || { mode: "serve" };
+  const value = va.mode === "off" ? "off" : va.mode === "redirect" ? va.to : "";
+  const redirects = site.domain_redirects || {};
+  row.append(name, ruleControls({
+    label: "the generated address", value, code: va.code, allowOff: true,
+    targets: site.custom_domains.filter((d) => !redirects[d]),
+    save: async (to, code) => {
+      const body = to === "" ? { mode: "serve" } : to === "off" ? { mode: "off" } : { mode: "redirect", to, code };
+      site = await api("PUT", "/view-address", body);
+      render();
+      toast(to === "" ? "The generated address serves the site" :
+        to === "off" ? "The generated address is off" : "The generated address redirects to " + to);
+    },
+  }));
+  if (va.mode !== "serve" && !va.in_effect) {
+    row.append(ruleNote(va.mode === "off"
+      ? "no custom domain serves the site right now, so this address keeps serving it."
+      : va.to + " is not serving the site right now, so this address keeps serving it."));
+  }
+  return row;
 }
 
 // checkNowButton asks the server to look the claim's record up again, now.

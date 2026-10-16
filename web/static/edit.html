@@ -208,6 +208,11 @@
       after you add it, or a <code>CNAME</code> at the domain pointing at this site's own address. Route it with
       <code>A → your server IP</code> or that <code>CNAME</code> (<span id="dns-target"></span> also works for routing,
       but only the site's own address counts as proof). The certificate is issued automatically on the first visit.
+      <br><br>
+      A domain can <strong>redirect</strong> to another of this site's domains &mdash; <code>example.de &rarr; example.at</code>,
+      <code>www.example.com &rarr; example.com</code> &mdash; with the status code you pick; the path and query are kept,
+      and the redirect is answered here, on the domain's own certificate. Once a domain serves the site, its
+      <strong>generated address</strong> can be switched off or redirected too.
     </div>
   </section>
 
