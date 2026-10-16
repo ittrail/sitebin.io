@@ -15,15 +15,15 @@ func (a *API) authz(w http.ResponseWriter, r *http.Request) {
 	var site *store.Site
 	var err error
 	pathMode := false
+	host := r.Header.Get("X-Forwarded-Host")
+	if host == "" {
+		host = r.Host
+	}
 	if viewID := r.Header.Get("X-Sitebin-View"); viewID != "" {
 		// /v/<id> path view — Caddy passes the id explicitly.
 		pathMode = true
 		site, err = a.st.ByViewID(viewID)
 	} else {
-		host := r.Header.Get("X-Forwarded-Host")
-		if host == "" {
-			host = r.Host
-		}
 		site, err = a.siteByHost(host)
 	}
 	if err != nil {
@@ -43,6 +43,18 @@ func (a *API) authz(w http.ResponseWriter, r *http.Request) {
 	}
 	if site.Meta.Expired(time.Now()) {
 		a.msgPage(w, 410, "Site expired", "This site has reached its expiry date and is no longer available.")
+		return
+	}
+	// The address may not serve the site at all: a custom domain that
+	// redirects, or a generated address its owner switched off or redirected.
+	// Caddy relays this answer to the client as it is, so the redirect leaves
+	// without the file server, a container or the gate page being asked.
+	switch rule := a.addressRule(site, host, pathMode); rule.Mode {
+	case store.ViewOff:
+		a.msgPage(w, 404, "Site not found", "There is no site at this address. It may have been deleted.")
+		return
+	case store.ViewRedirect:
+		a.redirectAddress(w, r, site, rule, pathMode)
 		return
 	}
 	if !site.Meta.ViewPasswordProtected || a.hasViewAccess(r, site) {

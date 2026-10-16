@@ -31,9 +31,13 @@ const (
 func (a *API) formSite(r *http.Request) (*store.Site, bool, error) {
 	if id := r.URL.Query().Get("_site"); id != "" && a.cfg.PathViews() && strings.EqualFold(hostWithoutPort(r.Host), a.cfg.BaseDomain) {
 		site, err := a.st.ByViewID(id)
+		if err == nil && !servesPathView(site) {
+			return nil, true, store.ErrNotFound
+		}
 		return site, true, err
 	}
-	site, err := a.siteByHost(r.Host)
+	// An address that redirects or is off posts nothing.
+	site, err := a.servingSiteByHost(r.Host)
 	return site, false, err
 }
 

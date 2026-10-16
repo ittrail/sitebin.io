@@ -44,11 +44,15 @@ func (a *API) unlock(w http.ResponseWriter, r *http.Request) {
 	cookiePath := "/"
 	if sid := r.PostFormValue("site"); sid != "" {
 		site, err = a.st.ByViewID(sid)
+		if err == nil && !servesPathView(site) {
+			err = store.ErrNotFound
+		}
 		if err == nil {
 			cookiePath = "/v/" + site.ViewID + "/"
 		}
 	} else {
-		site, err = a.siteByHost(r.Host)
+		// An address that redirects or is off unlocks nothing.
+		site, err = a.servingSiteByHost(r.Host)
 	}
 	if err != nil {
 		a.msgPage(w, 404, "Site not found", "There is no site at this address.")

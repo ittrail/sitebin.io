@@ -23,11 +23,18 @@ type Meta struct {
 	// certificates. DomainClaims holds every domain the site has asked for,
 	// verified or pending, with the token its owner proves control with; a
 	// pending claim is never in CustomDomains. See domainverify.go.
-	CustomDomains  []string      `json:"custom_domains"`
-	DomainClaims   []DomainClaim `json:"domain_claims,omitempty"`
-	EntryFile      string        `json:"entry_file"`
-	SPAFallback    bool          `json:"spa_fallback"`               // webserver mode: serve index.html for unknown paths
-	OwnerAccountID string        `json:"owner_account_id,omitempty"` // enterprise: owning account (empty = anonymous)
+	CustomDomains []string      `json:"custom_domains"`
+	DomainClaims  []DomainClaim `json:"domain_claims,omitempty"`
+	// DomainRedirects are the custom domains that redirect to another of the
+	// site's custom domains instead of serving it, keyed by the redirecting
+	// domain; ViewAddress is what the generated address does instead of
+	// serving it (nil: it serves). Both are the owner's stored choice — what
+	// is in effect is DomainRedirect / ViewRule. See redirects.go.
+	DomainRedirects map[string]Redirect `json:"domain_redirects,omitempty"`
+	ViewAddress     *ViewAddress        `json:"view_address,omitempty"`
+	EntryFile       string              `json:"entry_file"`
+	SPAFallback     bool                `json:"spa_fallback"`               // webserver mode: serve index.html for unknown paths
+	OwnerAccountID  string              `json:"owner_account_id,omitempty"` // enterprise: owning account (empty = anonymous)
 
 	// Name is the owner's optional label for the site, validated by
 	// CleanSiteName. It is private: shown wherever the site is managed and

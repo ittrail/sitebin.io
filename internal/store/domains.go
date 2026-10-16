@@ -173,6 +173,7 @@ func (s *Store) RemoveDomain(site *Site, domain string) error {
 	return s.Update(site, func(m *Meta) error {
 		m.CustomDomains = slices.DeleteFunc(m.CustomDomains, func(x string) bool { return x == d })
 		m.DomainClaims = slices.DeleteFunc(m.DomainClaims, func(c DomainClaim) bool { return c.Domain == d })
+		m.dropAddressRules(d)
 		return nil
 	})
 }

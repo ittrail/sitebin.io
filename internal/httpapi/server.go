@@ -132,6 +132,9 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("DELETE /api/sites/{editID}/files/{path...}", a.withEditAuth(a.recorded(provenance.ActionDeleteFile, a.deleteFile)))
 	mux.HandleFunc("POST /api/sites/{editID}/domains", a.withEditAuth(a.recorded(provenance.ActionDomainAdd, a.addDomain)))
 	mux.HandleFunc("DELETE /api/sites/{editID}/domains/{domain}", a.withEditAuth(a.recorded(provenance.ActionDomainRemove, a.removeDomain)))
+	mux.HandleFunc("PUT /api/sites/{editID}/domains/{domain}/redirect", a.withEditAuth(a.recorded(provenance.ActionDomainRedirect, a.putDomainRedirect)))
+	mux.HandleFunc("DELETE /api/sites/{editID}/domains/{domain}/redirect", a.withEditAuth(a.recorded(provenance.ActionDomainRedirect, a.deleteDomainRedirect)))
+	mux.HandleFunc("PUT /api/sites/{editID}/view-address", a.withEditAuth(a.recorded(provenance.ActionViewAddress, a.putViewAddress)))
 	mux.HandleFunc("POST /api/sites/{editID}/containers/{action}", a.withEditAuth(a.recorded(provenance.ActionContainer, a.containerAction)))
 	mux.HandleFunc("GET /api/sites/{editID}/containers/{service}/logs", a.withEditAuth(a.containerLogs))
 
