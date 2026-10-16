@@ -24,6 +24,7 @@ type fakeOps struct {
 	gotFiles  []DecodedFile
 	gotPath   string
 	gotDomain string
+	gotTarget string
 	// gotRedirect is "<domain or mode>→<to> <code>" as the redirect tools passed it.
 	gotRedirect string
 	gotForm     FormInput
@@ -103,9 +104,17 @@ func (f *fakeOps) DeleteSite(_ context.Context, a Auth, ref SiteRef) error {
 	return f.err
 }
 
-func (f *fakeOps) AddDomain(_ context.Context, a Auth, ref SiteRef, d string) (*SiteResult, error) {
+func (f *fakeOps) AddDomain(_ context.Context, a Auth, ref SiteRef, d, target string) (*SiteResult, error) {
 	f.note("add_domain", a, ref)
 	f.gotDomain = d
+	f.gotTarget = target
+	return f.result(), f.err
+}
+
+func (f *fakeOps) SetDomainTarget(_ context.Context, a Auth, ref SiteRef, d, target string) (*SiteResult, error) {
+	f.note("set_domain_target", a, ref)
+	f.gotDomain = d
+	f.gotTarget = target
 	return f.result(), f.err
 }
 
@@ -122,9 +131,10 @@ func (f *fakeOps) SetDomainRedirect(_ context.Context, a Auth, ref SiteRef, d, t
 	return f.result(), f.err
 }
 
-func (f *fakeOps) SetViewAddress(_ context.Context, a Auth, ref SiteRef, mode, to string, code int) (*SiteResult, error) {
+func (f *fakeOps) SetViewAddress(_ context.Context, a Auth, ref SiteRef, endpoint, mode, to string, code int) (*SiteResult, error) {
 	f.note("set_view_address", a, ref)
 	f.gotRedirect = fmt.Sprintf("%s→%s %d", mode, to, code)
+	f.gotTarget = endpoint
 	return f.result(), f.err
 }
 
@@ -236,7 +246,7 @@ func TestToolCatalog(t *testing.T) {
 		"create_site": true, "list_sites": true, "get_site": true, "update_site": true,
 		"list_files": true, "read_file": true, "write_files": true, "delete_file": true,
 		"delete_site": true, "add_domain": true, "remove_domain": true, "download_site": true,
-		"set_domain_redirect": true, "set_view_address": true,
+		"set_domain_redirect": true, "set_view_address": true, "set_domain_target": true,
 		"list_forms": true, "add_form": true, "update_form": true, "remove_form": true, "resend_form_confirmation": true,
 		"open_upload": true,
 	}
@@ -465,8 +475,20 @@ func TestPathAndDomainArgumentsReachOps(t *testing.T) {
 		t.Errorf("set_domain_redirect passed %q", ops.gotRedirect)
 	}
 	call(t, cs, "set_view_address", map[string]any{"edit_id": "e1", "edit_password": "p", "mode": "off"})
-	if ops.gotRedirect != "off→ 0" {
-		t.Errorf("set_view_address passed %q", ops.gotRedirect)
+	if ops.gotRedirect != "off→ 0" || ops.gotTarget != "" {
+		t.Errorf("set_view_address passed %q, endpoint %q", ops.gotRedirect, ops.gotTarget)
+	}
+	call(t, cs, "set_view_address", map[string]any{"edit_id": "e1", "edit_password": "p", "mode": "off", "endpoint": "api:8080"})
+	if ops.gotTarget != "api:8080" {
+		t.Errorf("set_view_address passed endpoint %q", ops.gotTarget)
+	}
+	call(t, cs, "add_domain", map[string]any{"edit_id": "e1", "edit_password": "p", "domain": "api.example.com", "target": "api:8080"})
+	if ops.gotDomain != "api.example.com" || ops.gotTarget != "api:8080" {
+		t.Errorf("add_domain passed %q → %q", ops.gotDomain, ops.gotTarget)
+	}
+	call(t, cs, "set_domain_target", map[string]any{"edit_id": "e1", "edit_password": "p", "domain": "api.example.com", "target": "app:3000"})
+	if ops.gotDomain != "api.example.com" || ops.gotTarget != "app:3000" {
+		t.Errorf("set_domain_target passed %q → %q", ops.gotDomain, ops.gotTarget)
 	}
 }
 
@@ -602,6 +624,7 @@ func TestEveryToolIsScoped(t *testing.T) {
 		"remove_domain":            {"edit_id": "e1", "domain": "d.example.com"},
 		"set_domain_redirect":      {"edit_id": "e1", "domain": "d.example.com", "to": "e.example.com"},
 		"set_view_address":         {"edit_id": "e1", "mode": "off"},
+		"set_domain_target":        {"edit_id": "e1", "domain": "d.example.com", "target": "app:3000"},
 		"download_site":            {"edit_id": "e1"},
 		"list_forms":               {"edit_id": "e1"},
 		"add_form":                 {"edit_id": "e1", "form": map[string]any{"name": "A", "recipient": "a@example.com"}},

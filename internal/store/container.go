@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -52,11 +53,13 @@ type ContainerMeta struct {
 
 // ContainerService is one service as it was last applied.
 type ContainerService struct {
-	Name    string            `json:"name"`
-	Image   string            `json:"image"`
-	Egress  bool              `json:"egress,omitempty"`
-	Volumes []string          `json:"volumes,omitempty"`
-	Domains []ContainerDomain `json:"domains,omitempty"`
+	Name    string   `json:"name"`
+	Image   string   `json:"image"`
+	Egress  bool     `json:"egress,omitempty"`
+	Volumes []string `json:"volumes,omitempty"`
+	// Ports are the ports the service speaks HTTP on (compose http:). Which
+	// address serves which of them is the site's Addresses and DomainTargets.
+	Ports []int `json:"ports,omitempty"`
 	// State is Docker's word for the container: running, restarting, exited…
 	State string `json:"state,omitempty"`
 	// Host is the name the service answers to on its project network, and
@@ -64,40 +67,37 @@ type ContainerService struct {
 	Host string `json:"host,omitempty"`
 }
 
-// ContainerDomain maps a host onto a port inside the service. Domain is "*"
-// for the site's own address.
-type ContainerDomain struct {
-	Domain string `json:"domain"`
-	Port   int    `json:"port"`
-}
-
-// DefaultDomain is the compose file's name for the site's own address.
-const DefaultDomain = "*"
-
-// Upstream answers where a request for host goes: "<service host>:<port>".
-// viewHost is the site's own address, which the "*" mapping answers for.
-// ok=false means nothing is mapped to host, or the project is not running —
-// and a container site is never served any other way.
-func (m *ContainerMeta) Upstream(host, viewHost string) (string, bool) {
+// Upstream answers where a request for endpoint ("service:port") goes:
+// "<service host>:<port>". ok=false means the running project declares no
+// such port, or the project is not running — and a container site is never
+// served any other way.
+func (m *ContainerMeta) Upstream(endpoint string) (string, bool) {
 	if m == nil || !m.Enabled || m.Status != ContainerRunning {
 		return "", false
 	}
-	host = strings.ToLower(host)
-	want := host
-	if viewHost != "" && host == strings.ToLower(viewHost) {
-		want = DefaultDomain
+	name, port, ok := SplitEndpoint(endpoint)
+	if !ok {
+		return "", false
 	}
 	for _, s := range m.Services {
-		if s.Host == "" {
-			continue
-		}
-		for _, d := range s.Domains {
-			if d.Domain == want {
-				return s.Host + ":" + strconv.Itoa(d.Port), true
-			}
+		if s.Name == name && s.Host != "" && slices.Contains(s.Ports, port) {
+			return s.Host + ":" + strconv.Itoa(port), true
 		}
 	}
 	return "", false
+}
+
+// SplitEndpoint splits "service:port".
+func SplitEndpoint(endpoint string) (service string, port int, ok bool) {
+	name, p, found := strings.Cut(endpoint, ":")
+	if !found || name == "" {
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(p)
+	if err != nil || n < 1 || n > 65535 {
+		return "", 0, false
+	}
+	return name, n, true
 }
 
 // ReadCompose returns the site's compose file. ErrNotFound when there is

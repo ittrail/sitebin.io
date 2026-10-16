@@ -213,8 +213,22 @@ func (o mcpOps) siteResult(site *store.Site) *mcp.SiteResult {
 		r := m.DomainRedirects[d]
 		out.DomainRedirects = append(out.DomainRedirects, mcp.DomainRedirect{Domain: d, To: r.To, Code: r.Code})
 	}
-	if va := m.ViewAddress; va != nil {
+	if va := m.ViewAddress; va != nil && m.Mode != store.ModeContainer {
 		out.ViewAddress = &mcp.ViewAddress{Mode: va.Mode, To: va.To, Code: va.Code}
+	}
+	for _, ad := range m.Addresses {
+		e := mcp.Address{Endpoint: ad.Endpoint, URL: o.a.cfg.ViewURL(ad.Label)}
+		if r := ad.Rule; r != nil {
+			e.Mode, e.To, e.Code = r.Mode, r.To, r.Code
+		}
+		if ad.Label == m.ID && ad.Rule != nil {
+			out.ViewAddress = &mcp.ViewAddress{Mode: ad.Rule.Mode, To: ad.Rule.To, Code: ad.Rule.Code}
+		}
+		out.Addresses = append(out.Addresses, e)
+	}
+	for _, d := range slices.Sorted(maps.Keys(m.DomainTargets)) {
+		e := m.DomainTargets[d]
+		out.DomainTargets = append(out.DomainTargets, mcp.DomainTarget{Domain: d, Endpoint: e, Declared: m.HasEndpoint(e)})
 	}
 	return out
 }
@@ -472,16 +486,19 @@ func (o mcpOps) DeleteSite(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) er
 	return nil
 }
 
-func (o mcpOps) AddDomain(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, domain string) (*mcp.SiteResult, error) {
+func (o mcpOps) AddDomain(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, domain, target string) (*mcp.SiteResult, error) {
 	site, err := o.openSite(auth, ref)
 	if err != nil {
 		return nil, err
 	}
-	pending, err := o.a.claimDomain(site, domain)
+	pending, err := o.a.claimDomain(site, domain, target)
 	if err != nil {
 		return nil, o.mcpError(err)
 	}
 	detail := strings.ToLower(strings.TrimSpace(domain))
+	if t := site.Meta.DomainTargets[strings.TrimSuffix(detail, ".")]; t != "" {
+		detail += " → " + t
+	}
 	if pending != "" {
 		detail += " (pending)"
 	}
@@ -524,20 +541,30 @@ func (o mcpOps) SetDomainRedirect(_ context.Context, auth mcp.Auth, ref mcp.Site
 	return o.siteResult(site), nil
 }
 
-// SetViewAddress goes through changeViewAddress, the API's own path.
-func (o mcpOps) SetViewAddress(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, mode, to string, code int) (*mcp.SiteResult, error) {
+// SetDomainTarget goes through changeDomainTarget, the API's own path.
+func (o mcpOps) SetDomainTarget(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, domain, target string) (*mcp.SiteResult, error) {
 	site, err := o.openSite(auth, ref)
 	if err != nil {
 		return nil, err
 	}
-	if err := o.a.changeViewAddress(site, mode, to, code); err != nil {
+	if err := o.a.changeDomainTarget(site, domain, target); err != nil {
 		return nil, o.mcpError(err)
 	}
-	stored := store.ViewAddress{}
-	if va := site.Meta.ViewAddress; va != nil {
-		stored = *va
+	o.a.recordMCP(auth, site, provenance.ActionDomainTarget, 0, strings.ToLower(strings.TrimSpace(domain))+" → "+strings.TrimSpace(target))
+	return o.siteResult(site), nil
+}
+
+// SetViewAddress goes through changeViewAddress, the API's own path.
+func (o mcpOps) SetViewAddress(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, endpoint, mode, to string, code int) (*mcp.SiteResult, error) {
+	site, err := o.openSite(auth, ref)
+	if err != nil {
+		return nil, err
 	}
-	o.a.recordMCP(auth, site, provenance.ActionViewAddress, 0, addressDetail("generated address", mode, stored.To, stored.Code))
+	if err := o.a.changeViewAddress(site, endpoint, mode, to, code); err != nil {
+		return nil, o.mcpError(err)
+	}
+	from, stored := viewAddressStored(site.Meta, endpoint)
+	o.a.recordMCP(auth, site, provenance.ActionViewAddress, 0, addressDetail(from, mode, stored.To, stored.Code))
 	return o.siteResult(site), nil
 }
 

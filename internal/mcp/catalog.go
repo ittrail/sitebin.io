@@ -71,6 +71,7 @@ var catalog = map[string]toolSpec{
 	// the web — and publishes or claims nothing.
 	"set_domain_redirect": {scope: ScopeWrite, perSite: true, title: "Redirect a custom domain", annotations: writes(true, false, true)},
 	"set_view_address":    {scope: ScopeWrite, perSite: true, title: "Set the generated address", annotations: writes(true, false, true)},
+	"set_domain_target":   {scope: ScopeWrite, perSite: true, title: "Point a custom domain at a port", annotations: writes(true, false, true)},
 	"download_site":       {scope: ScopeRead, perSite: true, title: "Download a site as a zip", annotations: reads()},
 	// Issues a credential and publishes nothing itself; each call is a new token.
 	"open_upload": {scope: ScopeWrite, perSite: true, title: "Open a large-file upload", annotations: writes(false, false, false)},

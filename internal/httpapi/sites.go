@@ -499,6 +499,8 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"custom_domains":          m.CustomDomains,
 		"domain_redirects":        redirectsPayload(m),
 		"view_address":            viewAddressPayload(m),
+		"addresses":               a.addressesPayload(m),
+		"domain_targets":          domainTargetsPayload(m),
 		"primary_url":             a.primaryURL(site),
 		"container":               a.containerPayload(site),
 		"pending_domains":         a.pendingDomains(site),
@@ -927,18 +929,22 @@ func (a *API) deleteFile(w http.ResponseWriter, r *http.Request, site *store.Sit
 func (a *API) addDomain(w http.ResponseWriter, r *http.Request, site *store.Site) {
 	var body struct {
 		Domain string `json:"domain"`
+		Target string `json:"target"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Domain == "" {
-		writeError(w, 400, `body must be {"domain": "example.com"}`)
+		writeError(w, 400, `body must be {"domain": "example.com"} — on a container site optionally with "target": "service:port"`)
 		return
 	}
-	pending, err := a.claimDomain(site, body.Domain)
+	pending, err := a.claimDomain(site, body.Domain, body.Target)
 	if err != nil {
 		respondErr(w, err)
 		return
 	}
 	noteOf(r).detail = strings.ToLower(strings.TrimSpace(body.Domain))
+	if t := site.Meta.DomainTargets[strings.ToLower(strings.TrimSuffix(strings.TrimSpace(body.Domain), "."))]; t != "" {
+		noteOf(r).detail += " → " + t
+	}
 	if pending != "" {
 		noteOf(r).detail += " (pending)"
 		// Recorded, not attached: the payload carries the record to create
@@ -964,10 +970,14 @@ const (
 
 // claimDomain is the one path an owner's request takes to claim a custom
 // domain or to check a claim again, from the edit page, the API and MCP
-// alike: the edition and licence gate, the container rule, the rate limit,
-// then the store. A claim left pending is not an error: pending is what the
-// check found, which the claim also records. Both "" and nil: attached.
-func (a *API) claimDomain(site *store.Site, domain string) (pending string, err error) {
+// alike: the edition and licence gate, the target rule, the rate limit, then
+// the store. A claim left pending is not an error: pending is what the check
+// found, which the claim also records. Both "" and nil: attached.
+//
+// On a container site the domain serves target, one of the HTTP ports the
+// compose file declares; without one it keeps the target it has, or gets the
+// port of the site's own address.
+func (a *API) claimDomain(site *store.Site, domain, target string) (pending string, err error) {
 	// Custom domains are an enterprise feature; the community build has no
 	// provider and rejects them.
 	if p, ok := ext.Get(); !ok {
@@ -975,10 +985,14 @@ func (a *API) claimDomain(site *store.Site, domain string) (pending string, err 
 	} else if err := p.CustomDomainsAllowed(); err != nil {
 		return "", &apiError{403, err.Error()}
 	}
-	// A container site's domains come from its compose file. Posting one it
-	// already claims is "Check now"; anything else is refused.
-	if site.Meta.Mode == store.ModeContainer && !site.HasDomainClaim(domain) {
-		return "", &apiError{409, errContainerDomains}
+	target = strings.TrimSpace(target)
+	if target != "" {
+		if site.Meta.Mode != store.ModeContainer {
+			return "", &apiError{400, "target names a port of a container site; this site's domains serve its files"}
+		}
+		if !site.Meta.HasEndpoint(target) {
+			return "", addressError(site.Meta.UnknownEndpoint(target))
+		}
 	}
 	key := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
 	if !a.domainChecks.Allow(site.ViewID+"|"+key) || !a.domainSites.Allow(site.ViewID) {
@@ -986,6 +1000,19 @@ func (a *API) claimDomain(site *store.Site, domain string) (pending string, err 
 			"The instance also checks pending domains by itself every %d minutes.", key, a.recheckMinutes())}
 	}
 	err = a.st.AddDomain(site, domain)
+	if err == nil || errors.Is(err, store.ErrDomainPending) {
+		// The domain is claimed now, attached or not: it serves its port as
+		// soon as it is attached.
+		var terr error
+		if target != "" {
+			terr = a.st.SetDomainTarget(site, domain, target)
+		} else {
+			terr = a.st.DefaultDomainTarget(site, domain)
+		}
+		if terr != nil {
+			return "", addressError(terr)
+		}
+	}
 	if !errors.Is(err, store.ErrDomainPending) {
 		return "", err
 	}
@@ -1003,10 +1030,6 @@ func (a *API) recheckMinutes() int {
 }
 
 func (a *API) removeDomain(w http.ResponseWriter, r *http.Request, site *store.Site) {
-	if site.Meta.Mode == store.ModeContainer {
-		writeError(w, 409, errContainerDomains)
-		return
-	}
 	noteOf(r).detail = r.PathValue("domain")
 	if err := a.st.RemoveDomain(site, r.PathValue("domain")); err != nil {
 		respondErr(w, err)
@@ -1014,9 +1037,6 @@ func (a *API) removeDomain(w http.ResponseWriter, r *http.Request, site *store.S
 	}
 	writeJSON(w, 200, a.sitePayload(site))
 }
-
-// errContainerDomains answers a domain edit on a container site.
-const errContainerDomains = "a container site's domains are declared in " + store.ComposeFile + "; edit the file and the project restarts with them"
 
 // maxListedContainerFiles caps the file listing of a container site.
 const maxListedContainerFiles = 2000

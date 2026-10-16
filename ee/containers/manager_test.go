@@ -191,14 +191,21 @@ func (f *fakeEngine) NetworkDisconnect(_ context.Context, network, container str
 // ---- a fake core ----
 
 type fakeSites struct {
-	mu      sync.Mutex
-	sites   map[string]*ext.ContainerSite
-	bytes   map[string]int64
-	domains map[string][]string
+	mu        sync.Mutex
+	sites     map[string]*ext.ContainerSite
+	bytes     map[string]int64
+	endpoints map[string][]string
 }
 
 func newFakeSites() *fakeSites {
-	return &fakeSites{sites: map[string]*ext.ContainerSite{}, bytes: map[string]int64{}, domains: map[string][]string{}}
+	return &fakeSites{sites: map[string]*ext.ContainerSite{}, bytes: map[string]int64{}, endpoints: map[string][]string{}}
+}
+
+func (s *fakeSites) synced(id string) ([]string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.endpoints[id]
+	return e, ok
 }
 
 func (s *fakeSites) add(id, owner, compose string) *ext.ContainerSite {
@@ -261,11 +268,11 @@ func (s *fakeSites) ClaimZone(string, string) (ext.ZoneInfo, bool, error) {
 func (s *fakeSites) Zones(string) ([]ext.ZoneInfo, error) { return nil, nil }
 func (s *fakeSites) ReleaseZone(string, string) error     { return nil }
 func (s *fakeSites) ReleaseZones(string) error            { return nil }
-func (s *fakeSites) SyncContainerDomains(id string, d []string) ([]string, error) {
+func (s *fakeSites) SyncContainerEndpoints(id string, e []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.domains[id] = d
-	return nil, nil
+	s.endpoints[id] = e
+	return nil
 }
 func (s *fakeSites) Info(id string) (ext.SiteInfo, bool) {
 	s.mu.Lock()
@@ -338,8 +345,11 @@ func TestApplyTheExample(t *testing.T) {
 	if cs.Observed.AppliedHash == "" || cs.Observed.AppliedAt.IsZero() {
 		t.Error("applied markers missing")
 	}
-	if got := r.sites.domains[siteA]; len(got) != 1 || got[0] != "my.custom.domain.com" {
-		t.Errorf("domains synced = %v", got)
+	if got, _ := r.sites.synced(siteA); strings.Join(got, ",") != "app:3000,app:3001" {
+		t.Errorf("endpoints synced = %v", got)
+	}
+	if p := cs.Observed.Services[0].Ports; len(p) != 2 || p[0] != 3000 {
+		t.Errorf("observed ports = %v", p)
 	}
 	if len(r.eng.pulled) != 2 {
 		t.Errorf("pulled = %v", r.eng.pulled)
@@ -461,10 +471,16 @@ func TestBrokenComposeIsReportedOnce(t *testing.T) {
 	r.reconcile(t, siteA, true)
 
 	r.sites.update(siteA, func(cs *ext.ContainerSite) { cs.Compose = []byte("services:\n  app:\n    image: nginx\n") })
+	r.sites.mu.Lock()
+	delete(r.sites.endpoints, siteA)
+	r.sites.mu.Unlock()
 	r.reconcile(t, siteA, false)
 	cs := r.sites.get(siteA)
 	if cs.Observed.Status != store.ContainerError || !strings.Contains(cs.Observed.Message, "not one of Sitebin's images") {
 		t.Fatalf("state = %+v", cs.Observed)
+	}
+	if _, ok := r.sites.synced(siteA); ok {
+		t.Error("a file that does not parse changed the site's addresses")
 	}
 	if len(r.eng.containers) != 0 {
 		t.Error("the old project kept running under a broken file")
@@ -499,6 +515,9 @@ func TestPlanCapCountsEveryProject(t *testing.T) {
 	}
 	if _, ok := r.eng.containers["sb-"+siteB+"-app"]; ok {
 		t.Error("a project over the cap was started")
+	}
+	if got, _ := r.sites.synced(siteB); len(got) != 2 {
+		t.Errorf("a project the plan refuses still shows its addresses: synced %v", got)
 	}
 
 	r.caps["acct"] = 0

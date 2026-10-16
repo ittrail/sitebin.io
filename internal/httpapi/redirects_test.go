@@ -253,20 +253,6 @@ func TestAddressRuleOrder(t *testing.T) {
 	}
 }
 
-func TestAddressRulesRefusedOnContainerSites(t *testing.T) {
-	e, c, edit := redirectEnv(t, nil, "a.example", "b.example")
-	site, _ := e.st.ByViewID(c.ID)
-	if err := e.st.Update(site, func(m *store.Meta) error { m.Mode = store.ModeContainer; return nil }); err != nil {
-		t.Fatal(err)
-	}
-	if w := e.public(t, jsonReq("PUT", "/api/sites/"+edit+"/domains/b.example/redirect", `{"to":"a.example"}`, c.EditPassword)); w.Code != 409 {
-		t.Errorf("container site redirect: %d %s", w.Code, w.Body)
-	}
-	if w := e.public(t, jsonReq("PUT", "/api/sites/"+edit+"/view-address", `{"mode":"off"}`, c.EditPassword)); w.Code != 409 {
-		t.Errorf("container site view address: %d %s", w.Code, w.Body)
-	}
-}
-
 // An address that does not serve the site answers nothing of it: no form
 // posts, no unlock.
 func TestNonServingAddressHasNoBackendRoutes(t *testing.T) {

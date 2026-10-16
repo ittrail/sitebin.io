@@ -271,13 +271,20 @@ func TestAddressRulesInEffect(t *testing.T) {
 		t.Errorf("a generated-address redirect to a redirecting domain = %+v, want serve", rule)
 	}
 
-	// A container site's addresses come from its compose file.
-	m.Mode = ModeContainer
+	// On a container site a domain serves only a port its compose file
+	// declares, so nothing redirects to one without; and its own address
+	// follows its entry in Addresses, never ViewAddress.
+	m.Mode, m.ID = ModeContainer, "cccccccccccccccccccccccccc"
 	m.ViewAddress = &ViewAddress{Mode: ViewOff}
 	if _, ok := m.DomainRedirect("b.example"); ok {
-		t.Error("a container site redirects")
+		t.Error("a redirect to a domain that serves no port is in effect")
 	}
 	if rule := m.ViewRule(); rule.Mode != ViewServe {
-		t.Errorf("a container site's generated address = %+v, want serve", rule)
+		t.Errorf("a container site's ViewAddress = %+v, want it ignored", rule)
+	}
+	m.Addresses = []Address{{Endpoint: "app:3000", Label: m.ID}}
+	m.DomainTargets = map[string]string{"a.example": "app:3000"}
+	if r, ok := m.DomainRedirect("b.example"); !ok || r.To != "a.example" {
+		t.Errorf("container DomainRedirect(b) = %+v %v, want → a.example", r, ok)
 	}
 }

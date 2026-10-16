@@ -238,9 +238,11 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		Description: "Attach a custom domain to a site. Enterprise instances only. " +
 			"The domain is attached once its DNS proves it belongs to this site: until then the result lists it under " +
 			"pending_domains with the TXT record (or CNAME) to create, and its warnings say what the check found. " +
-			"Create the record, then call add_domain again, or wait: the instance re-checks pending domains itself.",
-	}, func(ctx context.Context, _ *sdk.CallToolRequest, in domainArgs) (*sdk.CallToolResult, *SiteResult, error) {
-		return out(ops.AddDomain(ctx, auth, in.ref(), in.Domain))
+			"Create the record, then call add_domain again, or wait: the instance re-checks pending domains itself. " +
+			"On a container site the domain serves one of the HTTP ports the compose file lists under http: — target, " +
+			"as service:port, or by default the port of the site's own address.",
+	}, func(ctx context.Context, _ *sdk.CallToolRequest, in addDomainArgs) (*sdk.CallToolResult, *SiteResult, error) {
+		return out(ops.AddDomain(ctx, auth, in.ref(), in.Domain, in.Target))
 	})
 
 	addTool(s, auth, &sdk.Tool{
@@ -262,13 +264,24 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 	})
 
 	addTool(s, auth, &sdk.Tool{
+		Name: "set_domain_target",
+		Description: "Point a container site's custom domain at another of its HTTP ports — target is service:port, one " +
+			"the compose file (sitebin-container-compose.yaml) lists under http:. The project does not restart. " +
+			"Enterprise instances only.",
+	}, func(ctx context.Context, _ *sdk.CallToolRequest, in domainTargetArgs) (*sdk.CallToolResult, *SiteResult, error) {
+		return out(ops.SetDomainTarget(ctx, auth, in.ref(), in.Domain, in.Target))
+	})
+
+	addTool(s, auth, &sdk.Tool{
 		Name: "set_view_address",
 		Description: "Set what a site's generated address (its view_url) does once the site has a custom domain: serve " +
 			"(the default), off (visitors get \"not found\"), or redirect to one of its verified custom domains with " +
 			"code 301 (the default), 302, 307 or 308, keeping the path and query. off and redirect need a custom domain " +
-			"that serves the site; should that domain ever be detached, the generated address serves again on its own.",
+			"that serves the site; should that domain ever be detached, the generated address serves again on its own. " +
+			"A container site has one generated address per HTTP port (see addresses): endpoint (service:port) names " +
+			"which, and off needs a custom domain serving that same port.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in viewAddressArgs) (*sdk.CallToolResult, *SiteResult, error) {
-		return out(ops.SetViewAddress(ctx, auth, in.ref(), in.Mode, in.To, in.Code))
+		return out(ops.SetViewAddress(ctx, auth, in.ref(), in.Endpoint, in.Mode, in.To, in.Code))
 	})
 
 	addTool(s, auth, &sdk.Tool{
@@ -380,6 +393,26 @@ type domainArgs struct {
 
 func (a domainArgs) ref() SiteRef { return SiteRef{EditID: a.EditID, EditPassword: a.EditPassword} }
 
+type addDomainArgs struct {
+	EditID       string `json:"edit_id" jsonschema:"the site's edit id"`
+	EditPassword string `json:"edit_password,omitempty" jsonschema:"the site's edit password; not needed with an owning account API token"`
+	Domain       string `json:"domain" jsonschema:"the custom domain, e.g. docs.example.com"`
+	Target       string `json:"target,omitempty" jsonschema:"container sites only: the HTTP port the domain serves, as service:port (e.g. app:3000), one the compose file lists under http:; default: the port of the site's own address"`
+}
+
+func (a addDomainArgs) ref() SiteRef { return SiteRef{EditID: a.EditID, EditPassword: a.EditPassword} }
+
+type domainTargetArgs struct {
+	EditID       string `json:"edit_id" jsonschema:"the site's edit id"`
+	EditPassword string `json:"edit_password,omitempty" jsonschema:"the site's edit password; not needed with an owning account API token"`
+	Domain       string `json:"domain" jsonschema:"a custom domain of this container site"`
+	Target       string `json:"target" jsonschema:"the HTTP port it serves, as service:port, one the compose file lists under http:"`
+}
+
+func (a domainTargetArgs) ref() SiteRef {
+	return SiteRef{EditID: a.EditID, EditPassword: a.EditPassword}
+}
+
 type redirectArgs struct {
 	EditID       string `json:"edit_id" jsonschema:"the site's edit id"`
 	EditPassword string `json:"edit_password,omitempty" jsonschema:"the site's edit password; not needed with an owning account API token"`
@@ -396,6 +429,7 @@ type viewAddressArgs struct {
 	Mode         string `json:"mode" jsonschema:"serve, off or redirect"`
 	To           string `json:"to,omitempty" jsonschema:"with redirect: a verified custom domain of this site"`
 	Code         int    `json:"code,omitempty" jsonschema:"with redirect: 301 (the default), 302, 307 or 308"`
+	Endpoint     string `json:"endpoint,omitempty" jsonschema:"container sites only: which HTTP port's generated address, as service:port; default: the one at view_url"`
 }
 
 func (a viewAddressArgs) ref() SiteRef {

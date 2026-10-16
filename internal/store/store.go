@@ -46,6 +46,7 @@ const (
 	sitesDirName  = "sites"
 	editIndexName = "edit-index"
 	domainIndex   = "domain-index"
+	addressIndex  = "address-index"
 	rawDirName    = "_raw"
 
 	// SPAMarker is an empty file in a webserver site's files/ that a Caddy
@@ -202,7 +203,7 @@ func New(dataDir, baseDomain string, maxSiteBytes int64, maxFiles int) (*Store, 
 		replacing:    make(map[string]bool),
 		scanner:      abuse.NewLoader(filepath.Join(dataDir, AbuseRulesFile)),
 	}
-	for _, d := range []string{s.sitesDir(), s.editIndexDir(), s.domainIndexDir()} {
+	for _, d := range []string{s.sitesDir(), s.editIndexDir(), s.domainIndexDir(), s.addressIndexDir()} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return nil, fmt.Errorf("init data dir: %w", err)
 		}
@@ -210,10 +211,11 @@ func New(dataDir, baseDomain string, maxSiteBytes int64, maxFiles int) (*Store, 
 	return s, nil
 }
 
-func (s *Store) Root() string           { return s.root }
-func (s *Store) sitesDir() string       { return filepath.Join(s.root, sitesDirName) }
-func (s *Store) editIndexDir() string   { return filepath.Join(s.root, editIndexName) }
-func (s *Store) domainIndexDir() string { return filepath.Join(s.root, domainIndex) }
+func (s *Store) Root() string            { return s.root }
+func (s *Store) sitesDir() string        { return filepath.Join(s.root, sitesDirName) }
+func (s *Store) editIndexDir() string    { return filepath.Join(s.root, editIndexName) }
+func (s *Store) domainIndexDir() string  { return filepath.Join(s.root, domainIndex) }
+func (s *Store) addressIndexDir() string { return filepath.Join(s.root, addressIndex) }
 
 func (s *Store) lockSite(viewID string) *sync.Mutex {
 	s.mu.Lock()
@@ -427,6 +429,7 @@ func (s *Store) deleteChecked(site *Site, check func(*Meta) error) error {
 		for _, d := range meta.CustomDomains {
 			os.Remove(filepath.Join(s.domainIndexDir(), d))
 		}
+		s.unlinkAddresses(meta)
 	}
 	os.Remove(filepath.Join(s.editIndexDir(), site.EditID))
 	if err := os.RemoveAll(site.dir); err != nil {

@@ -89,11 +89,13 @@ func (a *API) admit(w http.ResponseWriter, r *http.Request, site *store.Site, pa
 		if host == "" {
 			host = r.Host
 		}
-		viewHost := ""
-		if a.cfg.SubdomainViews() {
-			viewHost = site.ViewID + "." + a.cfg.ViewDomain
+		// The address names a port — a generated address its own, a custom
+		// domain its target — and the port a running service.
+		endpoint := ""
+		if a.cfg.SubdomainViews() || !a.isViewHost(host) {
+			endpoint = a.endpointOf(site, host)
 		}
-		upstream, ok := site.Meta.Container.Upstream(hostWithoutPort(host), viewHost)
+		upstream, ok := site.Meta.Container.Upstream(endpoint)
 		if !ok {
 			if c := site.Meta.Container; c == nil || !c.Enabled || c.Status != store.ContainerRunning {
 				a.msgPage(w, 503, "This app is not running", "Its owner has stopped it, or it is starting. Try again in a moment.")

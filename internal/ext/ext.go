@@ -380,11 +380,12 @@ type SiteService interface {
 	// SetContainerState records what the runtime observed. It never touches
 	// the desired half (enabled, restart_seq), which is the core's.
 	SetContainerState(viewID string, st ContainerState) error
-	// SyncContainerDomains makes the site's custom-domain claims match the
-	// compose file's: missing ones are claimed through the same gate, quotas
-	// and DNS proof as the domain editor, ones no longer declared are
-	// released. Domains that could not be claimed come back as warnings.
-	SyncContainerDomains(viewID string, domains []string) (warnings []string, err error)
+	// SyncContainerEndpoints tells the core which HTTP ports ("service:port",
+	// in the compose file's order) a compose file that parsed declares. The
+	// core gives each one a generated address and drops the addresses of
+	// ports no longer declared; which custom domain serves which port is the
+	// site's domain settings', never the file's.
+	SyncContainerEndpoints(viewID string, endpoints []string) error
 
 	// ---- account zones (see ZoneAccounts) ----
 
@@ -559,15 +560,9 @@ type ContainerService struct {
 	Image   string
 	Egress  bool
 	Volumes []string
-	Domains []ContainerDomain
+	Ports   []int  // the ports it speaks HTTP on (compose http:)
 	State   string // Docker's: running, restarting, exited…
 	Host    string // its name on the project network
-}
-
-// ContainerDomain maps a host ("*" = the site's own address) to a port.
-type ContainerDomain struct {
-	Domain string
-	Port   int
 }
 
 // SiteInfo is the dashboard's view of a site.

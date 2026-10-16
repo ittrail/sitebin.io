@@ -180,6 +180,26 @@ type SiteResult struct {
 	Cache           string           `json:"cache,omitempty" jsonschema:"the browser-cache policy, when it is not auto"`
 	DomainRedirects []DomainRedirect `json:"domain_redirects,omitempty" jsonschema:"custom domains that redirect to another of this site's custom domains instead of serving it"`
 	ViewAddress     *ViewAddress     `json:"view_address,omitempty" jsonschema:"present only when the generated address (view_url) does not serve the site: off, or a redirect to one of its custom domains"`
+	// Addresses and DomainTargets are present only on a container site, for
+	// the same reason.
+	Addresses     []Address      `json:"addresses,omitempty" jsonschema:"container sites only: the generated address of each HTTP port the compose file declares under http:"`
+	DomainTargets []DomainTarget `json:"domain_targets,omitempty" jsonschema:"container sites only: the HTTP port each custom domain serves"`
+}
+
+// Address is a container site's generated address for one HTTP port.
+type Address struct {
+	Endpoint string `json:"endpoint" jsonschema:"the port, as service:port"`
+	URL      string `json:"url" jsonschema:"its generated address"`
+	Mode     string `json:"mode,omitempty" jsonschema:"present when it does not serve the port: off, or redirect"`
+	To       string `json:"to,omitempty" jsonschema:"with redirect: the custom domain of this site it redirects to"`
+	Code     int    `json:"code,omitempty" jsonschema:"with redirect: 301, 302, 307 or 308"`
+}
+
+// DomainTarget is the HTTP port a container site's custom domain serves.
+type DomainTarget struct {
+	Domain   string `json:"domain"`
+	Endpoint string `json:"endpoint" jsonschema:"the port it serves, as service:port"`
+	Declared bool   `json:"declared" jsonschema:"false when the compose file no longer declares that port: the domain then serves nothing until it is pointed at another"`
 }
 
 // DomainRedirect is a custom domain that redirects to another of the site's
@@ -319,14 +339,20 @@ type Ops interface {
 	WriteFiles(ctx context.Context, a Auth, ref SiteRef, files []DecodedFile, replace bool) (*SiteResult, error)
 	DeleteFile(ctx context.Context, a Auth, ref SiteRef, path string) (*SiteResult, error)
 	DeleteSite(ctx context.Context, a Auth, ref SiteRef) error
-	AddDomain(ctx context.Context, a Auth, ref SiteRef, domain string) (*SiteResult, error)
+	// AddDomain claims a custom domain; on a container site it serves target
+	// ("service:port", "" = the port of the site's own address).
+	AddDomain(ctx context.Context, a Auth, ref SiteRef, domain, target string) (*SiteResult, error)
 	RemoveDomain(ctx context.Context, a Auth, ref SiteRef, domain string) (*SiteResult, error)
 	// SetDomainRedirect makes a custom domain redirect to another of the
 	// site's custom domains; an empty to makes it serve the site again.
 	SetDomainRedirect(ctx context.Context, a Auth, ref SiteRef, domain, to string, code int) (*SiteResult, error)
-	// SetViewAddress sets what the generated address does: serve, off, or
-	// redirect to a custom domain.
-	SetViewAddress(ctx context.Context, a Auth, ref SiteRef, mode, to string, code int) (*SiteResult, error)
+	// SetDomainTarget points a container site's custom domain at another of
+	// its HTTP ports.
+	SetDomainTarget(ctx context.Context, a Auth, ref SiteRef, domain, target string) (*SiteResult, error)
+	// SetViewAddress sets what a generated address does: serve, off, or
+	// redirect to a custom domain. endpoint names which one on a container
+	// site ("" = its own).
+	SetViewAddress(ctx context.Context, a Auth, ref SiteRef, endpoint, mode, to string, code int) (*SiteResult, error)
 	DownloadSite(ctx context.Context, a Auth, ref SiteRef) (zip []byte, err error)
 	// OpenUpload issues a short-lived upload token for one site, authorized
 	// exactly like WriteFiles.

@@ -65,6 +65,7 @@ const (
 	ActionDomainAdd      = "domain-add"
 	ActionDomainRemove   = "domain-remove"
 	ActionDomainRedirect = "domain-redirect"
+	ActionDomainTarget   = "domain-target"
 	ActionViewAddress    = "view-address"
 	ActionFormAdd        = "form-add"
 	ActionFormUpdate     = "form-update"

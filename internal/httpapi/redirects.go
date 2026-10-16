@@ -15,13 +15,14 @@ import (
 // (store/redirects.go); everything here only asks them. See
 // docs/superpowers/specs/2026-10-16-domain-redirects-design.md.
 
-// errContainerAddresses answers an address rule on a container site.
-const errContainerAddresses = "a container site's addresses are declared in " + store.ComposeFile + ", which maps each of them to a service; they cannot redirect"
-
 // addressRule is what the address a content request came in on does: the
-// generated address's rule (its subdomain or its /v/<id>/ path view), or a
-// custom domain's redirect. Mode ViewServe: serve the site.
+// generated address's rule (its subdomain or its /v/<id>/ path view; on a
+// container site, the rule of the port's address that label is), or a custom
+// domain's redirect. Mode ViewServe: serve the site.
 func (a *API) addressRule(site *store.Site, host string, pathMode bool) store.ViewAddress {
+	if label, ok := a.viewLabel(host); ok && !pathMode && site.Meta.Mode == store.ModeContainer {
+		return site.Meta.LabelRule(label)
+	}
 	if pathMode || a.isViewHost(host) {
 		return site.Meta.ViewRule()
 	}
@@ -34,7 +35,28 @@ func (a *API) addressRule(site *store.Site, host string, pathMode bool) store.Vi
 // isViewHost reports whether host is a site's generated address — a label of
 // the view domain, which is how siteByHost resolves it.
 func (a *API) isViewHost(host string) bool {
-	return strings.HasSuffix(strings.ToLower(hostWithoutPort(host)), "."+a.cfg.ViewDomain)
+	_, ok := a.viewLabel(host)
+	return ok
+}
+
+// viewLabel is host's label under the view domain, when it is a generated
+// address.
+func (a *API) viewLabel(host string) (string, bool) {
+	label, ok := strings.CutSuffix(strings.ToLower(hostWithoutPort(host)), "."+a.cfg.ViewDomain)
+	return label, ok && label != "" && !strings.Contains(label, ".")
+}
+
+// endpointOf is the HTTP port of a container site that host serves: a
+// generated address's own port, or a custom domain's target while the
+// compose file declares it. "" serves nothing.
+func (a *API) endpointOf(site *store.Site, host string) string {
+	if label, ok := a.viewLabel(host); ok {
+		if ad, ok := site.Meta.AddressByLabel(label); ok {
+			return ad.Endpoint
+		}
+		return ""
+	}
+	return site.Meta.DomainEndpoint(strings.ToLower(hostWithoutPort(host)))
 }
 
 // redirectAddress answers a redirecting address: the rule's code, and the
@@ -91,19 +113,26 @@ func servesPathView(site *store.Site) bool {
 // clear a custom domain's redirect, from the API and MCP alike. An empty to
 // makes the domain serve the site again.
 func (a *API) changeDomainRedirect(site *store.Site, domain, to string, code int) error {
-	if site.Meta.Mode == store.ModeContainer {
-		return &apiError{409, errContainerAddresses}
-	}
 	return addressError(a.st.SetDomainRedirect(site, domain, to, code))
 }
 
-// changeViewAddress is the one path an owner's request takes to set what the
-// generated address does, from the API and MCP alike.
-func (a *API) changeViewAddress(site *store.Site, mode, to string, code int) error {
+// changeViewAddress is the one path an owner's request takes to set what a
+// generated address does, from the API and MCP alike: a file site's one, or —
+// on a container site — the address of endpoint ("" = the site's own).
+func (a *API) changeViewAddress(site *store.Site, endpoint, mode, to string, code int) error {
 	if site.Meta.Mode == store.ModeContainer {
-		return &apiError{409, errContainerAddresses}
+		return addressError(a.st.SetAddressRule(site, strings.TrimSpace(endpoint), mode, to, code))
+	}
+	if strings.TrimSpace(endpoint) != "" {
+		return &apiError{400, "endpoint names a port of a container site; this site has one generated address"}
 	}
 	return addressError(a.st.SetViewAddress(site, mode, to, code))
+}
+
+// changeDomainTarget is the one path an owner's request takes to point a
+// container site's custom domain at another of its HTTP ports.
+func (a *API) changeDomainTarget(site *store.Site, domain, endpoint string) error {
+	return addressError(a.st.SetDomainTarget(site, domain, strings.TrimSpace(endpoint)))
 }
 
 // addressError turns the store's refusals into answers that say why.
@@ -117,6 +146,8 @@ func addressError(err error) error {
 		return nil
 	case errors.Is(err, store.ErrBadRedirect):
 		return &apiError{400, reason(store.ErrBadRedirect)}
+	case errors.Is(err, store.ErrBadTarget):
+		return &apiError{400, reason(store.ErrBadTarget)}
 	case errors.Is(err, store.ErrNotFound) && err != store.ErrNotFound:
 		return &apiError{404, reason(store.ErrNotFound)}
 	}
@@ -136,9 +167,10 @@ func addressDetail(from, mode, to string, code int) string {
 }
 
 type redirectBody struct {
-	Mode string `json:"mode"`
-	To   string `json:"to"`
-	Code int    `json:"code"`
+	Mode     string `json:"mode"`
+	To       string `json:"to"`
+	Code     int    `json:"code"`
+	Endpoint string `json:"endpoint"`
 }
 
 func decodeRedirectBody(w http.ResponseWriter, r *http.Request) (redirectBody, bool) {
@@ -184,22 +216,63 @@ func (a *API) deleteDomainRedirect(w http.ResponseWriter, r *http.Request, site 
 }
 
 // putViewAddress is PUT /api/sites/{editID}/view-address,
-// {"mode": "serve" | "off" | "redirect", "to": "example.com", "code": 301}.
+// {"mode": "serve" | "off" | "redirect", "to": "example.com", "code": 301},
+// with "endpoint": "app:3000" naming which generated address of a container
+// site (default: its own).
 func (a *API) putViewAddress(w http.ResponseWriter, r *http.Request, site *store.Site) {
 	body, ok := decodeRedirectBody(w, r)
 	if !ok || body.Mode == "" {
 		writeError(w, 400, `body must be {"mode": "serve"}, {"mode": "off"} or {"mode": "redirect", "to": "example.com", "code": 301}`)
 		return
 	}
-	if err := a.changeViewAddress(site, body.Mode, body.To, body.Code); err != nil {
+	if err := a.changeViewAddress(site, body.Endpoint, body.Mode, body.To, body.Code); err != nil {
 		respondErr(w, err)
 		return
 	}
-	to, code := "", 0
-	if va := site.Meta.ViewAddress; va != nil {
-		to, code = va.To, va.Code
+	from, stored := viewAddressStored(site.Meta, body.Endpoint)
+	noteOf(r).detail = addressDetail(from, body.Mode, stored.To, stored.Code)
+	writeJSON(w, 200, a.sitePayload(site))
+}
+
+// viewAddressStored names a generated address for provenance and returns its
+// stored rule: a file site's one, or a container site's for endpoint ("" =
+// its own).
+func viewAddressStored(m store.Meta, endpoint string) (string, store.ViewAddress) {
+	if m.Mode != store.ModeContainer {
+		if m.ViewAddress != nil {
+			return "generated address", *m.ViewAddress
+		}
+		return "generated address", store.ViewAddress{}
 	}
-	noteOf(r).detail = addressDetail("generated address", body.Mode, to, code)
+	for _, ad := range m.Addresses {
+		if (endpoint == "" && ad.Label == m.ID) || ad.Endpoint == strings.TrimSpace(endpoint) {
+			if ad.Rule != nil {
+				return "generated address of " + ad.Endpoint, *ad.Rule
+			}
+			return "generated address of " + ad.Endpoint, store.ViewAddress{}
+		}
+	}
+	return "generated address", store.ViewAddress{}
+}
+
+// putDomainTarget is PUT /api/sites/{editID}/domains/{domain}/target,
+// {"endpoint": "app:3000"}: which HTTP port of a container site the domain
+// serves.
+func (a *API) putDomainTarget(w http.ResponseWriter, r *http.Request, site *store.Site) {
+	var body struct {
+		Endpoint string `json:"endpoint"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Endpoint) == "" {
+		writeError(w, 400, `body must be {"endpoint": "service:port"}, one of the HTTP ports the compose file declares`)
+		return
+	}
+	domain := r.PathValue("domain")
+	if err := a.changeDomainTarget(site, domain, body.Endpoint); err != nil {
+		respondErr(w, err)
+		return
+	}
+	noteOf(r).detail = strings.ToLower(domain) + " → " + strings.TrimSpace(body.Endpoint)
 	writeJSON(w, 200, a.sitePayload(site))
 }
 
@@ -215,13 +288,46 @@ func redirectsPayload(m store.Meta) map[string]any {
 }
 
 // viewAddressPayload is the generated address's stored mode, and whether it
-// is in effect right now.
+// is in effect right now. On a container site it is the site's own address.
 func viewAddressPayload(m store.Meta) map[string]any {
 	stored := store.ViewAddress{Mode: store.ViewServe}
-	if m.ViewAddress != nil {
+	if m.Mode == store.ModeContainer {
+		if ad, ok := m.AddressByLabel(m.ID); ok && ad.Rule != nil {
+			stored = *ad.Rule
+		}
+	} else if m.ViewAddress != nil {
 		stored = *m.ViewAddress
 	}
 	return map[string]any{"mode": stored.Mode, "to": stored.To, "code": stored.Code, "in_effect": m.ViewRule().Mode == stored.Mode}
+}
+
+// addressesPayload is a container site's generated addresses, one per HTTP
+// port in the compose file's order, each with its stored rule and whether
+// that is in effect. Empty for a file site.
+func (a *API) addressesPayload(m store.Meta) []map[string]any {
+	out := make([]map[string]any, 0, len(m.Addresses))
+	for _, ad := range m.Addresses {
+		stored := store.ViewAddress{Mode: store.ViewServe}
+		if ad.Rule != nil {
+			stored = *ad.Rule
+		}
+		out = append(out, map[string]any{
+			"endpoint": ad.Endpoint, "url": a.cfg.ViewURL(ad.Label), "own": ad.Label == m.ID,
+			"mode": stored.Mode, "to": stored.To, "code": stored.Code,
+			"in_effect": m.AddressRule(ad).Mode == stored.Mode,
+		})
+	}
+	return out
+}
+
+// domainTargetsPayload is the HTTP port each custom domain of a container
+// site is pointed at, and whether the compose file still declares it.
+func domainTargetsPayload(m store.Meta) map[string]any {
+	out := map[string]any{}
+	for d, e := range m.DomainTargets {
+		out[d] = map[string]any{"endpoint": e, "declared": m.HasEndpoint(e)}
+	}
+	return out
 }
 
 // primaryURL is where the site is served first: its generated address while

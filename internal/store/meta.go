@@ -32,8 +32,14 @@ type Meta struct {
 	// is in effect is DomainRedirect / ViewRule. See redirects.go.
 	DomainRedirects map[string]Redirect `json:"domain_redirects,omitempty"`
 	ViewAddress     *ViewAddress        `json:"view_address,omitempty"`
-	EntryFile       string              `json:"entry_file"`
-	SPAFallback     bool                `json:"spa_fallback"` // webserver mode: serve index.html for unknown paths
+	// Addresses and DomainTargets are a container site's: one generated
+	// address per HTTP port its compose file declares, each with its own
+	// rule, and the port each custom domain serves. A file site has neither
+	// (its one generated address's rule is ViewAddress). See addresses.go.
+	Addresses     []Address         `json:"addresses,omitempty"`
+	DomainTargets map[string]string `json:"domain_targets,omitempty"`
+	EntryFile     string            `json:"entry_file"`
+	SPAFallback   bool              `json:"spa_fallback"` // webserver mode: serve index.html for unknown paths
 	// Cache is the owner's browser-cache policy (CleanCachePolicy); "" is
 	// auto, the default. See cache.go.
 	Cache          string `json:"cache,omitempty"`

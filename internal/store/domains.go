@@ -202,7 +202,7 @@ func (s *Site) PendingDomains() []DomainClaim {
 // exists (for the cleanup worker).
 func (s *Store) DanglingIndexLinks() ([]string, error) {
 	var out []string
-	for _, dir := range []string{s.editIndexDir(), s.domainIndexDir()} {
+	for _, dir := range []string{s.editIndexDir(), s.domainIndexDir(), s.addressIndexDir()} {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			return nil, err

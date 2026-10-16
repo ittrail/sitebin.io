@@ -53,11 +53,10 @@ type ViewAddress struct {
 }
 
 // DomainRedirect is the redirect host answers with now, if any: a stored rule
-// whose domain is attached and whose target serves the site. A container
-// site's addresses come from its compose file and never redirect.
+// whose domain is attached and whose target serves the site.
 func (m Meta) DomainRedirect(host string) (Redirect, bool) {
 	d := strings.ToLower(strings.TrimSuffix(host, "."))
-	if m.Mode == ModeContainer || !slices.Contains(m.CustomDomains, d) {
+	if !slices.Contains(m.CustomDomains, d) {
 		return Redirect{}, false
 	}
 	r, ok := m.DomainRedirects[d]
@@ -70,11 +69,15 @@ func (m Meta) DomainRedirect(host string) (Redirect, bool) {
 // ViewRule is what the generated address does now: ViewServe unless a stored
 // rule is in effect. Off holds only while a custom domain serves the site — if
 // the sweep detaches the last one, the generated address serves again rather
-// than leaving the site with no address at all.
+// than leaving the site with no address at all. On a container site it is the
+// rule of the site's own address (addresses.go).
 func (m Meta) ViewRule() ViewAddress {
 	serve := ViewAddress{Mode: ViewServe}
+	if m.Mode == ModeContainer {
+		return m.LabelRule(m.ID)
+	}
 	va := m.ViewAddress
-	if va == nil || m.Mode == ModeContainer {
+	if va == nil {
 		return serve
 	}
 	switch va.Mode {
@@ -103,25 +106,30 @@ func (m Meta) ServingDomains() []string {
 }
 
 // serves reports whether d is an attached custom domain with no redirect in
-// effect.
+// effect — and, on a container site, a target its compose file declares.
 func (m Meta) serves(d string) bool {
 	if !slices.Contains(m.CustomDomains, d) {
 		return false
 	}
-	r, ok := m.DomainRedirects[d]
-	return !ok || !m.followable(d, r)
+	if r, ok := m.DomainRedirects[d]; ok && m.followable(d, r) {
+		return false
+	}
+	return m.Mode != ModeContainer || m.HasEndpoint(m.DomainTargets[d])
 }
 
 // followable reports whether from's stored rule can be followed: its target
-// is attached and has no rule of its own. The setters never write a chain;
-// this keeps one that the sweep's detachments could leave from ever being
+// is attached, has no rule of its own, and — on a container site — serves a
+// port the compose file declares. The setters never write a chain; this
+// keeps one that the sweep's detachments could leave from ever being
 // followed.
 func (m Meta) followable(from string, r Redirect) bool {
 	if r.To == from || !slices.Contains(m.CustomDomains, r.To) {
 		return false
 	}
-	_, chained := m.DomainRedirects[r.To]
-	return !chained
+	if _, chained := m.DomainRedirects[r.To]; chained {
+		return false
+	}
+	return m.Mode != ModeContainer || m.HasEndpoint(m.DomainTargets[r.To])
 }
 
 // redirectSource names what redirects to d — another domain, or the generated
@@ -132,8 +140,13 @@ func (m Meta) redirectSource(d string) string {
 			return from
 		}
 	}
-	if va := m.ViewAddress; va != nil && va.Mode == ViewRedirect && va.To == d {
+	if va := m.ViewAddress; m.Mode != ModeContainer && va != nil && va.Mode == ViewRedirect && va.To == d {
 		return "the site's generated address"
+	}
+	for _, a := range m.Addresses {
+		if a.Rule != nil && a.Rule.Mode == ViewRedirect && a.Rule.To == d {
+			return "the generated address of " + a.Endpoint
+		}
 	}
 	return ""
 }
@@ -156,6 +169,18 @@ func (m *Meta) dropAddressRules(d string) {
 	if va := m.ViewAddress; va != nil {
 		if (va.Mode == ViewRedirect && va.To == d) || (va.Mode == ViewOff && len(m.ServingDomains()) == 0) {
 			m.ViewAddress = nil
+		}
+	}
+	// A container site's: the domain's target, and the address rules it was
+	// part of — a redirect to it, an off it alone justified.
+	delete(m.DomainTargets, d)
+	if len(m.DomainTargets) == 0 {
+		m.DomainTargets = nil
+	}
+	for i := range m.Addresses {
+		a := &m.Addresses[i]
+		if r := a.Rule; r != nil && ((r.Mode == ViewRedirect && r.To == d) || (r.Mode == ViewOff && !m.servesEndpoint(a.Endpoint))) {
+			a.Rule = nil
 		}
 	}
 }
@@ -190,7 +215,26 @@ func checkTarget(m *Meta, t string) error {
 	if _, ok := m.DomainRedirects[t]; ok {
 		return fmt.Errorf("%w: %s redirects to %s itself — point at %[3]s instead", ErrBadRedirect, t, m.DomainRedirects[t].To)
 	}
+	if m.Mode == ModeContainer && !m.HasEndpoint(m.DomainTargets[t]) {
+		return fmt.Errorf("%w: %s serves none of this app's HTTP ports — point it at one first", ErrBadRedirect, t)
+	}
 	return nil
+}
+
+// ruleTarget validates a generated address's mode and, for a redirect, its
+// target and code (0: 301).
+func ruleTarget(mode, to string, code int) (string, int, error) {
+	switch mode {
+	case ViewServe, "", ViewOff:
+		return "", 0, nil
+	case ViewRedirect:
+		if strings.TrimSpace(to) == "" {
+			return "", 0, fmt.Errorf("%w: a redirect needs a target — one of this site's custom domains", ErrBadRedirect)
+		}
+		return redirectTarget(to, code)
+	default:
+		return "", 0, fmt.Errorf("%w: mode %q — use serve, off or redirect", ErrBadRedirect, mode)
+	}
 }
 
 // SetDomainRedirect makes the attached custom domain redirect to another of
@@ -242,21 +286,14 @@ func (s *Store) SetDomainRedirect(site *Site, domain, to string, code int) error
 // ViewOff — refused while no custom domain serves the site — or ViewRedirect
 // to an attached custom domain that serves it, with code (0: 301).
 func (s *Store) SetViewAddress(site *Site, mode, to string, code int) error {
-	var target string
-	switch mode {
-	case ViewServe, "", ViewOff:
-	case ViewRedirect:
-		if strings.TrimSpace(to) == "" {
-			return fmt.Errorf("%w: a redirect needs a target — one of this site's custom domains", ErrBadRedirect)
-		}
-		var err error
-		if target, code, err = redirectTarget(to, code); err != nil {
-			return err
-		}
-	default:
-		return fmt.Errorf("%w: mode %q — use serve, off or redirect", ErrBadRedirect, mode)
+	target, code, err := ruleTarget(mode, to, code)
+	if err != nil {
+		return err
 	}
 	return s.Update(site, func(m *Meta) error {
+		if m.Mode == ModeContainer {
+			return fmt.Errorf("%w: a container site has one generated address per HTTP port — set it with SetAddressRule", ErrBadRedirect)
+		}
 		switch mode {
 		case ViewOff:
 			if len(m.ServingDomains()) == 0 {

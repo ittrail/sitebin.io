@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -239,19 +240,41 @@ func TestAuthzRoutesContainerSites(t *testing.T) {
 	}
 
 	running(t, e, c.ID,
-		ext.ContainerService{Name: "app", Host: "sb-" + c.ID + "-app", Domains: []ext.ContainerDomain{{Domain: "*", Port: 3000}}},
+		ext.ContainerService{Name: "app", Host: "sb-" + c.ID + "-app", Ports: []int{3000, 3001}},
+		ext.ContainerService{Name: "api", Host: "sb-" + c.ID + "-api", Ports: []int{8080}},
 		ext.ContainerService{Name: "db", Host: "sb-" + c.ID + "-db"},
 	)
+	if err := e.api.SiteService().SyncContainerEndpoints(c.ID, []string{"app:3000", "app:3001", "api:8080"}); err != nil {
+		t.Fatal(err)
+	}
 	w := authzFor(t, e, viewHost, nil)
 	if w.Code != 200 || w.Header().Get(upstreamHeader) != "sb-"+c.ID+"-app:3000" {
 		t.Fatalf("running: %d %q", w.Code, w.Header().Get(upstreamHeader))
+	}
+	// Every further port has a generated address of its own.
+	site, _ := e.st.ByViewID(c.ID)
+	for endpoint, want := range map[string]string{"app:3001": "sb-" + c.ID + "-app:3001", "api:8080": "sb-" + c.ID + "-api:8080"} {
+		var label string
+		for _, a := range site.Meta.Addresses {
+			if a.Endpoint == endpoint {
+				label = a.Label
+			}
+		}
+		if label == "" || label == c.ID {
+			t.Fatalf("%s has no address of its own: %+v", endpoint, site.Meta.Addresses)
+		}
+		if w := authzFor(t, e, label+"."+e.cfg.ViewDomain, nil); w.Code != 200 || w.Header().Get(upstreamHeader) != want {
+			t.Errorf("%s: %d %q, want %s", endpoint, w.Code, w.Header().Get(upstreamHeader), want)
+		}
+	}
+	if w := authzFor(t, e, "zzzzzzzzzzzzzzzzzzzzzzzzzz."+e.cfg.ViewDomain, nil); w.Code != 404 || w.Header().Get(upstreamHeader) != "" {
+		t.Errorf("an unknown label: %d %q", w.Code, w.Header().Get(upstreamHeader))
 	}
 	// Path views never proxy.
 	if w := authzFor(t, e, "sitebin.example", map[string]string{"X-Sitebin-View": c.ID}); w.Code != 404 {
 		t.Errorf("path view: %d", w.Code)
 	}
 	// Stopped: 503 again.
-	site, _ := e.st.ByViewID(c.ID)
 	e.st.Update(site, func(m *store.Meta) error { m.Container.Enabled = false; return nil })
 	if w := authzFor(t, e, viewHost, nil); w.Code != 503 {
 		t.Errorf("stopped: %d", w.Code)
@@ -331,62 +354,196 @@ func TestContainerActionsAndLogs(t *testing.T) {
 	}
 }
 
-func TestContainerSiteDomainsComeFromTheComposeFile(t *testing.T) {
+// A container site's domains are managed like a file site's — the edit page,
+// the API, MCP — and each serves one of the app's HTTP ports. The compose
+// file never names one. See
+// docs/superpowers/specs/2026-10-16-container-addresses-design.md.
+func TestContainerSiteDomainsServePorts(t *testing.T) {
 	withContainers(t, &fakeRuntime{})
 	e := newEnv(t, nil)
 	c := e.createSite(t, map[string]string{"mode": "container"}, nil)
 	edit := editIDFrom(t, c.EditURL)
-
-	if w := e.call(t, "POST", "/api/sites/"+edit+"/domains", c.EditPassword, map[string]string{"domain": "a.example.com"}); w.Code != 409 {
-		t.Fatalf("add on container site: %d %s", w.Code, w.Body)
+	running(t, e, c.ID,
+		ext.ContainerService{Name: "app", Host: "sb-app", Ports: []int{3000}},
+		ext.ContainerService{Name: "api", Host: "sb-api", Ports: []int{8080}},
+	)
+	ss := e.api.SiteService()
+	if err := ss.SyncContainerEndpoints(c.ID, []string{"app:3000", "api:8080"}); err != nil {
+		t.Fatal(err)
+	}
+	upstream := func(host string) (int, string) {
+		w := authzFor(t, e, host, nil)
+		return w.Code, w.Header().Get(upstreamHeader)
 	}
 
-	warn, err := e.api.SiteService().SyncContainerDomains(c.ID, []string{"a.example.com", "B.example.com"})
-	if err != nil || len(warn) != 0 {
-		t.Fatalf("sync: %v %v", warn, err)
+	// Added without a target: the port of the site's own address.
+	if w := e.call(t, "POST", "/api/sites/"+edit+"/domains", c.EditPassword, map[string]string{"domain": "a.example.com"}); w.Code != 200 {
+		t.Fatalf("add on a container site: %d %s", w.Code, w.Body)
+	}
+	if w := e.call(t, "POST", "/api/sites/"+edit+"/domains", c.EditPassword, map[string]string{"domain": "b.example.com", "target": "api:8080"}); w.Code != 200 {
+		t.Fatalf("add with a target: %d %s", w.Code, w.Body)
+	}
+	if w := e.call(t, "POST", "/api/sites/"+edit+"/domains", c.EditPassword, map[string]string{"domain": "c.example.com", "target": "db:3306"}); w.Code != 400 || !strings.Contains(w.Body.String(), "app:3000, api:8080") {
+		t.Errorf("an undeclared target: %d %s", w.Code, w.Body)
+	}
+	if site, _ := e.st.ByViewID(c.ID); site.HasDomainClaim("c.example.com") {
+		t.Error("a refused target still claimed the domain")
+	}
+	if code, up := upstream("a.example.com"); code != 200 || up != "sb-app:3000" {
+		t.Errorf("a: %d %q", code, up)
+	}
+	if code, up := upstream("b.example.com"); code != 200 || up != "sb-api:8080" {
+		t.Errorf("b: %d %q", code, up)
+	}
+
+	// Pointed at another port, without touching the compose file.
+	if w := e.call(t, "PUT", "/api/sites/"+edit+"/domains/b.example.com/target", c.EditPassword, map[string]string{"endpoint": "app:3000"}); w.Code != 200 {
+		t.Fatalf("target: %d %s", w.Code, w.Body)
+	}
+	if code, up := upstream("b.example.com"); code != 200 || up != "sb-app:3000" {
+		t.Errorf("b after the target change: %d %q", code, up)
+	}
+	if w := e.call(t, "PUT", "/api/sites/"+edit+"/domains/b.example.com/target", c.EditPassword, map[string]string{"endpoint": "nope:1"}); w.Code != 400 {
+		t.Errorf("an undeclared target: %d %s", w.Code, w.Body)
+	}
+
+	// Redirects and the generated addresses work as on a file site — before
+	// the gate.
+	if w := e.call(t, "PUT", "/api/sites/"+edit+"/domains/b.example.com/redirect", c.EditPassword, map[string]any{"to": "a.example.com"}); w.Code != 200 {
+		t.Fatalf("redirect: %d %s", w.Code, w.Body)
+	}
+	if w := e.putJSON(t, edit, c.EditPassword, map[string]any{"view_password": "sesame"}); w.Code != 200 {
+		t.Fatal(w.Body)
+	}
+	if w := authzFor(t, e, "b.example.com", map[string]string{"X-Forwarded-Uri": "/x?y=1"}); w.Code != 301 || w.Header().Get("Location") != e.api.cfg.SiteURL("a.example.com")+"/x?y=1" {
+		t.Errorf("b → a: %d %q", w.Code, w.Header().Get("Location"))
+	}
+	if code, _ := upstream("a.example.com"); code != 401 {
+		t.Errorf("the target is gated: %d", code)
+	}
+	if w := e.putJSON(t, edit, c.EditPassword, map[string]any{"view_password": ""}); w.Code != 200 {
+		t.Fatal(w.Body)
+	}
+	if w := e.call(t, "PUT", "/api/sites/"+edit+"/view-address", c.EditPassword, map[string]any{"mode": "off", "endpoint": "api:8080"}); w.Code != 400 {
+		t.Errorf("off for a port no domain serves: %d %s", w.Code, w.Body)
+	}
+	if w := e.call(t, "PUT", "/api/sites/"+edit+"/view-address", c.EditPassword, map[string]any{"mode": "off"}); w.Code != 200 {
+		t.Fatalf("own address off: %d %s", w.Code, w.Body)
+	}
+	if code, _ := upstream(c.ID + "." + e.cfg.ViewDomain); code != 404 {
+		t.Errorf("an own address that is off: %d", code)
+	}
+	w := e.call(t, "PUT", "/api/sites/"+edit+"/view-address", c.EditPassword, map[string]any{"mode": "redirect", "to": "a.example.com", "code": 302, "endpoint": "api:8080"})
+	if w.Code != 200 {
+		t.Fatalf("api's address → a: %d %s", w.Code, w.Body)
+	}
+	var p struct {
+		ViewAddress struct{ Mode string } `json:"view_address"`
+		Addresses   []struct {
+			Endpoint, URL, Mode, To string
+			Own                     bool
+			Code                    int
+			InEffect                bool `json:"in_effect"`
+		} `json:"addresses"`
+		DomainTargets map[string]struct {
+			Endpoint string
+			Declared bool
+		} `json:"domain_targets"`
+		Container struct {
+			Services []struct {
+				Name  string
+				Ports []int
+			}
+		}
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.ViewAddress.Mode != "off" || len(p.Addresses) != 2 || !p.Addresses[0].Own || p.Addresses[0].Mode != "off" ||
+		p.Addresses[1].Endpoint != "api:8080" || p.Addresses[1].Mode != "redirect" || p.Addresses[1].Code != 302 || !p.Addresses[1].InEffect {
+		t.Errorf("payload addresses = %+v, view_address %+v", p.Addresses, p.ViewAddress)
+	}
+	if p.DomainTargets["a.example.com"].Endpoint != "app:3000" || !p.DomainTargets["a.example.com"].Declared {
+		t.Errorf("payload targets = %+v", p.DomainTargets)
+	}
+	if len(p.Container.Services) != 2 || len(p.Container.Services[1].Ports) != 1 || p.Container.Services[1].Ports[0] != 8080 {
+		t.Errorf("payload services = %+v", p.Container.Services)
+	}
+	apiHost := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSuffix(p.Addresses[1].URL, "/"), "http://"), "https://")
+	if w := authzFor(t, e, apiHost, nil); w.Code != 302 || !strings.HasPrefix(w.Header().Get("Location"), e.api.cfg.SiteURL("a.example.com")+"/") {
+		t.Errorf("api's address %s: %d %q", apiHost, w.Code, w.Header().Get("Location"))
+	}
+
+	// MCP: the same paths.
+	cs := mcpClient(t, e, nil)
+	res := mcpCall(t, cs, "add_domain", map[string]any{"edit_id": edit, "edit_password": c.EditPassword, "domain": "d.example.com", "target": "api:8080"})
+	if res.IsError || !strings.Contains(mcpText(res), `"domain_targets"`) || !strings.Contains(mcpText(res), `"addresses"`) {
+		t.Errorf("MCP add_domain with a target: %s", mcpText(res))
+	}
+	if res := mcpCall(t, cs, "set_domain_target", map[string]any{"edit_id": edit, "edit_password": c.EditPassword, "domain": "d.example.com", "target": "app:3000"}); res.IsError {
+		t.Errorf("MCP set_domain_target: %s", mcpText(res))
+	}
+	if res := mcpCall(t, cs, "set_view_address", map[string]any{"edit_id": edit, "edit_password": c.EditPassword, "mode": "serve", "endpoint": "api:8080"}); res.IsError {
+		t.Errorf("MCP set_view_address with an endpoint: %s", mcpText(res))
+	}
+	if code, up := upstream("d.example.com"); code != 200 || up != "sb-app:3000" {
+		t.Errorf("d: %d %q", code, up)
+	}
+
+	// The file drops api:8080: a domain pointed at it stays and serves
+	// nothing; nothing is moved to another service.
+	if w := e.call(t, "PUT", "/api/sites/"+edit+"/domains/d.example.com/target", c.EditPassword, map[string]string{"endpoint": "api:8080"}); w.Code != 200 {
+		t.Fatal(w.Body)
+	}
+	if err := ss.SyncContainerEndpoints(c.ID, []string{"app:3000"}); err != nil {
+		t.Fatal(err)
+	}
+	if w := authzFor(t, e, "d.example.com", nil); w.Code != 404 || w.Header().Get(upstreamHeader) != "" {
+		t.Errorf("a domain whose port went: %d %q", w.Code, w.Header().Get(upstreamHeader))
+	}
+	if site, _ := e.st.ByViewID(c.ID); !slices.Contains(site.Meta.CustomDomains, "d.example.com") {
+		t.Error("a domain whose port went was detached")
+	}
+
+	// Domains are removed like any other.
+	if w := e.call(t, "DELETE", "/api/sites/"+edit+"/domains/d.example.com", c.EditPassword, nil); w.Code != 200 {
+		t.Errorf("remove on a container site: %d %s", w.Code, w.Body)
+	}
+}
+
+// Leaving container mode takes the ports' addresses with it; the domains stay
+// and serve the files.
+func TestLeavingContainerModeDropsAddresses(t *testing.T) {
+	rt := &fakeRuntime{}
+	withContainers(t, rt)
+	e := newEnv(t, nil)
+	c := e.createSite(t, map[string]string{"mode": "container"}, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+	if err := e.api.SiteService().SyncContainerEndpoints(c.ID, []string{"app:3000", "api:8080"}); err != nil {
+		t.Fatal(err)
+	}
+	if w := e.call(t, "POST", "/api/sites/"+edit+"/domains", c.EditPassword, map[string]string{"domain": "a.example.com"}); w.Code != 200 {
+		t.Fatal(w.Body)
 	}
 	site, _ := e.st.ByViewID(c.ID)
-	if !site.HasDomainClaim("a.example.com") || !site.HasDomainClaim("b.example.com") {
-		t.Fatalf("claims after sync: %+v %v", site.Meta.DomainClaims, site.Meta.CustomDomains)
+	var label string
+	for _, a := range site.Meta.Addresses {
+		if a.Endpoint == "api:8080" {
+			label = a.Label
+		}
 	}
-	// The edit page's "check now" re-posts a claimed domain: allowed.
-	if w := e.call(t, "POST", "/api/sites/"+edit+"/domains", c.EditPassword, map[string]string{"domain": "a.example.com"}); w.Code != 200 && w.Code != 202 {
-		t.Errorf("re-check: %d %s", w.Code, w.Body)
-	}
-	if w := e.call(t, "DELETE", "/api/sites/"+edit+"/domains/a.example.com", c.EditPassword, nil); w.Code != 409 {
-		t.Errorf("remove on container site: %d", w.Code)
-	}
-	// MCP follows the same rule: a claimed domain re-checks, a new one is
-	// refused, because the compose file is where a container site's domains
-	// are declared.
-	cs := mcpClient(t, e, nil)
-	if res := mcpCall(t, cs, "add_domain", map[string]any{"edit_id": edit, "edit_password": c.EditPassword, "domain": "a.example.com"}); res.IsError {
-		t.Errorf("MCP re-check of a claimed domain: %s", mcpText(res))
-	}
-	if res := mcpCall(t, cs, "add_domain", map[string]any{"edit_id": edit, "edit_password": c.EditPassword, "domain": "new.example.com"}); !res.IsError || !strings.Contains(mcpText(res), store.ComposeFile) {
-		t.Errorf("MCP add of a new domain on a container site = %v %s, want refused", res.IsError, mcpText(res))
-	}
-	if site, _ := e.st.ByViewID(c.ID); site.HasDomainClaim("new.example.com") {
-		t.Error("MCP claimed a domain the compose file does not declare")
-	}
-
-	if _, err := e.api.SiteService().SyncContainerDomains(c.ID, []string{"b.example.com"}); err != nil {
-		t.Fatal(err)
+	if w := e.putJSON(t, edit, c.EditPassword, map[string]any{"mode": "webserver"}); w.Code != 200 {
+		t.Fatalf("leave: %d %s", w.Code, w.Body)
 	}
 	site, _ = e.st.ByViewID(c.ID)
-	if site.HasDomainClaim("a.example.com") || !site.HasDomainClaim("b.example.com") {
-		t.Errorf("claims after dropping one: %+v %v", site.Meta.DomainClaims, site.Meta.CustomDomains)
+	if site.Meta.Addresses != nil || site.Meta.DomainTargets != nil || len(site.Meta.CustomDomains) != 1 {
+		t.Errorf("after leaving: %+v %+v %v", site.Meta.Addresses, site.Meta.DomainTargets, site.Meta.CustomDomains)
 	}
-
-	// A domain another site holds comes back as a warning, not an error.
-	other := e.createSite(t, nil, nil)
-	os, _ := e.st.ByViewID(other.ID)
-	if err := e.st.AddDomain(os, "taken.example.com"); err != nil {
-		t.Fatal(err)
+	if w := authzFor(t, e, label+"."+e.cfg.ViewDomain, nil); w.Code != 404 {
+		t.Errorf("a port's address after leaving the mode: %d", w.Code)
 	}
-	warn, err = e.api.SiteService().SyncContainerDomains(c.ID, []string{"taken.example.com"})
-	if err != nil || len(warn) != 1 {
-		t.Errorf("taken domain: %v %v", warn, err)
+	if w := authzFor(t, e, "a.example.com", nil); w.Code != 200 || w.Header().Get(upstreamHeader) != "" {
+		t.Errorf("the domain serves the files: %d %q", w.Code, w.Header().Get(upstreamHeader))
 	}
 }
 
@@ -416,7 +573,7 @@ func TestContainerSiteServiceSeam(t *testing.T) {
 
 	// Observed state round-trips and leaves the desired half alone.
 	st := ext.ContainerState{Status: store.ContainerError, Message: "bad", AppliedHash: "h", AppliedSeq: 3,
-		Services: []ext.ContainerService{{Name: "app", Image: "alpine-node-22", Host: "h", Domains: []ext.ContainerDomain{{Domain: "*", Port: 80}}}}}
+		Services: []ext.ContainerService{{Name: "app", Image: "alpine-node-22", Host: "h", Ports: []int{80}}}}
 	if err := ss.SetContainerState(c.ID, st); err != nil {
 		t.Fatal(err)
 	}

@@ -134,6 +134,7 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("DELETE /api/sites/{editID}/domains/{domain}", a.withEditAuth(a.recorded(provenance.ActionDomainRemove, a.removeDomain)))
 	mux.HandleFunc("PUT /api/sites/{editID}/domains/{domain}/redirect", a.withEditAuth(a.recorded(provenance.ActionDomainRedirect, a.putDomainRedirect)))
 	mux.HandleFunc("DELETE /api/sites/{editID}/domains/{domain}/redirect", a.withEditAuth(a.recorded(provenance.ActionDomainRedirect, a.deleteDomainRedirect)))
+	mux.HandleFunc("PUT /api/sites/{editID}/domains/{domain}/target", a.withEditAuth(a.recorded(provenance.ActionDomainTarget, a.putDomainTarget)))
 	mux.HandleFunc("PUT /api/sites/{editID}/view-address", a.withEditAuth(a.recorded(provenance.ActionViewAddress, a.putViewAddress)))
 	mux.HandleFunc("POST /api/sites/{editID}/containers/{action}", a.withEditAuth(a.recorded(provenance.ActionContainer, a.containerAction)))
 	mux.HandleFunc("GET /api/sites/{editID}/containers/{service}/logs", a.withEditAuth(a.containerLogs))
@@ -241,7 +242,13 @@ func (a *API) siteByHost(host string) (*store.Site, error) {
 		if strings.Contains(label, ".") {
 			return nil, store.ErrNotFound
 		}
-		return a.st.ByViewID(label)
+		// A site's own address, else another generated address of a
+		// container site (one per HTTP port).
+		site, err := a.st.ByViewID(label)
+		if errors.Is(err, store.ErrNotFound) {
+			return a.st.ByAddress(label)
+		}
+		return site, err
 	}
 	return a.st.ByDomain(h)
 }

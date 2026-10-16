@@ -192,36 +192,39 @@ func TestContainerUpstream(t *testing.T) {
 		Enabled: true,
 		Status:  ContainerRunning,
 		Services: []ContainerService{
-			{Name: "app", Host: "sb-x-app", Domains: []ContainerDomain{{Domain: "*", Port: 3000}, {Domain: "shop.example.com", Port: 3001}}},
+			{Name: "app", Host: "sb-x-app", Ports: []int{3000, 3001}},
 			{Name: "db", Host: "sb-x-db"},
 		},
 	}
 	cases := []struct {
-		host string
-		want string
-		ok   bool
+		endpoint string
+		want     string
+		ok       bool
 	}{
-		{"x.sitebin.app", "sb-x-app:3000", true},
-		{"X.SITEBIN.APP", "sb-x-app:3000", true},
-		{"shop.example.com", "sb-x-app:3001", true},
-		{"other.example.com", "", false},
+		{"app:3000", "sb-x-app:3000", true},
+		{"app:3001", "sb-x-app:3001", true},
+		{"app:3002", "", false}, // not declared under http:
+		{"db:3306", "", false},  // a service without http: has no address
+		{"other:80", "", false},
+		{"app", "", false},
+		{"", "", false},
 	}
 	for _, c := range cases {
-		got, ok := m.Upstream(c.host, "x.sitebin.app")
+		got, ok := m.Upstream(c.endpoint)
 		if got != c.want || ok != c.ok {
-			t.Errorf("Upstream(%q) = %q,%v want %q,%v", c.host, got, ok, c.want, c.ok)
+			t.Errorf("Upstream(%q) = %q,%v want %q,%v", c.endpoint, got, ok, c.want, c.ok)
 		}
 	}
 	m.Status = ContainerStopped
-	if _, ok := m.Upstream("x.sitebin.app", "x.sitebin.app"); ok {
+	if _, ok := m.Upstream("app:3000"); ok {
 		t.Error("a stopped project was routed")
 	}
 	m.Status, m.Enabled = ContainerRunning, false
-	if _, ok := m.Upstream("x.sitebin.app", "x.sitebin.app"); ok {
+	if _, ok := m.Upstream("app:3000"); ok {
 		t.Error("a disabled project was routed")
 	}
 	var nilMeta *ContainerMeta
-	if _, ok := nilMeta.Upstream("x", "x"); ok {
+	if _, ok := nilMeta.Upstream("app:3000"); ok {
 		t.Error("nil meta routed")
 	}
 }

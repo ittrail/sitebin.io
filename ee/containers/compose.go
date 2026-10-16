@@ -23,14 +23,23 @@ const (
 	maxEnvPerSvc    = 200
 	maxEnvBytes     = 32 << 10
 	maxVolumesSvc   = 10
-	maxDomainsSvc   = 10
+	maxPortsSvc     = 10
 	maxCommandParts = 100
 )
 
 // Spec is a validated compose file. Services are in start order.
 type Spec struct {
 	Services []Service
+	// endpoints are the services' HTTP ports as "service:port", in the
+	// FILE's order — not the start order — because the first one gets the
+	// site's own address.
+	endpoints []string
 }
+
+// Endpoints are the project's HTTP ports as "service:port", in file order.
+// Which address serves which of them is the site's domain settings' business,
+// never the file's.
+func (s *Spec) Endpoints() []string { return s.endpoints }
 
 // Service is one validated service.
 type Service struct {
@@ -38,7 +47,7 @@ type Service struct {
 	Image      Image
 	Env        []string // KEY=value, in file order
 	Volumes    []Volume
-	Domains    []Domain
+	Ports      []int // the ports that speak HTTP and get an address
 	Egress     bool
 	Command    []string
 	WorkingDir string
@@ -61,29 +70,9 @@ func (v Volume) String() string {
 	return s
 }
 
-// Domain maps a host ("*" = the site's own address) onto a port.
-type Domain struct {
-	Host string
-	Port int
-}
-
-// CustomDomains are the spec's domains other than "*".
-func (s *Spec) CustomDomains() []string {
-	var out []string
-	for _, sv := range s.Services {
-		for _, d := range sv.Domains {
-			if d.Host != store.DefaultDomain {
-				out = append(out, d.Host)
-			}
-		}
-	}
-	return out
-}
-
 var (
 	serviceName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}[a-z0-9]$|^[a-z]$`)
 	envKey      = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*$`)
-	hostLabel   = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 )
 
 // fieldErr names where in the file a problem is.
@@ -127,8 +116,6 @@ func Parse(b []byte) (*Spec, error) {
 
 	spec := &Spec{}
 	byName := map[string]bool{}
-	star := ""
-	hosts := map[string]string{}
 	for i := 0; i < len(services.Content); i += 2 {
 		name := services.Content[i].Value
 		at := "services." + name
@@ -142,18 +129,8 @@ func Parse(b []byte) (*Spec, error) {
 		if err != nil {
 			return nil, err
 		}
-		for _, d := range sv.Domains {
-			if d.Host == store.DefaultDomain {
-				if star != "" {
-					return nil, fieldErr(at+".domains", `"*" is the site's own address and can be mapped once; %s already maps it`, star)
-				}
-				star = name
-				continue
-			}
-			if other, ok := hosts[d.Host]; ok {
-				return nil, fieldErr(at+".domains", "%s is already mapped by %s", d.Host, other)
-			}
-			hosts[d.Host] = name
+		for _, p := range sv.Ports {
+			spec.endpoints = append(spec.endpoints, name+":"+strconv.Itoa(p))
 		}
 		spec.Services = append(spec.Services, sv)
 		byName[name] = true
@@ -199,8 +176,13 @@ func parseService(at, name string, n *yaml.Node) (Service, error) {
 			sv.Env, err = parseEnv(key, v)
 		case "volumes":
 			sv.Volumes, err = parseVolumes(key, v)
+		case "http":
+			sv.Ports, err = parsePorts(key, v)
 		case "domains":
-			sv.Domains, err = parseDomains(key, v)
+			// Addresses are the site's domain settings now; a file written
+			// for the old format says so instead of "not supported".
+			err = fieldErr(key, "addresses are no longer declared here: list the service's HTTP ports under http: "+
+				"(e.g. http: [3000]) and add domains on the site's edit page, through the API or MCP")
 		case "egress", "egres":
 			if egressSet {
 				return sv, fieldErr(key, "egress is declared twice")
@@ -217,7 +199,7 @@ func parseService(at, name string, n *yaml.Node) (Service, error) {
 		case "depends_on":
 			sv.DependsOn, err = parseDependsOn(key, v)
 		default:
-			return sv, fieldErr(key, "not supported (a service takes image, environment, volumes, domains, egress, command, working_dir, depends_on)")
+			return sv, fieldErr(key, "not supported (a service takes image, environment, volumes, http, egress, command, working_dir, depends_on)")
 		}
 		if err != nil {
 			return sv, err
@@ -339,48 +321,44 @@ func parseVolumes(at string, n *yaml.Node) ([]Volume, error) {
 	return out, nil
 }
 
-func parseDomains(at string, n *yaml.Node) ([]Domain, error) {
-	if n.Kind != yaml.SequenceNode {
-		return nil, fieldErr(at, `must be a list of "host:port"`)
+// parsePorts reads http: — one port, or a list of them. Each is a port the
+// service speaks HTTP on and that gets an address.
+func parsePorts(at string, n *yaml.Node) ([]int, error) {
+	items := []*yaml.Node{n}
+	switch n.Kind {
+	case yaml.ScalarNode:
+	case yaml.SequenceNode:
+		items = n.Content
+	default:
+		return nil, fieldErr(at, "must be a port or a list of ports, e.g. [3000]")
 	}
-	if len(n.Content) > maxDomainsSvc {
-		return nil, fieldErr(at, "at most %d domains", maxDomainsSvc)
+	if len(items) > maxPortsSvc {
+		return nil, fieldErr(at, "at most %d ports", maxPortsSvc)
 	}
-	var out []Domain
-	for _, e := range n.Content {
-		raw := scalar(e)
-		i := strings.LastIndex(raw, ":")
-		if e.Kind != yaml.ScalarNode || i < 0 {
-			return nil, fieldErr(at, `%q: a domain is "host:port", e.g. "*:3000"`, e.Value)
+	var out []int
+	for _, e := range items {
+		port, err := strconv.Atoi(strings.TrimSpace(scalar(e)))
+		if e.Kind != yaml.ScalarNode || err != nil || port < 1 || port > 65535 {
+			return nil, fieldErr(at, "%q is not a port: list the port numbers the service speaks HTTP on, e.g. [3000]", nodeText(e))
 		}
-		host, portS := strings.ToLower(strings.TrimSpace(raw[:i])), raw[i+1:]
-		port, err := strconv.Atoi(portS)
-		if err != nil || port < 1 || port > 65535 {
-			return nil, fieldErr(at, "%q: %q is not a port", raw, portS)
+		if slices.Contains(out, port) {
+			return nil, fieldErr(at, "%d is listed twice", port)
 		}
-		if host != store.DefaultDomain && !validHost(host) {
-			return nil, fieldErr(at, `%q: %q is not a domain name (use "*" for the site's own address)`, raw, host)
-		}
-		for _, o := range out {
-			if o.Host == host {
-				return nil, fieldErr(at, "%s is mapped twice", host)
-			}
-		}
-		out = append(out, Domain{Host: host, Port: port})
+		out = append(out, port)
 	}
 	return out, nil
 }
 
-func validHost(h string) bool {
-	if len(h) > 253 || !strings.Contains(h, ".") {
-		return false
+// nodeText is a node as the customer wrote it, for an error message.
+func nodeText(n *yaml.Node) string {
+	if n.Kind == yaml.ScalarNode {
+		return n.Value
 	}
-	for _, l := range strings.Split(h, ".") {
-		if !hostLabel.MatchString(l) {
-			return false
-		}
+	b, err := yaml.Marshal(n)
+	if err != nil {
+		return "?"
 	}
-	return true
+	return strings.TrimSpace(string(b))
 }
 
 func parseEgress(at string, n *yaml.Node) (bool, error) {

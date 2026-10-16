@@ -21,9 +21,9 @@ const example = `services:
       DB_NAME: appdb
     volumes:
       - sitebin-rootfolder-1:/usr/src/app
-    domains:
-      - "*:3000"
-      - "my.custom.domain.com:3001"
+    http:
+      - 3000
+      - "3001"
     egres: allowed
 
   db:
@@ -58,11 +58,28 @@ func TestParseTheExample(t *testing.T) {
 	if len(app.Volumes) != 1 || app.Volumes[0] != (Volume{Folder: "sitebin-rootfolder-1", Target: "/usr/src/app"}) {
 		t.Errorf("volumes = %+v", app.Volumes)
 	}
-	if len(app.Domains) != 2 || app.Domains[0] != (Domain{"*", 3000}) || app.Domains[1] != (Domain{"my.custom.domain.com", 3001}) {
-		t.Errorf("domains = %+v", app.Domains)
+	if len(app.Ports) != 2 || app.Ports[0] != 3000 || app.Ports[1] != 3001 || len(db.Ports) != 0 {
+		t.Errorf("ports = %v, %v", app.Ports, db.Ports)
 	}
-	if cd := spec.CustomDomains(); len(cd) != 1 || cd[0] != "my.custom.domain.com" {
-		t.Errorf("custom domains = %v", cd)
+	if got := strings.Join(spec.Endpoints(), ","); got != "app:3000,app:3001" {
+		t.Errorf("endpoints = %s", got)
+	}
+}
+
+// Endpoints keep the file's order, not the start order: the first one gets
+// the site's own address, and that must not depend on depends_on.
+func TestEndpointsInFileOrder(t *testing.T) {
+	in := "services:\n  web:\n    image: alpine-node-22\n    http: 80\n    depends_on: [api]\n" +
+		"  api:\n    image: alpine-node-22\n    http: [8080, 9090]\n  db:\n    image: mysql-8.4\n"
+	spec, err := Parse([]byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Services[0].Name != "api" {
+		t.Fatalf("start order: %s first", spec.Services[0].Name)
+	}
+	if got := strings.Join(spec.Endpoints(), ","); got != "web:80,api:8080,api:9090" {
+		t.Errorf("endpoints = %s", got)
 	}
 }
 
@@ -113,40 +130,43 @@ func TestParseErrors(t *testing.T) {
 		return "services:\n  a:\n    image: mysql-8.4\n" + a + "  b:\n    image: mysql-8.4\n" + b
 	}
 	cases := map[string]struct{ in, want string }{
-		"not yaml":          {"services: [", "not valid YAML"},
-		"empty":             {"", "empty"},
-		"no services":       {"version: '3'\n", "at least one service"},
-		"unknown top":       {"services:\n  a:\n    image: mysql-8.4\nnetworks: {}\n", "networks: not supported"},
-		"unknown key":       {svc("    ports: ['80:80']\n"), "services.app.ports: not supported"},
-		"foreign image":     {"services:\n  a:\n    image: nginx:latest\n", `"nginx:latest" is not one of Sitebin's images`},
-		"no image":          {"services:\n  a:\n    environment: {A: b}\n", "image: is required"},
-		"bad name":          {"services:\n  App_1:\n    image: mysql-8.4\n", "a service name is"},
-		"bad env key":       {svc("    environment: {'1X': y}\n"), "not a variable name"},
-		"dup env":           {svc("    environment: [A=1, A=2]\n"), "A is set twice"},
-		"nested env":        {svc("    environment: {A: {b: c}}\n"), "plain value"},
-		"volume no target":  {svc("    volumes: [data]\n"), "folder:/path"},
-		"volume nested":     {svc("    volumes: ['a/b:/x']\n"), "is not a folder name"},
-		"volume hidden":     {svc("    volumes: ['.git:/x']\n"), "is not a folder name"},
-		"volume dotdot":     {svc("    volumes: ['..:/x']\n"), "is not a folder name"},
-		"volume raw":        {svc("    volumes: ['_raw:/x']\n"), "is not a folder name"},
-		"volume relative":   {svc("    volumes: ['a:x']\n"), "absolute path"},
-		"volume root":       {svc("    volumes: ['a:/']\n"), "absolute path"},
-		"volume proc":       {svc("    volumes: ['a:/proc/x']\n"), "absolute path"},
-		"volume unclean":    {svc("    volumes: ['a:/x/../y']\n"), "absolute path"},
-		"volume option":     {svc("    volumes: ['a:/x:z']\n"), "ro and rw"},
-		"volume twice":      {svc("    volumes: ['a:/x', 'b:/x']\n"), "mounted twice"},
-		"domain no port":    {svc("    domains: ['*']\n"), "host:port"},
-		"domain bad port":   {svc("    domains: ['*:99999']\n"), "not a port"},
-		"domain bad host":   {svc("    domains: ['bad_host:80']\n"), "not a domain name"},
-		"domain bare label": {svc("    domains: ['localhost:80']\n"), "not a domain name"},
-		"two stars":         {two("    domains: ['*:1']\n", "    domains: ['*:2']\n"), "can be mapped once"},
-		"host twice":        {two("    domains: ['x.example.com:1']\n", "    domains: ['x.example.com:2']\n"), "already mapped by a"},
-		"egress bad":        {svc("    egress: sometimes\n"), "allowed or denied"},
-		"egress twice":      {svc("    egress: allowed\n    egres: allowed\n"), "declared twice"},
-		"workdir relative":  {svc("    working_dir: app\n"), "absolute path"},
-		"command quote":     {svc("    command: \"node 'x\"\n"), "unterminated quote"},
-		"depends unknown":   {svc("    depends_on: [db]\n"), `no service named "db"`},
-		"depends cycle":     {two("    depends_on: [b]\n", "    depends_on: [a]\n"), "cycle"},
+		"not yaml":         {"services: [", "not valid YAML"},
+		"empty":            {"", "empty"},
+		"no services":      {"version: '3'\n", "at least one service"},
+		"unknown top":      {"services:\n  a:\n    image: mysql-8.4\nnetworks: {}\n", "networks: not supported"},
+		"unknown key":      {svc("    ports: ['80:80']\n"), "services.app.ports: not supported"},
+		"foreign image":    {"services:\n  a:\n    image: nginx:latest\n", `"nginx:latest" is not one of Sitebin's images`},
+		"no image":         {"services:\n  a:\n    environment: {A: b}\n", "image: is required"},
+		"bad name":         {"services:\n  App_1:\n    image: mysql-8.4\n", "a service name is"},
+		"bad env key":      {svc("    environment: {'1X': y}\n"), "not a variable name"},
+		"dup env":          {svc("    environment: [A=1, A=2]\n"), "A is set twice"},
+		"nested env":       {svc("    environment: {A: {b: c}}\n"), "plain value"},
+		"volume no target": {svc("    volumes: [data]\n"), "folder:/path"},
+		"volume nested":    {svc("    volumes: ['a/b:/x']\n"), "is not a folder name"},
+		"volume hidden":    {svc("    volumes: ['.git:/x']\n"), "is not a folder name"},
+		"volume dotdot":    {svc("    volumes: ['..:/x']\n"), "is not a folder name"},
+		"volume raw":       {svc("    volumes: ['_raw:/x']\n"), "is not a folder name"},
+		"volume relative":  {svc("    volumes: ['a:x']\n"), "absolute path"},
+		"volume root":      {svc("    volumes: ['a:/']\n"), "absolute path"},
+		"volume proc":      {svc("    volumes: ['a:/proc/x']\n"), "absolute path"},
+		"volume unclean":   {svc("    volumes: ['a:/x/../y']\n"), "absolute path"},
+		"volume option":    {svc("    volumes: ['a:/x:z']\n"), "ro and rw"},
+		"volume twice":     {svc("    volumes: ['a:/x', 'b:/x']\n"), "mounted twice"},
+		"domains gone":     {svc("    domains: ['*:3000']\n"), "list the service's HTTP ports under http:"},
+		"http mapping":     {svc("    http: {a: 1}\n"), "a list of ports"},
+		"http bad port":    {svc("    http: [99999]\n"), "not a port"},
+		"http zero":        {svc("    http: [0]\n"), "not a port"},
+		"http word":        {svc("    http: [web]\n"), "not a port"},
+		"http host:port":   {svc("    http: ['80:80']\n"), "not a port"},
+		"http nested":      {svc("    http: [[80]]\n"), "not a port"},
+		"http twice":       {svc("    http: [80, 80]\n"), "80 is listed twice"},
+		"http too many":    {svc("    http: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]\n"), "at most 10 ports"},
+		"egress bad":       {svc("    egress: sometimes\n"), "allowed or denied"},
+		"egress twice":     {svc("    egress: allowed\n    egres: allowed\n"), "declared twice"},
+		"workdir relative": {svc("    working_dir: app\n"), "absolute path"},
+		"command quote":    {svc("    command: \"node 'x\"\n"), "unterminated quote"},
+		"depends unknown":  {svc("    depends_on: [db]\n"), `no service named "db"`},
+		"depends cycle":    {two("    depends_on: [b]\n", "    depends_on: [a]\n"), "cycle"},
 	}
 	for name, c := range cases {
 		_, err := Parse([]byte(c.in))

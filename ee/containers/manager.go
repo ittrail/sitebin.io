@@ -546,6 +546,12 @@ func (m *Manager) apply(ctx context.Context, cs ext.ContainerSite, hash string) 
 		fail(err.Error(), true)
 		return
 	}
+	// The site's addresses follow the file as soon as it parses — before the
+	// plan check, so a project the plan refuses still shows them. A file that
+	// does not parse changes none of them.
+	if err := m.sites.SyncContainerEndpoints(id, spec.Endpoints()); err != nil {
+		slog.Error("containers: sync endpoints", "site", id, "err", err)
+	}
 	limit, err := m.capFor(cs.Owner)
 	if err != nil {
 		fail("your plan could not be checked just now; retrying", false)
@@ -573,12 +579,8 @@ func (m *Manager) apply(ctx context.Context, cs ext.ContainerSite, hash string) 
 		fail("could not start: "+err.Error(), false)
 		return
 	}
-	warnings, err := m.sites.SyncContainerDomains(id, spec.CustomDomains())
-	if err != nil {
-		warnings = append(warnings, "custom domains: "+err.Error())
-	}
 	m.report(id, ext.ContainerState{
-		Status: store.ContainerRunning, Message: strings.Join(warnings, "; "),
+		Status:      store.ContainerRunning,
 		AppliedHash: hash, AppliedSeq: cs.RestartSeq, AppliedAt: m.now().UTC(),
 		Services: stateless(services, "running"),
 	})
@@ -620,12 +622,9 @@ func counts(s ext.ContainerSite) bool {
 func describe(id string, spec *Spec) []ext.ContainerService {
 	out := make([]ext.ContainerService, 0, len(spec.Services))
 	for _, sv := range spec.Services {
-		d := ext.ContainerService{Name: sv.Name, Image: sv.Image.Name, Egress: sv.Egress, Host: containerName(id, sv.Name)}
+		d := ext.ContainerService{Name: sv.Name, Image: sv.Image.Name, Egress: sv.Egress, Host: containerName(id, sv.Name), Ports: sv.Ports}
 		for _, v := range sv.Volumes {
 			d.Volumes = append(d.Volumes, v.String())
-		}
-		for _, dm := range sv.Domains {
-			d.Domains = append(d.Domains, ext.ContainerDomain{Domain: dm.Host, Port: dm.Port})
 		}
 		out = append(out, d)
 	}

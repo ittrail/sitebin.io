@@ -93,7 +93,10 @@ func TestAuthzLockedContainerSiteGetsNoUpstream(t *testing.T) {
 	withContainers(t, rt)
 	e := newEnv(t, nil)
 	c := e.createSite(t, map[string]string{"mode": "container"}, nil)
-	running(t, e, c.ID, ext.ContainerService{Name: "app", Host: "sb-" + c.ID + "-app", Domains: []ext.ContainerDomain{{Domain: "*", Port: 3000}}})
+	running(t, e, c.ID, ext.ContainerService{Name: "app", Host: "sb-" + c.ID + "-app", Ports: []int{3000}})
+	if err := e.api.SiteService().SyncContainerEndpoints(c.ID, []string{"app:3000"}); err != nil {
+		t.Fatal(err)
+	}
 	host := c.ID + "." + e.cfg.ViewDomain
 	if w := authzFor(t, e, host, nil); w.Code != 200 || w.Header().Get(upstreamHeader) == "" {
 		t.Fatalf("running: %d %q", w.Code, w.Header().Get(upstreamHeader))

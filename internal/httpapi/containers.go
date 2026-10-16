@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/ittrail/sitebin.io/internal/ext"
@@ -91,7 +90,7 @@ func (a *API) leaveContainerMode(site *store.Site) error {
 	} else if n > 0 {
 		a.log.Info("removed links left by containers", "id", site.ViewID, "count", n)
 	}
-	return a.st.Update(site, func(m *store.Meta) error {
+	err := a.st.Update(site, func(m *store.Meta) error {
 		if m.Container != nil {
 			m.Container.Enabled = false
 			m.Container.Status = store.ContainerStopped
@@ -99,6 +98,12 @@ func (a *API) leaveContainerMode(site *store.Site) error {
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	// The ports' generated addresses go with the containers; the custom
+	// domains stay, and serve the files.
+	return a.st.ClearAddresses(site)
 }
 
 // stopContainersBeforeDelete removes a container site's containers before its
@@ -234,22 +239,13 @@ func (a *API) containerPayload(site *store.Site) map[string]any {
 	out["message"] = c.Message
 	services := make([]map[string]any, 0, len(c.Services))
 	for _, s := range c.Services {
-		domains := make([]map[string]any, 0, len(s.Domains))
-		for _, d := range s.Domains {
-			entry := map[string]any{"domain": d.Domain, "port": d.Port}
-			switch {
-			case d.Domain == store.DefaultDomain:
-				entry["url"] = a.cfg.ViewURL(site.ViewID)
-			case slices.Contains(site.Meta.CustomDomains, d.Domain):
-				entry["url"] = a.cfg.SiteURL(d.Domain)
-			default:
-				entry["pending"] = true
-			}
-			domains = append(domains, entry)
+		ports := s.Ports
+		if ports == nil {
+			ports = []int{}
 		}
 		services = append(services, map[string]any{
 			"name": s.Name, "image": s.Image, "egress": s.Egress,
-			"volumes": s.Volumes, "domains": domains, "state": s.State,
+			"volumes": s.Volumes, "ports": ports, "state": s.State,
 		})
 	}
 	out["services"] = services
@@ -345,13 +341,9 @@ func (s siteService) SetContainerState(viewID string, st ext.ContainerState) err
 		}
 		c.Services = make([]store.ContainerService, 0, len(st.Services))
 		for _, sv := range st.Services {
-			ds := make([]store.ContainerDomain, 0, len(sv.Domains))
-			for _, d := range sv.Domains {
-				ds = append(ds, store.ContainerDomain{Domain: d.Domain, Port: d.Port})
-			}
 			c.Services = append(c.Services, store.ContainerService{
 				Name: sv.Name, Image: sv.Image, Egress: sv.Egress, Volumes: sv.Volumes,
-				Domains: ds, State: sv.State, Host: sv.Host,
+				Ports: slices.Clone(sv.Ports), State: sv.State, Host: sv.Host,
 			})
 		}
 		c.ObservedAt = &now
@@ -360,51 +352,12 @@ func (s siteService) SetContainerState(viewID string, st ext.ContainerState) err
 	return mapSiteGone(err, viewID)
 }
 
-func (s siteService) SyncContainerDomains(viewID string, domains []string) ([]string, error) {
+func (s siteService) SyncContainerEndpoints(viewID string, endpoints []string) error {
 	site, err := s.a.st.ByViewID(viewID)
 	if err != nil {
-		return nil, mapSiteGone(err, viewID)
+		return mapSiteGone(err, viewID)
 	}
-	want := map[string]bool{}
-	for _, d := range domains {
-		want[strings.ToLower(strings.TrimSpace(d))] = true
-	}
-	have := map[string]bool{}
-	for _, d := range site.Meta.CustomDomains {
-		have[d] = true
-	}
-	for _, c := range site.Meta.DomainClaims {
-		have[c.Domain] = true
-	}
-	for d := range have {
-		if !want[d] {
-			if err := s.a.st.RemoveDomain(site, d); err != nil && !errors.Is(err, store.ErrNotFound) {
-				return nil, err
-			}
-		}
-	}
-	var warnings []string
-	for _, d := range domains {
-		d = strings.ToLower(strings.TrimSpace(d))
-		if have[d] {
-			continue
-		}
-		// The same gate the domain editor passes: the edition and the
-		// licence's ceiling, then the store's own reservation, uniqueness and
-		// per-site cap. A pending claim is a success — the edit page shows
-		// the record that proves it.
-		if p, ok := ext.Get(); !ok {
-			warnings = append(warnings, d+": custom domains are an Enterprise feature")
-			continue
-		} else if err := p.CustomDomainsAllowed(); err != nil {
-			warnings = append(warnings, d+": "+err.Error())
-			continue
-		}
-		if err := s.a.st.AddDomain(site, d); err != nil && !errors.Is(err, store.ErrDomainPending) {
-			warnings = append(warnings, d+": "+err.Error())
-		}
-	}
-	return warnings, nil
+	return mapSiteGone(s.a.st.SyncAddresses(site, endpoints), viewID)
 }
 
 func observedOf(c *store.ContainerMeta) ext.ContainerState {
@@ -413,13 +366,9 @@ func observedOf(c *store.ContainerMeta) ext.ContainerState {
 		st.AppliedAt = *c.AppliedAt
 	}
 	for _, sv := range c.Services {
-		ds := make([]ext.ContainerDomain, 0, len(sv.Domains))
-		for _, d := range sv.Domains {
-			ds = append(ds, ext.ContainerDomain{Domain: d.Domain, Port: d.Port})
-		}
 		st.Services = append(st.Services, ext.ContainerService{
 			Name: sv.Name, Image: sv.Image, Egress: sv.Egress, Volumes: sv.Volumes,
-			Domains: ds, State: sv.State, Host: sv.Host,
+			Ports: slices.Clone(sv.Ports), State: sv.State, Host: sv.Host,
 		})
 	}
 	return st
