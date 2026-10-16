@@ -30,6 +30,8 @@ const pageHead = `<!doctype html>
   .acct .sitecard .doms { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 3px; }
   .acct .sitecard .doms a { font: 12px var(--mono); color: var(--amber); word-break: break-all; }
   .acct .sitecard .doms .pend { font: 12px var(--mono); color: rgba(245,184,77,.5); word-break: break-all; }
+  .acct .sitecard .doms .redir { font: 12px var(--mono); color: var(--ink-faint); word-break: break-all; }
+  .acct .sitecard .viewoff { font: 13px var(--mono); color: var(--ink-faint); word-break: break-all; }
   .acct .sitecard .locked { margin-top: 4px; font: 12px var(--mono); color: var(--danger); overflow-wrap: anywhere; }
   .acct .sitecard details.rename { margin-top: 6px; }
   .acct .sitecard details.rename summary { display: inline-block; cursor: pointer; list-style: none; font: 12px var(--mono); color: var(--ink-dim); }
@@ -170,8 +172,8 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
     <div class="sitecard">
       <div class="grow">
         {{if .Name}}<span class="sname">{{.Name}}</span>{{end}}
-        <a class="plain" href="{{.ViewURL}}" target="_blank" rel="noopener">{{.ViewURL}}</a>
-        {{if .DomainLinks}}<div class="doms">{{range .DomainLinks}}{{if .Pending}}<span class="pend" title="Claimed, waiting for its DNS record">{{.Domain}} · pending DNS</span>{{else}}<a href="{{.URL}}" target="_blank" rel="noopener">{{.Domain}}</a>{{end}}{{end}}</div>{{end}}
+        {{if .ViewOff}}<span class="viewoff" title="The generated address does not serve this site">{{.ViewURL}} · {{if .ViewRedirectTo}}&rarr; {{.ViewRedirectTo}}{{else}}off{{end}}</span>{{else}}<a class="plain" href="{{.ViewURL}}" target="_blank" rel="noopener">{{.ViewURL}}</a>{{end}}
+        {{if .DomainLinks}}<div class="doms">{{range .DomainLinks}}{{if .Pending}}<span class="pend" title="Claimed, waiting for its DNS record">{{.Domain}} · pending DNS</span>{{else if .RedirectTo}}<span class="redir" title="Redirects to {{.RedirectTo}}"><a href="{{.URL}}" target="_blank" rel="noopener">{{.Domain}}</a> &rarr; {{.RedirectTo}}</span>{{else}}<a href="{{.URL}}" target="_blank" rel="noopener">{{.Domain}}</a>{{end}}{{end}}</div>{{end}}
         <div class="u">{{.Mode}} · {{.SizeText}} · {{.Files}} files · {{.ExpiryText}}</div>
         {{if .Locked}}
         <div class="locked">Locked by the operator on {{.LockedText}}{{if .Locked.Reason}}: {{.Locked.Reason}}{{end}}. It is not served, and it cannot be changed or deleted.</div>

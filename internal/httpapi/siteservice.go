@@ -30,25 +30,28 @@ func (s siteService) Info(viewID string) (ext.SiteInfo, bool) {
 func (s siteService) infoOf(site *store.Site) ext.SiteInfo {
 	bytes, files, _ := s.a.st.Usage(site)
 	st := s.a.st.Stats(site)
+	view := site.Meta.ViewRule()
 	return ext.SiteInfo{
-		Violations:  st.CSPViolations,
-		Blocked:     st.CSPBlocked,
-		Reporters:   st.CSPSources,
-		ViewID:      site.ViewID,
-		Owner:       site.Meta.OwnerAccountID,
-		Mode:        site.Meta.Mode,
-		Name:        site.Meta.Name,
-		Domains:     site.Meta.CustomDomains,
-		DomainLinks: s.domainLinks(site),
-		Origin:      site.Meta.Origin,
-		Bytes:       bytes,
-		Files:       files,
-		ViewURL:     s.a.cfg.ViewURL(site.ViewID),
-		EditURL:     s.a.cfg.EditURL(site.Meta.EditID),
-		CreatedAt:   site.Meta.CreatedAt,
-		ExpiresAt:   site.Meta.ExpiresAt,
-		Locked:      s.a.extLock(site.Meta.Locked),
-		Findings:    extFindings(site.Meta.Abuse),
+		ViewOff:        view.Mode != store.ViewServe,
+		ViewRedirectTo: view.To,
+		Violations:     st.CSPViolations,
+		Blocked:        st.CSPBlocked,
+		Reporters:      st.CSPSources,
+		ViewID:         site.ViewID,
+		Owner:          site.Meta.OwnerAccountID,
+		Mode:           site.Meta.Mode,
+		Name:           site.Meta.Name,
+		Domains:        site.Meta.CustomDomains,
+		DomainLinks:    s.domainLinks(site),
+		Origin:         site.Meta.Origin,
+		Bytes:          bytes,
+		Files:          files,
+		ViewURL:        s.a.cfg.ViewURL(site.ViewID),
+		EditURL:        s.a.cfg.EditURL(site.Meta.EditID),
+		CreatedAt:      site.Meta.CreatedAt,
+		ExpiresAt:      site.Meta.ExpiresAt,
+		Locked:         s.a.extLock(site.Meta.Locked),
+		Findings:       extFindings(site.Meta.Abuse),
 	}
 }
 
@@ -80,12 +83,17 @@ func (a *API) extLock(l *store.SiteLock) *ext.SiteLock {
 	return out
 }
 
-// domainLinks lists the verified domains with the URL each serves at, then the
-// pending claims, which serve nothing yet.
+// domainLinks lists the verified domains with the URL each serves at — and
+// where it redirects, if it does — then the pending claims, which serve
+// nothing yet.
 func (s siteService) domainLinks(site *store.Site) []ext.DomainLink {
 	var out []ext.DomainLink
 	for _, d := range site.Meta.CustomDomains {
-		out = append(out, ext.DomainLink{Domain: d, URL: s.a.cfg.SiteURL(d)})
+		l := ext.DomainLink{Domain: d, URL: s.a.cfg.SiteURL(d)}
+		if r, ok := site.Meta.DomainRedirect(d); ok {
+			l.RedirectTo = r.To
+		}
+		out = append(out, l)
 	}
 	for _, c := range site.PendingDomains() {
 		out = append(out, ext.DomainLink{Domain: c.Domain, Pending: true})

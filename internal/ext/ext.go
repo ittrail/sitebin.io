@@ -593,12 +593,17 @@ type SiteInfo struct {
 	DomainLinks []DomainLink
 	// Origin is the surface that created the site — "mcp", or empty for the UI
 	// and the JSON API. Provenance only; nothing gates on it.
-	Origin    string
-	Bytes     int64
-	Files     int
-	ViewURL   string
-	EditURL   string
-	CreatedAt time.Time
+	Origin  string
+	Bytes   int64
+	Files   int
+	ViewURL string
+	// ViewOff is set when the generated address (ViewURL) does not serve the
+	// site — its owner switched it off, or it redirects to ViewRedirectTo.
+	// The dashboard then shows it without a link.
+	ViewOff        bool
+	ViewRedirectTo string
+	EditURL        string
+	CreatedAt      time.Time
 	// Violations counts content-security-policy reports the site's pages have
 	// produced, and Blocked names the distinct destinations they tried to
 	// reach. A site whose first visitor trips form-action against a foreign
@@ -624,11 +629,13 @@ type SiteInfo struct {
 }
 
 // DomainLink is one custom domain of a site as the dashboard shows it. A
-// pending claim serves nothing yet, so it has no URL.
+// pending claim serves nothing yet, so it has no URL. RedirectTo is the
+// custom domain it redirects to, when it does.
 type DomainLink struct {
-	Domain  string
-	URL     string
-	Pending bool
+	Domain     string
+	URL        string
+	Pending    bool
+	RedirectTo string
 }
 
 var registered Provider
