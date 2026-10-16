@@ -26,6 +26,11 @@ func TestFingerprinted(t *testing.T) {
 		"/_next/static/chunks/pages/index.js", // Next keeps the whole tree content-addressed
 		"/_next/static/xY3_abcDEF12/_buildManifest.js",
 		"/_app/immutable/entry/start.js", // SvelteKit
+		// Astro and Nuxt keep their whole build output hashed in one folder,
+		// and a quarter of Vite's 8-character hashes carry no digit.
+		"/_astro/index.DfSBlnLq.css",
+		"/docs/_astro/hoisted.BfKdAxWq.js", // a site under a base path
+		"/_nuxt/entry.CjdHkWoU.js",
 		"/v/abcdefghijklmnopqrstuvwxyz/assets/index-BqCz7v8e.js",
 		"/3f9a1c2b4d5e6f70a1b2.png", // webpack asset modules: [hash][ext]
 	} {
@@ -59,6 +64,10 @@ func TestCacheControl(t *testing.T) {
 		{"", "/index.html", true, false, revalidate},
 		{"", "/about", false, false, revalidate},
 		{"", "/data.json", true, false, revalidate},
+		// Nuxt's builds/latest.json lives in its hashed folder and changes
+		// with every build: data always revalidates, wherever it is.
+		{"", "/_nuxt/builds/latest.json", true, false, revalidate},
+		{"", "/_astro/index.DfSBlnLq.css", true, false, immutable},
 		{"", "/assets/index-BqCz7v8e.js", true, false, immutable},
 		{"", "/style.css", true, false, revalidate},
 		// a hashed name that is not a file is the SPA fallback's index.html,

@@ -83,6 +83,20 @@ Caddyfile only copies a value.
 - Edit page: a "Browser caching" select in the Behavior card (file sites).
 - Provenance: a settings change records `cache=<policy>`.
 
+## Corrections (post-implementation)
+
+**2026-10-16 — `/_astro/` and `/_nuxt/` are immutable trees.** The name rule
+needs a digit in the hash, and Vite's hashes are 8 base64url characters: about
+a quarter of them have none (`index.DfSBlnLq.css`), so those files of an Astro
+site revalidated under `auto` (reported by an agent building one). Dropping
+the digit requirement would take CamelCase names (`app-MyComponent.js`) for
+hashes, so the fix is the folder, as for `/_next/static/`: Astro and Nuxt put
+nothing but their hashed build output there. The one file in either that does
+change, Nuxt's `_nuxt/builds/latest.json`, is data and revalidates before the
+tree is asked. A plain Vite site keeps its output in `/assets/`, which a
+hand-made site uses too, so it is not a tree: its digit-less hashes revalidate
+under `auto` (safe, just not optimal), and `year` is the owner's choice there.
+
 ## Testing
 
 `cache_test.go` for the rules (each policy, documents, fingerprints and the

@@ -223,7 +223,8 @@ names without an extension, directories, and every request that does not name
 an existing file (the SPA fallback's `index.html`, a 404 — never cached long).
 *Fingerprinted* names carry a content hash — `index-BqCz7v8e.js` (Vite),
 `main.8f9e7d6a.css` (webpack), a bare 16+ character hex name (webpack asset
-modules) — or live under `/_next/static/` or `/_app/immutable/`; a hand-named
+modules) — or live under `/_next/static/`, `/_app/immutable/`, `/_astro/` or
+`/_nuxt/`, folders those frameworks fill with hashed output only; a hand-named
 file (`style.css`, `report2024.pdf`) never counts. Those are what Lighthouse's
 "efficient cache policy" audit wants cached for a year. The fixed times cache
 every other file that long: only for files that never change under their name.

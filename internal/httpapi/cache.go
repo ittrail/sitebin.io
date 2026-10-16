@@ -37,8 +37,12 @@ var documentExts = map[string]bool{
 }
 
 // immutableTrees are directories frameworks keep content-addressed as a
-// whole: a path under one never holds other bytes.
-var immutableTrees = []string{"/_next/static/", "/_app/immutable/"}
+// whole: a path under one never holds other bytes. They matter beyond the
+// name rule because a quarter of Vite's 8-character hashes carry no digit,
+// which the name rule needs; Astro and Nuxt build with Vite. The one file in
+// one of them that does change — Nuxt's builds/latest.json — is data, and
+// data always revalidates before this is asked.
+var immutableTrees = []string{"/_next/static/", "/_app/immutable/", "/_astro/", "/_nuxt/"}
 
 // cacheControl is the Cache-Control value for one response: policy is the
 // site's (store.Meta.Cache, "" = auto), p the request path within the site,
