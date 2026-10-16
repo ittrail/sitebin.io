@@ -10,9 +10,7 @@ services:
       DB_NAME: appdb
     volumes:
       - app:/usr/src/app
-    domains:
-      - "*:3000"
-      - "second.localtest.me:3001"
+    http: [3000, 3001]
     egress: allowed
     depends_on: [db]
 
@@ -22,8 +20,7 @@ services:
       node -e "require('http').createServer(async (q, s) => {
       try { await fetch('https://registry.npmjs.org/', {signal: AbortSignal.timeout(4000)}); s.end('egress open') }
       catch (e) { s.end('egress blocked') } }).listen(3000)"
-    domains:
-      - "probe.localtest.me:3000"
+    http: [3000]
 
   db:
     image: mysql-8.4

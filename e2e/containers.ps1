@@ -49,6 +49,22 @@ function WaitSite([string]$edit, [string]$pw, [scriptblock]$cond, [int]$seconds)
     }
     return $null
 }
+# Status and Location of a request, without following a redirect.
+function Head([string]$u) {
+    $out = "$(& curl.exe -s -o NUL -w '%{http_code} %{redirect_url}' --max-time 30 $u)"
+    $parts = $out.Split(" ", 2)
+    $loc = ""; if ($parts.Count -gt 1) { $loc = $parts[1].Trim() }
+    return @{ code = [int]$parts[0]; location = $loc }
+}
+function Api([string]$m, [string]$path, [string]$json) {
+    $x = @("-H", "X-Edit-Password: $pw")
+    if ($json) { $x += @("-H", "Content-Type: application/json", "--data", (JsonBodyT $json)) }
+    return Req $m "$origin/api/sites/$edit$path" $x
+}
+function AddressOf($s, [string]$endpoint) {
+    foreach ($a in $s.addresses) { if ($a.endpoint -eq $endpoint) { return $a } }
+    return $null
+}
 function WaitHost([string]$url, [string]$want, [int]$seconds) {
     $deadline = (Get-Date).AddSeconds($seconds)
     $last = $null
@@ -115,10 +131,32 @@ Assert "the site's own address reaches the app, which reaches MySQL by service n
 Assert "the app runs as Sitebin's uid, not root" ($r.body.Contains("uid=1000")) "got $($r.body)"
 Assert "the environment is passed verbatim" ($r.body.Contains("greeting=hello"))
 
-$r = Req "GET" "http://second.localtest.me:$Port/"
-Assert "a custom domain maps to a second port" ($r.code -eq 200 -and $r.body.Contains("second port")) "got $($r.code): $($r.body)"
-$r = WaitHost "http://probe.localtest.me:$Port/" "egress" 60
+# ---- addresses: one per HTTP port, domains serve the port they are pointed at ----
+$own = AddressOf $s "app:3000"; $second = AddressOf $s "app:3001"; $probe = AddressOf $s "probe:3000"
+Assert "every http: port has a generated address, the first one the site's own" ($own -and $own.own -and $second -and $probe -and -not $second.own -and @($s.addresses).Count -eq 3) "addresses: $($s.addresses | ConvertTo-Json -Compress)"
+$r = WaitHost $second.url "second port" 60
+Assert "a second port's generated address reaches it" ($r.code -eq 200 -and $r.body.Contains("second port")) "got $($r.code): $($r.body)"
+$r = WaitHost $probe.url "egress" 60
 Assert "a service without egress cannot reach the internet" ($r.body -eq "egress blocked") "got $($r.code): $($r.body)"
+
+$r = Api "POST" "/domains" '{"domain":"second.localtest.me","target":"app:3001"}'
+Assert "a custom domain is added to a container site, pointed at a port" ($r.code -eq 200) "got $($r.code): $($r.body)"
+$r = Req "GET" "http://second.localtest.me:$Port/"
+Assert "the domain serves the port it is pointed at" ($r.code -eq 200 -and $r.body.Contains("second port")) "got $($r.code): $($r.body)"
+$r = Api "POST" "/domains" '{"domain":"alias.localtest.me"}'
+$alias = ($r.body | ConvertFrom-Json).domain_targets."alias.localtest.me".endpoint
+Assert "a domain added without a target serves the site's own port" ($r.code -eq 200 -and $alias -eq "app:3000") "got $($r.code): $alias"
+$r = Api "PUT" "/domains/alias.localtest.me/redirect" '{"to":"second.localtest.me","code":308}'
+Assert "a container site's domain redirects" ($r.code -eq 200) "got $($r.code): $($r.body)"
+$h = Head "http://alias.localtest.me:$Port/x?y=1"
+Assert "the redirect keeps path and query" ($h.code -eq 308 -and $h.location -eq "http://second.localtest.me:$Port/x?y=1") "got $($h.code) $($h.location)"
+$r = Api "POST" "/domains" '{"domain":"probe.localtest.me","target":"probe:3000"}'
+$r = Api "PUT" "/view-address" '{"mode":"off","endpoint":"probe:3000"}'
+Assert "a port's generated address goes off once a domain serves that port" ($r.code -eq 200) "got $($r.code): $($r.body)"
+$h = Head $probe.url
+Assert "an address that is off answers 404" ($h.code -eq 404) "got $($h.code)"
+$r = Req "GET" "http://probe.localtest.me:$Port/"
+Assert "the domain still serves the port" ($r.body -eq "egress blocked") "got $($r.code): $($r.body)"
 
 $r = Req "GET" "$origin/api/sites/$edit/containers/app/logs?tail=50" @("-H", "X-Edit-Password: $pw")
 Assert "service logs are readable" ($r.code -eq 200) "got $($r.code)"
@@ -134,16 +172,27 @@ Assert "the app really planted a link out of its volume (/data)" ($planted -eq "
 Assert "the link the app planted is not listed" (-not ($paths -contains "app/leak"))
 $r = Req "GET" "$origin/api/sites/$edit/content/app/leak/sites/$($site.id)/meta.json" @("-H", "X-Edit-Password: $pw")
 Assert "the API does not follow a container's link out of the site" ($r.code -ne 200) "got $($r.code): $($r.body)"
-$r = Req "POST" "$origin/api/sites/$edit/domains" @("-H", "X-Edit-Password: $pw", "-H", "Content-Type: application/json", "--data", (JsonBodyT '{"domain":"other.localtest.me"}'))
-Assert "domains of a container site come from the compose file (409)" ($r.code -eq 409) "got $($r.code)"
-
 # ---- a change to the compose file restarts the project ----
-$compose = [IO.File]::ReadAllText("$fx\sitebin-container-compose.yaml").Replace("GREETING: hello", "GREETING: changed")
+$compose = [IO.File]::ReadAllText("$fx\sitebin-container-compose.yaml").Replace("GREETING: hello", "GREETING: changed").Replace("http: [3000, 3001]", "http: [3000]")
 $c2 = Join-Path $work "ct-compose.yaml"; [IO.File]::WriteAllText($c2, $compose)
 $r = Req "POST" "$origin/api/sites/$edit/files" @("-H", "X-Edit-Password: $pw", "-F", "files=@$c2;filename=sitebin-container-compose.yaml")
 Assert "compose file replaced" ($r.code -eq 200) "got $($r.code)"
 $r = WaitHost $view "greeting=changed" 180
 Assert "the project restarted with the new environment" ($r.body.Contains("greeting=changed")) "got $($r.code): $($r.body)"
+$r = Req "GET" "http://second.localtest.me:$Port/"
+Assert "a domain whose port left the file serves nothing (404)" ($r.code -eq 404) "got $($r.code): $($r.body)"
+$r = Api "GET" "" ""
+$s = $r.body | ConvertFrom-Json
+$t = $s.domain_targets."second.localtest.me"
+Assert "it stays attached, its target marked as gone" ($s.custom_domains -contains "second.localtest.me" -and $t.endpoint -eq "app:3001" -and -not $t.declared) "got $($t | ConvertTo-Json -Compress)"
+$h = Head $second.url
+Assert "the dropped port's generated address is gone" ($h.code -eq 404) "got $($h.code)"
+$bad = Join-Path $work "ct-bad.yaml"; [IO.File]::WriteAllText($bad, "services:`n  web:`n    image: alpine-node-22`n    domains: ['*:3000']`n")
+$r = Req "POST" "$origin/api/sites" @("-b", $jar, "-F", "mode=container", "-F", "files=@$bad;filename=sitebin-container-compose.yaml")
+$old = $r.body | ConvertFrom-Json
+$sOld = WaitSite (($old.edit_url -split "/e/")[1]) $old.edit_password { param($s) $s.container.status -eq "error" } 60
+Assert "a compose file with domains: is refused, saying what replaced it" ($sOld -and $sOld.container.message.Contains("http:")) "got $($sOld.container.message)"
+$r = Req "DELETE" "$origin/api/sites/$(($old.edit_url -split '/e/')[1])" @("-H", "X-Edit-Password: $($old.edit_password)")
 
 # ---- the plan's cap spans every project ----
 $one = Join-Path $work "ct-one.yaml"; [IO.File]::WriteAllText($one, "services:`n  web:`n    image: alpine-node-22`n")
