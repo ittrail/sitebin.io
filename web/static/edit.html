@@ -96,8 +96,9 @@
     <div class="dnshint">
       The project runs what <code>sitebin-container-compose.yaml</code> in the site's root declares, and
       <strong>every change to that file restarts it</strong> &mdash; however you save it. Each root folder is a
-      volume: upload your app into the folder a service mounts. <code>*</code> maps the site's own address;
-      any other domain in the file is a custom domain and needs the DNS record shown here.
+      volume: upload your app into the folder a service mounts. A service lists the ports it speaks HTTP on
+      under <code>http:</code>; each gets an address of its own, and which domain serves which port is set under
+      <strong>Custom domains</strong> below &mdash; that never restarts the app.
     </div>
   </section>
 
@@ -219,6 +220,7 @@
     <div id="domainrows"></div>
     <div class="row" style="margin-top:12px">
       <input type="text" id="e-domain" placeholder="docs.example.com" style="max-width:280px">
+      <select id="e-domain-target" class="hidden" style="max-width:200px" aria-label="The port the domain serves"></select>
       <button class="btn small" id="e-add-domain">Add domain</button>
     </div>
     <div class="dnshint">
@@ -231,6 +233,11 @@
       <code>www.example.com &rarr; example.com</code> &mdash; with the status code you pick; the path and query are kept,
       and the redirect is answered here, on the domain's own certificate. Once a domain serves the site, its
       <strong>generated address</strong> can be switched off or redirected too.
+      <span id="dns-container" class="hidden"><br><br>
+      An app has one generated address per HTTP port its compose file lists under <code>http:</code>, and each
+      domain serves the port you pick. A port's generated address can be switched off once a domain serves that
+      same port. A domain whose port leaves the file stays attached and serves nothing until you point it
+      at another.</span>
     </div>
   </section>
 

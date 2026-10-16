@@ -150,7 +150,7 @@ function render() {
     (ct.available ? " Container runs the project that sitebin-container-compose.yaml declares." : "");
   document.querySelector(`input[name=emode][value=${site.mode}]`).checked = true;
   $("card-container").classList.toggle("hidden", site.mode !== "container");
-  $("card-domains").classList.toggle("hidden", site.mode === "container");
+  $("dns-container").classList.toggle("hidden", site.mode !== "container");
   if (site.mode === "container") renderContainer();
   $("entrywrap").classList.toggle("hidden", site.mode !== "viewer");
   $("spawrap").classList.toggle("hidden", site.mode !== "webserver");
@@ -212,11 +212,43 @@ function render() {
   const dr = $("domainrows");
   dr.innerHTML = "";
   const pending = site.pending_domains || [];
+  const isCt = site.mode === "container";
+  // A container site has one generated address per HTTP port, always shown:
+  // they are the app's addresses before any domain is.
+  if (isCt) {
+    for (const a of site.addresses || []) dr.appendChild(portAddressRow(a));
+    if (!(site.addresses || []).length) {
+      const none = document.createElement("div");
+      none.className = "domainrow";
+      none.style.color = "var(--ink-faint)";
+      none.textContent = "No address yet: list the ports your services speak HTTP on under http: in " +
+        "sitebin-container-compose.yaml, and each gets one here once the project starts.";
+      dr.appendChild(none);
+    }
+  }
   if (!site.custom_domains.length && !pending.length) {
-    dr.innerHTML = '<div class="domainrow" style="color:var(--ink-faint)">No custom domains yet.</div>';
+    const none = document.createElement("div");
+    none.className = "domainrow";
+    none.style.color = "var(--ink-faint)";
+    none.textContent = "No custom domains yet.";
+    dr.appendChild(none);
   }
   const va = site.view_address || { mode: "serve" };
-  if (site.custom_domains.length || va.mode !== "serve") dr.appendChild(viewAddressRow());
+  if (!isCt && (site.custom_domains.length || va.mode !== "serve")) dr.appendChild(viewAddressRow());
+  // The port a new domain serves, when the app has more than one.
+  const addTarget = $("e-domain-target");
+  const ports = isCt ? (site.addresses || []).map((a) => a.endpoint) : [];
+  if (addTarget.dataset.ports !== ports.join(",")) {
+    addTarget.innerHTML = "";
+    for (const p of ports) {
+      const o = document.createElement("option");
+      o.value = p;
+      o.textContent = "serves " + p;
+      addTarget.appendChild(o);
+    }
+    addTarget.dataset.ports = ports.join(",");
+  }
+  addTarget.classList.toggle("hidden", ports.length < 2);
   for (const p of pending) {
     const row = document.createElement("div");
     row.className = "domainrow pending";
@@ -283,17 +315,32 @@ function render() {
     // no target.
     const r = redirects[d];
     const source = redirectSource(d);
-    const targets = site.custom_domains.filter((t) => t !== d && !redirects[t]);
+    // On a container site a domain serves one of the app's ports, and only a
+    // domain serving a declared port can be redirected to.
+    const tgt = (site.domain_targets || {})[d];
+    let targets = site.custom_domains.filter((t) => t !== d && !redirects[t] && (!isCt || servesPort(t)));
     if (source && !r) {
       const via = document.createElement("span");
       via.className = "via";
       via.textContent = "\u2190 " + source;
       via.title = source + " redirects here";
       name.append(" ", via);
-    } else if (r || targets.length) {
+      targets = [];
+    }
+    if (isCt || (!source && (r || targets.length)) || (source && r)) {
       row.append(ruleControls({
-        label: d, value: r ? r.to : "", code: r && r.code, targets,
+        label: d, value: r ? r.to : isCt ? (tgt ? "port:" + tgt.endpoint : "") : "", code: r && r.code, targets,
+        serves: isCt ? portServes(tgt) : null,
         save: async (to, code) => {
+          if (isCt && to === "") { render(); return; }
+          if (to.startsWith("port:")) {
+            const ep = to.slice(5);
+            if (r) site = await api("DELETE", "/domains/" + encodeURIComponent(d) + "/redirect");
+            if (!tgt || tgt.endpoint !== ep) site = await api("PUT", "/domains/" + encodeURIComponent(d) + "/target", { endpoint: ep });
+            render();
+            toast(d + " serves " + ep);
+            return;
+          }
           site = to === ""
             ? await api("DELETE", "/domains/" + encodeURIComponent(d) + "/redirect")
             : await api("PUT", "/domains/" + encodeURIComponent(d) + "/redirect", { to, code });
@@ -316,9 +363,77 @@ function render() {
     if (r && !r.in_effect) {
       row.append(ruleNote(r.to + " is not serving the site right now, so " + d + " serves it meanwhile."));
     }
+    if (isCt && !r && !tgt) {
+      row.append(warnNote(d + " serves no port yet: pick one."));
+    } else if (isCt && !r && !tgt.declared) {
+      row.append(warnNote("the compose file no longer declares " + tgt.endpoint + ", so " + d +
+        " serves nothing: point it at another port."));
+    }
     dr.appendChild(row);
   }
   $("dns-target").textContent = site.dns_target;
+}
+
+// servesPort reports whether a container site's domain serves a port its
+// compose file declares — the only domains a redirect may point at.
+function servesPort(d) {
+  const t = (site.domain_targets || {})[d];
+  return !!(t && t.declared);
+}
+
+// portServes is the "serves …" choices of a container site's domain: every
+// port the compose file declares, plus the stored one if it no longer is.
+function portServes(tgt) {
+  const out = (site.addresses || []).map((a) => ["port:" + a.endpoint, "serves " + a.endpoint]);
+  if (tgt && !tgt.declared) out.push(["port:" + tgt.endpoint, "serves " + tgt.endpoint + " (gone)"]);
+  if (!tgt) out.unshift(["", "serves no port yet"]);
+  return out;
+}
+
+// portAddressRow is the generated address of one HTTP port of a container
+// site, which serves that port, is off, or redirects to a domain that serves.
+function portAddressRow(a) {
+  const row = document.createElement("div");
+  row.className = "domainrow rulerow";
+  const name = document.createElement("span");
+  name.className = "d";
+  const link = document.createElement("a");
+  link.href = a.url;
+  link.target = "_blank";
+  link.rel = "noopener";
+  link.textContent = a.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  const tag = document.createElement("span");
+  tag.className = "via";
+  tag.textContent = "generated · " + a.endpoint;
+  name.append(link, " ", tag);
+  const value = a.mode === "off" ? "off" : a.mode === "redirect" ? a.to : "";
+  const redirects = site.domain_redirects || {};
+  row.append(name, ruleControls({
+    label: "the address of " + a.endpoint, value, code: a.code, allowOff: true,
+    serves: [["", "serves " + a.endpoint]],
+    targets: site.custom_domains.filter((d) => !redirects[d] && servesPort(d)),
+    save: async (to, code) => {
+      const body = to === "" ? { mode: "serve", endpoint: a.endpoint } : to === "off" ? { mode: "off", endpoint: a.endpoint } :
+        { mode: "redirect", to, code, endpoint: a.endpoint };
+      site = await api("PUT", "/view-address", body);
+      render();
+      toast(to === "" ? "The address of " + a.endpoint + " serves it" :
+        to === "off" ? "The address of " + a.endpoint + " is off" : "The address of " + a.endpoint + " redirects to " + to);
+    },
+  }));
+  if (a.mode !== "serve" && !a.in_effect) {
+    row.append(ruleNote(a.mode === "off"
+      ? "no custom domain serves " + a.endpoint + " right now, so this address keeps serving it."
+      : a.to + " is not serving right now, so this address keeps serving " + a.endpoint + "."));
+  }
+  return row;
+}
+
+function warnNote(text) {
+  const n = document.createElement("div");
+  n.className = "rulenote";
+  n.textContent = text;
+  return n;
 }
 
 // ---- addresses: redirects and the generated address ----
@@ -333,8 +448,14 @@ const redirectCodes = [
 // redirectSource names what redirects to domain d, or "".
 function redirectSource(d) {
   const from = Object.entries(site.domain_redirects || {}).filter(([, r]) => r.to === d).map(([f]) => f).sort();
-  const va = site.view_address || {};
-  if (va.mode === "redirect" && va.to === d) from.push("the generated address");
+  if (site.mode === "container") {
+    for (const a of site.addresses || []) {
+      if (a.mode === "redirect" && a.to === d) from.push("the address of " + a.endpoint);
+    }
+  } else {
+    const va = site.view_address || {};
+    if (va.mode === "redirect" && va.to === d) from.push("the generated address");
+  }
   return from.join(", ");
 }
 
@@ -353,7 +474,7 @@ function ruleControls(opts) {
     o.textContent = text;
     target.appendChild(o);
   };
-  add("", "serves the site");
+  for (const [value, text] of opts.serves || [["", "serves the site"]]) add(value, text);
   if (opts.allowOff) add("off", "off · not served");
   const targets = opts.targets.slice();
   // A stored target that can no longer be chosen stays visible as what it is.
@@ -369,7 +490,7 @@ function ruleControls(opts) {
     code.appendChild(o);
   }
   code.value = String(opts.code || 301);
-  const sync = () => code.classList.toggle("hidden", target.value === "" || target.value === "off");
+  const sync = () => code.classList.toggle("hidden", target.value === "" || target.value === "off" || target.value.startsWith("port:"));
   sync();
   const save = async () => {
     target.disabled = code.disabled = true;
@@ -486,8 +607,6 @@ function renderContainer() {
   msg.classList.toggle("note", ct.status !== "error");
   msg.textContent = ct.message || "";
 
-  const pending = {};
-  for (const p of site.pending_domains || []) pending[p.domain] = p;
   const box = $("ct-services");
   box.innerHTML = "";
   if (!ct.services.length) {
@@ -512,40 +631,25 @@ function renderContainer() {
       head.append(f);
     }
     row.append(head);
-    if (s.domains && s.domains.length) {
+    if (s.ports && s.ports.length) {
+      // Each HTTP port, its generated address, and the domains serving it;
+      // the domain card below is where they are changed.
       const maps = document.createElement("div");
       maps.className = "maps";
-      for (const d of s.domains) {
+      for (const port of s.ports) {
+        const ep = s.name + ":" + port;
         const line = document.createElement("div");
-        if (d.url) {
-          const a = document.createElement("a");
-          a.href = d.url; a.target = "_blank"; a.rel = "noopener";
-          a.textContent = d.url.replace(/\/$/, "");
-          line.append(a);
-        } else {
-          line.append(d.domain);
+        line.append("http :" + port);
+        const a = (site.addresses || []).find((x) => x.endpoint === ep);
+        if (a) {
+          const link = document.createElement("a");
+          link.href = a.url; link.target = "_blank"; link.rel = "noopener";
+          link.textContent = a.url.replace(/\/$/, "");
+          line.append(" ← ", link);
         }
-        line.append(" → :" + d.port);
-        const p = pending[d.domain];
-        if (d.pending) {
-          const w = document.createElement("span");
-          w.className = "pending";
-          w.textContent = p ? "  pending DNS: TXT " + p.txt_name + " = " + p.txt_value +
-            (p.cname_target ? " (or CNAME → " + p.cname_target + ")" : "") : "  not attached";
-          line.append(w);
-          if (p) {
-            // A container site's domains come from its compose file, so the
-            // domain card is hidden; its "Check now" lives here instead.
-            line.classList.add("pendingroute");
-            line.append(" ", checkNowButton(d.domain));
-            const last = lastCheck(p);
-            if (last) line.append(last);
-            const note = document.createElement("div");
-            note.className = "lastcheck";
-            note.textContent = recheckNote();
-            line.append(note);
-          }
-        }
+        const doms = Object.entries(site.domain_targets || {})
+          .filter(([d, t]) => t.endpoint === ep && site.custom_domains.includes(d)).map(([d]) => d).sort();
+        if (doms.length) line.append(", " + doms.join(", "));
         maps.append(line);
       }
       row.append(maps);
@@ -1029,8 +1133,11 @@ mini.addEventListener("drop", (e) => {
 $("e-add-domain").addEventListener("click", async () => {
   const d = $("e-domain").value.trim().toLowerCase();
   if (!d) return;
+  const body = { domain: d };
+  const target = $("e-domain-target");
+  if (!target.classList.contains("hidden") && target.value) body.target = target.value;
   try {
-    site = await api("POST", "/domains", { domain: d });
+    site = await api("POST", "/domains", body);
     $("e-domain").value = "";
     render();
     if (site.custom_domains.includes(d)) toast("Verified and attached " + d);
