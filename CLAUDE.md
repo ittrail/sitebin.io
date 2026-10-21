@@ -204,6 +204,11 @@ scanner lock into `meta.json` BEFORE the file is renamed into place. Read
 - **Evidence stays put.** Every content change re-checks the lock under the
   site lock (`CheckUnlocked`): a request that passed its gate before a hold
   must not overwrite or delete the kit. NUL bytes never mean "skip".
+- **Matching sees the file as written AND decoded** (`abuse.decode`: HTML
+  entities, JavaScript escapes, percent-encoding, one round each), so
+  `tez&#58;//upi` is a payment link. Never drop the as-written view, and
+  never decode an entity-encoded `<` or `>`: every code sample on an
+  ordinary page would become a tag.
 - **The CSP tripwire only acts on what the site's own files reference**
   (`CheckExfil`): reports are unauthenticated.
 - **Operator mail is plain text** (the forms mailer, `SITEBIN_ABUSE_ALERTS_TO`),

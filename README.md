@@ -1036,7 +1036,9 @@ hits are recorded and alerted. Flag-severity rules only alert.
   ```
 
   A rule matches a file when all of `all` and one of `any` occur
-  (case-insensitive text, or `re:` + RE2 on the lowercased file). A file entry
+  (case-insensitive text, or `re:` + RE2 on the lowercased file — as written,
+  and again with HTML entities, JavaScript escapes and percent-encoding
+  decoded, so `tez&#58;//upi` is `tez://upi`). A file entry
   with a built-in id replaces it; `"severity"` alone changes only that;
   `"defaults": "replace"` drops every built-in rule. `exfil` lists the
   tripwire's destinations (`url` = host + optional path prefix, `action`

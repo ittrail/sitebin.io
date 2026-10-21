@@ -88,7 +88,9 @@ good). A deleted file means the defaults again.
   input AND a cross-origin exfiltration reference" is expressed, so the plain
   login form of a legitimate app does not trip a rule that needs both.
   Patterns are case-insensitive substrings, or RE2 regular expressions when
-  prefixed `re:`. `files` optionally limits a rule to extensions.
+  prefixed `re:`. `files` optionally limits a rule to extensions. (Since
+  2026-10-21 a pattern is also matched against the file with HTML entities,
+  JavaScript escapes and percent-encoding decoded — see the addendum.)
 - Severity **block** locks (below); **flag** alerts only; **off** disables.
 - An **exfil** entry is a tripwire destination: `url` is a host with an
   optional path prefix (`api.telegram.org/bot`), matched against the host and
@@ -396,3 +398,42 @@ that page. The operator is the alerts' recipient, so a finding on a site an
 operator account owns now stays on its register row and in the log, and no mail
 is sent (`onScan`; `Store.OperatorOwns`). Such a site is never held anyway, so no
 hold alert is lost; another account's trusted site is still mailed.
+
+## Addendum (2026-10-21): encoded signatures are decoded
+
+**The gap.** Matching saw only the bytes as written. One character written as
+an HTML character reference — `<a href="tez&#58;//upi/pay?…">` — is a
+working payment deep link to the browser and nothing to the rules: the block
+rule `wallet-deeplink` let it through, and so did every other pattern. The
+same holds for a JavaScript escape (`"tez\x3a//upi"`) and for percent-encoding
+in a URL (`api%2Etelegram.org`, `/%62ot…`), which the URL parser decodes in
+hosts and the server in paths. Found while clearing the findings the hosted
+website's own docs page produced; no kit on the instance was seen using it.
+
+**The rule.** Each chunk is matched twice: as written and as decoded
+(`abuse.decode`, in `scan.go`'s `flush`). A pattern is found when it matches
+either, so nothing the rules caught before is lost; the decoded text is only
+asked for what the text as written does not already show. Decoding is one
+round of each, in this order:
+
+1. **HTML character references** — decimal, hex, named, and the legacy forms
+   without a semicolon, as `html.UnescapeString` reads them — **except** a
+   reference that produces `<` or `>`. An entity-encoded angle bracket is how
+   every page shows code, and the parser never makes markup of it; decoding it
+   would turn each code sample into a fake tag.
+2. **JavaScript string escapes** `\xHH`, `\uHHHH`, `\u{H…}`; `\\` is a
+   backslash, never the start of an escape. These do decode `<`: a string
+   becomes markup through `document.write` or `innerHTML`.
+3. **Percent-encoding** `%HH`, `<` included, for the same reason (`unescape`,
+   `decodeURIComponent`).
+
+Every scanned file gets both views, `.js` too: a script can hand an entity to
+`innerHTML`. A hit found only once decoded has the excerpt prefixed
+`decoded: ` — hiding a signature is a signal in itself, and the register
+should say so. The CSP tripwire's verification (`CheckExfil`) uses the same
+scanner, so an encoded reference to a destination verifies a report too.
+
+**Known limits, still accepted:** an encoding that decodes into another
+encoding is not followed past one round each; base64 (`atob`), string
+concatenation and text split by tags (`tez:<wbr>//upi`) are not joined — the
+hosted website's docs quote the rules that way, so they never match.
