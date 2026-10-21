@@ -79,7 +79,8 @@ type Hit struct {
 	Rule     string
 	Severity Severity
 	// Excerpt is the matched text in context: one line, lowercased, at most
-	// excerptMax characters.
+	// excerptMax characters, and prefixed "decoded: " when the file only
+	// showed the match once decoded.
 	Excerpt string
 }
 
@@ -175,24 +176,25 @@ func (s *Scan) flush() {
 	s.scanned += int64(len(s.buf))
 	text := append(s.carry, s.buf...)
 	lower := bytes.ToLower(text)
+	// The decoded text is matched only for what the text as written does not
+	// already show (see decode). An encoding cut at the chunk edge is whole
+	// in the next chunk, which starts with the carry.
+	var decoded []byte
+	if d := decode(text); d != nil {
+		decoded = bytes.ToLower(d)
+	}
 	for i, p := range s.rs.patterns {
 		if s.found[i] {
 			continue
 		}
-		at, end := -1, -1
-		if p.re != nil {
-			if p.need != nil && !bytes.Contains(lower, p.need) {
-				continue
-			}
-			if loc := p.re.FindIndex(lower); loc != nil {
-				at, end = loc[0], loc[1]
-			}
-		} else if j := bytes.Index(lower, p.lit); j >= 0 {
-			at, end = j, j+len(p.lit)
-		}
-		if at >= 0 {
+		if at, end := p.find(lower); at >= 0 {
 			s.found[i] = true
 			s.excerpt[i] = excerpt(lower, at, end)
+		} else if decoded != nil {
+			if at, end := p.find(decoded); at >= 0 {
+				s.found[i] = true
+				s.excerpt[i] = Clean(decodedMark + excerpt(decoded, at, end))
+			}
 		}
 	}
 	keep := min(overlap, len(text))
@@ -238,6 +240,23 @@ func (s *Scan) Result() Result {
 		r.Hits = append(r.Hits, Hit{Rule: cr.ID, Severity: cr.Severity, Excerpt: ex})
 	}
 	return r
+}
+
+// find reports where p first matches text, or -1, -1.
+func (p pattern) find(text []byte) (at, end int) {
+	if p.re != nil {
+		if p.need != nil && !bytes.Contains(text, p.need) {
+			return -1, -1
+		}
+		if loc := p.re.FindIndex(text); loc != nil {
+			return loc[0], loc[1]
+		}
+		return -1, -1
+	}
+	if j := bytes.Index(text, p.lit); j >= 0 {
+		return j, j + len(p.lit)
+	}
+	return -1, -1
 }
 
 // excerpt is the match with some context around it, as one clean line.
