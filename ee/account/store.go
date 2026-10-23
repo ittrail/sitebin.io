@@ -228,7 +228,7 @@ func (s *Store) persist(a *Account) error {
 	if err := os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, filepath.Join(dir, "account.json"))
+	return replaceFile(tmp, filepath.Join(dir, "account.json"))
 }
 
 // LinkSite records that the account owns viewID (a marker file named by the id).

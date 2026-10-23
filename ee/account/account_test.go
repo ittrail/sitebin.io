@@ -4,6 +4,7 @@ package account
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"testing"
@@ -173,19 +174,35 @@ func TestDeleteCascades(t *testing.T) {
 	}
 }
 
+// Thirty concurrent readers-then-updaters must lose no update. The
+// goroutines' errors are part of the result: a failed Update IS a lost update,
+// and saying which call failed and why is what makes a failure here mean
+// something (it was an "access denied" rename on Windows while another
+// goroutine read account.json -- see replace_windows.go).
 func TestConcurrentUpdate(t *testing.T) {
 	s := newStore(t)
 	a, _ := s.CreateLocal("hank@example.com", "h", "free")
 	var wg sync.WaitGroup
+	errs := make(chan error, 60)
 	for i := 0; i < 30; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			h, _ := s.ByID(a.ID)
-			s.Update(h, func(cur *Account) error { cur.TokenVersion++; return nil })
+			h, err := s.ByID(a.ID)
+			if err != nil {
+				errs <- fmt.Errorf("ByID: %w", err)
+				return
+			}
+			if err := s.Update(h, func(cur *Account) error { cur.TokenVersion++; return nil }); err != nil {
+				errs <- fmt.Errorf("Update: %w", err)
+			}
 		}()
 	}
 	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
 	reload, _ := s.ByID(a.ID)
 	if reload.TokenVersion != 30 {
 		t.Errorf("lost updates: token_version = %d, want 30", reload.TokenVersion)
