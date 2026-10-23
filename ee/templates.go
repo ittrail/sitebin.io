@@ -284,6 +284,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
       <input type="hidden" name="csrf" value="{{.CSRF}}">
       <button class="btn small" type="submit">Manage subscription</button>
     </form>
+    {{if .CancelURL}}<a class="btn small" href="{{.CancelURL}}" rel="noopener">Cancel contracts here</a>{{end}}
   </div>
   {{end}}
 
@@ -317,8 +318,8 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
   <div class="card" style="border-color:rgba(242,109,109,.25)">
     <h3 style="color:var(--danger)">Danger zone</h3>
     {{if .StackDeletion}}
-    <p class="muted">Your account is deleted from the account console, where your sign-in lives. When it is, every site, token and record this instance holds for you is removed as well.</p>
-    <a class="btn danger" href="{{.AccountURL}}" rel="noopener">Delete account in the account console</a>
+    <p class="muted">Your account is deleted where your sign-in lives. When it is, every site, token and record this instance holds for you is removed as well.</p>
+    <a class="btn danger" href="{{.DeletionURL}}" rel="noopener">Delete account</a>
     {{else}}
     <p class="muted">Removes this account, every site it owns and every API token. You will be asked to confirm on the next page.</p>
     <form method="post" action="/account/delete">
@@ -327,6 +328,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
     </form>
     {{end}}
   </div>
+  {{if .CancelURL}}<p class="muted" style="text-align:center;margin-top:22px"><a href="{{.CancelURL}}" rel="noopener">Cancel contracts here</a></p>{{end}}
 </main>
 ` + pageFoot))
 

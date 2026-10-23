@@ -3,6 +3,7 @@
 package eeconfig
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -262,6 +263,40 @@ func TestLoadPayGate(t *testing.T) {
 	if cfg.PayGate.PlanURL != "" {
 		t.Errorf("PlanURL = %q without an issuer, want empty", cfg.PayGate.PlanURL)
 	}
+	if cfg.PayGate.CancelURL != "" {
+		t.Errorf("CancelURL = %q without an issuer, want empty", cfg.PayGate.CancelURL)
+	}
+}
+
+// The stack's own deletion page (`deleteAccountUrl()` in its SDK) opens the
+// deletion itself, branded for this app — not the console's start page, where
+// a user has to find it. Only where the console is where deletion happens.
+func TestAccountDeletionURL(t *testing.T) {
+	stack := map[string]string{
+		"SITEBIN_STACK_URL":            "https://platform.example",
+		"SITEBIN_STACK_APP_ID":         "sitebin",
+		"SITEBIN_STACK_ADMIN_KEY":      "padm_test",
+		"SITEBIN_STACK_GDPR_SECRET":    "0123456789abcdef0123456789abcdef",
+		"SITEBIN_OAUTH_OIDC_ISSUER":    "https://auth.example.com/realms/saas-stack",
+		"SITEBIN_OAUTH_OIDC_CLIENT_ID": "sitebin-app",
+	}
+	cfg, err := Load(env(stack), noFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.AccountDeletionURL(), "https://auth.example.com/account/delete?app=sitebin"; got != want {
+		t.Errorf("AccountDeletionURL = %q, want %q", got, want)
+	}
+	// No GDPR secret: the stack could not order the local half deleted, so
+	// deletion stays here and there is no link to the stack's page.
+	without := map[string]string{"SITEBIN_OAUTH_OIDC_ISSUER": stack["SITEBIN_OAUTH_OIDC_ISSUER"], "SITEBIN_OAUTH_OIDC_CLIENT_ID": "sitebin-app"}
+	cfg, err = Load(env(without), noFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.AccountDeletionURL(); got != "" {
+		t.Errorf("AccountDeletionURL = %q without stack deletion, want empty", got)
+	}
 }
 
 // The hosted plan page is DERIVED from the issuer and the app id, the way the
@@ -285,6 +320,11 @@ func TestPayGatePlanURLIsDerivedFromTheIssuer(t *testing.T) {
 	}
 	if got, want := cfg.PayGate.PlanURL, "https://auth.example.com/apps/sitebin/plan"; got != want {
 		t.Errorf("PlanURL = %q, want %q", got, want)
+	}
+	// The cancellation page (§ 312k BGB) is the same portal's, beside the
+	// plan page — `cancelUrl()` in the stack's SDK.
+	if got, want := cfg.PayGate.CancelURL, "https://auth.example.com/apps/sitebin/cancel"; got != want {
+		t.Errorf("CancelURL = %q, want %q", got, want)
 	}
 	// The origin, not the realm path: the plan page is the portal's, which
 	// shares the issuer's host and nothing below it.
@@ -801,6 +841,29 @@ func TestLoadStackConsents(t *testing.T) {
 		}
 	})
 
+	// The file the stack attaches to the contract confirmation (its order
+	// S22): the terms on a durable medium, not only a link to a page that
+	// can change.
+	t.Run("a document for the contract confirmation", func(t *testing.T) {
+		cfg, err := Load(env(base(map[string]string{
+			"SITEBIN_STACK_CONSENTS": `[{"key":"terms","version":"1","url":"https://sitebin.io/terms/","documentUrl":" https://sitebin.io/terms/ "}]`,
+		})), noFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := cfg.StackRegistration.Consents[0].DocumentURL; got != "https://sitebin.io/terms/" {
+			t.Errorf("DocumentURL = %q", got)
+		}
+		b, _ := json.Marshal(cfg.StackRegistration.Consents[0])
+		if !strings.Contains(string(b), `"documentUrl":"https://sitebin.io/terms/"`) {
+			t.Errorf("wire shape = %s", b)
+		}
+		b, _ = json.Marshal(StackConsent{Key: "dpa", Version: "1", URL: "https://sitebin.io/dpa/"})
+		if strings.Contains(string(b), "documentUrl") {
+			t.Errorf("an unset documentUrl must not be sent: %s", b)
+		}
+	})
+
 	t.Run("absent means declare nothing", func(t *testing.T) {
 		cfg, err := Load(env(base(nil)), noFile)
 		if err != nil {
@@ -814,17 +877,18 @@ func TestLoadStackConsents(t *testing.T) {
 	// A half-filled list would register documents the gate cannot show, and
 	// the failure would happen in a background goroutine at boot.
 	for name, bad := range map[string]string{
-		"no key":        `[{"version":"1","url":"https://sitebin.io/terms/"}]`,
-		"bad key":       `[{"key":"Terms Of Service","version":"1","url":"https://sitebin.io/terms/"}]`,
-		"duplicate key": `[{"key":"terms","version":"1","url":"https://a.example"},{"key":"terms","version":"2","url":"https://b.example"}]`,
-		"no version":    `[{"key":"terms","url":"https://sitebin.io/terms/"}]`,
-		"no url":        `[{"key":"terms","version":"1"}]`,
-		"blank url":     `[{"key":"terms","version":"1","url":"   "}]`,
-		"not a url":     `[{"key":"terms","version":"1","url":"sitebin.io/terms"}]`,
-		"empty list":    `[]`,
-		"the old shape": `{"version":"1","url":"https://sitebin.io/terms/"}`,
-		"not json":      `[`,
-		"too many":      "[" + strings.TrimSuffix(strings.Repeat(`{"key":"k","version":"1","url":"https://x.example"},`, 21), ",") + "]",
+		"no key":              `[{"version":"1","url":"https://sitebin.io/terms/"}]`,
+		"bad key":             `[{"key":"Terms Of Service","version":"1","url":"https://sitebin.io/terms/"}]`,
+		"duplicate key":       `[{"key":"terms","version":"1","url":"https://a.example"},{"key":"terms","version":"2","url":"https://b.example"}]`,
+		"no version":          `[{"key":"terms","url":"https://sitebin.io/terms/"}]`,
+		"no url":              `[{"key":"terms","version":"1"}]`,
+		"blank url":           `[{"key":"terms","version":"1","url":"   "}]`,
+		"not a url":           `[{"key":"terms","version":"1","url":"sitebin.io/terms"}]`,
+		"plain http document": `[{"key":"terms","version":"1","url":"https://sitebin.io/terms/","documentUrl":"http://sitebin.io/terms/"}]`,
+		"empty list":          `[]`,
+		"the old shape":       `{"version":"1","url":"https://sitebin.io/terms/"}`,
+		"not json":            `[`,
+		"too many":            "[" + strings.TrimSuffix(strings.Repeat(`{"key":"k","version":"1","url":"https://x.example"},`, 21), ",") + "]",
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Load(env(base(map[string]string{"SITEBIN_STACK_CONSENTS": bad})), noFile); err == nil {

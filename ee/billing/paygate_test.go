@@ -5,6 +5,7 @@ package billing
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -183,5 +184,62 @@ func TestPayGateCheckoutRefusesAccountWithoutStackIdentity(t *testing.T) {
 		eeconfig.Tier{ID: "pro"}, "https://s.example/ok", "")
 	if err == nil {
 		t.Fatal("expected an error for an account with no stack identity")
+	}
+}
+
+// A customer who already pays is answered 409 by the stack rather than sold a
+// second subscription. Sitebin must hand them to the page the stack names —
+// the plan page with the change preselected, or the store's — not show
+// "checkout unavailable" for what is a plan change.
+func TestPayGateCheckoutOfAPayingCustomerNamesWhereToChange(t *testing.T) {
+	for _, code := range []string{"already_subscribed", "already_entitled"} {
+		t.Run(code, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				io.WriteString(w, `{"error":"`+code+`","message":"x","details":{"manageUrl":"https://auth.example/apps/sitebin/plan?tier=studio&cycle=monthly","tier":"pro","source":"stripe"}}`)
+			}))
+			defer srv.Close()
+			g := NewPayGate(eeconfig.PayGateConfig{URL: srv.URL, AppID: "sitebin", APIKey: "ssk"})
+			_, err := g.CheckoutURL(context.Background(), Customer{AccountID: "a", Subject: "u"}, eeconfig.Tier{ID: "studio"}, "https://s.example/ok", "")
+			var already *AlreadySubscribedError
+			if !errors.As(err, &already) {
+				t.Fatalf("err = %v, want an AlreadySubscribedError", err)
+			}
+			if already.ManageURL != "https://auth.example/apps/sitebin/plan?tier=studio&cycle=monthly" {
+				t.Errorf("ManageURL = %q", already.ManageURL)
+			}
+		})
+	}
+}
+
+// Anything else stays an error: another conflict, a page that is not https,
+// a stack that is down.
+func TestPayGateCheckoutOtherFailuresStayErrors(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status int
+		body   string
+	}{
+		"another conflict": {409, `{"error":"something_else","details":{"manageUrl":"https://auth.example/x"}}`},
+		"no manage url":    {409, `{"error":"already_subscribed","details":{"tier":"pro"}}`},
+		"not https":        {409, `{"error":"already_subscribed","details":{"manageUrl":"javascript:alert(1)"}}`},
+		"stack down":       {502, `bad gateway`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				io.WriteString(w, tc.body)
+			}))
+			defer srv.Close()
+			g := NewPayGate(eeconfig.PayGateConfig{URL: srv.URL, AppID: "sitebin", APIKey: "ssk"})
+			_, err := g.CheckoutURL(context.Background(), Customer{AccountID: "a", Subject: "u"}, eeconfig.Tier{ID: "studio"}, "https://s.example/ok", "")
+			if err == nil {
+				t.Fatal("want an error")
+			}
+			var already *AlreadySubscribedError
+			if errors.As(err, &already) {
+				t.Fatalf("err = %v must not send anyone anywhere", err)
+			}
+		})
 	}
 }

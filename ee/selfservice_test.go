@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ittrail/sitebin.io/ee/account"
+	"github.com/ittrail/sitebin.io/ee/billing"
 	"github.com/ittrail/sitebin.io/internal/ext"
 )
 
@@ -68,8 +69,10 @@ func postAs(mux http.Handler, path string, cookie *http.Cookie, v url.Values) *h
 }
 
 const (
-	wantAccountURL = "https://auth.example.com/realms/saas-stack/account/?referrer=sitebin-app&referrer_uri=http%3A%2F%2Fsitebin.example%2Faccount"
-	wantPlanURL    = "https://auth.example.com/apps/sitebin/plan"
+	wantAccountURL  = "https://auth.example.com/realms/saas-stack/account/?referrer=sitebin-app&referrer_uri=http%3A%2F%2Fsitebin.example%2Faccount"
+	wantPlanURL     = "https://auth.example.com/apps/sitebin/plan"
+	wantCancelURL   = "https://auth.example.com/apps/sitebin/cancel"
+	wantDeletionURL = "https://auth.example.com/account/delete?app=sitebin"
 )
 
 // Once a user is signed in, "manage my account" and "manage my plan" are
@@ -134,6 +137,35 @@ func TestUpgradeHandsOffToTheBackendsCheckout(t *testing.T) {
 	assertHandoff(t, w, "https://pay.example/checkout")
 }
 
+// A customer who already pays is refused a second subscription by the stack,
+// which names the plan page with the change preselected. That is where the
+// browser goes — a plan change, not "checkout unavailable".
+func TestUpgradeOfAPayingCustomerGoesWhereThePlanIsChanged(t *testing.T) {
+	p, _, mux := setupSelfService(t, testGDPRSecret)
+	manage := "https://auth.example.com/apps/sitebin/plan?tier=pro&cycle=monthly"
+	p.billing = &fakeBilling{name: "paygate", checkoutErr: &billing.AlreadySubscribedError{ManageURL: manage}}
+	acc, cookie := oidcUser(t, p, "11111111-1111-4111-8111-111111111111", "stack@example.com")
+
+	w := postAs(mux, "/account/upgrade", cookie, url.Values{"csrf": {p.csrf(acc)}, "tier": {"pro"}})
+	// html/template writes the query's & as &amp; inside the attribute.
+	assertHandoff(t, w, strings.ReplaceAll(manage, "&", "&amp;"))
+	if strings.Contains(w.Body.String(), "Checkout unavailable") {
+		t.Error("a plan change was reported as a failed checkout")
+	}
+}
+
+// § 312k BGB: a consumer who can sign a contract here must always find the
+// way to cancel it, without signing in — the stack's cancellation page.
+func TestDashboardLinksTheCancellationPage(t *testing.T) {
+	p, _, mux := setupSelfService(t, testGDPRSecret)
+	_, cookie := oidcUser(t, p, "11111111-1111-4111-8111-111111111111", "stack@example.com")
+
+	body := getAs(mux, "/account", cookie).Body.String()
+	if !strings.Contains(body, `href="`+wantCancelURL+`"`) || !strings.Contains(body, "Cancel contracts here") {
+		t.Errorf("the dashboard does not link the cancellation page %s", wantCancelURL)
+	}
+}
+
 // A local account has no stack identity: no console to manage it in, and a
 // portal that has nobody to show.
 func TestLocalAccountGetsNoStackLinks(t *testing.T) {
@@ -160,18 +192,20 @@ func TestStackAccountIsDeletedAtTheConsole(t *testing.T) {
 	p.accounts.LinkSite(acc, "aaaaaaaaaaaaaaaaaaaaaaaaaa")
 
 	body := getAs(mux, "/account", cookie).Body.String()
-	if !strings.Contains(body, "Delete account in the account console") {
-		t.Error("the danger zone does not send a stack user to the console")
+	// The stack's own deletion page, which opens the deletion itself — not
+	// the console's start page, where a user has to go looking for it.
+	if !strings.Contains(body, `href="`+strings.ReplaceAll(wantDeletionURL, "&", "&amp;")+`"`) || !strings.Contains(body, "Delete account") {
+		t.Errorf("the danger zone does not send a stack user to %s", wantDeletionURL)
 	}
 	if strings.Contains(body, `action="/account/delete"`) {
 		t.Error("the danger zone still offers the local delete form to a stack user")
 	}
 
+	// A stale form posts here: it is sent on with a handoff page, because a
+	// 303 off this origin after a form POST is what form-action 'self' drops.
 	for _, path := range []string{"/account/delete", "/account/delete/confirm"} {
 		w := postAs(mux, path, cookie, url.Values{"csrf": {p.csrf(acc)}})
-		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != wantAccountURL {
-			t.Fatalf("%s for a stack user = %d %q, want a 303 to the console", path, w.Code, w.Header().Get("Location"))
-		}
+		assertHandoff(t, w, wantDeletionURL)
 	}
 	if _, err := p.accounts.ByID(acc.ID); err != nil {
 		t.Error("the account was deleted locally, leaving the stack identity behind")

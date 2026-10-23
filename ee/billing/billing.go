@@ -48,6 +48,19 @@ type Backend interface {
 	PortalURL(ctx context.Context, c Customer, returnURL string) (string, error)
 }
 
+// AlreadySubscribedError is CheckoutURL's answer for a customer who already
+// pays: a checkout would sell them a second subscription, so the backend
+// refused it and named where the plan is changed instead — the stack's plan
+// page with the change preselected, or a store's subscription page. The
+// caller sends the browser there; it is not a failure to report.
+type AlreadySubscribedError struct {
+	ManageURL string
+}
+
+func (e *AlreadySubscribedError) Error() string {
+	return "already subscribed; the plan is changed at " + e.ManageURL
+}
+
 // TierSource is implemented by a backend that holds the subscription state
 // somewhere Sitebin can ask. PayGate does; the direct providers do not, because
 // with them Sitebin is itself the record of what an account holds.

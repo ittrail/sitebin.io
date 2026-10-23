@@ -489,7 +489,7 @@ func (p *provider) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	// deleting here first would leave the identity behind, still a member of
 	// this app, with nothing of its own left to come back to.
 	if p.stackDeletion(acc) {
-		http.Redirect(w, r, p.cfg.AccountConsoleURL(p.baseURL()+"/account"), http.StatusSeeOther)
+		p.leaveToAccountDeletion(w)
 		return
 	}
 	if p.refuseLockedDeletion(w, acc) {
@@ -520,7 +520,7 @@ func (p *provider) handleDeleteAccountConfirm(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if p.stackDeletion(acc) {
-		http.Redirect(w, r, p.cfg.AccountConsoleURL(p.baseURL()+"/account"), http.StatusSeeOther)
+		p.leaveToAccountDeletion(w)
 		return
 	}
 	if p.refuseLockedDeletion(w, acc) {
@@ -668,12 +668,19 @@ type dashView struct {
 	// erase its own half through the GDPR webhook. Deleting locally instead
 	// would leave a stack identity behind that still names this app.
 	StackDeletion bool
-	Email         string
-	Tier          string
-	Sites         []siteRow
-	CSRF          string
-	Base          string
-	SelfSelect    bool
+	// DeletionURL is the stack's own deletion page for this app, which opens
+	// the deletion itself; the console when there is none.
+	DeletionURL string
+	// CancelURL is the stack's cancellation page (§ 312k BGB): where a
+	// customer cancels a contract without signing in. Shown whenever the
+	// instance has one, so it is always there to be found.
+	CancelURL  string
+	Email      string
+	Tier       string
+	Sites      []siteRow
+	CSRF       string
+	Base       string
+	SelfSelect bool
 	// Checkout says a backend can sell a plan. It deliberately does not say
 	// which: the page posts to one neutral route so a customer never sees the
 	// processor's name, which is what lets the stack change providers.
@@ -755,21 +762,39 @@ func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, 
 			opts = append(opts, tierOption{ID: t.ID, Label: label, Current: t.ID == current.ID, Paid: t.Paid(), Price: t.Price.Label()})
 		}
 	}
-	var accountURL string
+	var accountURL, deletionURL, cancelURL string
 	if acc.Provider == account.OIDCProv {
 		accountURL = p.cfg.AccountConsoleURL(p.baseURL() + "/account")
+		if deletionURL = p.cfg.AccountDeletionURL(); deletionURL == "" {
+			deletionURL = accountURL
+		}
+	}
+	if p.cfg.PayGate != nil {
+		cancelURL = p.cfg.PayGate.CancelURL
 	}
 	dashTmpl.Execute(w, dashView{
 		MCPEndpoint: p.host.BaseURL() + "/mcp",
 		Email:       acc.Email, Tier: tier, Sites: rows, CSRF: token, Base: p.baseURL(),
 		SelfSelect: p.cfg.SelfSelect, Checkout: checkout, Portal: portal, Tiers: opts,
-		AccountURL: accountURL, StackDeletion: p.stackDeletion(acc),
+		AccountURL: accountURL, StackDeletion: p.stackDeletion(acc), DeletionURL: deletionURL, CancelURL: cancelURL,
 		IsAdmin:  p.isAdmin(acc),
 		Tokens:   p.tokenRows(acc, token),
 		Zones:    p.zoneRows(acc, token),
 		ZonesMax: current.MaxZones,
 		License:  p.licenseNotice(),
 	})
+}
+
+// leaveToAccountDeletion sends a stack user to where their account is deleted:
+// the stack's own deletion page, else the console. A handoff page, not a 303 —
+// the redirect of a form POST to another origin is what form-action 'self'
+// makes the browser drop.
+func (p *provider) leaveToAccountDeletion(w http.ResponseWriter) {
+	dest := p.cfg.AccountDeletionURL()
+	if dest == "" {
+		dest = p.cfg.AccountConsoleURL(p.baseURL() + "/account")
+	}
+	p.leaveTo(w, dest, "Delete your account", "Your account is deleted where your sign-in lives; your sites and tokens here go with it.")
 }
 
 // stackDeletion reports whether acc is deleted at the stack's account console

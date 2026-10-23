@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -84,6 +85,12 @@ func (g *PayGate) CheckoutURL(ctx context.Context, c Customer, tier eeconfig.Tie
 		} `json:"data"`
 	}
 	if err := g.post(ctx, "checkout", c.Subject, body, &out); err != nil {
+		var refused *paygateError
+		if errors.As(err, &refused) {
+			if manage := refused.manageURL(); manage != "" {
+				return "", &AlreadySubscribedError{ManageURL: manage}
+			}
+		}
 		return "", err
 	}
 	if out.Data.CheckoutURL == "" {
@@ -148,9 +155,48 @@ func (g *PayGate) post(ctx context.Context, action, subject string, body map[str
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var buf bytes.Buffer
 		buf.ReadFrom(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("paygate %s: status %d: %s", action, resp.StatusCode, strings.TrimSpace(buf.String()))
+		return &paygateError{action: action, status: resp.StatusCode, body: buf.Bytes()}
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// paygateError is a non-2xx answer, kept whole so a caller can read the
+// stack's error code where one means something other than a failure.
+type paygateError struct {
+	action string
+	status int
+	body   []byte
+}
+
+func (e *paygateError) Error() string {
+	return fmt.Sprintf("paygate %s: status %d: %s", e.action, e.status, strings.TrimSpace(string(e.body)))
+}
+
+// manageURL is the page the stack names when it refuses a checkout because
+// the customer already pays (409 `already_subscribed`, or `already_entitled`
+// for a tier bought for good) — "" for any other answer. Only https: the
+// browser is sent there.
+func (e *paygateError) manageURL() string {
+	if e.status != http.StatusConflict {
+		return ""
+	}
+	var answer struct {
+		Error   string `json:"error"`
+		Details struct {
+			ManageURL string `json:"manageUrl"`
+		} `json:"details"`
+	}
+	if json.Unmarshal(e.body, &answer) != nil {
+		return ""
+	}
+	if answer.Error != "already_subscribed" && answer.Error != "already_entitled" {
+		return ""
+	}
+	u, err := url.Parse(answer.Details.ManageURL)
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return ""
+	}
+	return u.String()
 }
 
 // TierFor returns the stack tier id for a user. ok=false with err=nil means

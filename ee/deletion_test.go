@@ -28,13 +28,17 @@ import (
 // fakeBilling is a direct-style backend that can cancel, and remembers what
 // it was asked to cancel.
 type fakeBilling struct {
-	name      string
-	cancelled []string
-	cancelErr error
+	name        string
+	cancelled   []string
+	cancelErr   error
+	checkoutErr error
 }
 
 func (f *fakeBilling) Name() string { return f.name }
 func (f *fakeBilling) CheckoutURL(context.Context, billing.Customer, eeconfig.Tier, string, string) (string, error) {
+	if f.checkoutErr != nil {
+		return "", f.checkoutErr
+	}
 	return "https://pay.example/checkout", nil
 }
 func (f *fakeBilling) PortalURL(context.Context, billing.Customer, string) (string, error) {

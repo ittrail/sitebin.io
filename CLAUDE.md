@@ -537,6 +537,13 @@ than merely unrouted.
   which is the OIDC subject). A local account has no subscription there and
   never will, so `SITEBIN_LOCAL_AUTH=false` is the recommendation on a stack
   instance.
+- **A customer who already pays is sent, not refused.** The stack answers
+  their checkout `409 already_subscribed` / `already_entitled` with
+  `details.manageUrl`; `CheckoutURL` turns that (https only) into
+  `billing.AlreadySubscribedError` and `handleUpgrade` hands the browser to
+  it. The dashboard links the stack's cancellation page (`PayGate.CancelURL`,
+  § 312k BGB) and its deletion page (`AccountDeletionURL`). See
+  `docs/superpowers/specs/2026-10-23-stack-consumer-commerce-followups.md`.
 - **Tier prices differ by backend.** Direct backends read `price.stripe` /
   `price.paddle`; PayGate needs `price.monthly` / `annual` / `currency`
   **amounts**, because the stack creates the product and has no field for a

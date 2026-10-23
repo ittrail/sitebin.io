@@ -313,6 +313,11 @@ type PayGateConfig struct {
 	// with the issuer the instance actually signs in against; the stack
 	// defines where the page is, and so does this.
 	PlanURL string
+	// CancelURL is the stack's cancellation page for this app (§ 312k BGB,
+	// `cancelUrl()` in the stack's SDK): no sign-in, cancels to the end of the
+	// term, confirms by mail. Derived like PlanURL; the dashboard links it so
+	// a customer can always find it.
+	CancelURL string
 }
 
 // StackConfig makes this instance register itself with the IT-Trail SaaS
@@ -375,6 +380,13 @@ type StackConsent struct {
 	// and the stack applies its own default (true), rather than Sitebin
 	// restating a default it does not own.
 	Required *bool `json:"required,omitempty"`
+	// DocumentURL is the file the stack attaches to a purchase confirmation
+	// (its order S22: the terms on a durable medium, not only a link to a
+	// page that can change) — https; a PDF, text, Markdown or HTML page. The
+	// stack fetches it once per version and archives what it fetched. It is
+	// not part of the document's identity: adding one to a version already
+	// recorded is accepted.
+	DocumentURL string `json:"documentUrl,omitempty"`
 }
 
 // consentKeyRe is the stack's CONSENT_KEY_PATTERN, verbatim: a key is a slug
@@ -667,6 +679,9 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Co
 		}
 		if cfg.OIDC != nil {
 			cfg.PayGate.PlanURL = stackPlanURL(cfg.OIDC.Issuer, pgApp)
+			if origin := stackPortalOrigin(cfg.OIDC.Issuer); origin != "" {
+				cfg.PayGate.CancelURL = origin + "/apps/" + url.PathEscape(pgApp) + "/cancel"
+			}
 		}
 	}
 
@@ -800,6 +815,12 @@ func parseConsents(raw string) ([]StackConsent, error) {
 		if !strings.HasPrefix(c.URL, "https://") && !strings.HasPrefix(c.URL, "http://") {
 			return nil, fmt.Errorf("document %q: url %q is not an http(s) URL", c.Key, c.URL)
 		}
+		// The stack refuses anything but https here, and a refused
+		// registration is a boot-time background error; say it now.
+		c.DocumentURL = strings.TrimSpace(c.DocumentURL)
+		if c.DocumentURL != "" && !strings.HasPrefix(c.DocumentURL, "https://") {
+			return nil, fmt.Errorf("document %q: documentUrl %q must be https", c.Key, c.DocumentURL)
+		}
 	}
 	return consents, nil
 }
@@ -810,11 +831,47 @@ func parseConsents(raw string) ([]StackConsent, error) {
 // issuer's origin — `https://auth.<domain>` serves both the realm and the
 // stack portal — so the issuer is the one value it is derived from.
 func stackPlanURL(issuer, appID string) string {
+	origin := stackPortalOrigin(issuer)
+	if origin == "" {
+		return ""
+	}
+	return origin + "/apps/" + url.PathEscape(appID) + "/plan"
+}
+
+// stackPortalOrigin is the stack portal's origin: the issuer's. "" for an
+// issuer that does not parse, so no page is derived rather than a broken link.
+func stackPortalOrigin(issuer string) string {
 	u, err := url.Parse(issuer)
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return ""
 	}
-	return u.Scheme + "://" + u.Host + "/apps/" + url.PathEscape(appID) + "/plan"
+	return u.Scheme + "://" + u.Host
+}
+
+// AccountDeletionURL is the stack's own account-deletion page for this app
+// (`deleteAccountUrl()` in the stack's SDK): it opens the deletion itself,
+// branded for the app, where the console's start page leaves a user to find
+// it. Only where deletion happens at the stack at all (StackDeletion), and ""
+// otherwise — local deletion stays on the dashboard.
+func (c Config) AccountDeletionURL() string {
+	if !c.StackDeletion() {
+		return ""
+	}
+	origin := stackPortalOrigin(c.OIDC.Issuer)
+	if origin == "" {
+		return ""
+	}
+	app := ""
+	if c.StackRegistration != nil {
+		app = c.StackRegistration.AppID
+	}
+	if app == "" && c.PayGate != nil {
+		app = c.PayGate.AppID
+	}
+	if app == "" {
+		return origin + "/account/delete"
+	}
+	return origin + "/account/delete?app=" + url.QueryEscape(app)
 }
 
 // AccountConsoleURL is the identity provider's account console — password,
