@@ -71,4 +71,15 @@ The stack's content hash covers `url` and `title` only. Adding `documentUrl`
 to a version already recorded is therefore accepted; no version bump is
 needed.
 
-On the hosted instance, `terms` declares `documentUrl: https://sitebin.io/terms/`.
+On the hosted instance, `terms` declares `documentUrl: https://www.sitebin.io/terms/`
+— the `www` host. The stack fetches with its outbound rules, which never follow
+a redirect (SSRF), and `sitebin.io` answers 302 to `www.sitebin.io`; the apex
+URL would archive nothing and attach nothing. Point it at the resource itself.
+
+## Corrections (post-implementation)
+
+- The stack's `normalizeAppConsents` dropped `documentUrl` when it stored a
+  registration (saas-stack, fixed in 0a86ac4 on 2026-10-23). Until then the
+  field arrived and was accepted, but `apps.config.consents` never held it.
+- `documentUrl` first pointed at the apex `https://sitebin.io/terms/`, which
+  redirects; see above.
