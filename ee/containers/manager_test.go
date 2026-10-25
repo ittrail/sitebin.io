@@ -39,6 +39,10 @@ type fakeEngine struct {
 	createErr  error
 	pingErr    error
 	mounts     []struct{ Type, Name, Source, Destination string }
+	updates    []string // the container names ContainerUpdate changed
+	updateErr  error
+	info       EngineInfo
+	infoErr    error
 }
 
 func newFakeEngine() *fakeEngine {
@@ -106,6 +110,22 @@ func (f *fakeEngine) byID(id string) *fakeContainer {
 	}
 	return nil
 }
+func (f *fakeEngine) ContainerUpdate(_ context.Context, id string, r Resources) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c := f.byID(id)
+	if c == nil {
+		return &engineError{404, "No such container: " + id}
+	}
+	if f.updateErr != nil {
+		return f.updateErr
+	}
+	f.updates = append(f.updates, c.name)
+	hc := &c.body.HostConfig
+	hc.Memory, hc.MemorySwap, hc.NanoCpus, hc.PidsLimit = r.Memory, r.MemorySwap, r.NanoCpus, r.PidsLimit
+	return nil
+}
+func (f *fakeEngine) Info(context.Context) (EngineInfo, error) { return f.info, f.infoErr }
 func (f *fakeEngine) ContainerStart(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -326,6 +346,9 @@ func newRig(t *testing.T) *rig {
 		}
 		return r.caps[owner], nil
 	})
+	// DataDir is /data, which is what the fake mounts; the saved defaults go
+	// to a directory of the test's own.
+	r.m.limits = NewLimitBook(t.TempDir(), r.m.limits.Env())
 	if !r.m.setup(context.Background()) {
 		t.Fatalf("setup: %v", r.m.setupErr)
 	}

@@ -209,6 +209,34 @@ func (c *Client) ContainerRemove(ctx context.Context, id string) error {
 	return err
 }
 
+// Resources are a container's limits as the Engine takes them, at creation
+// (in HostConfig) and in an update.
+type Resources struct {
+	Memory     int64 `json:"Memory"`
+	MemorySwap int64 `json:"MemorySwap"`
+	NanoCpus   int64 `json:"NanoCpus"`
+	PidsLimit  int64 `json:"PidsLimit"`
+}
+
+// ContainerUpdate changes a container's limits in place, running or not;
+// the container is not restarted.
+func (c *Client) ContainerUpdate(ctx context.Context, id string, r Resources) error {
+	return c.do(ctx, "POST", "/containers/"+id+"/update", nil, r, nil)
+}
+
+// EngineInfo is the part of the Engine's /info the runtime reads: the
+// host's size, which bounds what a container's limits can be.
+type EngineInfo struct {
+	NCPU     int   `json:"NCPU"`
+	MemTotal int64 `json:"MemTotal"`
+}
+
+// Info describes the Engine's host.
+func (c *Client) Info(ctx context.Context) (EngineInfo, error) {
+	var out EngineInfo
+	return out, c.do(ctx, "GET", "/info", nil, nil, &out)
+}
+
 // Inspect is the part of a container inspection the runtime reads.
 type Inspect struct {
 	ID     string `json:"Id"`

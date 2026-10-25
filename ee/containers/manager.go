@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path"
 	"regexp"
@@ -51,6 +52,8 @@ type engine interface {
 	ContainerRemove(ctx context.Context, id string) error
 	ContainerInspect(ctx context.Context, id string) (Inspect, error)
 	ContainerLogs(ctx context.Context, id string, tail int) (string, error)
+	ContainerUpdate(ctx context.Context, id string, r Resources) error
+	Info(ctx context.Context) (EngineInfo, error)
 	NetworkList(ctx context.Context, labels ...string) ([]NetworkSummary, error)
 	NetworkExists(ctx context.Context, name string) (bool, error)
 	NetworkCreate(ctx context.Context, name string, internal bool, labels, options map[string]string) error
@@ -98,6 +101,7 @@ type Manager struct {
 	eng    engine
 	sites  ext.SiteService
 	capFor func(owner string) (int, error)
+	limits *LimitBook
 	uid    int
 	gid    int
 	now    func() time.Time
@@ -111,6 +115,7 @@ type Manager struct {
 	retryAt   map[string]time.Time
 	locks     map[string]*sync.Mutex
 	cancels   map[string]context.CancelFunc
+	updateErr map[string]string // the last failed limits update, by site
 	lastQuota time.Time
 	kick      chan string
 }
@@ -133,11 +138,24 @@ func newManager(cfg Config, eng engine, sites ext.SiteService, capFor func(strin
 	}
 	return &Manager{
 		cfg: cfg, eng: eng, sites: sites, capFor: capFor, uid: uid, gid: gid, now: time.Now,
-		setupErr: errors.New("the container runtime is starting"),
-		known:    map[string]bool{}, busy: map[string]bool{}, retryAt: map[string]time.Time{},
+		limits:    NewLimitBook(cfg.DataDir, ext.ContainerLimits{MemoryMB: cfg.MemoryMB, CPUs: cfg.CPUs, Pids: cfg.Pids}),
+		updateErr: map[string]string{},
+		setupErr:  errors.New("the container runtime is starting"),
+		known:     map[string]bool{}, busy: map[string]bool{}, retryAt: map[string]time.Time{},
 		locks: map[string]*sync.Mutex{}, cancels: map[string]context.CancelFunc{},
 		kick: make(chan string, 64),
 	}
+}
+
+// Limits is the instance's default container limits, which the admin
+// console reads and changes.
+func (m *Manager) Limits() *LimitBook { return m.limits }
+
+// UpdateError is why the site's last limits update failed, or "".
+func (m *Manager) UpdateError(viewID string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.updateErr[viewID]
 }
 
 // ---- ext.ContainerRuntime ----
@@ -301,6 +319,13 @@ func (m *Manager) resolveSetup(ctx context.Context) error {
 	if err := m.eng.Ping(cctx); err != nil {
 		return fmt.Errorf("the Docker Engine does not answer at %s: %v", m.cfg.DockerHost, err)
 	}
+	// The host's size bounds what a limit may be. Not knowing it only
+	// leaves the static bounds.
+	if info, err := m.eng.Info(cctx); err == nil {
+		m.limits.SetCapacity(info.NCPU, info.MemTotal)
+	} else {
+		slog.Warn("containers: the Docker Engine did not say how large its host is", "err", err)
+	}
 	self := m.cfg.Self
 	if self == "" {
 		self = detectSelf()
@@ -461,8 +486,19 @@ func (m *Manager) reconcile(ctx context.Context, cs ext.ContainerSite, kicked bo
 
 	hash := composeHash(cs)
 	if obs.AppliedHash == hash && obs.AppliedSeq == cs.RestartSeq {
-		if present != nil && obs.Status == store.ContainerRunning {
+		switch {
+		case obs.Status != store.ContainerRunning:
+		case present != nil:
 			m.refresh(ctx, cs, present)
+		case m.limitsStale(cs):
+			// Limits are not part of what a project is re-applied on: a
+			// running one is updated in place, on the tick.
+			m.mu.Lock()
+			wait := !kicked && m.now().Before(m.retryAt[id])
+			m.mu.Unlock()
+			if !wait {
+				m.updateLimits(ctx, cs)
+			}
 		}
 		return
 	}
@@ -489,6 +525,7 @@ func (m *Manager) forget(id string) {
 	m.mu.Lock()
 	delete(m.known, id)
 	delete(m.retryAt, id)
+	delete(m.updateErr, id)
 	m.mu.Unlock()
 }
 
@@ -568,9 +605,13 @@ func (m *Manager) apply(ctx context.Context, cs ext.ContainerSite, hash string) 
 		return
 	}
 
-	services := describe(id, spec)
+	limits := map[string]ext.ContainerLimits{}
+	for _, sv := range spec.Services {
+		limits[sv.Name] = m.limits.For(cs.Limits, sv.Name)
+	}
+	services := describe(id, spec, limits)
 	m.report(id, ext.ContainerState{Status: store.ContainerStarting, AppliedHash: obs.AppliedHash, AppliedSeq: obs.AppliedSeq, AppliedAt: obs.AppliedAt, Services: stateless(services, "created")})
-	if err := m.deploy(ctx, id, spec); err != nil {
+	if err := m.deploy(ctx, id, spec, limits); err != nil {
 		m.teardownLogged(context.Background(), id)
 		if ctx.Err() != nil {
 			return // stopped or superseded while starting; Stop records the state
@@ -586,6 +627,7 @@ func (m *Manager) apply(ctx context.Context, cs ext.ContainerSite, hash string) 
 	})
 	m.mu.Lock()
 	delete(m.retryAt, id)
+	delete(m.updateErr, id)
 	m.mu.Unlock()
 	slog.Info("containers: started", "site", id, "owner", cs.Owner, "services", len(spec.Services))
 }
@@ -618,11 +660,12 @@ func counts(s ext.ContainerSite) bool {
 		(s.Observed.Status == store.ContainerRunning || s.Observed.Status == store.ContainerStarting)
 }
 
-// describe is the spec as the core records it.
-func describe(id string, spec *Spec) []ext.ContainerService {
+// describe is the spec as the core records it, with the limits each
+// service's container is created with.
+func describe(id string, spec *Spec, limits map[string]ext.ContainerLimits) []ext.ContainerService {
 	out := make([]ext.ContainerService, 0, len(spec.Services))
 	for _, sv := range spec.Services {
-		d := ext.ContainerService{Name: sv.Name, Image: sv.Image.Name, Egress: sv.Egress, Host: containerName(id, sv.Name), Ports: sv.Ports}
+		d := ext.ContainerService{Name: sv.Name, Image: sv.Image.Name, Egress: sv.Egress, Host: containerName(id, sv.Name), Ports: sv.Ports, Limits: limits[sv.Name]}
 		for _, v := range sv.Volumes {
 			d.Volumes = append(d.Volumes, v.String())
 		}
@@ -631,8 +674,9 @@ func describe(id string, spec *Spec) []ext.ContainerService {
 	return out
 }
 
-// deploy replaces the project's containers with ones built from spec.
-func (m *Manager) deploy(ctx context.Context, id string, spec *Spec) error {
+// deploy replaces the project's containers with ones built from spec, each
+// with its service's limits.
+func (m *Manager) deploy(ctx context.Context, id string, spec *Spec, limits map[string]ext.ContainerLimits) error {
 	for _, img := range uniqueImages(spec) {
 		ok, err := m.eng.ImageExists(ctx, img.Ref())
 		if err != nil {
@@ -673,7 +717,7 @@ func (m *Manager) deploy(ctx context.Context, id string, spec *Spec) error {
 		return fmt.Errorf("attach Sitebin to the project network: %w", err)
 	}
 	for _, sv := range spec.Services {
-		body, err := m.createBody(id, sv, mount)
+		body, err := m.createBody(id, sv, mount, limits[sv.Name])
 		if err != nil {
 			return err
 		}
@@ -713,8 +757,8 @@ func (m *Manager) ensureNetwork(ctx context.Context, name string, internal bool,
 
 // createBody is one service's container: Sitebin's uid, no capabilities, no
 // privilege escalation, a read-only root with bounded scratch space, the
-// instance's fixed limits, capped logs, and no published port.
-func (m *Manager) createBody(id string, sv Service, mount dataMount) (CreateBody, error) {
+// limits it was given (lim), capped logs, and no published port.
+func (m *Manager) createBody(id string, sv Service, mount dataMount, lim ext.ContainerLimits) (CreateBody, error) {
 	img := sv.Image
 	var mounts []Mount
 	for _, v := range sv.Volumes {
@@ -762,7 +806,7 @@ func (m *Manager) createBody(id string, sv Service, mount dataMount) (CreateBody
 			wd = sv.Volumes[0].Target
 		}
 	}
-	mem := int64(m.cfg.MemoryMB) << 20
+	res := resources(lim)
 	return CreateBody{
 		Image:      img.Ref(),
 		Hostname:   sv.Name,
@@ -772,10 +816,10 @@ func (m *Manager) createBody(id string, sv Service, mount dataMount) (CreateBody
 		WorkingDir: wd,
 		Labels:     map[string]string{labelManaged: "true", labelSite: id, labelService: sv.Name},
 		HostConfig: HostConfig{
-			Memory:         mem,
-			MemorySwap:     mem,
-			NanoCpus:       int64(m.cfg.CPUs * 1e9),
-			PidsLimit:      int64(m.cfg.Pids),
+			Memory:         res.Memory,
+			MemorySwap:     res.MemorySwap,
+			NanoCpus:       res.NanoCpus,
+			PidsLimit:      res.PidsLimit,
 			CapDrop:        []string{"ALL"},
 			SecurityOpt:    []string{"no-new-privileges:true"},
 			ReadonlyRootfs: true,
@@ -852,7 +896,7 @@ func (m *Manager) refresh(ctx context.Context, cs ext.ContainerSite, present []C
 			slog.Warn("containers: a service's container is gone, starting the project again", "site", id, "service", sv.Name)
 			obs.AppliedHash = ""
 			m.apply(ctx, ext.ContainerSite{ViewID: id, Owner: cs.Owner, Container: true, Enabled: true,
-				RestartSeq: cs.RestartSeq, Compose: cs.Compose, ComposeErr: cs.ComposeErr, Observed: obs}, composeHash(cs))
+				RestartSeq: cs.RestartSeq, Compose: cs.Compose, ComposeErr: cs.ComposeErr, Limits: cs.Limits, Observed: obs}, composeHash(cs))
 			return
 		}
 	}
@@ -872,6 +916,69 @@ func (m *Manager) refresh(ctx context.Context, cs ext.ContainerSite, present []C
 	if changed {
 		m.report(id, obs)
 	}
+}
+
+// resources is l as the Engine takes it: no swap, as at creation.
+func resources(l ext.ContainerLimits) Resources {
+	mem := int64(l.MemoryMB) << 20
+	return Resources{Memory: mem, MemorySwap: mem, NanoCpus: int64(math.Round(l.CPUs * 1e9)), PidsLimit: int64(l.Pids)}
+}
+
+// limitsStale reports whether a service of a running project has limits
+// other than the ones it should have, or none recorded (a container created
+// before they were). While the saved defaults are unknown nothing is stale:
+// an error must not change what customers' containers run with.
+func (m *Manager) limitsStale(cs ext.ContainerSite) bool {
+	if !m.limits.Known() {
+		return false
+	}
+	for _, sv := range cs.Observed.Services {
+		if sv.Limits != m.limits.For(cs.Limits, sv.Name) {
+			return true
+		}
+	}
+	return false
+}
+
+// updateLimits changes the limits of a running project's containers in
+// place: the app is not restarted. A failure leaves the project running and
+// is retried after a pause; a container that is gone starts the project
+// again, as the full scan's refresh does.
+func (m *Manager) updateLimits(ctx context.Context, cs ext.ContainerSite) {
+	id := cs.ViewID
+	obs := cs.Observed
+	obs.Services = slices.Clone(obs.Services)
+	for i, sv := range obs.Services {
+		want := m.limits.For(cs.Limits, sv.Name)
+		if sv.Limits == want {
+			continue
+		}
+		err := m.eng.ContainerUpdate(ctx, containerName(id, sv.Name), resources(want))
+		if errors.Is(err, errNotFound) {
+			slog.Warn("containers: a service's container is gone, starting the project again", "site", id, "service", sv.Name)
+			again := cs
+			again.Observed.AppliedHash = ""
+			m.apply(ctx, again, composeHash(cs))
+			return
+		}
+		if err != nil {
+			m.mu.Lock()
+			m.updateErr[id] = fmt.Sprintf("could not change the limits of %s: %v", sv.Name, err)
+			m.retryAt[id] = m.now().Add(retryAfter)
+			m.mu.Unlock()
+			slog.Error("containers: change limits", "site", id, "service", sv.Name, "err", err)
+			m.report(id, obs) // the services already changed are recorded
+			return
+		}
+		obs.Services[i].Limits = want
+		slog.Info("containers: limits changed", "site", id, "service", sv.Name,
+			"memory_mb", want.MemoryMB, "cpus", want.CPUs, "pids", want.Pids)
+	}
+	m.mu.Lock()
+	delete(m.updateErr, id)
+	delete(m.retryAt, id)
+	m.mu.Unlock()
+	m.report(id, obs)
 }
 
 // fullScan reconciles every container site, removes what belongs to no
