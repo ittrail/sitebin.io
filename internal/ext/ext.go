@@ -386,6 +386,12 @@ type SiteService interface {
 	// ports no longer declared; which custom domain serves which port is the
 	// site's domain settings', never the file's.
 	SyncContainerEndpoints(viewID string, endpoints []string) error
+	// SetContainerLimits replaces the operator's resource limits for the
+	// site's services (by service name); nil or empty clears them, and an
+	// entry that sets nothing is dropped. Desired state, like enabled and
+	// restart_seq: the core writes it, on the admin console's order, and the
+	// runtime converges to it. A site that no longer exists is ErrSiteGone.
+	SetContainerLimits(viewID string, limits map[string]ContainerLimits) error
 
 	// ---- account zones (see ZoneAccounts) ----
 
@@ -538,8 +544,38 @@ type ContainerSite struct {
 	// against it now and then through Info, which walks the tree and is far
 	// too costly for every tick.
 	MaxBytes int64
+	// Name is the owner's label for the site, for the admin console.
+	Name string
+	// Limits are the operator's own resource limits for the site's
+	// services, by service name: desired state the core writes on the admin
+	// console's order. A field not set in them comes from the instance
+	// default.
+	Limits map[string]ContainerLimits
 	// Observed is what the runtime last recorded.
 	Observed ContainerState
+}
+
+// ContainerLimits are one container's resource limits. A zero field is not
+// set: an operator's value for a service inherits it from the instance
+// default, and a container recorded before limits were recorded has none.
+type ContainerLimits struct {
+	MemoryMB int
+	CPUs     float64
+	Pids     int
+}
+
+// Or is l with every field it does not set taken from d.
+func (l ContainerLimits) Or(d ContainerLimits) ContainerLimits {
+	if l.MemoryMB <= 0 {
+		l.MemoryMB = d.MemoryMB
+	}
+	if l.CPUs <= 0 {
+		l.CPUs = d.CPUs
+	}
+	if l.Pids <= 0 {
+		l.Pids = d.Pids
+	}
+	return l
 }
 
 // ContainerState is what the runtime observed of a site.
@@ -563,6 +599,8 @@ type ContainerService struct {
 	Ports   []int  // the ports it speaks HTTP on (compose http:)
 	State   string // Docker's: running, restarting, exited…
 	Host    string // its name on the project network
+	// Limits are what was last applied to its container.
+	Limits ContainerLimits
 }
 
 // SiteInfo is the dashboard's view of a site.

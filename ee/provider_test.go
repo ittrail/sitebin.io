@@ -65,6 +65,9 @@ func (s *fakeSites) PrepareVolume(string, string) (string, error) {
 }
 func (s *fakeSites) SetContainerState(string, ext.ContainerState) error { return nil }
 func (s *fakeSites) SyncContainerEndpoints(string, []string) error      { return nil }
+func (s *fakeSites) SetContainerLimits(string, map[string]ext.ContainerLimits) error {
+	return nil
+}
 func (s *fakeSites) ClaimZone(acct, zone string) (ext.ZoneInfo, bool, error) {
 	if s.zones == nil {
 		s.zones = map[string]map[string]bool{}

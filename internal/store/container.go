@@ -38,9 +38,15 @@ const (
 // The runtime re-applies a project whenever the compose file's hash or
 // RestartSeq differs from what it last applied, which is how every write path
 // — WebDAV and FTP included — restarts a project without telling anyone.
+//
+// Limits — the operator's own resource limits per service — are desired
+// state too, written by the core on the admin console's order. They are not
+// part of what the runtime re-applies on: a running container is updated in
+// place, never recreated, when they change.
 type ContainerMeta struct {
-	Enabled    bool `json:"enabled"`
-	RestartSeq int  `json:"restart_seq,omitempty"`
+	Enabled    bool                       `json:"enabled"`
+	RestartSeq int                        `json:"restart_seq,omitempty"`
+	Limits     map[string]ContainerLimits `json:"limits,omitempty"`
 
 	Status      string             `json:"status,omitempty"`
 	Message     string             `json:"message,omitempty"`
@@ -65,6 +71,18 @@ type ContainerService struct {
 	// Host is the name the service answers to on its project network, and
 	// what Caddy proxies to.
 	Host string `json:"host,omitempty"`
+	// Limits are what was last applied to its container; absent on one
+	// created before they were recorded.
+	Limits ContainerLimits `json:"limits,omitzero"`
+}
+
+// ContainerLimits are one container's memory, CPU and process limits. A zero
+// field is not set: an operator's value inherits it from the instance
+// default.
+type ContainerLimits struct {
+	MemoryMB int     `json:"memory_mb,omitempty"`
+	CPUs     float64 `json:"cpus,omitempty"`
+	Pids     int     `json:"pids,omitempty"`
 }
 
 // Upstream answers where a request for endpoint ("service:port") goes:

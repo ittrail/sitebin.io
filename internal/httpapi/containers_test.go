@@ -603,3 +603,66 @@ func TestDeletingAContainerSiteStopsItFirst(t *testing.T) {
 		t.Errorf("stopped = %v", rt.stopped)
 	}
 }
+
+// The operator's per-service limits are desired state: the core writes them,
+// the runtime reads them, and recording what was observed leaves them alone.
+func TestSetContainerLimitsIsDesiredState(t *testing.T) {
+	withContainers(t, &fakeRuntime{})
+	e := newEnv(t, nil)
+	c := e.createSite(t, map[string]string{"mode": "container"}, map[string]string{store.ComposeFile: "services: {}\n"})
+	ss := e.api.SiteService()
+
+	want := map[string]ext.ContainerLimits{"db": {MemoryMB: 1024}, "app": {CPUs: 1, Pids: 512}, "gone": {}}
+	if err := ss.SetContainerLimits(c.ID, want); err != nil {
+		t.Fatal(err)
+	}
+	cs, _ := ss.ContainerSite(c.ID)
+	if len(cs.Limits) != 2 || cs.Limits["db"] != (ext.ContainerLimits{MemoryMB: 1024}) || cs.Limits["app"] != (ext.ContainerLimits{CPUs: 1, Pids: 512}) {
+		t.Fatalf("limits = %+v (an all-zero entry must be dropped)", cs.Limits)
+	}
+
+	applied := ext.ContainerLimits{MemoryMB: 1024, CPUs: 0.5, Pids: 256}
+	st := ext.ContainerState{Status: store.ContainerRunning, Services: []ext.ContainerService{{Name: "db", Image: "mysql-8.4", Limits: applied}}}
+	if err := ss.SetContainerState(c.ID, st); err != nil {
+		t.Fatal(err)
+	}
+	cs, _ = ss.ContainerSite(c.ID)
+	if len(cs.Limits) != 2 || cs.Observed.Services[0].Limits != applied {
+		t.Errorf("after SetContainerState: limits %+v, observed %+v", cs.Limits, cs.Observed.Services)
+	}
+
+	if err := ss.SetContainerLimits(c.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	cs, _ = ss.ContainerSite(c.ID)
+	if len(cs.Limits) != 0 {
+		t.Errorf("cleared limits = %+v", cs.Limits)
+	}
+	site, _ := e.st.ByViewID(c.ID)
+	raw, _ := os.ReadFile(filepath.Join(site.Dir(), "meta.json"))
+	var m struct {
+		Container struct {
+			Limits map[string]any `json:"limits"`
+		} `json:"container"`
+	}
+	json.Unmarshal(raw, &m)
+	if m.Container.Limits != nil {
+		t.Errorf("meta.json container.limits = %v", m.Container.Limits)
+	}
+
+	if err := ss.SetContainerLimits("aaaaaaaaaaaaaaaaaaaaaaaaaa", want); !errors.Is(err, ext.ErrSiteGone) {
+		t.Errorf("gone site: %v", err)
+	}
+}
+
+// A container site nobody gave limits writes no limits at all: older sites
+// and new ones look the same on disk.
+func TestContainerLimitsOmittedWhenUnset(t *testing.T) {
+	b, err := json.Marshal(store.ContainerMeta{Enabled: true, Services: []store.ContainerService{{Name: "app", Image: "alpine-node-22"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "limits") {
+		t.Errorf("unset limits are written: %s", b)
+	}
+}

@@ -265,11 +265,18 @@ func (s siteService) containerSiteOf(site *store.Site) ext.ContainerSite {
 		Expired:   site.Meta.Expired(time.Now()),
 		Locked:    site.Meta.IsLocked(),
 		MaxBytes:  s.a.st.EffMaxBytes(site),
+		Name:      site.Meta.Name,
 	}
 	if c := site.Meta.Container; c != nil {
 		cs.Enabled = c.Enabled
 		cs.RestartSeq = c.RestartSeq
 		cs.Observed = observedOf(c)
+		for name, l := range c.Limits {
+			if cs.Limits == nil {
+				cs.Limits = map[string]ext.ContainerLimits{}
+			}
+			cs.Limits[name] = extLimits(l)
+		}
 	}
 	if cs.Container {
 		b, err := s.a.st.ReadCompose(site)
@@ -343,7 +350,7 @@ func (s siteService) SetContainerState(viewID string, st ext.ContainerState) err
 		for _, sv := range st.Services {
 			c.Services = append(c.Services, store.ContainerService{
 				Name: sv.Name, Image: sv.Image, Egress: sv.Egress, Volumes: sv.Volumes,
-				Ports: slices.Clone(sv.Ports), State: sv.State, Host: sv.Host,
+				Ports: slices.Clone(sv.Ports), State: sv.State, Host: sv.Host, Limits: storeLimits(sv.Limits),
 			})
 		}
 		c.ObservedAt = &now
@@ -368,8 +375,44 @@ func observedOf(c *store.ContainerMeta) ext.ContainerState {
 	for _, sv := range c.Services {
 		st.Services = append(st.Services, ext.ContainerService{
 			Name: sv.Name, Image: sv.Image, Egress: sv.Egress, Volumes: sv.Volumes,
-			Ports: slices.Clone(sv.Ports), State: sv.State, Host: sv.Host,
+			Ports: slices.Clone(sv.Ports), State: sv.State, Host: sv.Host, Limits: extLimits(sv.Limits),
 		})
 	}
 	return st
+}
+
+func (s siteService) SetContainerLimits(viewID string, limits map[string]ext.ContainerLimits) error {
+	site, err := s.a.st.ByViewID(viewID)
+	if err != nil {
+		return mapSiteGone(err, viewID)
+	}
+	err = s.a.st.Update(site, func(m *store.Meta) error {
+		var keep map[string]store.ContainerLimits
+		for name, l := range limits {
+			if l == (ext.ContainerLimits{}) {
+				continue
+			}
+			if keep == nil {
+				keep = map[string]store.ContainerLimits{}
+			}
+			keep[name] = storeLimits(l)
+		}
+		if m.Container == nil {
+			if keep == nil {
+				return nil
+			}
+			m.Container = &store.ContainerMeta{}
+		}
+		m.Container.Limits = keep
+		return nil
+	})
+	return mapSiteGone(err, viewID)
+}
+
+func extLimits(l store.ContainerLimits) ext.ContainerLimits {
+	return ext.ContainerLimits{MemoryMB: l.MemoryMB, CPUs: l.CPUs, Pids: l.Pids}
+}
+
+func storeLimits(l ext.ContainerLimits) store.ContainerLimits {
+	return store.ContainerLimits{MemoryMB: l.MemoryMB, CPUs: l.CPUs, Pids: l.Pids}
 }

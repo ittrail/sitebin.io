@@ -274,6 +274,16 @@ func (s *fakeSites) SyncContainerEndpoints(id string, e []string) error {
 	s.endpoints[id] = e
 	return nil
 }
+func (s *fakeSites) SetContainerLimits(id string, l map[string]ext.ContainerLimits) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cs, ok := s.sites[id]
+	if !ok {
+		return ext.ErrSiteGone
+	}
+	cs.Limits = l
+	return nil
+}
 func (s *fakeSites) Info(id string) (ext.SiteInfo, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

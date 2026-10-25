@@ -41,3 +41,13 @@ func TestCredentialInContext(t *testing.T) {
 		t.Error("the MCP marker reads as a credential")
 	}
 }
+
+func TestLimitsOr(t *testing.T) {
+	d := ContainerLimits{MemoryMB: 512, CPUs: 0.5, Pids: 256}
+	if got := (ContainerLimits{}).Or(d); got != d {
+		t.Errorf("unset = %+v", got)
+	}
+	if got := (ContainerLimits{MemoryMB: 1024, Pids: 64}).Or(d); got != (ContainerLimits{MemoryMB: 1024, CPUs: 0.5, Pids: 64}) {
+		t.Errorf("partial = %+v", got)
+	}
+}
