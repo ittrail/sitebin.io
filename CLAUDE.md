@@ -316,6 +316,17 @@ The third site mode (`store.ModeContainer`) runs the project its
   minute. An unknown plan starts nothing and stops nothing.
 - **`max_containers` 0 means none**, like `custom_domains`. It counts running
   services across all of an account's projects.
+- **Limits are the operator's, and never restart an app.** Effective limits,
+  field by field: the service's own (`container.limits` in `meta.json`,
+  desired state the core writes on the console's order) → the defaults saved
+  in the console (`<data>/containers/limits.json`, `containers.LimitBook`) →
+  `SITEBIN_CONTAINER_*`. They are NOT part of the re-apply key: the tick
+  updates a running project's containers in place (`POST
+  /containers/{id}/update`) when the applied values it recorded per service
+  differ, retries a failure after a minute without tearing anything down,
+  and re-applies only when a container is gone. An unreadable defaults file
+  is unknown — nothing running is changed until defaults are saved again.
+  Read `docs/superpowers/specs/2026-10-25-container-limits-admin-design.md`.
 - **No file surface follows a symlink out of a site.** Containers write into
   the site tree, so the store, WebDAV (`siteFS`) and FTP (`rootFs`) resolve
   through `os.Root`; listings, ZIP and usage count regular files only; leaving

@@ -922,7 +922,10 @@ How it runs:
   Path views (`/v/<id>`) do not proxy.
 - Per container: Sitebin's own uid (files stay manageable), no capabilities,
   `no-new-privileges`, a read-only root filesystem with bounded tmpfs scratch
-  space, and **fixed** memory / CPU / process limits set by the instance. No
+  space, and memory / CPU / process limits the **operator** sets: the
+  instance's defaults, and per container in the instance register's
+  Containers tab (see below) — changed on running containers in place,
+  without a restart. The customer does not choose them. No
   port is published on the host. An image's data path you do not mount (e.g.
   MySQL's) is a tmpfs, so it cannot fill the host's disk.
 - **Quotas.** The tier's `max_containers` caps running services across **all**
@@ -1312,7 +1315,7 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_CONTAINERS_DATA_MOUNT` | Where `/data` lives for Docker: an absolute host path or `volume:<name>`. Default: found by inspecting Sitebin's own container. |
 | `SITEBIN_CONTAINERS_SELF` | Sitebin's own container id or name. Default: detected. |
 | `SITEBIN_CONTAINERS_RUNTIME` | OCI runtime for customer containers, e.g. `runsc` (gVisor). Default: the Engine's. |
-| `SITEBIN_CONTAINER_MEMORY_MB` / `_CPUS` / `_PIDS` | Fixed per-container limits: `512` MB (no swap), `0.5` CPU, `256` processes. |
+| `SITEBIN_CONTAINER_MEMORY_MB` / `_CPUS` / `_PIDS` | Default per-container limits: `512` MB (no swap), `0.5` CPU, `256` processes. An admin can override them in the instance register's Containers tab — the instance defaults (saved to `/data/containers/limits.json`, field by field over these) and one service's own — and running containers follow in place. |
 | `SITEBIN_VIEW_DOMAIN` | Domain user sites are served from, as `<id>.<view-domain>` (default: the base domain). Point it at a **separate registrable domain** and list that domain in the [Public Suffix List](https://publicsuffix.org/) to stop uploaded content sharing a browser "site" with the dashboard: no cookie can be written upward onto the app, `SameSite` stops treating navigations from a user site as same-site, and a phishing takedown against one site does not endanger the app's own domain. Needs its own wildcard DNS record and DNS-challenge access. Cannot be combined with `SITEBIN_VIEW_ACCESS=path\|both`, which would serve content from the main domain again. The apex and `www.` of the view domain then serve a static `noindex` page saying whose content it is and how to report it, and `security.txt`; point both at the instance too (the apex certificate is obtained the way the wildcard's is). |
 | `SITEBIN_ADMIN_ACCOUNTS` | Comma-separated emails allowed to reach the **instance register** at `/account/admin` — every site on the instance, with delete, expiry and lock control. Gated twice: the account's tier must also carry `"admin": true` in the tier config, so neither the plan source nor the environment can grant it alone. Unset disables the console entirely. |
 | `SITEBIN_ALLOW_ANON_CREATE` | In accounts mode, still allow anonymous sites. |
@@ -1422,6 +1425,16 @@ minutes of sign-up is flagged). Searching for an IP address or a CIDR range
 lists every site whose trail names it and every account seen there. It never exposes a
 site's edit password or edit page: an operator can clean up and look, but the
 claim ticket stays the only thing that confers ownership.
+
+With container sites on, its **Containers** tab (`/account/admin/containers`)
+sets the memory, CPU and process limits of every customer container: the
+instance defaults (an empty field is the `SITEBIN_CONTAINER_*` value) and,
+per service of a site, its own values, which win field by field. Values are
+checked against the host's CPUs and memory before they are saved. Running
+containers are changed in place within seconds — the apps are not restarted;
+a project that is stopped gets them when it starts. Memory set below what a
+process already uses gets it killed by the kernel, and Docker starts it again.
+Design: `docs/superpowers/specs/2026-10-25-container-limits-admin-design.md`.
 
 Note that an unlimited tier needs explicit large caps, not zeros:
 `max_site_bytes: 0` and `max_files: 0` fall back to the instance globals, and

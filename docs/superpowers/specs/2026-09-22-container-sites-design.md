@@ -69,7 +69,9 @@ It is an **Enterprise** feature and a **paid-tier** feature: the tier's
 `max_containers` caps the number of running services **across all of an
 account's projects** — Pro 3, Studio 20 on the hosted instance. Memory, CPU and
 process limits are fixed per container by the instance, not chosen by the
-customer.
+customer. (Since 2026-10-25 the operator sets them in the admin console —
+defaults and per container, changed in place; see
+`2026-10-25-container-limits-admin-design.md`.)
 
 ## Architecture
 
