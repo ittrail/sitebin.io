@@ -248,8 +248,47 @@ type Inspect struct {
 		Destination string `json:"Destination"`
 	} `json:"Mounts"`
 	NetworkSettings struct {
-		Networks map[string]json.RawMessage `json:"Networks"`
+		// Networks are the container's attachments by network name; the MAC
+		// address is how Sitebin finds its own interface on each.
+		Networks map[string]Endpoint `json:"Networks"`
 	} `json:"NetworkSettings"`
+}
+
+// Endpoint is one network attachment of a container.
+type Endpoint struct {
+	MacAddress string `json:"MacAddress"`
+}
+
+// Stats is the part of a container's stats the usage sampler reads.
+type Stats struct {
+	Read   time.Time `json:"read"`
+	Memory struct {
+		Usage uint64            `json:"usage"`
+		Stats map[string]uint64 `json:"stats"`
+	} `json:"memory_stats"`
+	CPU struct {
+		Usage struct {
+			Total uint64 `json:"total_usage"`
+		} `json:"cpu_usage"`
+	} `json:"cpu_stats"`
+	Pids struct {
+		Current uint64 `json:"current"`
+	} `json:"pids_stats"`
+	// Networks are the counters by interface name inside the container.
+	Networks map[string]IfCounters `json:"networks"`
+}
+
+// IfCounters are one network interface's byte counters.
+type IfCounters struct {
+	Rx uint64 `json:"rx_bytes"`
+	Tx uint64 `json:"tx_bytes"`
+}
+
+// ContainerStats reads a container's counters once, without the Engine's
+// own second sample: the sampler computes rates from its previous one.
+func (c *Client) ContainerStats(ctx context.Context, id string) (Stats, error) {
+	var out Stats
+	return out, c.do(ctx, "GET", "/containers/"+id+"/stats", url.Values{"stream": {"false"}, "one-shot": {"true"}}, nil, &out)
 }
 
 // ContainerInspect inspects a container by id or name.
@@ -329,8 +368,16 @@ func (c *Client) NetworkRemove(ctx context.Context, name string) error {
 // NetworkConnect attaches a container, with aliases. One already attached is
 // not an error: this runs on every scan to re-attach Sitebin after a
 // redeploy.
-func (c *Client) NetworkConnect(ctx context.Context, network, container string, aliases []string) error {
-	body := map[string]any{"Container": container, "EndpointConfig": map[string]any{"Aliases": aliases}}
+//
+// ifname, when set, names the container's interface on the network (Engine
+// 28+; an older Engine numbers it as ever): the container's stats are keyed
+// by interface, and the name is how its counters are told apart.
+func (c *Client) NetworkConnect(ctx context.Context, network, container string, ifname string) error {
+	ep := map[string]any{}
+	if ifname != "" {
+		ep["DriverOpts"] = map[string]string{"com.docker.network.endpoint.ifname": ifname}
+	}
+	body := map[string]any{"Container": container, "EndpointConfig": ep}
 	err := c.do(ctx, "POST", "/networks/"+network+"/connect", nil, body, nil)
 	var ee *engineError
 	if errors.As(err, &ee) && (ee.Status == 403 || ee.Status == 409) && strings.Contains(ee.Msg, "already") {

@@ -43,13 +43,18 @@ type fakeEngine struct {
 	updateErr  error
 	info       EngineInfo
 	infoErr    error
+	ifnames    map[string]string // "network|container" -> the interface name asked for
+	stats      map[string]Stats  // by container name
+	statsErr   map[string]error
+	selfNets   map[string]Endpoint // what an inspection names as networks
 }
 
 func newFakeEngine() *fakeEngine {
 	return &fakeEngine{
 		containers: map[string]*fakeContainer{}, networks: map[string]map[string]string{},
 		netOpts: map[string]map[string]string{}, internal: map[string]bool{},
-		attached: map[string][]string{}, images: map[string]bool{},
+		attached: map[string][]string{}, images: map[string]bool{}, ifnames: map[string]string{},
+		stats: map[string]Stats{}, statsErr: map[string]error{},
 		mounts: []struct{ Type, Name, Source, Destination string }{{"bind", "", "/srv/sitebin/data", "/data"}},
 	}
 }
@@ -126,6 +131,18 @@ func (f *fakeEngine) ContainerUpdate(_ context.Context, id string, r Resources) 
 	return nil
 }
 func (f *fakeEngine) Info(context.Context) (EngineInfo, error) { return f.info, f.infoErr }
+func (f *fakeEngine) ContainerStats(_ context.Context, id string) (Stats, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c := f.byID(id)
+	if c == nil {
+		return Stats{}, &engineError{404, "No such container: " + id}
+	}
+	if err := f.statsErr[c.name]; err != nil {
+		return Stats{}, err
+	}
+	return f.stats[c.name], nil
+}
 func (f *fakeEngine) ContainerStart(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -142,6 +159,7 @@ func (f *fakeEngine) ContainerRemove(_ context.Context, id string) error {
 }
 func (f *fakeEngine) ContainerInspect(_ context.Context, id string) (Inspect, error) {
 	in := Inspect{ID: "self-" + id}
+	in.NetworkSettings.Networks = f.selfNets
 	for _, m := range f.mounts {
 		in.Mounts = append(in.Mounts, struct {
 			Type        string `json:"Type"`
@@ -190,9 +208,10 @@ func (f *fakeEngine) NetworkRemove(_ context.Context, name string) error {
 	delete(f.attached, name)
 	return nil
 }
-func (f *fakeEngine) NetworkConnect(_ context.Context, network, container string, _ []string) error {
+func (f *fakeEngine) NetworkConnect(_ context.Context, network, container string, ifname string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.ifnames[network+"|"+container] = ifname
 	if _, ok := f.networks[network]; !ok {
 		return &engineError{404, "no such network"}
 	}

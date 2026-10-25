@@ -219,3 +219,16 @@ func TestSetupReadsHostCapacity(t *testing.T) {
 		t.Error("setup failed on /info")
 	}
 }
+
+// The egress interface is named, so the service's own stats say which
+// counters are its internet traffic.
+func TestEgressInterfaceIsNamed(t *testing.T) {
+	r := startExample(t, nil)
+	app := r.eng.containers["sb-"+siteA+"-app"]
+	if got := r.eng.ifnames[egressName(siteA)+"|"+app.id]; got != "egress0" {
+		t.Errorf("egress ifname = %q", got)
+	}
+	if got := r.eng.ifnames[networkName(siteA)+"|self-sitebin"]; got != "" {
+		t.Errorf("Sitebin's own attachment was named %q", got)
+	}
+}

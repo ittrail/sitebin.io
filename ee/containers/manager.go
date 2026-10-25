@@ -58,7 +58,8 @@ type engine interface {
 	NetworkExists(ctx context.Context, name string) (bool, error)
 	NetworkCreate(ctx context.Context, name string, internal bool, labels, options map[string]string) error
 	NetworkRemove(ctx context.Context, name string) error
-	NetworkConnect(ctx context.Context, network, container string, aliases []string) error
+	NetworkConnect(ctx context.Context, network, container string, ifname string) error
+	ContainerStats(ctx context.Context, id string) (Stats, error)
 	NetworkDisconnect(ctx context.Context, network, container string) error
 }
 
@@ -93,6 +94,15 @@ func egressName(site string) string             { return "sb-" + site + "-egress
 // the cloud metadata address. Linux caps interface names at 15 characters.
 func egressBridge(site string) string { return "sbe" + site[:min(12, len(site))] }
 
+// egressIf is a service's interface on its project's egress network, named
+// so its counters are the service's internet traffic. A container created
+// before it was named has it as legacyEgressIf: the egress network is
+// connected after the container is created on its project network.
+const (
+	egressIf       = "egress0"
+	legacyEgressIf = "eth1"
+)
+
 // Manager runs container sites: a reconciler that converges the Docker
 // Engine to the desired state the core records, and reports what it saw.
 // It is the only writer of a site's observed container state.
@@ -102,6 +112,8 @@ type Manager struct {
 	sites  ext.SiteService
 	capFor func(owner string) (int, error)
 	limits *LimitBook
+	ifaces ifaceReader // Sitebin's own interfaces, for web traffic
+	usage  *usageBook
 	uid    int
 	gid    int
 	now    func() time.Time
@@ -140,6 +152,8 @@ func newManager(cfg Config, eng engine, sites ext.SiteService, capFor func(strin
 		cfg: cfg, eng: eng, sites: sites, capFor: capFor, uid: uid, gid: gid, now: time.Now,
 		limits:    NewLimitBook(cfg.DataDir, ext.ContainerLimits{MemoryMB: cfg.MemoryMB, CPUs: cfg.CPUs, Pids: cfg.Pids}),
 		updateErr: map[string]string{},
+		ifaces:    sysNet{root: "/sys/class/net"},
+		usage:     newUsageBook(),
 		setupErr:  errors.New("the container runtime is starting"),
 		known:     map[string]bool{}, busy: map[string]bool{}, retryAt: map[string]time.Time{},
 		locks: map[string]*sync.Mutex{}, cancels: map[string]context.CancelFunc{},
@@ -249,6 +263,7 @@ func (m *Manager) Run(ctx context.Context) {
 		}
 	}
 	m.fullScan(ctx)
+	go m.sampleLoop(ctx)
 	tick := time.NewTicker(tickEvery)
 	scan := time.NewTicker(scanEvery)
 	defer tick.Stop()
@@ -713,7 +728,7 @@ func (m *Manager) deploy(ctx context.Context, id string, spec *Spec, limits map[
 	m.mu.Lock()
 	self, mount := m.self, m.mount
 	m.mu.Unlock()
-	if err := m.eng.NetworkConnect(ctx, net, self, nil); err != nil {
+	if err := m.eng.NetworkConnect(ctx, net, self, ""); err != nil {
 		return fmt.Errorf("attach Sitebin to the project network: %w", err)
 	}
 	for _, sv := range spec.Services {
@@ -726,7 +741,7 @@ func (m *Manager) deploy(ctx context.Context, id string, spec *Spec, limits map[
 			return fmt.Errorf("service %s: %w", sv.Name, err)
 		}
 		if sv.Egress {
-			if err := m.eng.NetworkConnect(ctx, egressName(id), cid, nil); err != nil {
+			if err := m.eng.NetworkConnect(ctx, egressName(id), cid, egressIf); err != nil {
 				return fmt.Errorf("service %s: %w", sv.Name, err)
 			}
 		}
@@ -903,7 +918,7 @@ func (m *Manager) refresh(ctx context.Context, cs ext.ContainerSite, present []C
 	m.mu.Lock()
 	self := m.self
 	m.mu.Unlock()
-	if err := m.eng.NetworkConnect(ctx, networkName(id), self, nil); err != nil {
+	if err := m.eng.NetworkConnect(ctx, networkName(id), self, ""); err != nil {
 		slog.Error("containers: re-attach Sitebin", "site", id, "err", err)
 	}
 	changed := false

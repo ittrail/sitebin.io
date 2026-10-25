@@ -523,6 +523,40 @@ type ContainerRuntime interface {
 	Stop(viewID string) error
 	// Logs returns the recent output of one service.
 	Logs(ctx context.Context, viewID, service string, tail int) (string, error)
+	// Usage is what the site's running services use, as last measured;
+	// ok=false when there is no recent measurement.
+	Usage(viewID string) (u ContainerUsage, ok bool)
+}
+
+// ContainerUsage is what a container site's running services use right now.
+// See docs/superpowers/specs/2026-10-25-container-usage-design.md.
+type ContainerUsage struct {
+	At       time.Time
+	Services []ServiceUsage
+	// Web is the project's web traffic when several of its services serve
+	// HTTP and it cannot be given to one of them; nil otherwise.
+	Web *Traffic
+}
+
+// ServiceUsage is one running service's usage against its limits. CPU, In
+// and Out are rates over the last interval, nil until there are two samples.
+type ServiceUsage struct {
+	Name             string
+	MemoryBytes      int64
+	MemoryLimitBytes int64
+	CPU              *float64 // cores
+	CPULimit         float64
+	Pids, PidsLimit  int
+	// In and Out are its public traffic in bytes per second: the project's
+	// web traffic when it is the one service serving HTTP, and its own
+	// internet traffic — never what it exchanges with the project's other
+	// services.
+	In, Out *float64
+}
+
+// Traffic is bytes per second in and out.
+type Traffic struct {
+	In, Out float64
 }
 
 // ContainerSite is a container site as the runtime needs to see it.

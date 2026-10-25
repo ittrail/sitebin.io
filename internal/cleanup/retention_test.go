@@ -165,6 +165,7 @@ func (r *stopRuntime) Stop(id string) error {
 	return r.err
 }
 func (r *stopRuntime) Logs(context.Context, string, string, int) (string, error) { return "", nil }
+func (r *stopRuntime) Usage(string) (ext.ContainerUsage, bool)                   { return ext.ContainerUsage{}, false }
 
 // A container site's project is removed before its files, as for an expired
 // site; a runtime that cannot stop it keeps the site for the next sweep.

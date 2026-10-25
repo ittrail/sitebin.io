@@ -25,6 +25,7 @@ type fakeRuntime struct {
 	kicked   []string
 	stopped  []string
 	logs     string
+	usage    map[string]ext.ContainerUsage
 }
 
 func (r *fakeRuntime) Allowed(string) error { return r.allowErr }
@@ -38,6 +39,12 @@ func (r *fakeRuntime) Stop(id string) error {
 	defer r.mu.Unlock()
 	r.stopped = append(r.stopped, id)
 	return r.stopErr
+}
+func (r *fakeRuntime) Usage(viewID string) (ext.ContainerUsage, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	u, ok := r.usage[viewID]
+	return u, ok
 }
 func (r *fakeRuntime) Logs(_ context.Context, _, service string, _ int) (string, error) {
 	if service != "app" {
