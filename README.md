@@ -946,7 +946,8 @@ How it runs:
   named `egress0`; Engine 28+, older containers' `eth1`) — never what a
   project's services exchange with each other. The edit page shows it under
   each service, refreshed every 10 s; `GET …/containers/stats` answers it
-  (`null` rates until two samples); the instance register's Containers tab
+  (`in_bps` / `out_bps` are **bytes** per second; a rate is `null` until the
+  second measurement, and `0` at once for a service with no public path); the instance register's Containers tab
   shows it for every container with totals against the host. Kept in memory
   only. Design: `docs/superpowers/specs/2026-10-25-container-usage-design.md`.
 

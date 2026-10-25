@@ -137,6 +137,19 @@ best used with Live off.
 - `ee/admincontainers.go`: figures, per-row line, Live.
 - Docs: README (container section, API list), website `/docs/containers/`.
 
+## Corrections (post-implementation)
+
+The whole-branch review (2026-10-25) changed three things before the deploy:
+
+1. `in_bps` / `out_bps` are **bytes** per second (the names read as bits);
+   the docs say so wherever the fields appear.
+2. A rate is `null` until the second measurement — except a service with no
+   public path (no egress, and not the project's web service), which reports
+   `0` from the first: that is not a measurement, it is how it is wired.
+3. The edit page clears the figures as soon as the project is not running
+   (a Stop, or a measurement answered after one), and formats sizes as the
+   server does, so it and the console show the same numbers.
+
 ## Left to the builder
 
 Formatting details (units, rounding), the CSS of the usage line in the

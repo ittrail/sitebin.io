@@ -670,14 +670,15 @@ function renderContainer() {
   web.className = "usage proj hidden";
   web.id = "ct-web";
   box.append(web);
-  paintUsage();
   if (wantStats()) {
     if (!ctStatsTimer && !ctStatsBusy) scheduleStats(Math.max(0, statsEvery - (Date.now() - ctStatsAt)));
   } else {
+    // Stopped, starting or failed: nothing it showed is true any more.
     clearTimeout(ctStatsTimer);
     ctStatsTimer = null;
     ctStats = null;
   }
+  paintUsage();
 
   const sel = $("ct-logsvc");
   const current = sel.value;
@@ -721,9 +722,12 @@ async function loadStats() {
   if (!wantStats() || document.hidden) return; // visibilitychange starts it again
   ctStatsBusy = true;
   try {
-    ctStats = await api("GET", "/containers/stats");
-    ctStatsAt = Date.now();
-    paintUsage();
+    const st = await api("GET", "/containers/stats");
+    if (wantStats()) { // a Stop while it was on its way: drop it
+      ctStats = st;
+      ctStatsAt = Date.now();
+      paintUsage();
+    }
   } catch {} finally { ctStatsBusy = false; }
   if (wantStats()) scheduleStats(statsEvery);
 }
@@ -732,14 +736,17 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden && wantStats() && !ctStatsTimer && !ctStatsBusy) scheduleStats(0);
 });
 
-function fmtBytes(n) {
-  if (n < 1024) return Math.round(n) + " B";
+// fmtUsageBytes writes sizes as the server does (store.HumanBytes), so the
+// edit page and the admin console show the same figures.
+function fmtUsageBytes(n) {
+  n = Math.round(n);
+  if (n < 1024) return n + " B";
   const units = ["KB", "MB", "GB", "TB"];
   let i = -1;
   do { n /= 1024; i++; } while (n >= 1024 && i < units.length - 1);
-  return (n >= 100 ? n.toFixed(0) : n.toFixed(1).replace(/\.0$/, "")) + " " + units[i];
+  return n.toFixed(n >= 100 ? 0 : 1) + " " + units[i];
 }
-function fmtRate(n) { return n == null ? "—" : fmtBytes(n) + "/s"; }
+function fmtRate(n) { return n == null ? "—" : fmtUsageBytes(n) + "/s"; }
 function fmtCPU(c) {
   if (c == null) return "—";
   if (c > 0 && c < 0.01) return "<0.01";
@@ -763,7 +770,7 @@ function paintUsage() {
     el.textContent = "";
     if (!u) continue;
     const mem = document.createElement("span");
-    mem.textContent = "RAM " + fmtBytes(u.memory_bytes) + (u.memory_limit_bytes ? " / " + fmtBytes(u.memory_limit_bytes) : "");
+    mem.textContent = "RAM " + fmtUsageBytes(u.memory_bytes) + (u.memory_limit_bytes ? " / " + fmtUsageBytes(u.memory_limit_bytes) : "");
     if (u.memory_limit_bytes && u.memory_bytes / u.memory_limit_bytes >= 0.9) mem.className = "hot";
     const cpu = document.createElement("span");
     cpu.textContent = "CPU " + fmtCPU(u.cpu) + (u.cpu_limit ? " / " + fmtCPU(u.cpu_limit) : "");
