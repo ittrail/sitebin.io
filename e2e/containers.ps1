@@ -76,7 +76,9 @@ function WaitHost([string]$url, [string]$want, [int]$seconds) {
     return $last
 }
 
-$tiers = '[{"id":"pro","label":"Pro","max_site_bytes":1073741824,"max_files":5000,"max_sites":10,"webdav":true,"custom_domains":5,"max_expiry_days":0,"max_containers":3,"trusted":true}]'
+# The one account is also the instance's admin (tier flag + allowlist), so it
+# can set container limits in the console.
+$tiers = '[{"id":"pro","label":"Pro","max_site_bytes":1073741824,"max_files":5000,"max_sites":10,"webdav":true,"custom_domains":5,"max_expiry_days":0,"max_containers":3,"trusted":true,"admin":true}]'
 [IO.File]::WriteAllText((Join-Path $work "ct-tiers.json"), $tiers)
 $workDocker = ($work -replace '\\', '/')
 
@@ -87,6 +89,7 @@ docker run -d --name $name -p "${Port}:80" -v "${vol}:/data" -v "${workDocker}:/
     -e "SITEBIN_BASE_DOMAIN=${base}:$Port" -e "SITEBIN_HTTP_ONLY=true" `
     -e "SITEBIN_ACCOUNT_MODE=tiers" -e "SITEBIN_TIERS_FILE=/cfg/ct-tiers.json" -e "SITEBIN_DEFAULT_TIER=pro" `
     -e "SITEBIN_DOMAIN_VERIFICATION=off" -e "SITEBIN_RATE_AUTH_PER_5MIN=500" `
+    -e "SITEBIN_ADMIN_ACCOUNTS=ct@example.com" `
     -e "SITEBIN_CONTAINERS=docker" $Image | Out-Null
 if ($LASTEXITCODE -ne 0) { Write-Host "docker run failed" -ForegroundColor Red; exit 1 }
 
@@ -160,6 +163,38 @@ Assert "the domain still serves the port" ($r.body -eq "egress blocked") "got $(
 
 $r = Req "GET" "$origin/api/sites/$edit/containers/app/logs?tail=50" @("-H", "X-Edit-Password: $pw")
 Assert "service logs are readable" ($r.code -eq 200) "got $($r.code)"
+
+# ---- the admin changes container limits; running containers follow in place ----
+function Inspect([string]$c, [string]$f) { return "$(docker inspect -f $f $c 2>&1)".Trim() }
+function WaitInspect([string]$c, [string]$f, [string]$want, [int]$seconds) {
+    $deadline = (Get-Date).AddSeconds($seconds); $got = ""
+    while ((Get-Date) -lt $deadline) { $got = Inspect $c $f; if ($got -eq $want) { break }; Start-Sleep -Seconds 1 }
+    return $got
+}
+$appC = "sb-$($site.id)-app"; $dbC = "sb-$($site.id)-db"
+$started = Inspect $appC "{{.State.StartedAt}}"
+Assert "containers start with the environment's limits" ((Inspect $appC "{{.HostConfig.Memory}} {{.HostConfig.NanoCpus}} {{.HostConfig.PidsLimit}}") -eq "536870912 500000000 256")
+$r = Req "GET" "$origin/account/admin/containers" @("-b", $jar)
+$csrf = ""; if ($r.body -match 'name="csrf" value="([^"]+)"') { $csrf = $Matches[1] }
+Assert "the admin sees the Containers tab with every service" ($r.code -eq 200 -and $csrf -and $r.body.Contains($site.id) -and $r.body.Contains(">probe<")) "got $($r.code)"
+$r = Req "POST" "$origin/account/admin/containers/sites/$($site.id)/limits" @("-b", $jar, "--data-urlencode", "csrf=$csrf", "--data-urlencode", "service=app", "--data-urlencode", "memory_mb=768", "--data-urlencode", "cpus=0,75")
+Assert "the admin sets one service's own limits" ($r.code -eq 303) "got $($r.code): $($r.body)"
+$got = WaitInspect $appC "{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.HostConfig.NanoCpus}}" "805306368 805306368 750000000" 30
+Assert "the running container has them within seconds" ($got -eq "805306368 805306368 750000000") "got $got"
+Assert "it was not restarted for it" ((Inspect $appC "{{.State.StartedAt}}") -eq $started)
+Assert "the other services keep the defaults" ((Inspect $dbC "{{.HostConfig.Memory}}") -eq "536870912")
+$r = Req "POST" "$origin/account/admin/containers/defaults" @("-b", $jar, "--data-urlencode", "csrf=$csrf", "--data-urlencode", "pids=300")
+Assert "the admin changes the instance defaults" ($r.code -eq 303) "got $($r.code): $($r.body)"
+$got = WaitInspect $dbC "{{.HostConfig.PidsLimit}}" "300" 30
+Assert "every container without its own value follows" ($got -eq "300" -and (WaitInspect $appC "{{.HostConfig.PidsLimit}}" "300" 10) -eq "300") "db pids $got"
+$r = Req "POST" "$origin/account/admin/containers/defaults" @("-b", $jar, "--data-urlencode", "csrf=$csrf", "--data-urlencode", "cpus=999")
+Assert "a limit beyond the host is refused" ($r.code -eq 400 -and $r.body.Contains("host")) "got $($r.code): $($r.body)"
+Req "POST" "$origin/account/admin/containers/sites/$($site.id)/limits" @("-b", $jar, "--data-urlencode", "csrf=$csrf", "--data-urlencode", "service=app", "--data-urlencode", "clear=1") | Out-Null
+Req "POST" "$origin/account/admin/containers/defaults" @("-b", $jar, "--data-urlencode", "csrf=$csrf", "--data-urlencode", "reset=1") | Out-Null
+$got = WaitInspect $appC "{{.HostConfig.Memory}} {{.HostConfig.NanoCpus}} {{.HostConfig.PidsLimit}}" "536870912 500000000 256" 30
+Assert "clearing and resetting returns to the environment's limits" ($got -eq "536870912 500000000 256") "got $got"
+$r = WaitHost $view "mysql=8.4.11" 30
+Assert "the app kept serving throughout" ($r.code -eq 200 -and (Inspect $appC "{{.State.StartedAt}}") -eq $started) "got $($r.code)"
 
 # ---- the site's files ARE the volumes ----
 $r = Req "GET" "$origin/api/sites/$edit" @("-H", "X-Edit-Password: $pw")
