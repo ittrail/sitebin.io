@@ -138,6 +138,7 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("PUT /api/sites/{editID}/view-address", a.withEditAuth(a.recorded(provenance.ActionViewAddress, a.putViewAddress)))
 	mux.HandleFunc("POST /api/sites/{editID}/containers/{action}", a.withEditAuth(a.recorded(provenance.ActionContainer, a.containerAction)))
 	mux.HandleFunc("GET /api/sites/{editID}/containers/{service}/logs", a.withEditAuth(a.containerLogs))
+	mux.HandleFunc("GET /api/sites/{editID}/containers/stats", a.withEditAuth(a.containerStats))
 
 	mux.HandleFunc("GET /api/sites/{editID}/forms", a.withEditAuth(a.listForms))
 	mux.HandleFunc("POST /api/sites/{editID}/forms", a.withEditAuth(a.recorded(provenance.ActionFormAdd, a.createForm)))

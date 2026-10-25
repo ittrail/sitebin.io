@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ittrail/sitebin.io/internal/ext"
 	"github.com/ittrail/sitebin.io/internal/store"
@@ -671,5 +672,58 @@ func TestContainerLimitsOmittedWhenUnset(t *testing.T) {
 	}
 	if strings.Contains(string(b), "limits") {
 		t.Errorf("unset limits are written: %s", b)
+	}
+}
+
+// The stats route answers what the runtime last measured, behind the same
+// gate as the logs, and never in the site payload (which MCP clients cache).
+func TestContainerStatsRoute(t *testing.T) {
+	rt := &fakeRuntime{usage: map[string]ext.ContainerUsage{}}
+	withContainers(t, rt)
+	e := newEnv(t, nil)
+	web := e.createSite(t, nil, nil)
+	if w := e.call(t, "GET", "/api/sites/"+editIDFrom(t, web.EditURL)+"/containers/stats", web.EditPassword, nil); w.Code != 409 {
+		t.Errorf("a web site: %d", w.Code)
+	}
+	c := e.createSite(t, map[string]string{"mode": "container"}, nil)
+	path := "/api/sites/" + editIDFrom(t, c.EditURL) + "/containers/stats"
+	if w := e.call(t, "GET", path, "wrong-password", nil); w.Code == 200 {
+		t.Error("stats answered a wrong password")
+	}
+
+	var body struct {
+		SampledAt *string          `json:"sampled_at"`
+		Services  []map[string]any `json:"services"`
+		Web       map[string]any   `json:"web"`
+	}
+	w := e.call(t, "GET", path, c.EditPassword, nil)
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &body) != nil || body.SampledAt != nil || body.Services == nil || len(body.Services) != 0 || body.Web != nil {
+		t.Fatalf("nothing measured yet: %d %s", w.Code, w.Body)
+	}
+
+	cpu, out := 0.25, 10.0
+	at := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)
+	rt.usage[c.ID] = ext.ContainerUsage{At: at, Web: &ext.Traffic{In: 1, Out: 2}, Services: []ext.ServiceUsage{
+		{Name: "app", MemoryBytes: 100, MemoryLimitBytes: 200, CPU: &cpu, CPULimit: 0.5, Pids: 3, PidsLimit: 256, Out: &out},
+	}}
+	w = e.call(t, "GET", path, c.EditPassword, nil)
+	if w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("stats: %d %q", w.Code, w.Header().Get("Cache-Control"))
+	}
+	body.Web = nil
+	json.Unmarshal(w.Body.Bytes(), &body)
+	s := body.Services[0]
+	if *body.SampledAt != "2026-10-25T09:00:00Z" || s["name"] != "app" || s["memory_bytes"] != 100.0 || s["memory_limit_bytes"] != 200.0 ||
+		s["cpu"] != 0.25 || s["cpu_limit"] != 0.5 || s["pids"] != 3.0 || s["pids_limit"] != 256.0 || s["in_bps"] != nil || s["out_bps"] != 10.0 ||
+		body.Web["in_bps"] != 1.0 || body.Web["out_bps"] != 2.0 {
+		t.Errorf("stats = %s", w.Body)
+	}
+	if _, has := s["in_bps"]; !has {
+		t.Error("an unknown rate is left out instead of null")
+	}
+
+	// The site payload is unchanged.
+	if w := e.call(t, "GET", "/api/sites/"+editIDFrom(t, c.EditURL), c.EditPassword, nil); strings.Contains(w.Body.String(), "memory") || strings.Contains(w.Body.String(), "in_bps") {
+		t.Errorf("usage leaked into the site payload: %s", w.Body)
 	}
 }

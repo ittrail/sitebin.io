@@ -223,6 +223,35 @@ func (a *API) containerLogs(w http.ResponseWriter, r *http.Request, site *store.
 	w.Write([]byte(out))
 }
 
+// containerStats answers what the site's running services use — memory,
+// CPU, processes and public traffic — as the runtime last measured it. Its
+// own route, not the site payload: MCP clients cache that one's schema. A
+// rate not yet measured (one sample so far) is null.
+func (a *API) containerStats(w http.ResponseWriter, r *http.Request, site *store.Site) {
+	rt, ok := a.requireContainerSite(w, site)
+	if !ok {
+		return
+	}
+	out := map[string]any{"sampled_at": nil, "services": []any{}, "web": nil}
+	if u, ok := rt.Usage(site.ViewID); ok {
+		out["sampled_at"] = u.At.UTC()
+		services := make([]map[string]any, 0, len(u.Services))
+		for _, s := range u.Services {
+			services = append(services, map[string]any{
+				"name": s.Name, "memory_bytes": s.MemoryBytes, "memory_limit_bytes": s.MemoryLimitBytes,
+				"cpu": s.CPU, "cpu_limit": s.CPULimit, "pids": s.Pids, "pids_limit": s.PidsLimit,
+				"in_bps": s.In, "out_bps": s.Out,
+			})
+		}
+		out["services"] = services
+		if u.Web != nil {
+			out["web"] = map[string]any{"in_bps": u.Web.In, "out_bps": u.Web.Out}
+		}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, 200, out)
+}
+
 // containerPayload is the container half of the site payload.
 func (a *API) containerPayload(site *store.Site) map[string]any {
 	_, available := containerRuntime()
