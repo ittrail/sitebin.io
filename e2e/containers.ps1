@@ -196,6 +196,34 @@ Assert "clearing and resetting returns to the environment's limits" ($got -eq "5
 $r = WaitHost $view "mysql=8.4.11" 30
 Assert "the app kept serving throughout" ($r.code -eq 200 -and (Inspect $appC "{{.State.StartedAt}}") -eq $started) "got $($r.code)"
 
+# ---- usage: memory, CPU, processes and public traffic per service ----
+function Stats() {
+    $r = Req "GET" "$origin/api/sites/$edit/containers/stats" @("-H", "X-Edit-Password: $pw")
+    if ($r.code -ne 200) { return $null }
+    return $r.body | ConvertFrom-Json
+}
+function Svc($st, [string]$n) { foreach ($x in $st.services) { if ($x.name -eq $n) { return $x } }; return $null }
+$names = "$(docker exec $appC ls /sys/class/net 2>&1)"
+Assert "a service's egress interface is named egress0" ($names -match "egress0") "got $names"
+$st = $null; $deadline = (Get-Date).AddSeconds(45)
+while ((Get-Date) -lt $deadline) {
+    Req "GET" $view | Out-Null
+    $st = Stats
+    $a = Svc $st "app"
+    if ($a -and $null -ne $a.cpu -and $null -ne $a.in_bps -and $st.web -and $st.web.out_bps -gt 0) { break }
+    Start-Sleep -Seconds 2
+}
+$a = Svc $st "app"; $d = Svc $st "db"
+Assert "stats answer every running service" ($st -and @($st.services).Count -eq 3) "got $($st | ConvertTo-Json -Compress -Depth 4)"
+Assert "memory in use against its limit" ($a.memory_bytes -gt 0 -and $a.memory_limit_bytes -eq 536870912 -and $a.memory_bytes -lt $a.memory_limit_bytes) "app: $($a | ConvertTo-Json -Compress)"
+Assert "CPU and processes against their limits" ($null -ne $a.cpu -and $a.cpu_limit -eq 0.5 -and $a.pids -gt 0 -and $a.pids_limit -eq 256) "app: $($a | ConvertTo-Json -Compress)"
+Assert "two services serve HTTP, so the visitors' traffic is the project's" ($st.web -and $st.web.out_bps -gt 0 -and $st.web.in_bps -gt 0) "web: $($st.web | ConvertTo-Json -Compress)"
+Assert "the database's traffic with the app is not public" ($d -and $d.in_bps -eq 0 -and $d.out_bps -eq 0) "db: $($d | ConvertTo-Json -Compress)"
+$r = Req "GET" "$origin/api/sites/$edit" @("-H", "X-Edit-Password: $pw")
+Assert "the site document carries no usage" (-not $r.body.Contains("memory_bytes")) "got $($r.code)"
+$r = Req "GET" "$origin/account/admin/containers" @("-b", $jar)
+Assert "the console shows the usage" ($r.code -eq 200 -and $r.body.Contains("Memory in use") -and $r.body.Contains("Usage as of") -and $r.body.Contains("RAM ")) "got $($r.code)"
+
 # ---- the site's files ARE the volumes ----
 $r = Req "GET" "$origin/api/sites/$edit" @("-H", "X-Edit-Password: $pw")
 $s = $r.body | ConvertFrom-Json

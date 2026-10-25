@@ -333,9 +333,10 @@ curl -X DELETE -H "X-Edit-Password: $PW" \
 curl -X POST -H "X-Edit-Password: $PW" \
      https://sitebin.example.com/api/sites/$EDIT_ID/forms/$KEY/confirmation
 
-# container sites (Enterprise): start / stop / restart, and a service's log
+# container sites (Enterprise): start / stop / restart, a service's log, and what each service uses
 curl -X POST -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/containers/restart
 curl -H "X-Edit-Password: $PW" "https://sitebin.example.com/api/sites/$EDIT_ID/containers/app/logs?tail=200"
+curl -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/containers/stats
 
 # read one file's content (used by the in-browser editor)
 curl -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/content/index.html
@@ -936,10 +937,23 @@ How it runs:
 - The edit page shows each service, its state, its ports with their addresses
   and domains, Start / Stop / Restart, and the recent log; the domain card
   below it manages the addresses.
+- **Usage.** Every 10 s the runtime measures each running service: memory in
+  use (without file cache, as `docker stats`), CPU in cores, processes —
+  each against its limit — and its **public** traffic in and out per second:
+  the visitors' (counted on Sitebin's own interface in the project network,
+  given to the service when it is the project's only one serving HTTP, else
+  shown for the project) and its own internet traffic (its egress interface,
+  named `egress0`; Engine 28+, older containers' `eth1`) — never what a
+  project's services exchange with each other. The edit page shows it under
+  each service, refreshed every 10 s; `GET …/containers/stats` answers it
+  (`null` rates until two samples); the instance register's Containers tab
+  shows it for every container with totals against the host. Kept in memory
+  only. Design: `docs/superpowers/specs/2026-10-25-container-usage-design.md`.
 
 ```bash
 curl -X POST -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/containers/restart  # or start / stop
 curl -H "X-Edit-Password: $PW" "https://sitebin.example.com/api/sites/$EDIT_ID/containers/app/logs?tail=200"
+curl -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/containers/stats   # memory, CPU, processes, public traffic
 ```
 
 **Operator setup.** Container sites need `SITEBIN_CONTAINERS=docker`, tiers
