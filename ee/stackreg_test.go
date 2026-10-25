@@ -475,7 +475,9 @@ func TestSignInStylesheetFitsTheStacksLimit(t *testing.T) {
 // are defused. Anything here that matches those patterns would silently change
 // meaning on the way -- an import rule's cut even runs through a comment's end
 // and swallows the rules after it -- so the file must not contain them at
-// all, comments included.
+// all, comments included. The gateway's and the portal's pages write the
+// sheet into a <style> on the server and escape every `<` on the way, so a
+// rule that needed one would not survive either.
 func TestSignInStylesheetSurvivesTheStacksFilter(t *testing.T) {
 	stack := []*regexp.Regexp{
 		regexp.MustCompile(`(?i)@import`),
@@ -483,6 +485,7 @@ func TestSignInStylesheetSurvivesTheStacksFilter(t *testing.T) {
 		regexp.MustCompile(`(?i)expression\s*\(`),
 		regexp.MustCompile(`(?i)-moz-binding\s*:`),
 		regexp.MustCompile(`(?i)behavior\s*:`),
+		regexp.MustCompile(`<`),
 	}
 	for _, re := range stack {
 		if loc := re.FindStringIndex(keycloakThemeSource); loc != nil {
@@ -492,26 +495,121 @@ func TestSignInStylesheetSurvivesTheStacksFilter(t *testing.T) {
 	}
 }
 
-// The stack injects the same customCss into the Keycloak account console
-// (a PatternFly 5 React app) when a user arrives there from the dashboard.
-// Every rule is therefore scoped to html.login-pf -- the class only the login
-// flow's pages carry -- or it would restyle the console as well.
-func TestSignInStylesheetIsScopedToTheLoginPages(t *testing.T) {
+// The stack applies the same customCss to three families of pages, and each
+// says which it is: the Keycloak login flow (html.login-pf), the
+// auth-gateway's account selector and consent pages (html[data-ss-page]),
+// and the portal's plan and order pages (html[data-ss-portal-page]) -- the
+// hooks of README § 11.5 of the saas-stack repo. It also injects it into the
+// Keycloak account console (a PatternFly 5 React app) when a user arrives
+// there from the dashboard, which carries none of them. Every rule is
+// therefore scoped to one of the three, or it would restyle the console.
+func TestStackStylesheetIsScopedToItsOwnPages(t *testing.T) {
 	css := sitebinTheme("https://app.example").CustomCSS
+	scopes := []string{
+		"html.login-pf",
+		"html[data-ss-page]", `html[data-ss-page=`, `html[data-ss-page^=`,
+		"html[data-ss-portal-page]", `html[data-ss-portal-page=`,
+	}
 	for _, sel := range cssSelectors(t, css) {
-		if !strings.HasPrefix(sel, "html.login-pf") {
-			t.Errorf("selector %q is not scoped to html.login-pf", sel)
+		scoped := false
+		for _, scope := range scopes {
+			if strings.HasPrefix(sel, scope) {
+				scoped = true
+				break
+			}
+		}
+		if !scoped {
+			t.Errorf("selector %q is not scoped to the login, gateway or portal pages", sel)
 		}
 	}
 }
 
-// cssSelectors returns every selector of every style rule in css, descending
-// into @media and @supports and skipping @keyframes, whose steps are not
-// selectors. It is only as clever as the stylesheet above needs: no strings
-// containing braces.
+// The gateway's and portal's rules are written as one nested block per
+// family, which is what keeps the sheet under the stack's cap. Nested rules
+// stay one level deep and every nested selector starts with `&`: browsers
+// from before relaxed nesting (Chrome 112-119, Safari 16.5-17.1) refuse a
+// nested selector that starts with a type such as `body` or `main`.
+func TestStackStylesheetNestsOnlyOneLevelBehindAnAmpersand(t *testing.T) {
+	css := sitebinTheme("https://app.example").CustomCSS
+	nested := cssNestedSelectors(t, css)
+	if len(nested) == 0 {
+		t.Fatal("no nested rules found; the gateway and portal rules are missing")
+	}
+	for _, sel := range nested {
+		if !strings.HasPrefix(sel, "&") {
+			t.Errorf("nested selector %q does not start with &", sel)
+		}
+	}
+}
+
+// The look reaches every page a Sitebin customer meets on the stack, not
+// only the login: the account selector and consent gate, and the plan and
+// order pages with their widgets.
+func TestStackStylesheetDressesTheGatewayAndPortalPages(t *testing.T) {
+	css := sitebinTheme("https://app.example").CustomCSS
+	have := map[string]bool{}
+	for _, sel := range cssSelectors(t, css) {
+		have[sel] = true
+	}
+	for _, want := range []string{"html[data-ss-page]", "html[data-ss-portal-page]", `html[data-ss-portal-page="order"]`} {
+		if !have[want] {
+			t.Errorf("no rules for %s", want)
+		}
+	}
+	for _, hook := range []string{"saas-pricing::part(card)", "saas-subscription::part(card)", "::part(button-primary)", "--saas-theme-text"} {
+		if !strings.Contains(css, hook) {
+			t.Errorf("the widgets are not styled through %s", hook)
+		}
+	}
+}
+
+// cssSelectors returns every top-level selector of every style rule in css,
+// descending into @media and @supports and skipping @keyframes, whose steps
+// are not selectors. A nested rule is part of its parent's body and is not
+// returned (cssNestedSelectors has those). It is only as clever as the
+// stylesheet above needs: no strings containing braces.
 func cssSelectors(t *testing.T, css string) []string {
 	t.Helper()
-	var out []string
+	sels, _ := cssWalk(t, css)
+	return sels
+}
+
+// cssNestedSelectors returns the selectors of the rules nested in a style
+// rule's body, failing on nesting deeper than one level.
+func cssNestedSelectors(t *testing.T, css string) []string {
+	t.Helper()
+	_, nested := cssWalk(t, css)
+	return nested
+}
+
+func cssWalk(t *testing.T, css string) (out, nested []string) {
+	t.Helper()
+	// nestedIn collects the nested rules of one style rule's body: the text
+	// before each top-level brace, back to the previous `;` or `}`.
+	nestedIn := func(body string) {
+		depth, start := 0, 0
+		for i := 0; i < len(body); i++ {
+			switch body[i] {
+			case '{':
+				if depth == 0 {
+					nested = append(nested, splitSelectors(strings.TrimSpace(body[start:i]))...)
+				}
+				depth++
+				if depth > 1 {
+					t.Errorf("rule nested more than one level deep near %.80q", body[start:i])
+				}
+			case '}':
+				depth--
+				if depth == 0 {
+					start = i + 1
+				}
+			case ';':
+				if depth == 0 {
+					start = i + 1
+				}
+			}
+		}
+	}
 	var walk func(s string)
 	walk = func(s string) {
 		for {
@@ -547,9 +645,8 @@ func cssSelectors(t *testing.T, css string) []string {
 			case strings.HasPrefix(prelude, "@"):
 				t.Errorf("unexpected at-rule %q", prelude)
 			default:
-				for _, sel := range strings.Split(prelude, ",") {
-					out = append(out, strings.TrimSpace(sel))
-				}
+				out = append(out, splitSelectors(prelude)...)
+				nestedIn(body)
 			}
 			s = s[end+1:]
 		}
@@ -558,5 +655,26 @@ func cssSelectors(t *testing.T, css string) []string {
 	if len(out) == 0 {
 		t.Fatal("no selectors found")
 	}
-	return out
+	return out, nested
+}
+
+// splitSelectors splits a selector list at its top-level commas, leaving
+// the ones inside :is(...) and :not(...) alone.
+func splitSelectors(list string) []string {
+	var out []string
+	depth, start := 0, 0
+	for i, c := range list {
+		switch c {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				out = append(out, strings.TrimSpace(list[start:i]))
+				start = i + 1
+			}
+		}
+	}
+	return append(out, strings.TrimSpace(list[start:]))
 }

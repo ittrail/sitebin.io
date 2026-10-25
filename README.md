@@ -1581,14 +1581,20 @@ that says nothing renders unemphasised, in whatever order it happens to be in.
 It declares its **look** as well, so every page the stack hosts for it reads as
 Sitebin rather than as the stack's stock grey: the palette, the bin mark as
 logo and tab icon (served by the instance itself), and — as the theme's
-`customCss` — the sign-in stylesheet in `ee/keycloak-theme.css`, which turns
-the stack's Keycloak sign-in, registration and password pages into the
-claim-ticket look. The colours alone would not: the stack's own sheet paints
-the sign-in button white whatever `primaryColor` says. Two rules bind that
-file, and tests hold both: it loads nothing (the stack strips `url()` and
-import rules from a stylesheet on a password page, so a font or image written
-there silently vanishes), and every rule is scoped to `html.login-pf`, because
-the stack injects the same stylesheet into the account console too.
+`customCss` — the stylesheet in `ee/keycloak-theme.css`, which puts the
+claim-ticket look on every stack page a Sitebin customer meets: the Keycloak
+sign-in, registration and password pages, the gateway's account selector and
+consent pages, and the hosted plan page and order page (its widgets through
+their `--saas-theme-*` properties and `::part()` names). The colours alone
+would not: the stack's own sheet paints the sign-in button white whatever
+`primaryColor` says. Three rules bind that file, and tests hold them: it loads
+nothing (the stack strips `url()` and import rules from a stylesheet on a
+password page, so a font or image written there silently vanishes) and holds
+no `<` (the gateway and portal escape it); every rule is scoped to the hooks
+the stack gives those pages — `html.login-pf`, `html[data-ss-page]`,
+`html[data-ss-portal-page]` — because the stack injects the same stylesheet
+into the account console too; and it stays under the stack's 50,000-character
+cap once its comments are stripped.
 
 And, when `SITEBIN_STACK_LICENSING` is set, it declares what a **Sitebin
 Enterprise license** is worth — see [Enterprise licensing](#enterprise-licensing).

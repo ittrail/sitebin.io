@@ -68,6 +68,16 @@ Rendered against the live login flow before deployment by routing
 and its filter apply it exactly as production does): sign-in, registration
 (empty and with validation errors), password reset; 1280×900 and 390×844.
 
+## Addendum (2026-10-25): the same sheet dresses more pages
+
+The stack now applies the same `customCss` to its auth-gateway pages (account
+selector, consent gate) and to the portal's plan and order pages, with stable
+hooks for them. The sheet gained rules for those pages; no login rule changed.
+Constraint 2 is therefore wider: every rule is scoped to `html.login-pf`,
+`html[data-ss-page]` or `html[data-ss-portal-page]`, and the test is now
+`TestStackStylesheetIsScopedToItsOwnPages`. See
+[`2026-10-25-stack-pages-theme.md`](2026-10-25-stack-pages-theme.md).
+
 ## Stack issues noticed, not fixed here
 
 - `primaryColor` has no visible effect on the login page: `saas-stack.css`

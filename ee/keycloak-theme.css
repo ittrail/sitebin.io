@@ -1,25 +1,38 @@
-/* Sitebin — the stack's sign-in pages in the claim-ticket look.
+/* Sitebin — the stack's pages for a Sitebin customer in the claim-ticket look.
 
-   Declared as theme.customCss at every stack registration (stackreg.go) and
-   appended by the stack's Keycloak theme after its own stylesheet, on every
-   login-flow page of the sitebin-app client: sign-in, registration, password
-   reset, e-mail verification, terms, errors.
+   Declared as theme.customCss at every stack registration (stackreg.go). The
+   stack appends it after its own styles on three families of pages:
 
-   Three rules this file lives by:
+   - the Keycloak login flow of the sitebin-app client: sign-in,
+     registration, password reset, e-mail verification, terms, errors;
+   - the auth-gateway's own pages between that login and the app: the
+     account selector and the consent gate with its decline and error pages;
+   - the admin portal's hosted plan page and its order page.
 
-   1. Everything is scoped to html.login-pf. The stack injects the SAME css
-      into the account console (a React/PatternFly 5 app) when it is opened
-      from the dashboard; an unscoped `body` or `a` rule would repaint that.
+   Four rules this file lives by:
+
+   1. Every rule is scoped to one of those families, by the hooks the stack
+      gives them (README § 11.5 of the saas-stack repo): html.login-pf for
+      the login, html[data-ss-page] for the gateway's pages,
+      html[data-ss-portal-page] for the plan and order pages. The stack
+      injects the SAME css into the account console (a React/PatternFly 5
+      app), which carries none of them; an unscoped `body` or `a` rule
+      would repaint that.
    2. Nothing is loaded from here: no url function and no import rule, not
       even in a comment. The stack rewrites both before injecting (a custom
       stylesheet on a password page must not be able to load or send
       anything): a url becomes `none`, and an import rule is cut up to the
       next semicolon, which inside a comment swallows the comment's end.
-      The logo arrives as --brand-logo-url, set from theme.logoUrl; the
-      fonts are the system's (Space Grotesk where it is installed).
-   3. !important on everything that the stack's own sheet sets that way,
-      with selectors at least as specific — this sheet comes later, so on a
-      tie it wins.
+      The logo arrives from theme.logoUrl: as --brand-logo-url on the
+      login, as an img the stack renders on the other pages; the fonts are
+      the system's (Space Grotesk where it is installed).
+   3. No less-than sign either. The gateway and the portal write this sheet
+      into a style element on the server and escape every one of them, so
+      a rule that needed it would not survive; nothing here does.
+   4. On the login: !important on everything that the stack's own sheet sets
+      that way, with selectors at least as specific — this sheet comes
+      later, so on a tie it wins. The gateway and portal pages set nothing
+      !important, so their rules here need none.
 
    The tokens are web/static/app.css's; keep them in step. */
 
@@ -877,4 +890,283 @@ html.login-pf body .login-pf-page .card-pf code {
 @media (prefers-reduced-motion: reduce) {
   html.login-pf body .login-pf-page::before,
   html.login-pf body .login-pf-page .card-pf { animation: none !important; }
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   The gateway's pages and the portal's plan and order pages
+   ════════════════════════════════════════════════════════════════════
+   Everything below hangs off the hooks the stack documents as a contract
+   (README § 11.5): html[data-ss-page] and the class names of the account
+   selector and the consent gate; html[data-ss-portal-page] and the plan and
+   order pages' elements; the widgets' --saas-theme-* properties and their
+   ::part() names. Nothing relies on markup outside that list.
+
+   The same ticket as the login: the gateway's pages and the order page are
+   one card with a gradient rim, a dashed tear line under the head, and the
+   stub torn off at the foot; the plan page is the dashboard's chrome around
+   the subscription ticket and the pricing cards of sitebin.io/pricing.
+
+   Written as one nested block per family so the scope is stated once: the
+   stack caps customCss at 50,000 characters and the login above takes
+   two thirds of it. One level of nesting only, and every nested selector
+   starts with `&`, so browsers from before relaxed nesting read it too; a
+   browser with no nesting at all drops the nested rules and keeps the
+   stack's own layout. `&` never follows a ::part() (a nesting selector
+   cannot stand for a pseudo-element), so those rules spell it out. */
+
+/* ── Both families: tokens, ground, and the ticket's parts ───────────── */
+
+html[data-ss-page],
+html[data-ss-portal-page] {
+  --sb-bg: #0a0e18; --sb-card: #131b2e; --sb-line: #242f4b; --sb-line-soft: #1a2338;
+  --sb-dash: rgba(126, 144, 185, .38); --sb-ink: #eceff7; --sb-dim: #9aa5bd; --sb-faint: #646f88;
+  --sb-amber: #f5b84d; --sb-blue: #5b8cff; --sb-ok: #5ecf8a;
+  --sb-display: "Space Grotesk", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  --sb-body: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+  --sb-mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+  --sb-pad: clamp(22px, 6vw, 38px);
+  --sb-rim: linear-gradient(160deg, #151e33, #101727) padding-box, linear-gradient(140deg, rgba(245, 184, 77, .65), rgba(245, 184, 77, .1) 38%, rgba(91, 140, 255, .22) 72%, rgba(245, 184, 77, .45)) border-box;
+  --sb-primary: linear-gradient(135deg, #ffd47c 0%, #f5b84d 45%, #d99a26 100%);
+  --sb-second: linear-gradient(180deg, rgba(255, 255, 255, .05), rgba(255, 255, 255, 0) 55%), #101727;
+  --sb-glow: 0 8px 22px rgba(217, 154, 38, .28), inset 0 1px 0 rgba(255, 255, 255, .4);
+  background: radial-gradient(1100px 720px at 12% -14%, #141e35 0%, transparent 62%), radial-gradient(950px 640px at 112% 8%, #101830 0%, transparent 58%), #0a0e18;
+  color-scheme: dark;
+
+  & ::selection { background: rgba(245, 184, 77, .3); }
+  /* The html carries the ground; the body is clear so the aurora shows (the
+     gateway's own film layer, re-painted; on the portal, added). */
+  & body { background: transparent; color: var(--sb-dim); font: 400 15px/1.55 var(--sb-body); }
+  & body::before {
+    content: ""; position: fixed; inset: -25%; pointer-events: none;
+    background: radial-gradient(38% 32% at 22% 26%, rgba(91, 140, 255, .13), transparent 70%), radial-gradient(34% 30% at 78% 18%, rgba(245, 184, 77, .09), transparent 70%), radial-gradient(42% 38% at 60% 82%, rgba(122, 92, 255, .08), transparent 70%);
+    animation: sb-aurora 38s ease-in-out infinite alternate;
+  }
+  & :focus-visible { outline: 2px solid var(--sb-blue); outline-offset: 2px; }
+
+  /* The ticket: the gateway's card (drawn behind the content, below the
+     wordmark), the order page's main, the plan the customer holds. */
+  &[data-ss-page] .container::before, &[data-ss-portal-page="order"] main, &[data-ss-portal-page] saas-subscription::part(card) {
+    border: 1px solid transparent; border-radius: 14px; background: var(--sb-rim);
+    box-shadow: 0 30px 80px rgba(0, 0, 0, .5), 0 0 60px rgba(245, 184, 77, .07);
+  }
+
+  /* Tear lines: dashed across the card's full width, notched at both ends.
+     Under the head (the subtitle; the title where there is none), and over
+     the stub (the gateway's operator line, the order page's button). */
+  &[data-ss-page] .subtitle, &[data-ss-page^="consent-"] h1, &[data-ss-portal-page="order"] h1 {
+    position: relative; margin: 0 calc(-1 * var(--sb-pad)) 24px; padding: 0 var(--sb-pad) 20px;
+    border-bottom: 1.5px dashed var(--sb-dash);
+  }
+  &[data-ss-page] .powered-by, &[data-ss-portal-page="order"] form { position: relative; border-top: 1.5px dashed var(--sb-dash); }
+  &[data-ss-page] :is(.subtitle, .powered-by)::before, &[data-ss-page] :is(.subtitle, .powered-by)::after,
+  &[data-ss-page^="consent-"] h1::before, &[data-ss-page^="consent-"] h1::after,
+  &[data-ss-portal-page="order"] :is(h1, form)::before, &[data-ss-portal-page="order"] :is(h1, form)::after {
+    content: ""; position: absolute; bottom: -11px; left: -11px; width: 20px; height: 20px;
+    border: 1px solid rgba(245, 184, 77, .35); border-radius: 50%; background: var(--sb-bg); clip-path: inset(0 0 0 50%);
+  }
+  &[data-ss-page] :is(.subtitle, .powered-by)::after, &[data-ss-page^="consent-"] h1::after,
+  &[data-ss-portal-page="order"] :is(h1, form)::after { left: auto; right: -11px; clip-path: inset(0 50% 0 0); }
+  &[data-ss-page] .powered-by::before, &[data-ss-page] .powered-by::after,
+  &[data-ss-portal-page="order"] form::before, &[data-ss-portal-page="order"] form::after { top: -11px; bottom: auto; }
+
+  /* Primary: the amber button. Secondary: raised ink. */
+  &[data-ss-page] .btn-accept, &[data-ss-portal-page="order"] .btn {
+    width: 100%; min-height: 48px; margin: 6px 0 0; padding: 12px 20px; border: 0; border-radius: 11px;
+    background: var(--sb-primary); box-shadow: var(--sb-glow); color: #221902; font: 650 15.5px/1.5 var(--sb-body);
+    cursor: pointer; transition: filter .15s, box-shadow .15s, transform .15s;
+  }
+  &[data-ss-page] .btn-accept:hover, &[data-ss-portal-page="order"] .btn:hover {
+    filter: brightness(1.05); transform: translateY(-1px);
+    box-shadow: 0 12px 30px rgba(217, 154, 38, .4), inset 0 1px 0 rgba(255, 255, 255, .4);
+  }
+  &[data-ss-page] :is(.switch-link, .btn-decline, .link), &[data-ss-portal-page] .portal-btn {
+    padding: 12px 18px; border: 1px solid var(--sb-line); border-radius: 10px;
+    background: var(--sb-second); color: var(--sb-ink); font: 500 14.5px/20px var(--sb-body);
+    text-align: center; text-decoration: none; cursor: pointer; transition: border-color .15s, box-shadow .15s, transform .15s;
+  }
+  &[data-ss-page] :is(.switch-link, .btn-decline, .link):hover, &[data-ss-portal-page] .portal-btn:hover {
+    border-color: #344160; transform: translateY(-1px); box-shadow: 0 10px 24px rgba(0, 0, 0, .35);
+  }
+
+  /* Links in text: amber when pointed at. */
+  &[data-ss-page] :is(.doc-meta, .legal-footer) a:hover, &[data-ss-portal-page] :is(footer, header, main) a:hover {
+    color: var(--sb-amber); text-decoration: underline; text-underline-offset: 3px;
+  }
+}
+
+/* ── Gateway: wordmark above the ticket ───────────────────────────────
+   The .container holds the wordmark and the card's content; the card is
+   its ::before, starting below the wordmark (40px mark + 26px gap). Then
+   the head, the account or the documents, and the stub: the operator's
+   line carries its tear, the legal links continue it to the card's foot. */
+
+html[data-ss-page] {
+  & body { justify-content: flex-start; padding: clamp(28px, 7vh, 72px) 16px 40px; }
+  & .container { max-width: 440px; padding: 0 var(--sb-pad) var(--sb-pad); text-align: left; animation: sb-rise .45s cubic-bezier(.2, .7, .25, 1) both; }
+  & .container::before { content: ""; position: absolute; inset: 66px 0 0; z-index: -1; }
+  & .logo-wrap { flex-direction: row; justify-content: center; gap: 12px; height: 40px; margin: 0 0 calc(26px + var(--sb-pad)); }
+  & .logo-circle { width: 40px; height: 40px; border: 0; border-radius: 10px; overflow: visible; filter: drop-shadow(0 6px 18px rgba(245, 184, 77, .18)); }
+  & .logo-circle img { width: 100%; height: 100%; }
+  & .logo-circle:not(.has-logo) { border: 1.5px dashed rgba(245, 184, 77, .5); }
+  & .logo-initial { font: 600 20px var(--sb-display); color: var(--sb-amber); }
+  & .logo-line { display: none; }
+  & .app-name { font: 600 30px/1 var(--sb-display); letter-spacing: -.02em; text-transform: lowercase; color: var(--sb-ink); }
+  & h1 { margin: 0 0 6px; font: 650 24px/1.2 var(--sb-display); letter-spacing: -.02em; color: var(--sb-ink); }
+  & .subtitle { font: 11px/1.5 var(--sb-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--sb-faint); }
+
+  & .account-card {
+    gap: 14px; padding: 14px 16px; border: 1px solid var(--sb-line); border-radius: 11px;
+    background: rgba(16, 23, 39, .8); color: var(--sb-ink); transition: border-color .15s, transform .15s, box-shadow .15s;
+  }
+  & .account-card:hover { border-color: rgba(245, 184, 77, .45); transform: translateY(-1px); box-shadow: 0 10px 24px rgba(0, 0, 0, .35); }
+  & .avatar { width: 42px; height: 42px; background: var(--sb-primary); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .4); color: #221902; font: 650 15px var(--sb-display); }
+  & .account-email { font: 12.5px/1.6 var(--sb-mono); color: var(--sb-faint); }
+  & .chevron { opacity: 1; color: var(--sb-faint); }
+  & .account-card:hover .chevron { color: var(--sb-amber); }
+  & .switch-link { margin-top: 12px; }
+
+  & .doc {
+    gap: 12px; margin: 0 0 10px; padding: 14px 16px; border: 1px solid var(--sb-line-soft); border-radius: 11px;
+    background: rgba(16, 23, 39, .8); font-size: 13.5px; line-height: 1.5; transition: border-color .15s;
+  }
+  & .doc:hover { border-color: #2c3855; }
+  & .doc:has(input:checked) { border-color: rgba(245, 184, 77, .45); }
+  & .doc input[type="checkbox"] { width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--sb-amber); }
+  & .doc-lead { font-size: 13.5px; color: var(--sb-faint); }
+  & .doc-meta { display: block; margin-top: 4px; font-size: 12.5px; color: var(--sb-faint); }
+  & .doc-meta a { color: var(--sb-blue); text-decoration: none; }
+  & .doc-optional { margin-left: 6px; padding: 2px 7px; border: 1px dashed var(--sb-dash); border-radius: 6px; font: 600 10px/1.4 var(--sb-mono); letter-spacing: .12em; color: var(--sb-dim); }
+  & .note { margin: 0; font-size: 14.5px; color: var(--sb-dim); }
+  & .btn-decline { margin-top: 10px; }
+  & .link { display: block; margin-top: 22px; }
+
+  & .powered-by {
+    margin: 26px calc(-1 * var(--sb-pad)) 0; padding: 18px var(--sb-pad) 0; background: rgba(10, 14, 24, .35);
+    text-align: center; font: 10.5px/1.6 var(--sb-mono); letter-spacing: .14em; color: var(--sb-faint);
+  }
+  & .legal-footer {
+    margin: 0 calc(-1 * var(--sb-pad)) calc(-1 * var(--sb-pad)); padding: 6px var(--sb-pad) 20px; border: 0;
+    border-radius: 0 0 13px 13px; background: rgba(10, 14, 24, .35); text-align: center; font-size: 12px; line-height: 1.8; color: var(--sb-faint);
+  }
+  & .legal-footer a { color: var(--sb-faint); }
+  & .legal-sep { margin: 0 7px; color: var(--sb-line); }
+}
+
+/* ── Portal: the dashboard's chrome, and the widgets ─────────────────
+   The widgets render in shadow DOM, so they are reached only through the
+   stack's contract: the --saas-theme-* properties (inherited through the
+   shadow boundary) and ::part(). A custom property set on a part reaches
+   that part's own inner elements too: that is how the cycle switch and the
+   feature ticks get their colours. */
+
+html[data-ss-portal-page] {
+  /* primary, primary-hover and bg: the stack derives them from Sitebin's
+     registered colours already (#f5b84d on #0a0e18). */
+  --saas-theme-card-bg: #1a2338; --saas-theme-border: #242f4b; --saas-theme-text: #eceff7;
+  --saas-theme-text-muted: #646f88; --saas-theme-text-light: #9aa5bd; --saas-theme-white: #eceff7;
+  --saas-theme-success: #5ecf8a; --saas-theme-font: var(--sb-body); --saas-theme-heading-font: var(--sb-display);
+  --saas-theme-radius: 10px;
+
+  & body::before { z-index: -1; }
+  & header { gap: 12px; padding: 15px clamp(18px, 4vw, 44px); background: linear-gradient(180deg, rgba(10, 14, 24, .88), rgba(10, 14, 24, .6)); border-bottom: 1px solid rgba(36, 47, 75, .55); }
+  & header .logo { width: 26px; height: 26px; border: 0; border-radius: 7px; overflow: visible; color: var(--sb-amber); }
+  & header img { width: 26px; height: 26px; }
+  & header :is(.app-name, .name) { font: 600 19px/1 var(--sb-display); letter-spacing: -.02em; text-transform: lowercase; color: var(--sb-ink); }
+  & header .home-link { display: inline-flex; color: var(--sb-faint); }
+  & .langs { font-family: var(--sb-mono); }
+  & header .langs a { color: var(--sb-faint); }
+  & header .langs strong { font-weight: 500; color: var(--sb-amber); }
+  & .portal-control { margin: 0 0 44px; }
+
+  /* Every widget's outer panel; the subscription's is the ticket (above),
+     notched at the middle of both edges like the dashboard's. */
+  & ::part(card) { padding: clamp(18px, 4vw, 26px); border: 1px solid var(--sb-line-soft); border-radius: 14px; background: linear-gradient(180deg, rgba(255, 255, 255, .02), transparent 55%), var(--sb-card); }
+  & saas-subscription::part(card) { position: relative; padding: clamp(22px, 5vw, 34px); }
+  & saas-subscription::part(card)::before, & saas-subscription::part(card)::after {
+    content: ""; position: absolute; top: 50%; left: -14px; width: 26px; height: 26px; border: 1px solid rgba(245, 184, 77, .35);
+    border-radius: 50%; background: var(--sb-bg); transform: translateY(-50%); clip-path: inset(0 0 0 50%);
+  }
+  & saas-subscription::part(card)::after { left: auto; right: -14px; clip-path: inset(0 50% 0 0); }
+
+  /* The catalogue: sitebin.io's pricing cards. A dashed rim, the tier and
+     its price at the head, the features below a tear line notched at both
+     edges; amber for the featured plan, green for the one held. */
+  & saas-pricing::part(card) { --sb-notch: #34405f; position: relative; padding: 26px 24px 24px; border: 1.5px dashed #34405f; border-radius: 14px; background: var(--sb-card); text-align: left; }
+  & saas-pricing::part(card-featured) { --sb-notch: rgba(245, 184, 77, .55); border-color: rgba(245, 184, 77, .55); outline: 1px solid rgba(245, 184, 77, .25); box-shadow: 0 18px 60px rgba(0, 0, 0, .35), 0 0 42px rgba(245, 184, 77, .05); }
+  & saas-pricing::part(card-current) { --sb-notch: rgba(94, 207, 138, .55); border-color: rgba(94, 207, 138, .55); outline: 0; }
+  & saas-pricing::part(tier-name) { margin: 0 0 10px; font: 650 22px/1.3 var(--sb-display); letter-spacing: -.01em; color: var(--sb-ink); }
+  & saas-pricing::part(cycle-switch) { --saas-primary: #202b45; --saas-theme-radius: 99px; align-self: flex-start; padding: 3px; border: 1px solid var(--sb-line); border-radius: 99px; background: #101727; }
+  & saas-pricing::part(cycle-switch):focus-within { outline: 2px solid var(--sb-blue); outline-offset: 2px; }
+  & saas-pricing::part(saving) { align-self: flex-start; padding: 0 2px; background: none; font: 12px/1.5 var(--sb-mono); color: var(--sb-ok); }
+  & saas-pricing::part(price) { justify-content: flex-start; column-gap: 7px; margin: 12px 0 2px; font: 700 30px/1.2 var(--sb-display); letter-spacing: -.02em; color: var(--sb-ink); }
+  & saas-pricing::part(price-unit) { font: 400 13.5px var(--sb-body); letter-spacing: 0; color: var(--sb-faint); }
+  & saas-pricing::part(price-sub) { margin: 0; font-size: 13px; color: var(--sb-faint); }
+  & saas-pricing::part(features) { --saas-primary: #5ecf8a; position: relative; margin: 18px -24px 22px; padding: 16px 24px 0; border-top: 1px dashed var(--sb-line); }
+  & saas-pricing::part(features)::before, & saas-pricing::part(features)::after {
+    content: ""; position: absolute; top: -10px; left: -10px; width: 18px; height: 18px; border: 1.5px dashed var(--sb-notch);
+    border-radius: 50%; background: var(--sb-bg); clip-path: inset(0 0 0 50%);
+  }
+  & saas-pricing::part(features)::after { left: auto; right: -10px; clip-path: inset(0 50% 0 0); }
+
+  /* Buttons in every widget: raised ink, and amber for the action the card
+     is for. */
+  & ::part(button) {
+    padding: 11px 16px; border: 1px solid var(--sb-line); border-radius: 10px; background: var(--sb-second); color: var(--sb-ink);
+    font: 500 14.5px/1.3 var(--sb-body); text-decoration: none; transition: border-color .15s, box-shadow .15s, filter .15s;
+  }
+  & ::part(button):hover { border-color: #344160; }
+  & ::part(button-primary) { border-color: transparent; background: var(--sb-primary); box-shadow: var(--sb-glow); color: #221902; font-weight: 650; }
+  & ::part(button-primary):hover { border-color: transparent; filter: brightness(1.05); box-shadow: 0 12px 30px rgba(217, 154, 38, .4), inset 0 1px 0 rgba(255, 255, 255, .4); }
+}
+
+/* ── Order page: the order as a receipt ───────────────────────────── */
+
+html[data-ss-portal-page="order"] {
+  & main { position: relative; width: min(560px, 100% - 32px); max-width: none; margin: clamp(24px, 6vh, 56px) auto 48px; padding: var(--sb-pad); animation: sb-rise .45s cubic-bezier(.2, .7, .25, 1) both; }
+  & h1 { font: 650 24px/1.2 var(--sb-display); letter-spacing: -.02em; color: var(--sb-ink); }
+  & dl { gap: 0 18px; margin: 0 0 18px; }
+  & :is(dt, dd) { padding: 11px 0; border-top: 1px dashed var(--sb-line); }
+  & :is(dt:first-of-type, dt:first-of-type + dd) { padding-top: 0; border-top: 0; }
+  & dt { font: 600 11px/23px var(--sb-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--sb-faint); }
+  & dd { font-size: 14.5px; color: var(--sb-dim); }
+  & dd strong { font: 600 17px var(--sb-display); color: var(--sb-ink); }
+  & dd ul { margin: 6px 0 0; padding: 0; list-style: none; }
+  & dd li { position: relative; padding-left: 20px; }
+  & dd li::before { content: "\2713"; position: absolute; left: 0; font-size: 12px; font-weight: 700; color: var(--sb-ok); }
+  & .price { font: 700 22px/1.2 var(--sb-display); letter-spacing: -.02em; color: var(--sb-ink); }
+  & .note { margin: 4px 0 0; font-size: 13px; color: var(--sb-faint); }
+  & main > p { margin: 0 0 14px; font-size: 14px; }
+  & main a { color: var(--sb-blue); text-decoration: none; }
+  & .box { margin: 14px 0; padding: 14px 16px; border: 1.5px dashed var(--sb-dash); border-radius: 11px; background: rgba(16, 23, 39, .55); font-size: 13.5px; line-height: 1.6; }
+  & .box h2 { margin: 0 0 6px; font: 600 11px/1.5 var(--sb-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--sb-ink); }
+  & .box p { margin: 0; }
+  & .errors {
+    margin: 0 0 18px; padding: 12px 14px; border-radius: 10px; font-size: 14px; line-height: 1.5;
+    background: rgba(242, 109, 109, .08); box-shadow: inset 0 0 0 1px rgba(242, 109, 109, .38); color: #ffb3b3;
+  }
+  & :is(.errors, .done) a { color: inherit; text-decoration: underline; }
+  & form { margin: 24px calc(-1 * var(--sb-pad)) 0; padding: 22px var(--sb-pad) 0; }
+  & form .note { text-align: center; }
+  & form + p { margin: 14px 0 0; text-align: center; }
+}
+
+/* ── Small screens and motion ──────────────────────────────────────── */
+
+@media (max-width: 480px) {
+  html[data-ss-page] {
+    & body { padding: 28px 12px 32px; }
+    & .logo-circle { width: 34px; height: 34px; }
+    & .app-name { font-size: 26px; }
+  }
+  html[data-ss-portal-page="order"] {
+    & dl { grid-template-columns: 1fr; }
+    & dt { padding-bottom: 2px; }
+    & dd { padding-top: 0; border-top: 0; }
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-ss-page],
+  html[data-ss-portal-page] {
+    & body::before, &[data-ss-page] .container, &[data-ss-portal-page="order"] main { animation: none; }
+  }
 }
