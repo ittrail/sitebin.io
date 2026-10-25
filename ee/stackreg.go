@@ -124,10 +124,12 @@ type stackTheme struct {
 	LogoURL         string `json:"logoUrl,omitempty"`
 	FaviconURL      string `json:"faviconUrl,omitempty"`
 	// CustomCSS is appended after the stack's own sheet on the Keycloak
-	// sign-in pages (and in the account console). The colours above reach
-	// only a few custom properties there -- the stack's sheet hard-codes the
-	// sign-in button white -- so this is what actually makes the page
-	// Sitebin's. See keycloak-theme.css for the rules it has to follow.
+	// sign-in pages, the stack's account selector and consent pages, its
+	// hosted plan and order pages (and in the account console, where it must
+	// do nothing). The colours above reach only a few custom properties --
+	// the stack's sheet hard-codes the sign-in button white -- so this is
+	// what actually makes those pages Sitebin's. See keycloak-theme.css for
+	// the rules it has to follow.
 	CustomCSS string `json:"customCss,omitempty"`
 }
 
@@ -397,7 +399,8 @@ func sitebinTheme(base string) *stackTheme {
 	}
 }
 
-// keycloakThemeSource is the sign-in stylesheet as it is kept in this repo,
+// keycloakThemeSource is the stylesheet for the stack's pages (sign-in,
+// account selector, consent, plan, order) as it is kept in this repo,
 // comments and all.
 //
 //go:embed keycloak-theme.css
