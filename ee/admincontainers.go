@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ittrail/sitebin.io/ee/containers"
 	"github.com/ittrail/sitebin.io/internal/ext"
@@ -43,6 +44,9 @@ type containerServiceRow struct {
 	Updating string
 	// Missing marks an own entry for a service the project no longer has.
 	Missing bool
+	// Usage is what the running container uses, as one line; empty when
+	// there is no recent measurement.
+	Usage string
 }
 
 type containerProject struct {
@@ -50,6 +54,9 @@ type containerProject struct {
 	Status, Message     string
 	UpdateErr           string
 	Services            []containerServiceRow
+	// Web is the project's web traffic when several of its services serve
+	// HTTP and it cannot be given to one of them.
+	Web string
 }
 
 type containersView struct {
@@ -68,6 +75,48 @@ type containersView struct {
 	Projects, Running       int
 	MemReserved, CPUReserve string
 	Rows                    []containerProject
+
+	// What the running containers use, summed: memory and CPU against the
+	// host, public traffic in and out (the projects' web traffic once).
+	MemUsed, CPUUsed      string
+	TrafficIn, TrafficOut string
+	// AsOf is when the newest measurement shown was taken; Live reloads
+	// the page every 10 s (the console runs without JavaScript).
+	AsOf string
+	Live bool
+}
+
+// rateText is bytes per second for people; "—" when not measured yet.
+func rateText(v *float64) string {
+	if v == nil {
+		return "—"
+	}
+	return humanBytes(int64(math.Round(*v))) + "/s"
+}
+
+func coresText(v *float64) string {
+	if v == nil {
+		return "—"
+	}
+	return cpuText(math.Round(*v*100) / 100)
+}
+
+// usageText is one container's usage as a row shows it, in the edit page's
+// words.
+func usageText(u ext.ServiceUsage) string {
+	out := "RAM " + humanBytes(u.MemoryBytes)
+	if u.MemoryLimitBytes > 0 {
+		out += " / " + humanBytes(u.MemoryLimitBytes)
+	}
+	out += " · CPU " + coresText(u.CPU)
+	if u.CPULimit > 0 {
+		out += " / " + cpuText(u.CPULimit)
+	}
+	out += " · " + strconv.Itoa(u.Pids)
+	if u.PidsLimit > 0 {
+		out += " / " + strconv.Itoa(u.PidsLimit)
+	}
+	return out + " processes · ↓ " + rateText(u.In) + " ↑ " + rateText(u.Out)
 }
 
 func memText(mb int) string    { return strconv.Itoa(mb) + " MB" }
@@ -120,7 +169,36 @@ func (p *provider) handleAdminContainers(w http.ResponseWriter, r *http.Request)
 	emails := map[string]string{}
 	var memMB int
 	var cpuSum float64
+	var usedMem int64
+	var usedCPU, trafficIn, trafficOut float64
+	var asOf time.Time
 	for _, cs := range sites {
+		var usage map[string]ext.ServiceUsage
+		var webText string
+		if p.containerUsage != nil {
+			if u, ok := p.containerUsage(cs.ViewID); ok {
+				usage = map[string]ext.ServiceUsage{}
+				for _, s := range u.Services {
+					usage[s.Name] = s
+					usedMem += s.MemoryBytes
+					if s.CPU != nil {
+						usedCPU += *s.CPU
+					}
+					if s.In != nil && s.Out != nil {
+						trafficIn += *s.In
+						trafficOut += *s.Out
+					}
+				}
+				if u.Web != nil {
+					trafficIn += u.Web.In
+					trafficOut += u.Web.Out
+					webText = "↓ " + rateText(&u.Web.In) + " ↑ " + rateText(&u.Web.Out)
+				}
+				if u.At.After(asOf) {
+					asOf = u.At
+				}
+			}
+		}
 		owner, done := emails[cs.Owner]
 		if !done {
 			owner = cs.Owner
@@ -129,7 +207,7 @@ func (p *provider) handleAdminContainers(w http.ResponseWriter, r *http.Request)
 			}
 			emails[cs.Owner] = owner
 		}
-		row := containerProject{ViewID: cs.ViewID, Name: cs.Name, Owner: owner, Status: cs.Observed.Status, Message: cs.Observed.Message}
+		row := containerProject{ViewID: cs.ViewID, Name: cs.Name, Owner: owner, Status: cs.Observed.Status, Message: cs.Observed.Message, Web: webText}
 		if !cs.Enabled && row.Status == "" {
 			row.Status = store.ContainerStopped
 		}
@@ -148,6 +226,9 @@ func (p *provider) handleAdminContainers(w http.ResponseWriter, r *http.Request)
 				Pids:      limitCell{strconv.Itoa(eff.Pids), own.Pids > 0},
 				OwnMemory: formValue(own.MemoryMB), OwnCPUs: formValue(own.CPUs), OwnPids: formValue(own.Pids),
 				HasOwn: own != (ext.ContainerLimits{}),
+			}
+			if u, ok := usage[sv.Name]; ok {
+				sr.Usage = usageText(u)
 			}
 			if running {
 				v.Running++
@@ -182,6 +263,22 @@ func (p *provider) handleAdminContainers(w http.ResponseWriter, r *http.Request)
 	v.CPUReserve = cpuText(math.Round(cpuSum*100) / 100)
 	if cpus > 0 {
 		v.CPUReserve += " of " + strconv.Itoa(cpus)
+	}
+	v.MemUsed = humanBytes(usedMem)
+	if mem > 0 {
+		v.MemUsed += " of " + humanBytes(mem)
+	}
+	v.CPUUsed = coresText(&usedCPU)
+	if cpus > 0 {
+		v.CPUUsed += " of " + strconv.Itoa(cpus)
+	}
+	v.TrafficIn, v.TrafficOut = rateText(&trafficIn), rateText(&trafficOut)
+	if !asOf.IsZero() {
+		v.AsOf = asOf.Local().Format("15:04:05")
+	}
+	v.Live = r.URL.Query().Get("live") == "1"
+	if v.Live {
+		w.Header().Set("Refresh", "10")
 	}
 	p.securityHeaders(w)
 	containersTmpl.Execute(w, v)
@@ -389,6 +486,10 @@ const containersCSS = `
   .adm .eff .o { color: var(--amber); }
   .adm .eff .o::after { content: " own"; font-size: 10px; letter-spacing: .06em; }
   .adm .eff .upd { display: block; font-size: 11px; color: var(--amber); }
+  .adm .eff .use { display: block; font-size: 11px; color: var(--ink-faint); margin-top: 2px; }
+  .adm .phead .web { font: 11px var(--mono); color: var(--ink-dim); }
+  .adm .asof { font: 12px var(--mono); color: var(--ink-faint); margin: -12px 0 22px; }
+  .adm .asof a { color: var(--ink-dim); }
   .adm .eff .gone { color: var(--ink-faint); font-style: italic; }
   .adm .svc .acts { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
   @media (max-width: 900px) { .adm form.svc { grid-template-columns: 1fr; } .adm .svc .acts { justify-content: flex-start; } }
@@ -408,7 +509,13 @@ var containersTmpl = template.Must(template.New("containers").Parse(pageHead + a
     <div class="fig"><span class="k">Running containers</span><span class="v">{{.Running}}</span></div>
     <div class="fig"><span class="k">Memory limits</span><span class="v">{{.MemReserved}}</span></div>
     <div class="fig"><span class="k">CPU limits</span><span class="v">{{.CPUReserve}}</span></div>
+    <div class="fig"><span class="k">Memory in use</span><span class="v">{{.MemUsed}}</span></div>
+    <div class="fig"><span class="k">CPU in use</span><span class="v">{{.CPUUsed}}</span></div>
+    <div class="fig"><span class="k">Public in</span><span class="v">{{.TrafficIn}}</span></div>
+    <div class="fig"><span class="k">Public out</span><span class="v">{{.TrafficOut}}</span></div>
   </section>
+  <p class="asof">{{if .AsOf}}Usage as of {{.AsOf}}{{else}}No usage measured yet{{end}} · public traffic is the visitors' and the internet's, not what a project's services exchange ·
+    {{if .Live}}<a href="/account/admin/containers">Stop live</a> (reloads every 10 s; stop it before you edit){{else}}<a href="/account/admin/containers?live=1">Live</a> (reload every 10 s){{end}}</p>
 
   <section class="defs">
     <h2>Instance defaults</h2>
@@ -434,6 +541,7 @@ var containersTmpl = template.Must(template.New("containers").Parse(pageHead + a
         <span class="st {{$p.Status}}">{{$p.Status}}</span>
         {{if $p.Message}}<span class="msg">{{$p.Message}}</span>{{end}}
         {{if $p.UpdateErr}}<span class="err">&#9888; {{$p.UpdateErr}}</span>{{end}}
+        {{if $p.Web}}<span class="web">web traffic of the project (several services serve HTTP): {{$p.Web}}</span>{{end}}
       </div>
       {{range $p.Services}}
       <form method="post" action="/account/admin/containers/sites/{{$p.ViewID}}/limits" class="svc">
@@ -444,7 +552,7 @@ var containersTmpl = template.Must(template.New("containers").Parse(pageHead + a
         <span class="eff"><span class="gone">has its own limits but is not in the project</span></span>
         <span class="acts"><button class="btn small" type="submit" name="clear" value="1">Remove</button></span>
         {{else}}
-        <span class="eff"><span{{if .Memory.Own}} class="o"{{end}}>{{.Memory.Value}}</span> · <span{{if .CPUs.Own}} class="o"{{end}}>{{.CPUs.Value}} CPU</span> · <span{{if .Pids.Own}} class="o"{{end}}>{{.Pids.Value}} processes</span>{{if .Updating}}<span class="upd">updating — {{.Updating}}</span>{{end}}</span>
+        <span class="eff"><span{{if .Memory.Own}} class="o"{{end}}>{{.Memory.Value}}</span> · <span{{if .CPUs.Own}} class="o"{{end}}>{{.CPUs.Value}} CPU</span> · <span{{if .Pids.Own}} class="o"{{end}}>{{.Pids.Value}} processes</span>{{if .Updating}}<span class="upd">updating — {{.Updating}}</span>{{end}}{{if .Usage}}<span class="use">{{.Usage}}</span>{{end}}</span>
         <span class="acts">
           <input class="num" type="text" inputmode="numeric" name="memory_mb" value="{{.OwnMemory}}" placeholder="MB" aria-label="Memory of {{.Name}} in MB">
           <input class="num" type="text" inputmode="decimal" name="cpus" value="{{.OwnCPUs}}" placeholder="CPUs" aria-label="CPUs of {{.Name}}">

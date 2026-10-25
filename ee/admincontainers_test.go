@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ittrail/sitebin.io/ee/containers"
 	"github.com/ittrail/sitebin.io/internal/ext"
@@ -228,5 +229,54 @@ func TestContainersTabTakesServicesFromTheComposeFile(t *testing.T) {
 	w := postAs(mux, "/account/admin/containers/sites/"+blogSite+"/limits", admin, url.Values{"csrf": {p.csrf(acc)}, "service": {"web"}, "cpus": {"1"}})
 	if w.Code != http.StatusSeeOther || host.sites.containers[1].Limits["web"].CPUs != 1 {
 		t.Errorf("a service of the file that never ran: %d %q", w.Code, w.Body)
+	}
+}
+
+func f64(v float64) *float64 { return &v }
+
+// usageOf answers the shop project's usage, as the runtime would.
+func usageOf(id string) (ext.ContainerUsage, bool) {
+	if id != shopSite {
+		return ext.ContainerUsage{}, false
+	}
+	return ext.ContainerUsage{At: time.Date(2026, 10, 25, 9, 30, 15, 0, time.Local), Services: []ext.ServiceUsage{
+		{Name: "app", MemoryBytes: 100 << 20, MemoryLimitBytes: 512 << 20, CPU: f64(0.25), CPULimit: 0.5, Pids: 12, PidsLimit: 256, In: f64(2048), Out: f64(4096)},
+		{Name: "db", MemoryBytes: 300 << 20, MemoryLimitBytes: 1024 << 20, CPU: f64(0.05), CPULimit: 0.5, Pids: 30, PidsLimit: 256, In: f64(0), Out: f64(0)},
+	}}, true
+}
+
+func TestContainersTabShowsUsage(t *testing.T) {
+	p, _, mux, admin, _ := setupContainersTab(t)
+	p.containerUsage = usageOf
+	body := getAs(mux, "/account/admin/containers", admin).Body.String()
+	for _, want := range []string{
+		"RAM 100 MB / 512 MB · CPU 0.25 / 0.5 · 12 / 256 processes · ↓ 2.0 KB/s ↑ 4.0 KB/s", // app's row
+		"RAM 300 MB / 1.0 GB",                // db's row
+		"Memory in use", "400 MB of 16.0 GB", // the figures
+		"CPU in use", "0.3 of 6",
+		"Public in", "2.0 KB/s", "Public out", "4.0 KB/s",
+		"as of 09:30:15",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the tab does not show %q", want)
+		}
+	}
+	// The stopped blog project has no usage line.
+	if strings.Count(body, "processes ·") != 2 {
+		t.Errorf("%d usage lines, want 2", strings.Count(body, "processes ·"))
+	}
+}
+
+// The console runs without JavaScript: Live reloads the page every 10 s.
+func TestContainersTabLive(t *testing.T) {
+	p, _, mux, admin, _ := setupContainersTab(t)
+	p.containerUsage = usageOf
+	w := getAs(mux, "/account/admin/containers", admin)
+	if w.Header().Get("Refresh") != "" || !strings.Contains(w.Body.String(), `href="/account/admin/containers?live=1"`) {
+		t.Errorf("default: Refresh %q, no Live link", w.Header().Get("Refresh"))
+	}
+	w = getAs(mux, "/account/admin/containers?live=1", admin)
+	if w.Header().Get("Refresh") != "10" || !strings.Contains(w.Body.String(), `href="/account/admin/containers"`) {
+		t.Errorf("live: Refresh %q", w.Header().Get("Refresh"))
 	}
 }

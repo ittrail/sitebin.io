@@ -60,7 +60,10 @@ type provider struct {
 	// which the console's Containers tab reads and changes; nil when
 	// containers are off.
 	containerLimits *containers.LimitBook
-	secret          []byte
+	// containerUsage is what a site's running containers use, for the same
+	// tab; nil when containers are off.
+	containerUsage func(viewID string) (ext.ContainerUsage, bool)
+	secret         []byte
 }
 
 func newProvider() *provider { return &provider{} }
