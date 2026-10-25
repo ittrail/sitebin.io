@@ -210,3 +210,25 @@ admin's id, site, service and values), like the register's other actions.
 Exact wording and layout of the tab (in the console's existing style), test
 names, and how the per-site update errors are kept (memory is enough: they
 describe the last attempt and are re-made by the next).
+
+## Corrections (post-implementation)
+
+The whole-branch review (2026-10-25) changed two rules before the deploy:
+
+1. **Effective limits are held to the host at use, not only checked at
+   save.** A value saved before the Engine answered `/info`, or on a larger
+   host before a move (`limits.json` travels in `sitebin backup`), would
+   otherwise go to Docker as it is — and Docker refuses more CPUs than the
+   host has, on every start and every update. `LimitBook.For` and `Defaults`
+   cap CPUs at `NCPU` and memory at `MemTotal`; what the admin saved stays as
+   saved, and the console shows the effective value.
+2. **"In the project" means the compose file.** A project whose last start
+   failed has recorded no services, so the console offered an operator's own
+   value for its database for removal as "not in the project", and refused
+   limits for a service that had not run yet. The tab and the save take the
+   services from the compose file when it parses, and the recorded ones only
+   otherwise.
+
+Deployed 2026-10-25 as e6d0947: the three running containers on
+app.sitebin.io each got one in-place update to 512 MB / 0.5 / 256 (their
+values already), with unchanged start times.
