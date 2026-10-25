@@ -92,7 +92,21 @@ func (b *LimitBook) Saved() ext.ContainerLimits {
 func (b *LimitBook) Defaults() ext.ContainerLimits {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.saved.Or(b.env)
+	return b.fitLocked(b.saved.Or(b.env))
+}
+
+// fitLocked holds l to the host's size. A value is checked against the host
+// when it is saved, but one saved before the Engine said how large its host
+// is, or on a larger host before a move, would otherwise go to Docker as it
+// is — and Docker refuses more CPUs than the host has, on every start.
+func (b *LimitBook) fitLocked(l ext.ContainerLimits) ext.ContainerLimits {
+	if b.cpus > 0 && l.CPUs > float64(b.cpus) {
+		l.CPUs = float64(b.cpus)
+	}
+	if mb := int(b.mem >> 20); mb > 0 && l.MemoryMB > mb {
+		l.MemoryMB = mb
+	}
+	return l
 }
 
 // Err is why the saved defaults could not be read, or nil.
@@ -106,9 +120,12 @@ func (b *LimitBook) Err() error {
 // be converged to them.
 func (b *LimitBook) Known() bool { return b.Err() == nil }
 
-// For is the effective limits of one service: its own, then the defaults.
+// For is the effective limits of one service: its own, then the defaults,
+// held to the host's size.
 func (b *LimitBook) For(own map[string]ext.ContainerLimits, service string) ext.ContainerLimits {
-	return own[service].Or(b.Defaults())
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.fitLocked(own[service].Or(b.saved.Or(b.env)))
 }
 
 // SetCapacity records the host's CPUs and memory (bytes), as the Engine

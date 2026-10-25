@@ -88,9 +88,9 @@ func TestContainersTabShowsEveryService(t *testing.T) {
 	for _, want := range []string{
 		"Shop", shopSite, blogSite, "shop@example.com",
 		">app<", ">db<", ">web<", "mysql-8.4",
-		"1024 MB", // db's own memory
-		"512 MB",  // everyone else's, the default
-		"6 CPUs",  // the host
+		"1024 MB",  // db's own memory
+		"512 MB",   // everyone else's, the default
+		"6 CPUs",   // the host
 		"updating", // db runs with 512 MB until the runtime changes it
 		">old<", "not in the project",
 		`placeholder="512"`, // the defaults form shows the environment's
@@ -201,5 +201,32 @@ func TestSaveContainerLimits(t *testing.T) {
 	}
 	if w := postAs(mux, "/account/admin/containers/sites/zzzzzzzzzzzzzzzzzzzzzzzzzz/limits", admin, url.Values{"csrf": {csrf}, "service": {"app"}}); w.Code != 404 {
 		t.Errorf("unknown site: %d", w.Code)
+	}
+}
+
+// A project whose last start failed has recorded no services. The tab takes
+// them from its compose file, so an operator's value for one of them is not
+// offered for removal as "not in the project", and a service that never ran
+// can be given limits before it starts.
+func TestContainersTabTakesServicesFromTheComposeFile(t *testing.T) {
+	p, host, mux, admin, adminID := setupContainersTab(t)
+	acc, _ := p.accounts.ByID(adminID)
+	blog := &host.sites.containers[1]
+	blog.Compose = []byte("services:\n  web:\n    image: alpine-node-22\n  worker:\n    image: alpine-node-22\n")
+	blog.Observed = ext.ContainerState{Status: store.ContainerError, Message: "your plan could not be checked just now; retrying"}
+	blog.Limits = map[string]ext.ContainerLimits{"worker": {MemoryMB: 1024}, "old": {Pids: 64}}
+
+	body := getAs(mux, "/account/admin/containers", admin).Body.String()
+	if n := strings.Count(body, "not in the project"); n != 1 {
+		t.Errorf("%d services marked as not in the project, want 1 (old)", n)
+	}
+	for _, want := range []string{">web<", ">worker<", "1024 MB"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the tab does not show %q", want)
+		}
+	}
+	w := postAs(mux, "/account/admin/containers/sites/"+blogSite+"/limits", admin, url.Values{"csrf": {p.csrf(acc)}, "service": {"web"}, "cpus": {"1"}})
+	if w.Code != http.StatusSeeOther || host.sites.containers[1].Limits["web"].CPUs != 1 {
+		t.Errorf("a service of the file that never ran: %d %q", w.Code, w.Body)
 	}
 }

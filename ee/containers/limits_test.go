@@ -115,3 +115,23 @@ func TestUnreadableDefaultsAreUnknown(t *testing.T) {
 		t.Error("an out-of-bounds file read as known")
 	}
 }
+
+// A value saved before the host's size was known, or on a larger host before
+// a move, is used at the host's size: Docker refuses more CPUs than the host
+// has, and would refuse every start.
+func TestForFitsTheHost(t *testing.T) {
+	b := NewLimitBook(t.TempDir(), envLimits)
+	if err := b.SetDefaults(ext.ContainerLimits{CPUs: 8}); err != nil {
+		t.Fatal(err)
+	}
+	b.SetCapacity(6, 16<<30)
+	if got := b.For(map[string]ext.ContainerLimits{"db": {MemoryMB: 20000}}, "db"); got.CPUs != 6 || got.MemoryMB != 16384 || got.Pids != 256 {
+		t.Errorf("db = %+v", got)
+	}
+	if got := b.Defaults(); got.CPUs != 6 {
+		t.Errorf("defaults = %+v", got)
+	}
+	if b.Saved().CPUs != 8 {
+		t.Errorf("the admin's saved value was rewritten: %+v", b.Saved())
+	}
+}

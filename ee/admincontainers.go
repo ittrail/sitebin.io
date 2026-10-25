@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ittrail/sitebin.io/ee/containers"
 	"github.com/ittrail/sitebin.io/internal/ext"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
@@ -136,7 +137,8 @@ func (p *provider) handleAdminContainers(w http.ResponseWriter, r *http.Request)
 			row.UpdateErr = p.containers.UpdateError(cs.ViewID)
 		}
 		running := cs.Observed.Status == store.ContainerRunning
-		for _, sv := range cs.Observed.Services {
+		services := projectServices(cs)
+		for _, sv := range services {
 			eff := book.For(cs.Limits, sv.Name)
 			own := cs.Limits[sv.Name]
 			sr := containerServiceRow{
@@ -161,7 +163,7 @@ func (p *provider) handleAdminContainers(w http.ResponseWriter, r *http.Request)
 			row.Services = append(row.Services, sr)
 		}
 		for _, name := range slices.Sorted(maps.Keys(cs.Limits)) {
-			if !slices.ContainsFunc(cs.Observed.Services, func(sv ext.ContainerService) bool { return sv.Name == name }) {
+			if !hasService(services, name) {
 				row.Services = append(row.Services, containerServiceRow{Name: name, Missing: true, HasOwn: true})
 			}
 		}
@@ -183,6 +185,31 @@ func (p *provider) handleAdminContainers(w http.ResponseWriter, r *http.Request)
 	}
 	p.securityHeaders(w)
 	containersTmpl.Execute(w, v)
+}
+
+// projectServices are the services a project has: its compose file's when
+// the file parses — a project whose last start failed has recorded none —
+// with what was last recorded of each, else the ones last recorded.
+func projectServices(cs ext.ContainerSite) []ext.ContainerService {
+	spec, err := containers.Parse(cs.Compose)
+	if cs.Compose == nil || err != nil {
+		return cs.Observed.Services
+	}
+	out := make([]ext.ContainerService, 0, len(spec.Services))
+	for _, sv := range spec.Services {
+		d := ext.ContainerService{Name: sv.Name, Image: sv.Image.Name}
+		for _, o := range cs.Observed.Services {
+			if o.Name == sv.Name {
+				d.State, d.Limits = o.State, o.Limits
+			}
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
+func hasService(services []ext.ContainerService, name string) bool {
+	return slices.ContainsFunc(services, func(sv ext.ContainerService) bool { return sv.Name == name })
 }
 
 // parseLimitsForm reads memory_mb, cpus and pids. An empty field is not set
@@ -292,7 +319,7 @@ func (p *provider) handleAdminContainerLimits(w http.ResponseWriter, r *http.Req
 	}
 	service := r.PostFormValue("service")
 	_, hasOwn := cs.Limits[service]
-	if !hasOwn && !slices.ContainsFunc(cs.Observed.Services, func(sv ext.ContainerService) bool { return sv.Name == service }) {
+	if !hasOwn && !hasService(projectServices(cs), service) {
 		http.Error(w, fmt.Sprintf("the project has no service %q", service), http.StatusBadRequest)
 		return
 	}
