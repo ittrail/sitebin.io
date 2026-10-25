@@ -66,12 +66,12 @@ func (p *provider) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 	url, err := p.billing.CheckoutURL(r.Context(), p.billingCustomer(acc), tier,
 		p.baseURL()+"/account?upgraded=1", p.baseURL()+"/account")
 	// A customer who already pays is not sold a second subscription: the
-	// backend names where the plan is changed (the stack's plan page with the
-	// change preselected for confirmation, or a store's), and that is where
+	// backend names where the plan is changed (the stack's order page for
+	// exactly this change, its plan page, or a store's), and that is where
 	// they go.
 	var already *billing.AlreadySubscribedError
 	if errors.As(err, &already) {
-		p.leaveTo(w, already.ManageURL, "You already have a plan", "Plan changes are made on your plan page, where this one is waiting for you to confirm.")
+		p.leaveTo(w, already.ManageURL, "You already have a plan", "Your change is waiting for you to confirm on the next page, with what it costs today.")
 		return
 	}
 	if err != nil {

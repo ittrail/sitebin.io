@@ -143,9 +143,17 @@ type stackGDPR struct {
 }
 
 type stackBilling struct {
-	TierAfterRegistration string      `json:"tierAfterRegistration,omitempty"`
-	Tiers                 []stackTier `json:"tiers"`
+	TierAfterRegistration string `json:"tierAfterRegistration,omitempty"`
+	// What follows the stack account's prefix on a customer's card
+	// statement: "ITTRAIL* SITEBIN" instead of the account's name alone,
+	// which every app on the stack shares. The stack accepts 1-10 Latin
+	// letters, digits, spaces and . & -.
+	StatementDescriptorSuffix string      `json:"statementDescriptorSuffix,omitempty"`
+	Tiers                     []stackTier `json:"tiers"`
 }
+
+// statementDescriptorSuffix is the product's name on card statements.
+const statementDescriptorSuffix = "SITEBIN"
 
 type stackTier struct {
 	Key         string              `json:"key"`
@@ -256,8 +264,9 @@ func (p *provider) stackDeclaration(appID string) stackRegistration {
 		tiers = append(tiers, st)
 	}
 	reg.Billing = &stackBilling{
-		TierAfterRegistration: p.cfg.DefaultTier,
-		Tiers:                 tiers,
+		TierAfterRegistration:     p.cfg.DefaultTier,
+		StatementDescriptorSuffix: statementDescriptorSuffix,
+		Tiers:                     tiers,
 	}
 
 	// Only when configured. See stackRegistration.Licensing: an empty block is

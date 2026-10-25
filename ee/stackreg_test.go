@@ -45,6 +45,15 @@ func stackProvider(t *testing.T, licensing string) *provider {
 // Tier order on the stack's hosted plan page is the order of this array — the
 // stack derives the sort from it and has no sortOrder field — and `featured`
 // says which plan the page leads with. Declaring neither left both accidental.
+// Every app charges through the stack's one payment account, so the card
+// statement would read the operator's name alone; the suffix names Sitebin.
+func TestStackDeclarationNamesSitebinOnCardStatements(t *testing.T) {
+	reg := stackProvider(t, "").stackDeclaration("sitebin")
+	if got := reg.Billing.StatementDescriptorSuffix; got != "SITEBIN" {
+		t.Fatalf("statementDescriptorSuffix = %q, want SITEBIN", got)
+	}
+}
+
 func TestStackDeclarationCarriesOrderAndEmphasis(t *testing.T) {
 	reg := stackProvider(t, "").stackDeclaration("sitebin")
 
