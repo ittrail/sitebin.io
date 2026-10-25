@@ -569,6 +569,9 @@ input::placeholder { color: var(--ink-faint); }
 .ctsvc .maps a { color: var(--ink); }
 .lastcheck { font: 12px var(--mono); color: var(--ink-faint); margin-top: 4px; word-break: break-word; }
 .ctsvc .vols { margin-top: 4px; font: 12px var(--mono); color: var(--ink-faint); }
+.ctsvc .usage, #ct-services .usage.proj { margin-top: 6px; font: 12px var(--mono); color: var(--ink-dim); }
+#ct-services .usage.proj { padding-top: 10px; border-top: 1px dashed var(--line-soft); }
+.usage .hot { color: var(--amber); }
 .ctlog {
   margin-top: 12px; max-height: 320px; overflow: auto; padding: 12px 14px; border-radius: 10px;
   background: #0d1322; border: 1px solid var(--line-soft); font: 12px/1.55 var(--mono); color: #cfd6e6;

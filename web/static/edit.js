@@ -660,7 +660,23 @@ function renderContainer() {
       v.textContent = "volumes: " + s.volumes.join(", ");
       row.append(v);
     }
+    const use = document.createElement("div");
+    use.className = "usage hidden";
+    use.dataset.svc = s.name;
+    row.append(use);
     box.append(row);
+  }
+  const web = document.createElement("div");
+  web.className = "usage proj hidden";
+  web.id = "ct-web";
+  box.append(web);
+  paintUsage();
+  if (wantStats()) {
+    if (!ctStatsTimer && !ctStatsBusy) scheduleStats(Math.max(0, statsEvery - (Date.now() - ctStatsAt)));
+  } else {
+    clearTimeout(ctStatsTimer);
+    ctStatsTimer = null;
+    ctStats = null;
   }
 
   const sel = $("ct-logsvc");
@@ -679,6 +695,89 @@ function renderContainer() {
     ctPoll = setTimeout(async () => {
       try { site = await api("GET", ""); render(); } catch {}
     }, 4000);
+  }
+}
+
+// ---- container usage: memory, CPU, processes and public traffic, as the
+// runtime last measured them, refreshed while the project runs and the tab
+// is visible. Public traffic is the visitors' and the internet's, never what
+// the project's services exchange with each other.
+
+const statsEvery = 10000;
+let ctStats = null, ctStatsAt = 0, ctStatsTimer = null, ctStatsBusy = false;
+
+function wantStats() {
+  const ct = site && site.container;
+  return site && site.mode === "container" && ct && ct.enabled && ct.status === "running";
+}
+
+function scheduleStats(delay) {
+  clearTimeout(ctStatsTimer);
+  ctStatsTimer = setTimeout(loadStats, delay);
+}
+
+async function loadStats() {
+  ctStatsTimer = null;
+  if (!wantStats() || document.hidden) return; // visibilitychange starts it again
+  ctStatsBusy = true;
+  try {
+    ctStats = await api("GET", "/containers/stats");
+    ctStatsAt = Date.now();
+    paintUsage();
+  } catch {} finally { ctStatsBusy = false; }
+  if (wantStats()) scheduleStats(statsEvery);
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && wantStats() && !ctStatsTimer && !ctStatsBusy) scheduleStats(0);
+});
+
+function fmtBytes(n) {
+  if (n < 1024) return Math.round(n) + " B";
+  const units = ["KB", "MB", "GB", "TB"];
+  let i = -1;
+  do { n /= 1024; i++; } while (n >= 1024 && i < units.length - 1);
+  return (n >= 100 ? n.toFixed(0) : n.toFixed(1).replace(/\.0$/, "")) + " " + units[i];
+}
+function fmtRate(n) { return n == null ? "—" : fmtBytes(n) + "/s"; }
+function fmtCPU(c) {
+  if (c == null) return "—";
+  if (c > 0 && c < 0.01) return "<0.01";
+  return String(Math.round(c * 100) / 100);
+}
+function traffic(inB, outB) {
+  const t = document.createElement("span");
+  t.title = "Public traffic: the visitors and the internet, not the project's own services";
+  t.textContent = "↓ " + fmtRate(inB) + " ↑ " + fmtRate(outB);
+  return t;
+}
+
+function paintUsage() {
+  const box = $("ct-services");
+  if (!box) return;
+  const by = {};
+  for (const s of (ctStats && ctStats.services) || []) by[s.name] = s;
+  for (const el of box.querySelectorAll(".usage[data-svc]")) {
+    const u = by[el.dataset.svc];
+    el.classList.toggle("hidden", !u);
+    el.textContent = "";
+    if (!u) continue;
+    const mem = document.createElement("span");
+    mem.textContent = "RAM " + fmtBytes(u.memory_bytes) + (u.memory_limit_bytes ? " / " + fmtBytes(u.memory_limit_bytes) : "");
+    if (u.memory_limit_bytes && u.memory_bytes / u.memory_limit_bytes >= 0.9) mem.className = "hot";
+    const cpu = document.createElement("span");
+    cpu.textContent = "CPU " + fmtCPU(u.cpu) + (u.cpu_limit ? " / " + fmtCPU(u.cpu_limit) : "");
+    if (u.cpu != null && u.cpu_limit && u.cpu / u.cpu_limit >= 0.9) cpu.className = "hot";
+    const pids = document.createElement("span");
+    pids.textContent = u.pids + (u.pids_limit ? " / " + u.pids_limit : "") + " processes";
+    el.append(mem, " · ", cpu, " · ", pids, " · ", traffic(u.in_bps, u.out_bps));
+  }
+  const web = $("ct-web");
+  if (web) {
+    const w = ctStats && ctStats.web;
+    web.classList.toggle("hidden", !w);
+    web.textContent = "";
+    if (w) web.append("Web traffic of the project (several services serve HTTP): ", traffic(w.in_bps, w.out_bps));
   }
 }
 
