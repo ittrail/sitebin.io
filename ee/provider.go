@@ -56,7 +56,11 @@ type provider struct {
 	license *licensing.Manager
 	// containers runs container sites; nil when SITEBIN_CONTAINERS is off.
 	containers *containers.Manager
-	secret     []byte
+	// containerLimits is the runtime's book of default container limits,
+	// which the console's Containers tab reads and changes; nil when
+	// containers are off.
+	containerLimits *containers.LimitBook
+	secret          []byte
 }
 
 func newProvider() *provider { return &provider{} }

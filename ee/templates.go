@@ -522,7 +522,7 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
 <main class="adm">
   <h1>Instance register</h1>
   <p class="lede">Every site on this instance — yours, other accounts', and anonymous drops. Signed in as {{.Email}} · <a href="/account">back to your account</a></p>
-  <nav class="tabs"><a class="on" href="/account/admin">Sites</a><a href="/account/admin/reports">Reports{{if .Figures.Reports}} ({{.Figures.Reports}}){{end}}</a></nav>
+  <nav class="tabs"><a class="on" href="/account/admin">Sites</a><a href="/account/admin/reports">Reports{{if .Figures.Reports}} ({{.Figures.Reports}}){{end}}</a>{{if .Containers}}<a href="/account/admin/containers">Containers</a>{{end}}</nav>
 
   {{if eq .Flash "deleted"}}<p class="flash">Site deleted.</p>{{end}}
   {{if eq .Flash "expiry"}}<p class="flash">Expiry updated.</p>{{end}}
@@ -665,7 +665,7 @@ var reportsTmpl = template.Must(template.New("reports").Parse(pageHead + adminCo
 <main class="adm">
   <h1>Abuse reports</h1>
   <p class="lede">Filed through the report page and POST /api/report, newest first, and kept for 14 days. Signed in as {{.Email}} · <a href="/account">back to your account</a></p>
-  <nav class="tabs"><a href="/account/admin">Sites</a><a class="on" href="/account/admin/reports">Reports ({{.Total}})</a></nav>
+  <nav class="tabs"><a href="/account/admin">Sites</a><a class="on" href="/account/admin/reports">Reports ({{.Total}})</a>{{if .Containers}}<a href="/account/admin/containers">Containers</a>{{end}}</nav>
   {{if eq .Flash "locked"}}<p class="flash">Site locked: it is served to nobody, frozen for its owner, and kept past its expiry.</p>{{end}}
   <section class="reg">
     {{range .Rows}}

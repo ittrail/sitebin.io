@@ -41,6 +41,10 @@ func (p *provider) initContainers() error {
 		return err
 	}
 	p.containers = m
+	p.containerLimits = m.Limits()
+	if err := m.Limits().Err(); err != nil {
+		slog.Error("containers: the saved default limits could not be read; running containers keep theirs until defaults are saved again", "err", err)
+	}
 	go m.Run(context.Background())
 	slog.Info("containers enabled", "docker", c.DockerHost, "memory_mb", c.MemoryMB, "cpus", c.CPUs, "pids", c.Pids)
 	return nil

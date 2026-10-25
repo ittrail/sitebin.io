@@ -213,6 +213,9 @@ type adminView struct {
 	// RetentionDays is the lock retention in days, 0 when locks are kept
 	// forever (and the evidence hold has nothing to hold off).
 	RetentionDays int
+	// Containers shows the Containers tab: the instance runs container
+	// sites.
+	Containers bool
 }
 
 // matches decides whether a site survives the text query. It searches the
@@ -373,6 +376,7 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	p.securityHeaders(w)
 	adminTmpl.Execute(w, adminView{
 		RetentionDays: int(p.host.LockRetention() / (24 * time.Hour)),
+		Containers:    p.containerLimits != nil,
 		Prov:          p.rowProvenance(rows),
 		IP:            panel,
 		Email:         acc.Email,

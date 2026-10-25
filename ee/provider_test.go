@@ -50,14 +50,24 @@ type fakeSites struct {
 	// (0: none, as a store nobody configured); holds records SetHold calls.
 	retention time.Duration
 	holds     []string
+	// containers are the container sites ContainerSites lists;
+	// SetContainerLimits writes their Limits.
+	containers []ext.ContainerSite
 }
 
 func (s *fakeSites) Info(id string) (ext.SiteInfo, bool) { i, ok := s.infos[id]; return i, ok }
 
-// The container half of the seam is exercised against its own fake in
-// ee/containers; the provider tests never reach it.
-func (s *fakeSites) ContainerSites() ([]ext.ContainerSite, error) { return nil, nil }
+// The runtime's half of the container seam is exercised against its own
+// fake in ee/containers; the provider tests reach only what the admin
+// console's Containers tab reads and writes: the list (containers) and the
+// operator's limits.
+func (s *fakeSites) ContainerSites() ([]ext.ContainerSite, error) { return s.containers, nil }
 func (s *fakeSites) ContainerSite(id string) (ext.ContainerSite, error) {
+	for _, cs := range s.containers {
+		if cs.ViewID == id {
+			return cs, nil
+		}
+	}
 	return ext.ContainerSite{}, fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
 }
 func (s *fakeSites) PrepareVolume(string, string) (string, error) {
@@ -65,8 +75,14 @@ func (s *fakeSites) PrepareVolume(string, string) (string, error) {
 }
 func (s *fakeSites) SetContainerState(string, ext.ContainerState) error { return nil }
 func (s *fakeSites) SyncContainerEndpoints(string, []string) error      { return nil }
-func (s *fakeSites) SetContainerLimits(string, map[string]ext.ContainerLimits) error {
-	return nil
+func (s *fakeSites) SetContainerLimits(id string, l map[string]ext.ContainerLimits) error {
+	for i := range s.containers {
+		if s.containers[i].ViewID == id {
+			s.containers[i].Limits = l
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
 }
 func (s *fakeSites) ClaimZone(acct, zone string) (ext.ZoneInfo, bool, error) {
 	if s.zones == nil {

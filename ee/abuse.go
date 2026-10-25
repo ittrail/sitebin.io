@@ -52,6 +52,8 @@ type reportsView struct {
 	Total   int
 	Flash   string
 	Figures instanceFigures
+	// Containers shows the Containers tab.
+	Containers bool
 }
 
 // handleAdminReports lists the abuse reports, newest first, each with the
@@ -68,7 +70,7 @@ func (p *provider) handleAdminReports(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not read the abuse reports", http.StatusInternalServerError)
 		return
 	}
-	v := reportsView{Email: acc.Email, CSRF: p.csrf(acc), Total: len(reps), Flash: r.URL.Query().Get("flash")}
+	v := reportsView{Email: acc.Email, CSRF: p.csrf(acc), Total: len(reps), Flash: r.URL.Query().Get("flash"), Containers: p.containerLimits != nil}
 	v.Figures.Reports = len(reps)
 	if len(reps) > maxShownReports {
 		reps = reps[:maxShownReports]
