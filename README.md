@@ -299,6 +299,15 @@ curl -X POST -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
 curl -X DELETE -H "X-Edit-Password: $PW" \
      https://sitebin.example.com/api/sites/$EDIT_ID/domains/docs.client.com
 
+# a custom domain may carry a path: the site is served under it, and other
+# sites of the same account serve the rest of the host. In a URL the slash
+# is %2F.
+curl -X POST -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
+     -d '{"domain":"client.com/demos/k1"}' \
+     https://sitebin.example.com/api/sites/$EDIT_ID/domains
+curl -X DELETE -H "X-Edit-Password: $PW" \
+     https://sitebin.example.com/api/sites/$EDIT_ID/domains/client.com%2Fdemos%2Fk1
+
 # an attached domain redirects to another attached domain of the site
 # (301 default; 302, 307, 308), path and query kept; DELETE serves again
 curl -X PUT -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
@@ -766,6 +775,59 @@ same port (see [Container sites](#container-sites-enterprise)). Edit page: the
 dropdowns in the domain card; API and MCP: below and in the tool list. Design:
 `docs/superpowers/specs/2026-10-16-domain-redirects-design.md` and
 `2026-10-16-container-addresses-design.md`.
+
+**Custom domains with a path.** A custom domain may carry a path —
+`morgenfertig.at/demos/kunde123` — and is then served by its site under that
+path, while other sites **of the same account** serve the rest of the host:
+a container app at `morgenfertig.at`, a static Astro demo under
+`/demos/kunde123`, a file viewer under `/files`, each deployed on its own.
+Every site mode works at the root of a host and under a path, and a host may
+have nothing at its root (`404` there). The longest matching path wins, on
+segment boundaries (`/account` serves `/account/x`, never `/accounts`). A path
+is lowercase letters, digits and `- _ . ~`, at most 8 segments and 200
+characters, with no trailing slash, and `_sitebin` is never a segment;
+`<path>/_sitebin/` is Sitebin's own, as `/_sitebin/` is at the root. A path
+counts as one custom domain against every cap; names in the owner's zone stay
+unlimited.
+
+*Proof.* Every address on a host belongs to one account: a host another
+account holds is refused whatever DNS says. An address of the same account on
+a host one of its addresses already holds **by its own proof** (TXT, CNAME,
+zone, operator domain) attaches at once, *held through the host*, with no new
+record; the edit page shows the TXT record that would make it independent
+("Check its own record") and warns before you remove the last address that
+holds the host for the others. Only an address held by its own proof holds a
+host — two held through it never keep each other alive. When nothing holds it
+any more, all of them share one three-day window, in which one TXT record
+rescues them all. Without accounts every address proves itself.
+
+*Serving.* A static site or file viewer under a path is served from its own
+folder with the path stripped (`/demos/kunde123/_astro/x.css` is its file
+`_astro/x.css`); the bare path redirects to `<path>/` (`308`). It must be
+**built for its path** — Astro: `base: '/demos/kunde123'`, which prefixes
+every asset the build emits while still writing a flat `dist/`; links you
+write yourself need `import.meta.env.BASE_URL`, and files from `public/` are
+not prefixed. A site built for the root links `/_astro/x.css`, which under a
+path belongs to the root's site: Sitebin does not rewrite links, but warns
+(`domain_warnings` in the payload, `warnings` from MCP's `add_domain`, the
+edit page) when the top-level `index.html` links root-absolute URLs outside
+the path. An app that cannot be told its base belongs on a subdomain instead.
+A site built for its path no longer works on its generated address — let that
+address redirect to the path. A container port under a path receives the
+**full** path (`/account/login`) and `X-Forwarded-Prefix: /account`; the app
+must be configured with its base path (Next.js `basePath`, Astro SSR `base`,
+an Express router). Forms under a path post to `<path>/_sitebin/forms/<key>`
+(Astro: `` `${import.meta.env.BASE_URL}_sitebin/forms/<key>` ``); the view
+password's unlock and cookie live under the path, so two protected sites on
+one host stay unlocked side by side. All sites on a host share one browser
+origin (cookies, `localStorage`) — which is why they must share an owner.
+
+How a request is routed: authz resolves host + longest path to the site and
+answers Caddy `X-Sitebin-Site` (the folder the custom-domain block serves —
+never derived from the host), `X-Sitebin-Strip` (the prefix stripped) and
+`X-Sitebin-Mount` (a container's prefix; the backend's own routes under a
+path); Caddy removes every client copy before the gate. Design:
+`docs/superpowers/specs/2026-11-02-custom-domains-with-a-path-design.md`.
 
 **Operator zones.** A zone the operator owns and points at the instance with a
 wildcard — `*.app.example.com` — is exactly the situation the proof guards

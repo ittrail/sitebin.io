@@ -1,7 +1,7 @@
 # Custom domains with a path
 
 **Date:** 2026-11-02
-**Status:** design — not yet approved
+**Status:** implemented (approved by the owner 2026-11-02)
 
 ## Problem
 
@@ -375,3 +375,38 @@ These were not discussed with the owner; they are the designer's defaults:
 - Without accounts, every address on a shared host proves DNS itself.
 - The view-password cookie is scoped to the address's path.
 - No "strip prefix" switch for containers for now.
+
+## Corrections (post-implementation)
+
+What the build decided that this document had left open or got wrong, kept
+here rather than rewritten above:
+
+1. **The base-path warning skips file viewers.** A viewer's `index.html` is
+   Sitebin's own wrapper: it links `/_sitebin/assets/` from the root (global
+   on every origin) and fetches raw files relative to its own directory, so a
+   viewer works under any path and would only ever be warned about falsely.
+   The warning is for static sites; Sitebin's site-independent routes
+   (`/_sitebin/assets/`, `/_sitebin/embed.js`, `/_sitebin/altcha.js`) are
+   never flagged, `/_sitebin/forms/...` is. It is computed for pending claims
+   too, so the owner sees it when adding the address.
+2. **`<mount>/_sitebin/*` goes to the backend before lock, expiry, address
+   rule and gate**, exactly as `/_sitebin/*` at the root reaches the backend
+   without authz: the backend's routes already apply each site's lock,
+   serving rule and password (the unlock form must be reachable behind a
+   password). It is proxied before the site's security headers, which would
+   otherwise put `form-action 'none'` on a gate page shown again after a
+   wrong password.
+3. **A form's own result pages live under the mount**: the `303` after a
+   submission goes to `<mount>/_sitebin/forms/<key>/thanks`, or to
+   `<mount>` + the owner's own thank-you path.
+4. **"Check now" for an address held through the host** is the same repeat
+   add (`POST .../domains`, MCP `add_domain`): it looks up the address's own
+   record and makes it independent when the record is there.
+5. **A host another owner holds is refused in `attach` too**, not only in
+   `AddDomain`, which closes the window between the check and the link when
+   two accounts race on one host; the sweep drops the loser's claim.
+6. **A URI that is not a path is read as the host's root** by authz instead
+   of being refused; Caddy never forwards one, and the root's own rules then
+   answer it (the existing redirect sanitizer relies on it).
+7. A CSP report is attributed by its document URL's path only when that
+   URL's host is the request's host.

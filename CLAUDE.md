@@ -21,17 +21,17 @@ docker build --build-arg EDITION=enterprise -t sitebin:latest-ee .   # enterpris
 ```
 
 **`e2e.ps1` is not the full E2E.** It is the core HTTP suite and references no
-other script; there is no aggregate entry point. A full pass is all thirteen run
+other script; there is no aggregate entry point. A full pass is all fourteen run
 by hand: `e2e.ps1`, `spa.ps1`, `paths.ps1`, `ftp.ps1`, `mcp.ps1` (community
 image), `forms.ps1` (community image; pulls `axllent/mailpit` as its SMTP
 server), `caching.ps1` (community image), `accounts.ps1`, `tiers.ps1`,
-`redirects.ps1`, `containers.ps1`
-(enterprise image; the last drives the host's real Docker Engine and pulls
-images), `license.ps1`, and
+`redirects.ps1`, `mounts.ps1`, `containers.ps1`
+(enterprise image; `containers.ps1` and `mounts.ps1` without `-NoContainers`
+drive the host's real Docker Engine and pull images), `license.ps1`, and
 `consent.ps1` -- the last of which is the only one that needs a **running SaaS
 Stack** (the stack's consent gate, the OIDC issuer/discovery split, and the
 `consents` declaration; see `docs/superpowers/specs/2026-09-01-consent-gate-through-the-stack-design.md`).
-`e2e/stack/verify.ps1` is the fourteenth, run against the compose container in
+`e2e/stack/verify.ps1` is the fifteenth, run against the compose container in
 `e2e/stack/` rather than one it starts itself: the registration the stack
 holds, the stack-hosted self-service links, and a signed GDPR export and
 deletion.
@@ -275,8 +275,42 @@ One hop, never a chain; targets are only the site's own verified domains
 (never a URL — that would be an open redirector on a proven domain).
 Container sites have the same rules per HTTP port (see Container sites). On
 a non-serving address the forms and unlock routes answer 404
-(`servingSiteByHost`). Read
+(`servingSiteByAddress`). Read
 `docs/superpowers/specs/2026-10-16-domain-redirects-design.md`.
+
+**Custom domains with a path** (`internal/store/address.go`, `pathindex.go`,
+`hostshare.go`, `internal/httpapi/mount.go`): a custom domain may be
+`host/path`, and that ADDRESS string is the domain's name everywhere —
+`CustomDomains`, claims, redirects, targets, API, MCP. Read
+`docs/superpowers/specs/2026-11-02-custom-domains-with-a-path-design.md`.
+
+- **`addrLink` is the one place an address meets the index**: a host is
+  `domain-index/<host>` as before, a path `path-index/<host>/<path, / as +>`.
+  Attach, detach, delete, `ByDomain`, counting and pruning all go through it;
+  anything that needs the HOST of a site's domain (DNS, TXT name, zones,
+  operator zones, reserved names) takes `hostOf(d)` — never compare a site
+  domain with a zone without it.
+- **authz decides the folder, Caddy never does.** The custom-domain block's
+  root is `sites/{X-Sitebin-Site}`, from authz's answer; `X-Sitebin-Strip` is
+  stripped for file sites (and for `<mount>/_sitebin/*`, which authz sends to
+  the backend before the gate, as Caddy does at the root); a container gets
+  the full path and `X-Forwarded-Prefix` from `X-Sitebin-Mount`. Caddy
+  removes every client copy, and the backend resolves its own routes from
+  host + mount exactly (`servingSiteByAddress`), so a forged mount names
+  nothing a path would not. `<mount>/_sitebin/*` is proxied BEFORE the
+  site's security headers — a gate page with `form-action 'none'` cannot be
+  submitted again.
+- **One owner per host; only an address held by its own proof vouches.**
+  `DomainClaim.ViaHost` marks an address attached because another address of
+  the same account on the host holds it by its own proof (`vouchFor`). An
+  address held through the host never vouches — two would keep each other
+  alive after DNS moved — and when nothing holds the host every address on
+  it shares one revocation clock (the earliest failing voucher's, or the
+  first check that found none). A host another owner holds is
+  `ErrDomainTaken` in `AddDomain` AND `attach`. Without accounts (owner "")
+  every address proves itself.
+- A path counts as one custom domain everywhere (per-site cap,
+  `CountDomains` for the licence ceiling); zone names stay exempt.
 
 ## Container sites
 
