@@ -28,17 +28,20 @@ const (
 // was addressed through a path view (?_site= on the main domain). _site is
 // honoured on the main domain only; on a site's own host it is ignored, so it
 // can never point a key at another site.
-func (a *API) formSite(r *http.Request) (*store.Site, bool, error) {
+//
+// mount is the path of the custom domain the form was posted under ("" at
+// a host's root): the site's own paths are below it.
+func (a *API) formSite(r *http.Request) (site *store.Site, viaPath bool, mount string, err error) {
 	if id := r.URL.Query().Get("_site"); id != "" && a.cfg.PathViews() && strings.EqualFold(hostWithoutPort(r.Host), a.cfg.BaseDomain) {
 		site, err := a.st.ByViewID(id)
 		if err == nil && !servesPathView(site) {
-			return nil, true, store.ErrNotFound
+			return nil, true, "", store.ErrNotFound
 		}
-		return site, true, err
+		return site, true, "", err
 	}
 	// An address that redirects or is off posts nothing.
-	site, err := a.servingSiteByHost(r.Host)
-	return site, false, err
+	site, mount, err = a.servingSiteByAddress(r)
+	return site, false, mount, err
 }
 
 // submitForm is POST /_sitebin/forms/{key}. The checks run cheapest first,
@@ -56,7 +59,7 @@ func (a *API) submitForm(w http.ResponseWriter, r *http.Request) {
 		fail(404, noForm)
 		return
 	}
-	site, viaPath, err := a.formSite(r)
+	site, viaPath, mount, err := a.formSite(r)
 	if err != nil {
 		fail(404, noForm)
 		return
@@ -112,7 +115,7 @@ func (a *API) submitForm(w http.ResponseWriter, r *http.Request) {
 	}
 	if sub.Honeypot() {
 		// Exactly what a success looks like: a bot learns nothing.
-		a.formSucceeded(w, r, site, f, viaPath, wantJSON)
+		a.formSucceeded(w, r, site, f, viaPath, mount, wantJSON)
 		return
 	}
 	if f.Captcha && a.forms.captcha.Verify(sub.Control["altcha"], site.ViewID, f.Key) != nil {
@@ -167,22 +170,22 @@ func (a *API) submitForm(w http.ResponseWriter, r *http.Request) {
 	}
 	// Never the values, the filenames or the recipient.
 	a.log.Info("form submitted", "id", site.ViewID, "form", f.Key, "bytes", len(m.Data), "files", len(sub.Files))
-	a.formSucceeded(w, r, site, f, viaPath, wantJSON)
+	a.formSucceeded(w, r, site, f, viaPath, mount, wantJSON)
 }
 
 // formSucceeded answers a delivered (or honeypotted) submission: JSON for a
 // script, else a 303 to the form's thank-you path or the default page.
-func (a *API) formSucceeded(w http.ResponseWriter, r *http.Request, site *store.Site, f store.Form, viaPath, wantJSON bool) {
+func (a *API) formSucceeded(w http.ResponseWriter, r *http.Request, site *store.Site, f store.Form, viaPath bool, mount string, wantJSON bool) {
 	if wantJSON {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 		return
 	}
-	target := "/_sitebin/forms/" + f.Key + "/thanks"
+	target := mount + "/_sitebin/forms/" + f.Key + "/thanks"
 	if viaPath {
 		target += "?_site=" + site.ViewID
 	}
 	if f.Redirect != "" {
-		target = f.Redirect
+		target = mount + f.Redirect
 		if viaPath {
 			target = "/v/" + site.ViewID + f.Redirect
 		}
@@ -239,7 +242,7 @@ func (a *API) formChallenge(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	site, _, err := a.formSite(r)
+	site, _, _, err := a.formSite(r)
 	if err != nil {
 		http.NotFound(w, r)
 		return

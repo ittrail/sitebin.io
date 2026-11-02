@@ -95,19 +95,40 @@ func (a *API) redirectAddress(w http.ResponseWriter, r *http.Request, site *stor
 	w.WriteHeader(rule.Code)
 }
 
-// servingSiteByHost is siteByHost for the backend's own routes on a site's
-// origin (forms, the unlock form): an address that does not serve the site —
-// a redirecting domain, a generated address that is off or redirects —
+// servingSiteByAddress is the site of the backend's own routes on a site's
+// origin (forms, the unlock form): the host's, or — under a custom domain
+// with a path, where Caddy passes authz's mount — the site attached at
+// exactly host + mount. An address that does not serve the site — a
+// redirecting domain, a generated address that is off or redirects —
 // answers nothing of it, the same as an address that belongs to no site.
-func (a *API) servingSiteByHost(host string) (*store.Site, error) {
-	site, err := a.siteByHost(host)
+//
+// The mount is a header, but one a client gains nothing by forging: it can
+// only name an address attached on the very host it asks, which is what
+// requesting that path does anyway (Caddy also removes a client's copy).
+func (a *API) servingSiteByAddress(r *http.Request) (*store.Site, string, error) {
+	host := strings.ToLower(hostWithoutPort(r.Host))
+	mount := r.Header.Get(mountHeader)
+	addr := host
+	var site *store.Site
+	var err error
+	if mount == "" {
+		site, err = a.siteByHost(host)
+	} else {
+		if a.isViewHost(host) || !strings.HasPrefix(mount, "/") {
+			return nil, "", store.ErrNotFound
+		}
+		addr = host + mount
+		if site, err = a.st.ByDomain(addr); err == nil && store.PathOf(addr) != mount {
+			err = store.ErrNotFound // not in the one form an address is stored in
+		}
+	}
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	if a.addressRule(site, host, false).Mode != store.ViewServe {
-		return nil, store.ErrNotFound
+	if a.addressRule(site, addr, false).Mode != store.ViewServe {
+		return nil, "", store.ErrNotFound
 	}
-	return site, nil
+	return site, mount, nil
 }
 
 // servesPathView reports whether the site's generated address serves it, for

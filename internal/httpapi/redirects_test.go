@@ -279,13 +279,13 @@ func TestNonServingAddressHasNoBackendRoutes(t *testing.T) {
 		if code := unlock(host); code != 404 {
 			t.Errorf("unlock on non-serving %s: %d, want 404", host, code)
 		}
-		site, err := e.api.servingSiteByHost(host)
+		site, _, err := e.api.servingSiteByAddress(hostReq(host))
 		if err == nil {
-			t.Errorf("servingSiteByHost(%s) = %s, want not found", host, site.ViewID)
+			t.Errorf("servingSiteByAddress(%s) = %s, want not found", host, site.ViewID)
 		}
 	}
-	if site, err := e.api.servingSiteByHost("a.example"); err != nil || site.ViewID != c.ID {
-		t.Errorf("servingSiteByHost(a.example) = %v, %v", site, err)
+	if site, _, err := e.api.servingSiteByAddress(hostReq("a.example")); err != nil || site.ViewID != c.ID {
+		t.Errorf("servingSiteByAddress(a.example) = %v, %v", site, err)
 	}
 }
 
@@ -356,4 +356,11 @@ func TestSiteInfoCarriesAddressRules(t *testing.T) {
 	if len(redirects) != 1 || redirects[0] != "example.de→example.at" {
 		t.Errorf("DomainLinks redirects = %v", redirects)
 	}
+}
+
+// hostReq is a backend request on host.
+func hostReq(host string) *http.Request {
+	req := httptest.NewRequest("GET", "/_sitebin/x", nil)
+	req.Host = host
+	return req
 }

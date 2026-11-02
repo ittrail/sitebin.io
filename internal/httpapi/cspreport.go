@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -139,15 +141,23 @@ func (a *API) handleCSPReport(w http.ResponseWriter, r *http.Request) {
 	if host == "" {
 		host = r.Host
 	}
-	site, err := a.siteByHost(host)
-	if err != nil {
-		return // a report about nothing we serve
-	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxReportBody))
 	if err != nil {
 		return
 	}
 	blocked, doc := reportFields(body)
+	// The report reaches the host's root whatever page sent it; on a host
+	// whose paths serve different sites, the reporting page's path says
+	// whose it is. A forged one gains nothing: the tripwire acts only on what
+	// that site's own files reference.
+	reqPath := "/"
+	if u, err := url.Parse(doc); err == nil && strings.EqualFold(hostWithoutPort(u.Host), hostWithoutPort(host)) {
+		reqPath = requestPath(u.RequestURI())
+	}
+	site, _, _, err := a.siteByRequest(host, reqPath)
+	if err != nil {
+		return // a report about nothing we serve
+	}
 	for _, p := range a.csp.add(site, blocked, source) {
 		a.st.RecordCSPViolation(p.site, p.count, p.blocked, len(p.sources))
 	}

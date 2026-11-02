@@ -525,7 +525,7 @@ func (a *API) siteByURL(raw string) *store.Site {
 		}
 		return nil
 	}
-	if site, err := a.siteByHost(u.Host); err == nil {
+	if site, _, _, err := a.siteByRequest(u.Host, requestPath(u.RequestURI())); err == nil {
 		return site
 	}
 	return nil

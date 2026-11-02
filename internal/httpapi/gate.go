@@ -52,8 +52,13 @@ func (a *API) unlock(w http.ResponseWriter, r *http.Request) {
 			cookiePath = "/v/" + site.ViewID + "/"
 		}
 	} else {
-		// An address that redirects or is off unlocks nothing.
-		site, err = a.servingSiteByHost(r.Host)
+		// An address that redirects or is off unlocks nothing. Under a
+		// custom domain with a path, the cookie is scoped to that path, so
+		// two protected sites on one host each keep their own.
+		site, mount, err = a.servingSiteByAddress(r)
+		if err == nil && mount != "" {
+			cookiePath = mount + "/"
+		}
 	}
 	if err != nil {
 		a.msgPage(w, 404, "Site not found", "There is no site at this address.")
@@ -88,12 +93,16 @@ func (a *API) unlock(w http.ResponseWriter, r *http.Request) {
 
 // hasViewAccess reports whether the request carries a valid view-session
 // cookie for the site.
+//
+// One host may carry several sites, each under its own path and each with a
+// cookie of the same name scoped to it: any of them may be this site's.
 func (a *API) hasViewAccess(r *http.Request, site *store.Site) bool {
-	c, err := r.Cookie(viewCookieName)
-	if err != nil {
-		return false
+	for _, c := range r.CookiesNamed(viewCookieName) {
+		if a.signer.Verify(c.Value, tokenSubject(site), time.Now()) {
+			return true
+		}
 	}
-	return a.signer.Verify(c.Value, tokenSubject(site), time.Now())
+	return false
 }
 
 // ---- pages (self-contained: served on user-site origins where only
