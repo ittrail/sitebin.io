@@ -240,7 +240,11 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 			"pending_domains with the TXT record (or CNAME) to create, and its warnings say what the check found. " +
 			"Create the record, then call add_domain again, or wait: the instance re-checks pending domains itself. " +
 			"On a container site the domain serves one of the HTTP ports the compose file lists under http: — target, " +
-			"as service:port, or by default the port of the site's own address.",
+			"as service:port, or by default the port of the site's own address. " +
+			"The domain may carry a path (example.com/docs): the site is then served under that path, " +
+			"and other sites of the same account can serve the rest of the host. A site under a path must be built for it " +
+			"(e.g. Astro's base option); the result's warnings say when its index.html links outside the path. " +
+			"A host another site of the same account already holds needs no new DNS record.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in addDomainArgs) (*sdk.CallToolResult, *SiteResult, error) {
 		return out(ops.AddDomain(ctx, auth, in.ref(), in.Domain, in.Target))
 	})
@@ -388,7 +392,7 @@ func (a pathArgs) ref() SiteRef { return SiteRef{EditID: a.EditID, EditPassword:
 type domainArgs struct {
 	EditID       string `json:"edit_id" jsonschema:"the site's edit id"`
 	EditPassword string `json:"edit_password,omitempty" jsonschema:"the site's edit password; not needed with an owning account API token"`
-	Domain       string `json:"domain" jsonschema:"the custom domain, e.g. docs.example.com"`
+	Domain       string `json:"domain" jsonschema:"the custom domain, optionally with a path, e.g. docs.example.com or example.com/docs"`
 }
 
 func (a domainArgs) ref() SiteRef { return SiteRef{EditID: a.EditID, EditPassword: a.EditPassword} }
@@ -396,7 +400,7 @@ func (a domainArgs) ref() SiteRef { return SiteRef{EditID: a.EditID, EditPasswor
 type addDomainArgs struct {
 	EditID       string `json:"edit_id" jsonschema:"the site's edit id"`
 	EditPassword string `json:"edit_password,omitempty" jsonschema:"the site's edit password; not needed with an owning account API token"`
-	Domain       string `json:"domain" jsonschema:"the custom domain, e.g. docs.example.com"`
+	Domain       string `json:"domain" jsonschema:"the custom domain, optionally with a path, e.g. docs.example.com or example.com/docs"`
 	Target       string `json:"target,omitempty" jsonschema:"container sites only: the HTTP port the domain serves, as service:port (e.g. app:3000), one the compose file lists under http:; default: the port of the site's own address"`
 }
 
@@ -405,7 +409,7 @@ func (a addDomainArgs) ref() SiteRef { return SiteRef{EditID: a.EditID, EditPass
 type domainTargetArgs struct {
 	EditID       string `json:"edit_id" jsonschema:"the site's edit id"`
 	EditPassword string `json:"edit_password,omitempty" jsonschema:"the site's edit password; not needed with an owning account API token"`
-	Domain       string `json:"domain" jsonschema:"a custom domain of this container site"`
+	Domain       string `json:"domain" jsonschema:"a custom domain of this container site, optionally with a path"`
 	Target       string `json:"target" jsonschema:"the HTTP port it serves, as service:port, one the compose file lists under http:"`
 }
 
@@ -416,8 +420,8 @@ func (a domainTargetArgs) ref() SiteRef {
 type redirectArgs struct {
 	EditID       string `json:"edit_id" jsonschema:"the site's edit id"`
 	EditPassword string `json:"edit_password,omitempty" jsonschema:"the site's edit password; not needed with an owning account API token"`
-	Domain       string `json:"domain" jsonschema:"the custom domain that redirects, e.g. www.example.com"`
-	To           string `json:"to,omitempty" jsonschema:"another verified custom domain of this site, e.g. example.com; empty makes the domain serve the site again"`
+	Domain       string `json:"domain" jsonschema:"the custom domain that redirects, optionally with a path, e.g. www.example.com or example.com/old"`
+	To           string `json:"to,omitempty" jsonschema:"another verified custom domain of this site, optionally with a path, e.g. example.com; empty makes the domain serve the site again"`
 	Code         int    `json:"code,omitempty" jsonschema:"301 (the default), 302, 307 or 308"`
 }
 

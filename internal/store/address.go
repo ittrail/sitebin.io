@@ -89,6 +89,10 @@ func pathOf(addr string) string {
 	return ""
 }
 
+// NormalizeAddress is normalizeAddress for the packages that take an
+// address from a caller.
+func NormalizeAddress(s string) (string, error) { return normalizeAddress(s) }
+
 // HostOf is hostOf for the packages that hold addresses from the store.
 func HostOf(addr string) string { return hostOf(addr) }
 

@@ -504,6 +504,12 @@ func (o mcpOps) AddDomain(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, dom
 	}
 	o.a.recordMCP(auth, site, provenance.ActionDomainAdd, 0, detail)
 	res := o.siteResult(site)
+	// A site under a path that is not built for it: in warnings too.
+	if addr, err := store.NormalizeAddress(domain); err == nil {
+		if w := o.a.st.BasePathWarning(site, addr); w != "" {
+			res.Warnings = append(res.Warnings, w)
+		}
+	}
 	if pending != "" {
 		// In warnings, an existing field: a client that cached the output
 		// schema rejects a result carrying a field it has not seen.

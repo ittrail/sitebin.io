@@ -450,6 +450,48 @@ func (a *API) pendingDomains(site *store.Site) []pendingDomain {
 	return out
 }
 
+// domainProof is the record that makes a custom domain held through its
+// host independent: the same TXT a pending claim shows.
+type domainProof struct {
+	ViaHost  bool   `json:"via_host"`
+	TXTName  string `json:"txt_name"`
+	TXTValue string `json:"txt_value"`
+}
+
+// addressNotes are what the owner needs to know about the site's custom
+// domains with a path and about the host they share: a site not built for
+// its path (domain_warnings), an address held through the host and the
+// record that would make it independent (domain_proofs), and the addresses
+// that would lose their hold were this one removed (domain_dependents).
+// Each is left out of the payload when empty.
+func (a *API) addressNotes(site *store.Site, payload map[string]any) {
+	warnings := map[string]string{}
+	proofs := map[string]domainProof{}
+	dependents := map[string][]string{}
+	for _, c := range site.Meta.DomainClaims {
+		if w := a.st.BasePathWarning(site, c.Domain); w != "" {
+			warnings[c.Domain] = w
+		}
+		if c.Verified() && c.ViaHost {
+			proofs[c.Domain] = domainProof{ViaHost: true, TXTName: c.TXTName(), TXTValue: c.TXTValue()}
+		}
+	}
+	for _, d := range site.Meta.CustomDomains {
+		if deps := a.st.Dependents(site, d); len(deps) > 0 {
+			dependents[d] = deps
+		}
+	}
+	if len(warnings) > 0 {
+		payload["domain_warnings"] = warnings
+	}
+	if len(proofs) > 0 {
+		payload["domain_proofs"] = proofs
+	}
+	if len(dependents) > 0 {
+		payload["domain_dependents"] = dependents
+	}
+}
+
 // sitePayload is the full settings/state document returned by GET/PUT.
 func (a *API) sitePayload(site *store.Site) map[string]any {
 	files, err := a.st.ListFiles(site)
@@ -533,6 +575,7 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 	if m.FTPEnabled && ftpAvailable {
 		payload["ftp_url"] = a.cfg.FTPURL(m.EditID)
 	}
+	a.addressNotes(site, payload)
 	return payload
 }
 
