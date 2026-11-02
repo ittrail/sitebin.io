@@ -91,6 +91,11 @@ type DomainClaim struct {
 	// check records it with CheckedAt, a failed lookup included (a pending
 	// claim is checked every sweep whatever it says). Empty once proven.
 	CheckResult string `json:"check_result,omitempty"`
+	// ViaHost marks a verified claim attached because another address of the
+	// same account on the same host holds it by its own proof — not by a
+	// record of its own. It never vouches for anything (see hostshare.go);
+	// it is cleared the moment its own proof is seen.
+	ViaHost bool `json:"via_host,omitempty"`
 }
 
 // Verified reports whether the claim is attached.
@@ -384,13 +389,30 @@ func (s *Store) ReconcileDomains(ctx context.Context, site *Site, now time.Time)
 				slog.Info("custom domain: dropped a claim on a domain another site verified", "site", site.ViewID, "domain", c.Domain)
 				continue
 			}
+			if s.hostForeign(site, hostOf(c.Domain)) {
+				// Another account holds the host; this claim can never attach.
+				s.dropClaim(site, c.Domain)
+				slog.Info("custom domain: dropped a claim on a host another account holds", "site", site.ViewID, "domain", c.Domain)
+				continue
+			}
 			if z, ok := s.accountZoneFor(c.Domain); ok && z.AccountID != site.Meta.OwnerAccountID {
 				// Another account proved the zone; this claim can never verify.
 				s.dropClaim(site, c.Domain)
 				slog.Info("custom domain: dropped a claim inside a zone another account proved", "site", site.ViewID, "domain", c.Domain, "zone", z.Zone)
 				continue
 			}
-			ok, found, err := s.verify(ctx, site, c)
+			var (
+				ok, viaHost bool
+				found       string
+				err         error
+			)
+			if s.vouchFor(site, c.Domain).Healthy {
+				// Another address of the owner holds the host by its own
+				// proof: no lookup needed.
+				ok, viaHost = true, true
+			} else {
+				ok, found, err = s.verify(ctx, site, c)
+			}
 			if err != nil {
 				slog.Warn("custom domain: verification lookup failed; will retry", "site", site.ViewID, "domain", c.Domain, "err", err)
 				s.stampCheck(site, c.Domain, now, lookupFailed(err))
@@ -400,7 +422,7 @@ func (s *Store) ReconcileDomains(ctx context.Context, site *Site, now time.Time)
 				s.stampCheck(site, c.Domain, now, found)
 				continue
 			}
-			switch err := s.attach(site, c.Domain, now); {
+			switch err := s.attach(site, c.Domain, now, viaHost); {
 			case errors.Is(err, ErrDomainTaken):
 				// Another site proved control in the meantime; this claim can
 				// never verify and only occupies a cap slot.
@@ -425,12 +447,20 @@ func (s *Store) ReconcileDomains(ctx context.Context, site *Site, now time.Time)
 			s.stampOK(site, c.Domain, now)
 			continue
 		}
-		if c.FailingSince == nil {
-			s.markFailing(site, c.Domain, now, found)
-			slog.Warn("custom domain: proof of ownership is gone; the domain is detached if it stays gone", "site", site.ViewID, "domain", c.Domain, "after", revokeAfter)
+		// Its own proof is gone. Another address of the owner that holds the
+		// host by its own proof keeps it attached, held through the host.
+		v := s.vouchFor(site, c.Domain)
+		if v.Healthy {
+			s.stampViaHost(site, c.Domain, now, found)
 			continue
 		}
-		if now.Sub(*c.FailingSince) >= revokeAfter {
+		// Nothing holds the host: one clock for every address on it — from
+		// the earliest voucher's window, or from now when there is none.
+		clock := earliest(c.FailingSince, v.FailingSince)
+		if clock == nil {
+			clock = &now
+		}
+		if now.Sub(*clock) >= revokeAfter {
 			if err := s.detach(site, c.Domain, now); err != nil {
 				slog.Error("custom domain: could not detach", "site", site.ViewID, "domain", c.Domain, "err", err)
 				continue
@@ -438,7 +468,10 @@ func (s *Store) ReconcileDomains(ctx context.Context, site *Site, now time.Time)
 			slog.Warn("custom domain: detached; its proof of ownership has been gone for longer than the revocation window", "site", site.ViewID, "domain", c.Domain)
 			continue
 		}
-		s.stampCheck(site, c.Domain, now, found)
+		if c.FailingSince == nil {
+			slog.Warn("custom domain: proof of ownership is gone; the domain is detached if it stays gone", "site", site.ViewID, "domain", c.Domain, "after", revokeAfter)
+		}
+		s.markFailing(site, c.Domain, now, *clock, found)
 	}
 	return nil
 }
@@ -458,8 +491,9 @@ func (s *Store) stampCheck(site *Site, d string, now time.Time, found string) {
 	})
 }
 
-// stampOK records a definitive positive answer, which also ends any
-// revocation window that was running.
+// stampOK records a definitive positive answer of the claim's own proof,
+// which also ends any revocation window that was running and makes an
+// address held through the host independent.
 func (s *Store) stampOK(site *Site, d string, now time.Time) {
 	s.Update(site, func(m *Meta) error {
 		if i := claimIndex(m, d); i >= 0 {
@@ -467,18 +501,35 @@ func (s *Store) stampOK(site *Site, d string, now time.Time) {
 			m.DomainClaims[i].CheckedAt = &t
 			m.DomainClaims[i].FailingSince = nil
 			m.DomainClaims[i].CheckResult = ""
+			m.DomainClaims[i].ViaHost = false
 		}
 		return nil
 	})
 }
 
-// markFailing starts a verified domain's revocation window.
-func (s *Store) markFailing(site *Site, d string, now time.Time, found string) {
+// stampViaHost records that a verified claim's own proof is missing but the
+// host holds it: no revocation window, and found says what its own record
+// would need.
+func (s *Store) stampViaHost(site *Site, d string, now time.Time, found string) {
 	s.Update(site, func(m *Meta) error {
 		if i := claimIndex(m, d); i >= 0 {
 			t := now.UTC()
 			m.DomainClaims[i].CheckedAt = &t
-			m.DomainClaims[i].FailingSince = &t
+			m.DomainClaims[i].FailingSince = nil
+			m.DomainClaims[i].CheckResult = found
+			m.DomainClaims[i].ViaHost = true
+		}
+		return nil
+	})
+}
+
+// markFailing runs a verified domain's revocation window from since.
+func (s *Store) markFailing(site *Site, d string, now, since time.Time, found string) {
+	s.Update(site, func(m *Meta) error {
+		if i := claimIndex(m, d); i >= 0 {
+			t, f := now.UTC(), since.UTC()
+			m.DomainClaims[i].CheckedAt = &t
+			m.DomainClaims[i].FailingSince = &f
 			m.DomainClaims[i].CheckResult = found
 		}
 		return nil
@@ -506,6 +557,7 @@ func (s *Store) detach(site *Site, d string, now time.Time) error {
 			t := now.UTC()
 			m.DomainClaims[i].VerifiedAt = nil
 			m.DomainClaims[i].FailingSince = nil
+			m.DomainClaims[i].ViaHost = false
 			m.DomainClaims[i].CheckedAt = &t
 			m.DomainClaims[i].RequestedAt = t
 		}

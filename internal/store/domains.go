@@ -57,7 +57,10 @@ func (s *Store) AddDomain(site *Site, domain string) error {
 	}
 	if slices.Contains(site.Meta.CustomDomains, d) {
 		if got, err := s.ByDomain(d); err == nil && got.ViewID == site.ViewID {
-			return nil // already ours, idempotent
+			// Already ours, idempotent — and for an address held through the
+			// host, the owner's "check now" for a record of its own.
+			s.recheckOwnProof(site, d, now)
+			return nil
 		}
 	}
 	// Attached elsewhere: someone else proved control. A pending claim on
@@ -66,6 +69,11 @@ func (s *Store) AddDomain(site *Site, domain string) error {
 		if got, err := s.ByDomain(d); err == nil && got.ViewID != site.ViewID {
 			return ErrDomainTaken
 		}
+	}
+	// Another account holds the host: every address on it belongs to one
+	// owner, whatever DNS says about this claim.
+	if s.hostForeign(site, host) {
+		return ErrDomainTaken
 	}
 	// The per-site cap counts verified AND pending, so claims cannot be
 	// sprayed: the owner's tier value if stamped, else the instance default.
@@ -93,7 +101,12 @@ func (s *Store) AddDomain(site *Site, domain string) error {
 	}
 	if claim.Verified() {
 		// Verified in meta but not indexed (a lost link): repair the index.
-		return s.attach(site, d, now)
+		return s.attach(site, d, now, claim.ViaHost)
+	}
+	// Another address of the owner holds the host by its own proof: this one
+	// attaches through it, with no lookup.
+	if !viaZone && s.vouchFor(site, d).Healthy {
+		return s.attach(site, d, now, true)
 	}
 	ok, found, verr := s.verify(context.Background(), site, claim)
 	if verr != nil {
@@ -104,12 +117,30 @@ func (s *Store) AddDomain(site *Site, domain string) error {
 		s.stampCheck(site, d, now, found)
 		return fmt.Errorf("%w: %s", ErrDomainPending, found)
 	}
-	return s.attach(site, d, now)
+	return s.attach(site, d, now, false)
 }
 
-// attach indexes a domain for the site and records it as verified. It is the
-// ONLY place a domain enters the index and CustomDomains.
-func (s *Store) attach(site *Site, d string, now time.Time) error {
+// recheckOwnProof looks up the own proof of an attached address held through
+// the host, and makes it independent when the proof is there. Anything else —
+// no proof yet, a failed lookup, an address that is not held through the
+// host — leaves it as it is: it stays attached either way.
+func (s *Store) recheckOwnProof(site *Site, d string, now time.Time) {
+	c, ok := claimOf(site.Meta, d)
+	if !ok || !c.ViaHost {
+		return
+	}
+	if proven, _, err := s.verify(context.Background(), site, c); err == nil && proven {
+		s.stampOK(site, d, now)
+	}
+}
+
+// attach indexes a domain for the site and records it as verified — by its
+// own proof, or through the host (viaHost; see hostshare.go). It is the ONLY
+// place a domain enters the index and CustomDomains.
+func (s *Store) attach(site *Site, d string, now time.Time, viaHost bool) error {
+	if s.hostForeign(site, hostOf(d)) {
+		return ErrDomainTaken
+	}
 	link := s.addrLink(d)
 	if linkExists(link) {
 		got, err := s.ByDomain(d)
@@ -142,8 +173,9 @@ func (s *Store) attach(site *Site, d string, now time.Time) error {
 			c.CheckedAt = &t
 			c.FailingSince = nil
 			c.CheckResult = ""
+			c.ViaHost = viaHost
 		} else {
-			m.DomainClaims = append(m.DomainClaims, DomainClaim{Domain: d, Token: newClaimToken(), RequestedAt: t, VerifiedAt: &t, CheckedAt: &t})
+			m.DomainClaims = append(m.DomainClaims, DomainClaim{Domain: d, Token: newClaimToken(), RequestedAt: t, VerifiedAt: &t, CheckedAt: &t, ViaHost: viaHost})
 		}
 		return nil
 	})

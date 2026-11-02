@@ -447,6 +447,18 @@ func (s *Store) zoneDomains(zone string) []ZoneDomain {
 		}
 		out = append(out, ZoneDomain{Domain: d, ViewID: site.ViewID, Owner: site.Meta.OwnerAccountID})
 	}
+	// Custom domains with a path, under the hosts inside the zone.
+	hosts, _ := os.ReadDir(s.pathIndexDir())
+	for _, h := range hosts {
+		if h.Name() != zone && !strings.HasSuffix(h.Name(), "."+zone) {
+			continue
+		}
+		for _, ha := range s.HostAddresses(h.Name()) {
+			if pathOf(ha.Addr) != "" {
+				out = append(out, ZoneDomain{Domain: ha.Addr, ViewID: ha.Site.ViewID, Owner: ha.Site.Meta.OwnerAccountID})
+			}
+		}
+	}
 	return out
 }
 
