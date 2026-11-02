@@ -91,3 +91,6 @@ func pathOf(addr string) string {
 
 // HostOf is hostOf for the packages that hold addresses from the store.
 func HostOf(addr string) string { return hostOf(addr) }
+
+// PathOf is pathOf for the packages that hold addresses from the store.
+func PathOf(addr string) string { return pathOf(addr) }

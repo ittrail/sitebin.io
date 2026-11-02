@@ -153,7 +153,7 @@ func hashSegment(s string) bool {
 // applied to the path the visitor asked for, after the /v/<id> prefix of a
 // path view. Whether that path is an existing regular file is asked of the
 // site's own os.Root, so no path can look outside it.
-func (a *API) cacheValue(site *store.Site, rawURI string, pathMode bool) string {
+func (a *API) cacheValue(site *store.Site, rawURI, prefix string) string {
 	if site.Meta.Cache == store.CacheOff {
 		return ""
 	}
@@ -161,8 +161,8 @@ func (a *API) cacheValue(site *store.Site, rawURI string, pathMode bool) string 
 	if u, err := url.ParseRequestURI(rawURI); err == nil && u.Path != "" {
 		p = u.Path
 	}
-	if pathMode {
-		p = strings.TrimPrefix(p, "/v/"+site.ViewID)
+	if prefix != "" {
+		p = strings.TrimPrefix(p, prefix)
 	}
 	isFile := false
 	if rel := strings.TrimPrefix(path.Clean("/"+p), "/"); rel != "" && !strings.HasSuffix(p, "/") {

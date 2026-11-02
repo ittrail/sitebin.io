@@ -19,15 +19,29 @@ func (a *API) authz(w http.ResponseWriter, r *http.Request) {
 	if host == "" {
 		host = r.Host
 	}
+	// addr is the address the request came in on — the host, or on a custom
+	// domain the host with the path it matched — and mount that path.
+	addr, mount, reqPath := host, "", "/"
 	if viewID := r.Header.Get("X-Sitebin-View"); viewID != "" {
 		// /v/<id> path view — Caddy passes the id explicitly.
 		pathMode = true
 		site, err = a.st.ByViewID(viewID)
 	} else {
-		site, err = a.siteByHost(host)
+		reqPath = requestPath(r.Header.Get("X-Forwarded-Uri"))
+		site, addr, mount, err = a.siteByRequest(host, reqPath)
 	}
 	if err != nil {
 		a.msgPage(w, 404, "Site not found", "There is no site at this address. It may have been deleted.")
+		return
+	}
+	// <mount>/_sitebin/* is Sitebin's own, as /_sitebin/* is at the root,
+	// where Caddy hands it to the backend before this gate: the backend's
+	// routes apply each site's rules (lock, serving address, password).
+	if mount != "" && strings.HasPrefix(underMount(reqPath, mount), "/_sitebin/") {
+		w.Header().Set(upstreamHeader, publicBackend)
+		w.Header().Set(stripHeader, mount)
+		w.Header().Set(mountHeader, mount)
+		w.WriteHeader(200)
 		return
 	}
 	// A locked site is served to nobody, before any other rule: not after a
@@ -49,16 +63,27 @@ func (a *API) authz(w http.ResponseWriter, r *http.Request) {
 	// redirects, or a generated address its owner switched off or redirected.
 	// Caddy relays this answer to the client as it is, so the redirect leaves
 	// without the file server, a container or the gate page being asked.
-	switch rule := a.addressRule(site, host, pathMode); rule.Mode {
+	switch rule := a.addressRule(site, addr, pathMode); rule.Mode {
 	case store.ViewOff:
 		a.msgPage(w, 404, "Site not found", "There is no site at this address. It may have been deleted.")
 		return
 	case store.ViewRedirect:
-		a.redirectAddress(w, r, site, rule, pathMode)
+		a.redirectAddress(w, r, site, rule, pathMode, mount)
+		return
+	}
+	// A file site under a path is a directory: its relative links need the
+	// slash. A container gets its path as it came.
+	if mount != "" && reqPath == mount && site.Meta.Mode != store.ModeContainer {
+		loc := mount + "/"
+		if q := forwardedQuery(r.Header.Get("X-Forwarded-Uri")); q != "" {
+			loc += "?" + q
+		}
+		w.Header().Set("Location", loc)
+		w.WriteHeader(http.StatusPermanentRedirect)
 		return
 	}
 	if !site.Meta.ViewPasswordProtected || a.hasViewAccess(r, site) {
-		a.admit(w, r, site, pathMode)
+		a.admit(w, r, site, pathMode, addr, mount)
 		return
 	}
 	// The gate form needs the site id in path mode (Host is the main domain).
@@ -66,7 +91,7 @@ func (a *API) authz(w http.ResponseWriter, r *http.Request) {
 	if pathMode {
 		gateSite = site.ViewID
 	}
-	a.gatePage(w, 401, sanitizeRedirect(r.Header.Get("X-Forwarded-Uri")), "", gateSite)
+	a.gatePage(w, 401, sanitizeRedirect(r.Header.Get("X-Forwarded-Uri")), "", gateSite, mount)
 }
 
 // upstreamHeader carries a container site's upstream from authz to Caddy,
@@ -79,21 +104,17 @@ const upstreamHeader = "X-Sitebin-Upstream"
 // its files — its tree holds the database's files and the compose file holds
 // its passwords — so it is admitted only WITH an upstream, and otherwise
 // answered here with a page saying why.
-func (a *API) admit(w http.ResponseWriter, r *http.Request, site *store.Site, pathMode bool) {
+func (a *API) admit(w http.ResponseWriter, r *http.Request, site *store.Site, pathMode bool, addr, mount string) {
 	if site.Meta.Mode == store.ModeContainer {
 		if pathMode {
 			a.msgPage(w, 404, "Not available here", "This app is served on its own address, not under a path.")
 			return
 		}
-		host := r.Header.Get("X-Forwarded-Host")
-		if host == "" {
-			host = r.Host
-		}
 		// The address names a port — a generated address its own, a custom
 		// domain its target — and the port a running service.
 		endpoint := ""
-		if a.cfg.SubdomainViews() || !a.isViewHost(host) {
-			endpoint = a.endpointOf(site, host)
+		if a.cfg.SubdomainViews() || !a.isViewHost(addr) {
+			endpoint = a.endpointOf(site, addr)
 		}
 		upstream, ok := site.Meta.Container.Upstream(endpoint)
 		if !ok {
@@ -106,13 +127,28 @@ func (a *API) admit(w http.ResponseWriter, r *http.Request, site *store.Site, pa
 		}
 		a.countView(r, site)
 		w.Header().Set(upstreamHeader, upstream)
+		if mount != "" {
+			w.Header().Set(mountHeader, mount)
+		}
 		w.WriteHeader(200)
 		return
 	}
 	a.countView(r, site)
-	// A file site's Cache-Control, which Caddy sets on a 2xx or 304 only.
-	if v := a.cacheValue(site, r.Header.Get("X-Forwarded-Uri"), pathMode); v != "" {
+	// A file site's Cache-Control, which Caddy sets on a 2xx or 304 only —
+	// computed on the path the file server will see.
+	prefix := mount
+	if pathMode {
+		prefix = "/v/" + site.ViewID
+	}
+	if v := a.cacheValue(site, r.Header.Get("X-Forwarded-Uri"), prefix); v != "" {
 		w.Header().Set(cacheHeader, v)
+	}
+	// The folder Caddy serves on a custom domain, and the path it strips.
+	if !pathMode {
+		w.Header().Set(siteHeader, site.ViewID)
+	}
+	if mount != "" {
+		w.Header().Set(stripHeader, mount)
 	}
 	w.WriteHeader(200)
 }
@@ -126,7 +162,7 @@ func (a *API) tlsCheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing domain", 400)
 		return
 	}
-	if _, err := a.st.ByDomain(domain); err != nil {
+	if !a.st.HostKnown(domain) {
 		http.Error(w, "unknown domain", 404)
 		return
 	}

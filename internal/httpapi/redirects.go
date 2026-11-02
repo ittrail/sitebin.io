@@ -19,6 +19,9 @@ import (
 // generated address's rule (its subdomain or its /v/<id>/ path view; on a
 // container site, the rule of the port's address that label is), or a custom
 // domain's redirect. Mode ViewServe: serve the site.
+//
+// host is the address: a host, or a custom domain's host with the path it
+// matched.
 func (a *API) addressRule(site *store.Site, host string, pathMode bool) store.ViewAddress {
 	if label, ok := a.viewLabel(host); ok && !pathMode && site.Meta.Mode == store.ModeContainer {
 		return site.Meta.LabelRule(label)
@@ -63,10 +66,14 @@ func (a *API) endpointOf(site *store.Site, host string) string {
 // target with the request's own path and query. A permanent redirect is
 // cached for an hour, not for ever, so an owner who changes it is not
 // overruled by every visitor's cache; a temporary one is not cached.
-func (a *API) redirectAddress(w http.ResponseWriter, r *http.Request, site *store.Site, rule store.ViewAddress, pathMode bool) {
+func (a *API) redirectAddress(w http.ResponseWriter, r *http.Request, site *store.Site, rule store.ViewAddress, pathMode bool, mount string) {
 	uri := r.Header.Get("X-Forwarded-Uri")
 	if pathMode {
 		uri = strings.TrimPrefix(uri, "/v/"+site.ViewID)
+	}
+	// A custom domain with a path sends what is below it.
+	if mount != "" {
+		uri = strings.TrimPrefix(uri, mount)
 	}
 	// The target is fixed; the path only follows it. Anything that is not a
 	// plain origin-form path — "@evil", "//evil", an absolute URL, a line

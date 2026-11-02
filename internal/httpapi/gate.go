@@ -42,6 +42,7 @@ func (a *API) unlock(w http.ResponseWriter, r *http.Request) {
 	var site *store.Site
 	var err error
 	cookiePath := "/"
+	mount := ""
 	if sid := r.PostFormValue("site"); sid != "" {
 		site, err = a.st.ByViewID(sid)
 		if err == nil && !servesPathView(site) {
@@ -65,11 +66,11 @@ func (a *API) unlock(w http.ResponseWriter, r *http.Request) {
 	}
 	pw := r.PostFormValue("password")
 	if !a.authLimiter.Allow(clientIP(r)+"|view:"+site.ViewID) || !a.targetLimiter.Allow("view:"+site.ViewID) {
-		a.gatePage(w, 429, redirect, "Too many attempts — please wait a moment and try again.", gateSite)
+		a.gatePage(w, 429, redirect, "Too many attempts — please wait a moment and try again.", gateSite, mount)
 		return
 	}
 	if pw == "" || !auth.VerifyPassword(site.Meta.ViewPasswordHash, pw) {
-		a.gatePage(w, 401, redirect, "Wrong password, please try again.", gateSite)
+		a.gatePage(w, 401, redirect, "Wrong password, please try again.", gateSite, mount)
 		return
 	}
 	token := a.signer.Sign(tokenSubject(site), time.Now(), viewCookieTTL)
@@ -174,7 +175,7 @@ var basePageTmpl = template.Must(template.New("page").Parse(`<!doctype html>
   {{range .More}}<p class="more">{{.}}</p>{{end}}
   {{with .Abuse}}<div class="abuse"><span class="k">Report abuse</span>{{if .ReportURL}}<a href="{{.ReportURL}}">{{.ReportLabel}}</a>{{end}}{{if .Email}}<a href="mailto:{{.Email}}">{{.Email}}</a>{{end}}</div>{{end}}
   {{if .ShowForm}}
-  <form method="post" action="/_sitebin/unlock">
+  <form method="post" action="{{.Mount}}/_sitebin/unlock">
     <input type="hidden" name="redirect" value="{{.Redirect}}">
     {{if .Site}}<input type="hidden" name="site" value="{{.Site}}">{{end}}
     <input type="password" name="password" placeholder="Password" autofocus autocomplete="current-password" aria-label="View password">
@@ -203,6 +204,9 @@ type pageData struct {
 	Redirect string
 	Error    string
 	Site     string // view id (path mode only; empty on subdomains)
+	// Mount is the path of a custom domain with a path the page is shown
+	// under: Sitebin's own routes are below it there.
+	Mount string
 	// Back links to the page a visitor came from (forms' result pages).
 	Back string
 	// Action, Token and Button render a one-button form that POSTs t=Token to
@@ -231,7 +235,7 @@ func (a *API) renderPage(w http.ResponseWriter, status int, d pageData) {
 // gatePage renders the password prompt (also used as the 401 body relayed by
 // Caddy's forward_auth). site is the view id for path-mode gates ("" on
 // subdomains, where the site resolves from the Host).
-func (a *API) gatePage(w http.ResponseWriter, status int, redirect, errMsg, site string) {
+func (a *API) gatePage(w http.ResponseWriter, status int, redirect, errMsg, site, mount string) {
 	a.renderPage(w, status, pageData{
 		Title:    "This site is protected",
 		Message:  "Enter the view password to continue.",
@@ -239,6 +243,7 @@ func (a *API) gatePage(w http.ResponseWriter, status int, redirect, errMsg, site
 		Redirect: redirect,
 		Error:    errMsg,
 		Site:     site,
+		Mount:    mount,
 	})
 }
 
