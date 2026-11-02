@@ -203,7 +203,7 @@ func New(dataDir, baseDomain string, maxSiteBytes int64, maxFiles int) (*Store, 
 		replacing:    make(map[string]bool),
 		scanner:      abuse.NewLoader(filepath.Join(dataDir, AbuseRulesFile)),
 	}
-	for _, d := range []string{s.sitesDir(), s.editIndexDir(), s.domainIndexDir(), s.addressIndexDir()} {
+	for _, d := range []string{s.sitesDir(), s.editIndexDir(), s.domainIndexDir(), s.pathIndexDir(), s.addressIndexDir()} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return nil, fmt.Errorf("init data dir: %w", err)
 		}
@@ -324,13 +324,15 @@ func (s *Store) ByEditID(editID string) (*Site, error) {
 	return s.load(filepath.Join(s.editIndexDir(), editID))
 }
 
-// ByDomain resolves a custom-domain link and loads the site.
+// ByDomain resolves a custom domain — a host, or a host with a path, exactly
+// as attached — and loads the site. A request's path is resolved by
+// ResolveAddress, which walks its prefixes.
 func (s *Store) ByDomain(domain string) (*Site, error) {
-	domain, err := normalizeDomain(domain)
+	addr, err := normalizeAddress(domain)
 	if err != nil {
 		return nil, ErrNotFound
 	}
-	return s.load(filepath.Join(s.domainIndexDir(), domain))
+	return s.load(s.addrLink(addr))
 }
 
 // load reads meta.json under dir (following index links) and returns a Site
@@ -427,7 +429,7 @@ func (s *Store) deleteChecked(site *Site, check func(*Meta) error) error {
 	}
 	if m != nil {
 		for _, d := range meta.CustomDomains {
-			os.Remove(filepath.Join(s.domainIndexDir(), d))
+			s.removeLink(d)
 		}
 		s.unlinkAddresses(meta)
 	}

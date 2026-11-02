@@ -97,7 +97,8 @@ type DomainClaim struct {
 func (c DomainClaim) Verified() bool { return c.VerifiedAt != nil }
 
 // TXTName is the owner name of the TXT record that proves control.
-func (c DomainClaim) TXTName() string { return challengeLabel + c.Domain }
+// The proof is about the host: a path plays no part in DNS.
+func (c DomainClaim) TXTName() string { return challengeLabel + hostOf(c.Domain) }
 
 // TXTValue is the value that TXT record must carry.
 func (c DomainClaim) TXTValue() string { return challengePrefix + c.Token }
@@ -261,6 +262,12 @@ func (s *Store) CountDomains() (int, error) {
 			n++
 		}
 	}
+	// A custom domain with a path counts as a custom domain.
+	for _, p := range s.pathLinks() {
+		if !linkDangling(p) {
+			n++
+		}
+	}
 	return n, nil
 }
 
@@ -325,9 +332,9 @@ func (s *Store) verify(ctx context.Context, site *Site, c DomainClaim) (ok bool,
 		return false, "this instance checks no DNS records, so no domain can be proven", nil
 	}
 	if ex, explains := s.verifier.(DomainExplainer); explains {
-		ok, found, err = ex.Explain(ctx, c.Domain, c.Token, s.viewHost(site))
+		ok, found, err = ex.Explain(ctx, hostOf(c.Domain), c.Token, s.viewHost(site))
 	} else {
-		ok, err = s.verifier.Verify(ctx, c.Domain, c.Token, s.viewHost(site))
+		ok, err = s.verifier.Verify(ctx, hostOf(c.Domain), c.Token, s.viewHost(site))
 	}
 	if !ok && err == nil && found == "" {
 		found = "no TXT record " + c.TXTName() + " = " + c.TXTValue() + " is visible yet"

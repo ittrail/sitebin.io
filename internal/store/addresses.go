@@ -192,7 +192,7 @@ func (s *Store) unlinkAddresses(m Meta) {
 // SetDomainTarget points a custom domain of a container site — attached or
 // still pending — at one of the HTTP ports its compose file declares.
 func (s *Store) SetDomainTarget(site *Site, domain, endpoint string) error {
-	d, err := normalizeDomain(domain)
+	d, err := normalizeAddress(domain)
 	if err != nil {
 		return fmt.Errorf("%w: %q is not a custom domain of this site", ErrNotFound, domain)
 	}
@@ -217,7 +217,7 @@ func (s *Store) SetDomainTarget(site *Site, domain, endpoint string) error {
 // DefaultDomainTarget gives a container site's custom domain the main
 // endpoint when it has no target yet; a domain that has one keeps it.
 func (s *Store) DefaultDomainTarget(site *Site, domain string) error {
-	d, err := normalizeDomain(domain)
+	d, err := normalizeAddress(domain)
 	if err != nil {
 		return nil
 	}

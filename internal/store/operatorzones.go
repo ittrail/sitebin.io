@@ -49,7 +49,7 @@ func (s *Store) OperatorOwns(ownerAccountID string) bool {
 // InOperatorZone reports whether d is one of the operator's zones or a name
 // under one.
 func (s *Store) InOperatorZone(d string) bool {
-	d = strings.ToLower(d)
+	d = strings.ToLower(hostOf(d)) // an address's zone is its host's
 	for _, z := range s.operatorZones {
 		if d == z || strings.HasSuffix(d, "."+z) {
 			return true

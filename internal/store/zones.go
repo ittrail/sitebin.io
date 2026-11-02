@@ -239,7 +239,7 @@ func (s *Store) Zones(accountID string) ([]Zone, error) {
 // parent), walking the labels upward: one stat per label, no scan. Zones never
 // overlap, so the first hit is the only one.
 func (s *Store) accountZoneFor(d string) (*Zone, bool) {
-	d = strings.ToLower(d)
+	d = strings.ToLower(hostOf(d)) // an address's zone is its host's
 	for {
 		if strings.Count(d, ".") < 1 {
 			return nil, false

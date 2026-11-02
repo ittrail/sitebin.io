@@ -195,7 +195,7 @@ func codeOrDefault(code int) int {
 // redirectTarget validates a target and its code: a domain name and one of
 // RedirectCodes (0 is the default).
 func redirectTarget(to string, code int) (string, int, error) {
-	t, err := normalizeDomain(to)
+	t, err := normalizeAddress(to)
 	if err != nil {
 		return "", 0, fmt.Errorf("%w: %q is not a domain name — the target is one of this site's custom domains", ErrBadRedirect, to)
 	}
@@ -241,7 +241,7 @@ func ruleTarget(mode, to string, code int) (string, int, error) {
 // the site's attached custom domains with code (0: 301), keeping path and
 // query. An empty to makes the domain serve the site again.
 func (s *Store) SetDomainRedirect(site *Site, domain, to string, code int) error {
-	d, err := normalizeDomain(domain)
+	d, err := normalizeAddress(domain)
 	if err != nil {
 		return fmt.Errorf("%w: %q is not an attached custom domain of this site", ErrNotFound, domain)
 	}

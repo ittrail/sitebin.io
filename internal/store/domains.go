@@ -40,13 +40,14 @@ func normalizeDomain(domain string) (string, error) {
 // the claim, with the records to create, is then in site.Meta.DomainClaims.
 // Calling again re-checks with the same token.
 func (s *Store) AddDomain(site *Site, domain string) error {
-	d, err := normalizeDomain(domain)
+	d, err := normalizeAddress(domain)
 	if err != nil {
 		return err
 	}
+	host := hostOf(d)
 	for _, r := range s.reserved {
-		if d == r || strings.HasSuffix(d, "."+r) {
-			return fmt.Errorf("%w: %s is reserved by this Sitebin instance", ErrBadDomain, d)
+		if host == r || strings.HasSuffix(host, "."+r) {
+			return fmt.Errorf("%w: %s is reserved by this Sitebin instance", ErrBadDomain, host)
 		}
 	}
 	now := time.Now().UTC()
@@ -61,7 +62,7 @@ func (s *Store) AddDomain(site *Site, domain string) error {
 	}
 	// Attached elsewhere: someone else proved control. A pending claim on
 	// another site is not that, and is not a reason to refuse.
-	if linkExists(filepath.Join(s.domainIndexDir(), d)) {
+	if linkExists(s.addrLink(d)) {
 		if got, err := s.ByDomain(d); err == nil && got.ViewID != site.ViewID {
 			return ErrDomainTaken
 		}
@@ -109,7 +110,7 @@ func (s *Store) AddDomain(site *Site, domain string) error {
 // attach indexes a domain for the site and records it as verified. It is the
 // ONLY place a domain enters the index and CustomDomains.
 func (s *Store) attach(site *Site, d string, now time.Time) error {
-	link := filepath.Join(s.domainIndexDir(), d)
+	link := s.addrLink(d)
 	if linkExists(link) {
 		got, err := s.ByDomain(d)
 		if err != nil || got.ViewID != site.ViewID {
@@ -121,7 +122,10 @@ func (s *Store) attach(site *Site, d string, now time.Time) error {
 		}
 	}
 	if !linkExists(link) {
-		if err := makeLink(link, filepath.Join("..", sitesDirName, site.ViewID), site.dir); err != nil {
+		if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+			return fmt.Errorf("index domain: %w", err)
+		}
+		if err := makeLink(link, linkTarget(d, site.ViewID), site.dir); err != nil {
 			return fmt.Errorf("index domain: %w", err)
 		}
 	}
@@ -144,23 +148,28 @@ func (s *Store) attach(site *Site, d string, now time.Time) error {
 		return nil
 	})
 	if err != nil {
-		os.Remove(link)
+		s.removeLink(d)
 		return err
 	}
 	return nil
 }
 
-// removeLink drops the index entry for d, tolerating its absence.
+// removeLink drops the index entry for d, tolerating its absence. A path
+// address's host folder goes with its last link.
 func (s *Store) removeLink(d string) error {
-	if err := os.Remove(filepath.Join(s.domainIndexDir(), d)); err != nil && !os.IsNotExist(err) {
+	link := s.addrLink(d)
+	if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
 		return err
+	}
+	if pathOf(d) != "" {
+		os.Remove(filepath.Dir(link)) // only succeeds once it is empty
 	}
 	return nil
 }
 
 // RemoveDomain detaches a verified domain, or forgets a pending claim.
 func (s *Store) RemoveDomain(site *Site, domain string) error {
-	d, err := normalizeDomain(domain)
+	d, err := normalizeAddress(domain)
 	if err != nil {
 		return err
 	}
@@ -180,7 +189,7 @@ func (s *Store) RemoveDomain(site *Site, domain string) error {
 
 // HasDomainClaim reports whether the site claims domain, verified or not.
 func (s *Site) HasDomainClaim(domain string) bool {
-	d, err := normalizeDomain(domain)
+	d, err := normalizeAddress(domain)
 	if err != nil {
 		return false
 	}
@@ -212,6 +221,11 @@ func (s *Store) DanglingIndexLinks() ([]string, error) {
 			if linkDangling(p) {
 				out = append(out, p)
 			}
+		}
+	}
+	for _, p := range s.pathLinks() {
+		if linkDangling(p) {
+			out = append(out, p)
 		}
 	}
 	return out, nil
