@@ -95,3 +95,19 @@ func TestBackendHandleStripsMount(t *testing.T) {
 		}
 	}
 }
+
+// A client's X-Sitebin-View would make authz check another site than the one
+// whose folder the view wildcard serves (its root keys on the label): every
+// content block removes it before the gate (review, 2026-11-02).
+func TestContentBlocksStripTheViewHeader(t *testing.T) {
+	cfg := mustLoad(t, map[string]string{
+		"SITEBIN_BASE_DOMAIN":  "app.sitebin.io",
+		"SITEBIN_VIEW_DOMAIN":  "sitebin.app",
+		"SITEBIN_DNS_PROVIDER": "hetzner",
+		"SITEBIN_DNS_TOKEN":    "x",
+	})
+	out := Generate(cfg)
+	for _, h := range []string{"*.sitebin.app", "https://"} {
+		inOrder(t, siteBlock(t, out, h), "request_header -X-Sitebin-View", "forward_auth")
+	}
+}

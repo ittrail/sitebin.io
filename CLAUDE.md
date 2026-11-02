@@ -299,7 +299,11 @@ a non-serving address the forms and unlock routes answer 404
   host + mount exactly (`servingSiteByAddress`), so a forged mount names
   nothing a path would not. `<mount>/_sitebin/*` is proxied BEFORE the
   site's security headers — a gate page with `form-action 'none'` cannot be
-  submitted again.
+  submitted again. authz names the folder for a CONTAINER too: the trust
+  marker in it picks the security headers, and without it every trusted
+  app on a custom domain gets the untrusted policy. Every content block
+  also removes a client's `X-Sitebin-View` (only the path view may set it).
+  The view cookie under a path is `Path=<mount>`, no trailing slash.
 - **One owner per host; only an address held by its own proof vouches.**
   `DomainClaim.ViaHost` marks an address attached because another address of
   the same account on the host holds it by its own proof (`vouchFor`). An

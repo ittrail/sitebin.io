@@ -208,8 +208,12 @@ func (s *Store) RemoveDomain(site *Site, domain string) error {
 	if !slices.Contains(site.Meta.CustomDomains, d) && claimIndex(&site.Meta, d) < 0 {
 		return ErrNotFound
 	}
-	if err := s.removeLink(d); err != nil {
-		return err
+	// The link is this site's, or nobody's (dangling): a pending claim here
+	// says nothing about the site another claim attached on the address.
+	if got, err := s.ByDomain(d); err != nil || got.ViewID == site.ViewID {
+		if err := s.removeLink(d); err != nil {
+			return err
+		}
 	}
 	return s.Update(site, func(m *Meta) error {
 		m.CustomDomains = slices.DeleteFunc(m.CustomDomains, func(x string) bool { return x == d })

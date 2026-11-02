@@ -57,7 +57,10 @@ func (a *API) unlock(w http.ResponseWriter, r *http.Request) {
 		// two protected sites on one host each keep their own.
 		site, mount, err = a.servingSiteByAddress(r)
 		if err == nil && mount != "" {
-			cookiePath = mount + "/"
+			// No trailing slash: "/account" matches "/account" and
+			// "/account/x" but not "/accounts", and a container under a
+			// path serves its bare path as it is (no 308 to the slash).
+			cookiePath = mount
 		}
 	}
 	if err != nil {

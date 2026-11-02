@@ -410,3 +410,24 @@ here rather than rewritten above:
    answer it (the existing redirect sanitizer relies on it).
 7. A CSP report is attributed by its document URL's path only when that
    URL's host is the request's host.
+
+From the whole-branch review (2026-11-02):
+
+8. **A container names its folder too.** authz sets `X-Sitebin-Site` on a
+   container's answer as well: the custom-domain block's root comes from it,
+   and the trust marker in that folder decides the security headers. Without
+   it every trusted container app on a custom domain would have been served
+   with the untrusted policy (`form-action 'none'`) — a regression for apps
+   that use no path at all.
+9. **The view-password cookie under a path is `Path=<path>`, without the
+   trailing slash** this document prescribed: a cookie for `/account/` is
+   not sent for `/account`, which a container under that path serves as it
+   is (no `308`), so a protected app's home page could never be unlocked.
+   `<path>` still matches `<path>/x` and never `<path>x`.
+10. **Every content block removes a client's `X-Sitebin-View`** before the
+    gate. Only the `/v/<id>/` path view sets it, from its own path; on a view
+    host a client's copy made authz check another (open) site while Caddy
+    served the protected one's folder by its label. This predates custom
+    domains with a path; it was found reviewing their header list.
+11. **Removing a pending claim never unlinks the address another site holds**
+    on it (a project of the same account attached it through the host).

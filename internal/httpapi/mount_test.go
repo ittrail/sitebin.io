@@ -242,3 +242,32 @@ func TestTLSCheckPathOnlyHost(t *testing.T) {
 		t.Fatalf("tls-check for an unknown host: %d", w.Code)
 	}
 }
+
+// A container on a custom domain names its folder too: the Caddyfile's root
+// for a custom domain comes from the site header, and the trust marker in
+// that folder decides the response's security headers (review, 2026-11-02).
+func TestAuthzContainerNamesItsFolder(t *testing.T) {
+	rt := &fakeRuntime{}
+	withContainers(t, rt)
+	e := newEnv(t, nil)
+	c := e.createSite(t, map[string]string{"mode": "container"}, nil)
+	running(t, e, c.ID, ext.ContainerService{Name: "web", Host: "sb-" + c.ID + "-web", Ports: []int{3000}})
+	if err := e.api.SiteService().SyncContainerEndpoints(c.ID, []string{"web:3000"}); err != nil {
+		t.Fatal(err)
+	}
+	site, _ := e.st.ByViewID(c.ID)
+	for _, a := range []string{"c.at", "c.at/api"} {
+		if err := e.st.AddDomain(site, a); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.st.SetDomainTarget(site, a, "web:3000"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, uri := range []string{"/x", "/api/x"} {
+		w := e.internal(t, authzReq("c.at", uri, ""))
+		if w.Code != 200 || hdr(w, upstreamHeader) == "" || hdr(w, siteHeader) != c.ID {
+			t.Errorf("%s: %d upstream=%q site=%q, want the container's own folder named", uri, w.Code, hdr(w, upstreamHeader), hdr(w, siteHeader))
+		}
+	}
+}

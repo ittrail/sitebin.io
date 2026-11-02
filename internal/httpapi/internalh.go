@@ -127,6 +127,10 @@ func (a *API) admit(w http.ResponseWriter, r *http.Request, site *store.Site, pa
 		}
 		a.countView(r, site)
 		w.Header().Set(upstreamHeader, upstream)
+		// Its folder too: the file server never sees it, but the trust
+		// marker in it decides the security headers on a custom domain,
+		// whose root is this answer.
+		w.Header().Set(siteHeader, site.ViewID)
 		if mount != "" {
 			w.Header().Set(mountHeader, mount)
 		}

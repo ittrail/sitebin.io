@@ -222,8 +222,12 @@ func writeContentRoutes(b *strings.Builder, backend func(string) string, root, u
 	// A client sending the header itself would choose where Caddy proxies —
 	// any host the instance can reach — so it is removed before the gate.
 	// So are the folder, the prefix and the mount, and a client's
-	// X-Forwarded-Prefix, which an app behind a path trusts as its base.
-	for _, h := range []string{upstreamHeader, cacheHeader, siteHeader, stripHeader, mountHeader, "X-Forwarded-Prefix"} {
+	// X-Forwarded-Prefix, which an app behind a path trusts as its base. So
+	// is X-Sitebin-View, which only the /v/<id>/ path view sets (from its
+	// own path): authz takes it as the site to check, and on a view host the
+	// folder served comes from the label — a client sending it would have
+	// another, open site checked and the protected one served.
+	for _, h := range []string{upstreamHeader, cacheHeader, siteHeader, stripHeader, mountHeader, "X-Forwarded-Prefix", "X-Sitebin-View"} {
 		fmt.Fprintf(b, "\t\t\trequest_header -%s\n", h)
 	}
 	// Pin X-Forwarded-Host to Caddy's own {host} placeholder so authz resolves

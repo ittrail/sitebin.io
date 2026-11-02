@@ -374,3 +374,23 @@ func TestZoneConflictSeesPathAddress(t *testing.T) {
 		t.Errorf("ZoneDomains = %+v", got)
 	}
 }
+
+// Removing a pending claim never takes down the link another site holds on
+// the same address (review, 2026-11-02).
+func TestRemovePendingClaimKeepsSiblingLink(t *testing.T) {
+	s, v := shareStore(t)
+	a, b, c := ownedSite(t, s, "u1"), ownedSite(t, s, "u1"), ownedSite(t, s, "u1")
+	if err := s.AddDomain(b, "m.at/x"); !errors.Is(err, ErrDomainPending) {
+		t.Fatalf("= %v, want pending", err)
+	}
+	prove(t, s, v, a, "m.at")
+	if err := s.AddDomain(c, "m.at/x"); err != nil {
+		t.Fatalf("the sibling attaches through the host: %v", err)
+	}
+	if err := s.RemoveDomain(reload(t, s, b), "m.at/x"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.ByDomain("m.at/x"); err != nil || got.ViewID != c.ViewID {
+		t.Fatalf("after b dropped its pending claim, m.at/x = %v, %v; want still c", got, err)
+	}
+}

@@ -97,8 +97,10 @@ func TestUnlockUnderMountScopesCookie(t *testing.T) {
 		t.Fatalf("unlock = %d %q: %s", w.Code, w.Header().Get("Location"), w.Body)
 	}
 	c := w.Result().Cookies()
-	if len(c) != 1 || c[0].Path != "/demos/k1/" {
-		t.Fatalf("cookie = %+v, want one scoped to /demos/k1/", c)
+	// No trailing slash: a cookie for "/demos/k1/" is not sent for the bare
+	// "/demos/k1", which a container under the path serves as it is.
+	if len(c) != 1 || c[0].Path != "/demos/k1" {
+		t.Fatalf("cookie = %+v, want one scoped to /demos/k1", c)
 	}
 	// A wrong password shows the gate again, posting under the path.
 	w = post(t, e, "m.at", "/_sitebin/unlock", urlenc, strings.NewReader("password=no&redirect=/demos/k1/"), mounted("/demos/k1"))

@@ -40,8 +40,8 @@ New-Item -ItemType Directory -Force $work | Out-Null
 
 # Every assertion must run; the count is checked at the end. Update it when
 # you add or remove one.
-$ExpectedAssertions = 28
-if (-not $NoContainers) { $ExpectedAssertions += 8 }
+$ExpectedAssertions = 29
+if (-not $NoContainers) { $ExpectedAssertions += 11 }
 
 $script:pass = 0; $script:fail = 0
 function Assert([string]$n, $c, [string]$d = "") {
@@ -186,12 +186,14 @@ foreach ($spell in @("/demos/k1/app.css", "/demos/k1/%2e%2e/k1/app.css", "/demos
 }
 $r = Visit "m.e2e.test" "/app.css" @("-H", "X-Sitebin-Site: $($k1.id)", "-H", "X-Sitebin-Strip: /demos/k1")
 Assert "client-sent folder and prefix headers change nothing" ($r.body -notmatch "k1-css") "got $($r.code): $($r.body)"
+$r = Visit "$($k1.id).$base" "/app.css" @("-H", "X-Sitebin-View: $($root.id)")
+Assert "a client-sent X-Sitebin-View does not open a protected generated address" ($r.code -eq 401 -and $r.body -notmatch "k1-css") "got $($r.code): $($r.body)"
 $vjar = Join-Path $work "mt-view.jar"
 Remove-Item $vjar -ErrorAction SilentlyContinue
 $r = Req "POST" "http://127.0.0.1:$Port/demos/k1/_sitebin/unlock" @("-H", "Host: m.e2e.test", "-c", $vjar,
     "--data-urlencode", "password=sesame", "--data-urlencode", "redirect=/demos/k1/")
 Assert "the unlock under the path accepts the password" ($r.code -eq 303 -and (Header $r "Location") -eq "/demos/k1/") "got $($r.code) $(Header $r 'Location')"
-Assert "the view cookie is scoped to the path" ((Header $r "Set-Cookie") -match "Path=/demos/k1/") "got $(Header $r 'Set-Cookie')"
+Assert "the view cookie is scoped to the path" ((Header $r "Set-Cookie") -match "Path=/demos/k1(;|$)") "got $(Header $r 'Set-Cookie')"
 $r = Visit "m.e2e.test" "/demos/k1/" @("-b", $vjar)
 Assert "with the cookie the site under the path is served" ($r.code -eq 200 -and $r.body -match "k1-ok") "got $($r.code)"
 $r = Visit "m.e2e.test" "/demos/k1/app.css" @("-b", $vjar)
@@ -265,6 +267,20 @@ services:
     Assert "a client-sent X-Forwarded-Prefix never reaches the app" ($r.code -eq 200 -and $r.body -eq "port=3000 url=/x prefix=-") "got $($r.code): $($r.body)"
     $r = Visit "c.e2e.test" "/demos/"
     Assert "the static site beside the app is served by Sitebin" ($r.code -eq 200 -and $r.body -eq "beside-the-app") "got $($r.code): $($r.body)"
+    $r = Visit "c.e2e.test" "/x"
+    $csp = Header $r "Content-Security-Policy"
+    Assert "a trusted app on a custom domain keeps the trusted policy" ($r.code -eq 200 -and $csp -ne "" -and $csp -notmatch "form-action 'none'") "got $($r.code) CSP: $csp"
+
+    # A protected app under a path unlocks at its bare path, which it serves
+    # as it is (no redirect to the slash).
+    $r = Api $ct "PUT" "" '{"view_password":"sesame"}'
+    $cjar = Join-Path $work "mt-ct.jar"
+    Remove-Item $cjar -ErrorAction SilentlyContinue
+    $r = Req "POST" "http://127.0.0.1:$Port/api/_sitebin/unlock" @("-H", "Host: c.e2e.test", "-c", $cjar,
+        "--data-urlencode", "password=sesame", "--data-urlencode", "redirect=/api")
+    Assert "the protected app's unlock under its path accepts the password" ($r.code -eq 303 -and (Header $r "Set-Cookie") -match "Path=/api(;|$)") "got $($r.code) $(Header $r 'Set-Cookie')"
+    $r = Visit "c.e2e.test" "/api" @("-b", $cjar)
+    Assert "with the cookie the bare path of the app is served" ($r.code -eq 200 -and $r.body -eq "port=3001 url=/api prefix=/api") "got $($r.code): $($r.body)"
 }
 
 # ---------- cleanup ----------
