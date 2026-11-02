@@ -40,7 +40,7 @@ func TestGenerateHTTPS(t *testing.T) {
 		"*.sitebin.ittrail.cloud {",
 		"dns cloudflare {env.SITEBIN_DNS_TOKEN}",
 		"root * /data/sites/{labels.3}/files",
-		"root * /data/domain-index/{host}/files",
+		"root * /data/sites/{http.request.header.X-Sitebin-Site}/files",
 		"forward_auth 127.0.0.1:9000",
 		"uri /internal/authz",
 		"header_up X-Forwarded-Host {host}",

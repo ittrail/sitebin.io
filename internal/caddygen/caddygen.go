@@ -58,7 +58,7 @@ func Generate(cfg config.Config) string {
 		fmt.Fprintf(&b, "%s*.%s {\n", scheme, cfg.ViewDomain)
 		writeViewTLS(&b, cfg)
 		writeHSTS(&b, cfg, true)
-		writeContentRoutes(&b, backend, fmt.Sprintf("%s/sites/{labels.%d}/files", cfg.DataDir, labelIdx), untrusted)
+		writeContentRoutes(&b, backend, fmt.Sprintf("%s/sites/{labels.%d}/files", cfg.DataDir, labelIdx), untrusted, false)
 		b.WriteString("}\n\n")
 	}
 
@@ -89,7 +89,11 @@ func Generate(cfg config.Config) string {
 		b.WriteString("https:// {\n\ttls {\n\t\ton_demand\n\t}\n")
 	}
 	writeHSTS(&b, cfg, false)
-	writeContentRoutes(&b, backend, cfg.DataDir+"/domain-index/{host}/files", untrusted)
+	// The folder is authz's answer (siteHeader), never the host's: a custom
+	// domain may carry a path, and the site serving a request is the one
+	// mounted at its longest matching path. See
+	// docs/superpowers/specs/2026-11-02-custom-domains-with-a-path-design.md.
+	writeContentRoutes(&b, backend, fmt.Sprintf("%s/sites/{http.request.header.%s}/files", cfg.DataDir, siteHeader), untrusted, true)
 	b.WriteString("}\n")
 
 	if !cfg.HTTPOnly {
@@ -200,27 +204,50 @@ func writePathViewRoutes(b *strings.Builder, backend func(string) string, dataDi
 // every site without the trust marker. Inside `route` the written order
 // holds: the gate answers first, and only a request that passed it reaches
 // the header directives.
-func writeContentRoutes(b *strings.Builder, backend func(string) string, root, untrusted string) {
+//
+// mounts is the custom-domain catch-all, where a custom domain may carry a
+// path: the root comes from authz's siteHeader, a file site under a path has
+// authz's stripHeader stripped, Sitebin's own routes under a path go to the
+// backend before the site's security headers (a gate page carrying the
+// untrusted policy's form-action 'none' could not be submitted again), and
+// a container under a path is told its prefix.
+func writeContentRoutes(b *strings.Builder, backend func(string) string, root, untrusted string, mounts bool) {
 	b.WriteString("\tencode zstd gzip\n")
 	b.WriteString("\t@backend path /_sitebin/*\n")
-	fmt.Fprintf(b, "\thandle @backend {\n\t\treverse_proxy %s\n\t}\n", backend("8080"))
+	// The backend resolves Sitebin's own routes under a path from the mount
+	// authz names; on a route that never passes authz a client's copy goes.
+	fmt.Fprintf(b, "\thandle @backend {\n\t\trequest_header -%s\n\t\treverse_proxy %s\n\t}\n", mountHeader, backend("8080"))
 	b.WriteString("\thandle {\n\t\troute {\n")
 	// The upstream of a container site is authz's answer and nobody else's.
 	// A client sending the header itself would choose where Caddy proxies —
 	// any host the instance can reach — so it is removed before the gate.
-	fmt.Fprintf(b, "\t\t\trequest_header -%s\n", upstreamHeader)
-	fmt.Fprintf(b, "\t\t\trequest_header -%s\n", cacheHeader)
+	// So are the folder, the prefix and the mount, and a client's
+	// X-Forwarded-Prefix, which an app behind a path trusts as its base.
+	for _, h := range []string{upstreamHeader, cacheHeader, siteHeader, stripHeader, mountHeader, "X-Forwarded-Prefix"} {
+		fmt.Fprintf(b, "\t\t\trequest_header -%s\n", h)
+	}
 	// Pin X-Forwarded-Host to Caddy's own {host} placeholder so authz resolves
 	// the SAME site that file_server will serve. Without this, a client-supplied
 	// X-Forwarded-Host could make the gate evaluate a different (open) site than
 	// the one whose files are served — a password-gate bypass.
-	fmt.Fprintf(b, "\t\t\tforward_auth %s {\n\t\t\t\turi /internal/authz\n\t\t\t\theader_up X-Forwarded-Host {host}\n\t\t\t\tcopy_headers Set-Cookie %s %s\n\t\t\t}\n", backend("9000"), upstreamHeader, cacheHeader)
+	fmt.Fprintf(b, "\t\t\tforward_auth %s {\n\t\t\t\turi /internal/authz\n\t\t\t\theader_up X-Forwarded-Host {host}\n\t\t\t\tcopy_headers Set-Cookie %s %s %s %s %s\n\t\t\t}\n", backend("9000"), upstreamHeader, cacheHeader, siteHeader, stripHeader, mountHeader)
 	fmt.Fprintf(b, "\t\t\troot * %s\n", root)
+	if mounts {
+		fmt.Fprintf(b, "\t\t\t@strip header %s *\n", stripHeader)
+		fmt.Fprintf(b, "\t\t\turi @strip strip_prefix {http.request.header.%s}\n", stripHeader)
+		fmt.Fprintf(b, "\t\t\t@sitebinroute header %s %s\n", upstreamHeader, backend("8080"))
+		fmt.Fprintf(b, "\t\t\treverse_proxy @sitebinroute %s\n", backend("8080"))
+	}
 	writeSecurityHeaders(b, "\t\t\t", untrusted)
 	writeCacheHeader(b, "\t\t\t")
 	// A container site: authz admitted it WITH an upstream, so it is proxied
 	// there and never reaches the file server below. authz never admits a
 	// container site without one.
+	if mounts {
+		// Under a path, with the prefix the app was mounted at.
+		fmt.Fprintf(b, "\t\t\t@proxiedmount {\n\t\t\t\theader %s *\n\t\t\t\theader %s *\n\t\t\t}\n", upstreamHeader, mountHeader)
+		fmt.Fprintf(b, "\t\t\treverse_proxy @proxiedmount {http.request.header.%s} {\n\t\t\t\theader_up X-Forwarded-Prefix {http.request.header.%s}\n\t\t\t}\n", upstreamHeader, mountHeader)
+	}
 	fmt.Fprintf(b, "\t\t\t@proxied header %s *\n", upstreamHeader)
 	fmt.Fprintf(b, "\t\t\treverse_proxy @proxied {http.request.header.%s}\n", upstreamHeader)
 	writeFileServing(b, "\t\t\t")
@@ -243,6 +270,15 @@ func writeFileServing(b *strings.Builder, ind string) {
 
 // upstreamHeader mirrors httpapi's: authz sets it for a container site.
 const upstreamHeader = "X-Sitebin-Upstream"
+
+// siteHeader, stripHeader and mountHeader mirror httpapi's: the folder a
+// custom domain serves, the prefix stripped before it, and the mount a
+// container or the backend is told (httpapi/mount.go).
+const (
+	siteHeader  = "X-Sitebin-Site"
+	stripHeader = "X-Sitebin-Strip"
+	mountHeader = "X-Sitebin-Mount"
+)
 
 // cacheHeader mirrors httpapi's: authz sets it to a file site's whole
 // Cache-Control value for the response, or leaves it out.
