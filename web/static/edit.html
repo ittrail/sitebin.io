@@ -219,7 +219,7 @@
     <h3>Custom domains</h3>
     <div id="domainrows"></div>
     <div class="row" style="margin-top:12px">
-      <input type="text" id="e-domain" placeholder="docs.example.com" style="max-width:280px">
+      <input type="text" id="e-domain" placeholder="docs.example.com or example.com/docs" style="max-width:280px">
       <select id="e-domain-target" class="hidden" style="max-width:200px" aria-label="The port the domain serves"></select>
       <button class="btn small" id="e-add-domain">Add domain</button>
     </div>
@@ -233,6 +233,11 @@
       <code>www.example.com &rarr; example.com</code> &mdash; with the status code you pick; the path and query are kept,
       and the redirect is answered here, on the domain's own certificate. Once a domain serves the site, its
       <strong>generated address</strong> can be switched off or redirected too.
+      <br><br>
+      A domain can carry a <strong>path</strong> &mdash; <code>example.com/docs</code> &mdash; to serve this site
+      under it while your other projects serve the rest of the domain; the longest matching path wins. A domain
+      another of your projects already holds needs no new record. The site must be built for its path (Astro:
+      <code>base: '/docs'</code>), or it will not find its own files; a warning appears here when it is not.
       <span id="dns-container" class="hidden"><br><br>
       An app has one generated address per HTTP port its compose file lists under <code>http:</code>, and each
       domain serves the port you pick. A port's generated address can be switched off once a domain serves that

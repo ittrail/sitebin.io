@@ -292,6 +292,8 @@ function render() {
       } catch (err) { toast(err.message, true); }
     });
     row.append(name, tag, check, rm, rec);
+    const pw = (site.domain_warnings || {})[p.domain];
+    if (pw) row.append(warnNote(pw));
     dr.appendChild(row);
   }
   const redirects = site.domain_redirects || {};
@@ -307,6 +309,15 @@ function render() {
       const via = document.createElement("span");
       via.className = "via";
       via.textContent = "via zone " + zone;
+      name.append(" ", via);
+    }
+    // Held through another of the owner's projects on the same host.
+    const proof = (site.domain_proofs || {})[d];
+    if (proof) {
+      const via = document.createElement("span");
+      via.className = "via";
+      via.textContent = "via your other projects on " + d.split("/")[0];
+      via.title = "Attached because another of your projects on this domain holds it by its own DNS record";
       name.append(" ", via);
     }
     row.append(name);
@@ -349,17 +360,25 @@ function render() {
         },
       }));
     }
-    const rm = document.createElement("button");
-    rm.className = "btn small";
-    rm.textContent = "Remove";
-    rm.addEventListener("click", async () => {
+    const remove = async () => {
       try {
         site = await api("DELETE", "/domains/" + encodeURIComponent(d));
         render();
         toast("Removed " + d);
       } catch (err) { toast(err.message, true); }
-    });
+    };
+    const deps = (site.domain_dependents || {})[d] || [];
+    // Other projects on this host hold it through this one: a second click,
+    // and the note below says what removing it means for them.
+    const rm = deps.length ? armedButton("Remove", "Click again to remove", remove) : smallButton("Remove", remove);
     row.append(rm);
+    if (deps.length) {
+      row.append(warnNote(deps.join(", ") + (deps.length > 1 ? " hold" : " holds") + " this domain through " + d +
+        ". Without it, they need a DNS record of their own within 3 days, or they are detached."));
+    }
+    const warning = (site.domain_warnings || {})[d];
+    if (warning) row.append(warnNote(warning));
+    if (proof) row.append(ownRecordHint(d, proof));
     if (r && !r.in_effect) {
       row.append(ruleNote(r.to + " is not serving the site right now, so " + d + " serves it meanwhile."));
     }
@@ -372,6 +391,28 @@ function render() {
     dr.appendChild(row);
   }
   $("dns-target").textContent = site.dns_target;
+}
+
+// ownRecordHint is the TXT record that keeps an address held through its
+// host working on its own, with a button to check for it.
+function ownRecordHint(d, proof) {
+  const rec = document.createElement("div");
+  rec.className = "dnshint";
+  rec.style.flexBasis = "100%";
+  const txt = document.createElement("div");
+  txt.append("To keep it working on its own, add a TXT record: ");
+  const n = document.createElement("code"); n.textContent = proof.txt_name;
+  const v = document.createElement("code"); v.textContent = proof.txt_value;
+  txt.append(n, " = ", v, " ");
+  txt.append(smallButton("Check its own record", async () => {
+    try {
+      site = await api("POST", "/domains", { domain: d });
+      render();
+      toast((site.domain_proofs || {})[d] ? "No record of its own yet for " + d : d + " now holds by its own record");
+    } catch (err) { toast(err.message, true); }
+  }));
+  rec.append(txt);
+  return rec;
 }
 
 // servesPort reports whether a container site's domain serves a port its
@@ -1237,7 +1278,9 @@ mini.addEventListener("drop", (e) => {
 // ---- domains ----
 
 $("e-add-domain").addEventListener("click", async () => {
-  const d = $("e-domain").value.trim().toLowerCase();
+  // The host is case-insensitive; a path is not, and is taken as typed (the
+  // server refuses one it would have to change). A trailing slash is dropped.
+  const d = $("e-domain").value.trim().replace(/^[^/]+/, (h) => h.toLowerCase()).replace(/\/+$/, "");
   if (!d) return;
   const body = { domain: d };
   const target = $("e-domain-target");
