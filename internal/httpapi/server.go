@@ -170,6 +170,8 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("GET /forms/stop", a.formStopPage)
 	mux.HandleFunc("POST /forms/stop", a.formStop)
 
+	mux.HandleFunc("GET /account/status", a.accountStatus)
+
 	// Enterprise: mount the account dashboard + auth routes when a provider is
 	// active. Guarded so a provider can only ever add routes on the main domain.
 	if p, ok := ext.Get(); ok {
