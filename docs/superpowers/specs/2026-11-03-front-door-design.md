@@ -387,3 +387,37 @@ Earlier text above is left as written; these rulings replace it where they diffe
   account, including any host/path address on sitebin.io / www.sitebin.io,
   which "one owner per host" keeps to the operator's account. A landing page
   reached through an alias host (not `BaseDomain`) now creates anonymous sites.
+
+## Corrections (final review, 2026-11-03)
+
+These rulings came out of the whole-branch review and replace the text above
+where they differ.
+
+- **The home URL must be on another host name.** Startup compares host names,
+  not origins: `SITEBIN_HOME_URL` on the base host under any scheme or port
+  (`https://<base>` behind a TLS terminator with `SITEBIN_HTTP_ONLY`,
+  `<base>:443`, another case) is refused, because `GET /` would redirect to
+  itself.
+- **The dashboard always links to publishing**, not only when it is empty:
+  "Publish a new site" beside "Your sites" goes to the host's `PublishURL`
+  (the front door, else `/`). The wordmark and `edit.js` keep `/`.
+- **A session origin is browser-shaped without `Sec-Fetch-Site`.** Safari
+  before 16.4 sends `Origin` only, so `fromOwnBrowser` accepts a session
+  origin's `Origin` alone, as it does the instance's own host. Only the plan
+  heuristic moves: the cookie still counts only through
+  `sessionOriginRequest`. A plain embed origin still needs fetch metadata.
+- **The front door is inert in the core too.** `landingPage` redirects only
+  with an active provider that honours embed origins; `main.go`'s clear is
+  no longer the only guard. Both redirects carry `Cache-Control: no-store`.
+- **MCP never reads the session, by construction**: `createSiteWith` hands
+  `AuthorizeCreate` the cookie-less clone whenever `browserOK` is false.
+- **The drop's network error is visitor wording.** The operator's settings
+  go to the `sitebin-error` event's `hint` and `console.warn`, never onto the
+  page.
+- **Anonymous drops per mode:** `SITEBIN_ANON_TIER` in tiers mode,
+  `SITEBIN_ALLOW_ANON_CREATE` in accounts mode (the earlier "or" read as if
+  either worked in both).
+- **Session origins with accounts off** are inert, and startup logs that once
+  in the enterprise edition.
+- `/_sitebin/qrcode.min.js` is one of the global Sitebin routes the base-path
+  check ignores.
