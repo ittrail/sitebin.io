@@ -334,8 +334,9 @@ func (p *provider) tagForm(w http.ResponseWriter, r *http.Request) (*account.Acc
 }
 
 // handleAddSiteTag adds one tag to a site. A tag the account already knows,
-// in the registry or on any of its sites, keeps that spelling whatever case
-// was typed; a new one with a group gets a registry entry in that group.
+// in the registry or on any of its sites, keeps that spelling and its group
+// whatever case was typed and whichever group was chosen; only a new one with
+// a group gets a registry entry in that group.
 func (p *provider) handleAddSiteTag(w http.ResponseWriter, r *http.Request) {
 	acc, viewID, ok := p.tagForm(w, r)
 	if !ok {
@@ -369,8 +370,11 @@ func (p *provider) handleAddSiteTag(w http.ResponseWriter, r *http.Request) {
 		p.recordSite(r, acc, viewID, provenance.ActionTags, "")
 	}
 
+	// The group is for a NEW tag only: one in neither the registry nor use on
+	// any of the account's sites. An existing tag keeps its (un)grouped state
+	// wherever it is added; grouping it is the manage page's job.
 	if group := r.PostFormValue("group"); group != "" {
-		if _, registered := reg.Tags[key]; !registered {
+		if _, registered := reg.Tags[key]; !registered && inUse[key] == "" {
 			if err := p.registerTag(acc, key, name, group); err != nil {
 				p.tagAddedWithoutGroup(w, r, acc, name, err)
 				return

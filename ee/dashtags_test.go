@@ -319,6 +319,23 @@ func TestDashboardAddsATag(t *testing.T) {
 		t.Errorf("tags after adding intern = %q, want the in-use spelling", got)
 	}
 
+	// The group select is for new tags only. A tag the account already uses
+	// keeps its (un)grouped state when added to another site with a group
+	// chosen: grouping it is the manage page's job, not a side effect.
+	if res := add(f.ids[5], url.Values{"tag": {"INTERN"}, "group": {gKunde}}); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("add in-use tag with a group = %d", res.StatusCode)
+	}
+	if got := strings.Join(f.tags(f.ids[5]), ","); got != "Intern,mockup,Stadtwerke" {
+		t.Errorf("tags after adding an in-use tag = %q", got)
+	}
+	if m, ok := reg().Tags["intern"]; ok {
+		t.Errorf("adding an in-use tag with a group grouped it account-wide: %+v", m)
+	}
+	add(f.ids[5], url.Values{"tag": {"privat"}, "group": {gTyp}})
+	if m := reg().Tags["privat"]; m.Group != "" || m.Color != "amber" {
+		t.Errorf("adding a registered ungrouped tag with a group changed it: %+v", m)
+	}
+
 	// A new tag without a group gets no registry entry: ungrouped and grey by
 	// definition.
 	add(f.ids[7], url.Values{"tag": {"Entwurf"}})
