@@ -105,6 +105,14 @@ type Config struct {
 	// the enterprise edition; empty means same-origin only.
 	EmbedOrigins []string
 
+	// SessionOrigins are the embed origins whose <sitebin-drop> may use the
+	// visitor's signed-in session (SITEBIN_SESSION_ORIGINS); each must also be
+	// an embed origin. FrontDoor (SITEBIN_FRONT_DOOR) makes GET / on the base
+	// host send a signed-in visitor to /account and everyone else to HomeURL.
+	// Both are honoured only in the enterprise edition with accounts on.
+	SessionOrigins []string
+	FrontDoor      bool
+
 	// Forms (SITEBIN_FORMS_*): email form submissions for hosted sites. See
 	// docs/superpowers/specs/2026-09-24-site-forms-design.md. FormsSMTP nil
 	// means the instance has no forms at all.
@@ -442,7 +450,31 @@ func Load(getenv func(string) string) (Config, error) {
 		}
 	}
 
+	if v := strings.TrimSpace(getenv("SITEBIN_SESSION_ORIGINS")); v != "" {
+		for _, part := range strings.Split(v, ",") {
+			o := strings.ToLower(strings.TrimSpace(part))
+			if o == "" {
+				continue
+			}
+			u, err := url.Parse(o)
+			okScheme := u != nil && (u.Scheme == "https" || (u.Scheme == "http" && cfg.HTTPOnly))
+			if err != nil || !okScheme || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.User != nil {
+				return cfg, fmt.Errorf("SITEBIN_SESSION_ORIGINS: %q is not an origin (want https://host[:port])", part)
+			}
+			if !cfg.embedsOrigin(o) {
+				return cfg, fmt.Errorf("SITEBIN_SESSION_ORIGINS: %q is not in SITEBIN_EMBED_ORIGINS", part)
+			}
+			cfg.SessionOrigins = append(cfg.SessionOrigins, o)
+		}
+	}
+	if cfg.FrontDoor, err = boolVar(getenv, "SITEBIN_FRONT_DOOR", false); err != nil {
+		return cfg, err
+	}
+
 	if err := loadAbuse(getenv, &cfg); err != nil {
+		return cfg, err
+	}
+	if err := cfg.checkFrontDoorStatic(); err != nil {
 		return cfg, err
 	}
 

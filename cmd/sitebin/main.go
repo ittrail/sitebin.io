@@ -237,6 +237,14 @@ func serve() error {
 	if err != nil {
 		return err
 	}
+	// Session origins and the front door ride on cross-origin embedding, an
+	// enterprise feature: the community build warns once and ignores them,
+	// before the server is built from cfg.
+	if p, ok := ext.Get(); (cfg.FrontDoor || len(cfg.SessionOrigins) > 0) && (!ok || !p.EmbedOriginsAllowed()) {
+		slog.Warn("SITEBIN_FRONT_DOOR / SITEBIN_SESSION_ORIGINS are set, but they need cross-origin embedding, an enterprise feature; ignoring them in this edition")
+		cfg.FrontDoor = false
+		cfg.SessionOrigins = nil
+	}
 	httpapi.Version = version // reported to MCP clients at initialize
 	api, err := httpapi.New(cfg, st, secret, web.Assets)
 	if err != nil {
@@ -248,6 +256,9 @@ func serve() error {
 	if p, ok := ext.Get(); ok {
 		if err := p.Init(extHost{cfg: cfg, secret: secret, sites: api.SiteService()}); err != nil {
 			return fmt.Errorf("init %s extension: %w", p.Name(), err)
+		}
+		if err := cfg.CheckFrontDoor(p.EmbedOriginsAllowed(), p.AccountsEnabled()); err != nil {
+			return err
 		}
 		slog.Info("extension active", "name", p.Name(), "version", p.Version(),
 			"accounts_enabled", p.AccountsEnabled())

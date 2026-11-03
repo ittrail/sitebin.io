@@ -582,3 +582,60 @@ func TestLockRetention(t *testing.T) {
 		}
 	}
 }
+
+func sessEnv(extra map[string]string) func(string) string {
+	m := map[string]string{"SITEBIN_BASE_DOMAIN": "sitebin.example", "SITEBIN_HTTP_ONLY": "true"}
+	for k, v := range extra {
+		m[k] = v
+	}
+	return env(m)
+}
+
+func TestSessionOrigins(t *testing.T) {
+	cfg, err := Load(sessEnv(map[string]string{
+		"SITEBIN_EMBED_ORIGINS":   "https://sitebin.io,https://www.sitebin.io",
+		"SITEBIN_SESSION_ORIGINS": " https://Sitebin.io ,https://www.sitebin.io,",
+	}))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := strings.Join(cfg.SessionOrigins, " "); got != "https://sitebin.io https://www.sitebin.io" {
+		t.Fatalf("SessionOrigins = %v", cfg.SessionOrigins)
+	}
+
+	// http:// only with SITEBIN_HTTP_ONLY.
+	_, err = Load(env(map[string]string{
+		"SITEBIN_BASE_DOMAIN": "sitebin.example", "SITEBIN_HTTP_ONLY": "false",
+		"SITEBIN_EMBED_ORIGINS": "*", "SITEBIN_SESSION_ORIGINS": "http://x.example",
+	}))
+	if err == nil || !strings.Contains(err.Error(), `SITEBIN_SESSION_ORIGINS: "http://x.example" is not an origin (want https://host[:port])`) {
+		t.Errorf("http without HTTP_ONLY: err = %v", err)
+	}
+	cfg, err = Load(sessEnv(map[string]string{"SITEBIN_EMBED_ORIGINS": "*", "SITEBIN_SESSION_ORIGINS": "http://x.example"}))
+	if err != nil || len(cfg.SessionOrigins) != 1 {
+		t.Errorf("http with HTTP_ONLY: %v %v", cfg.SessionOrigins, err)
+	}
+
+	for _, bad := range []string{"*", "https://a.example/path", "ftp://a.example", "a.example", "https://a.example?x=1"} {
+		_, err := Load(sessEnv(map[string]string{"SITEBIN_EMBED_ORIGINS": "*", "SITEBIN_SESSION_ORIGINS": bad}))
+		if err == nil || !strings.Contains(err.Error(), "SITEBIN_SESSION_ORIGINS: ") || !strings.Contains(err.Error(), "is not an origin (want https://host[:port])") {
+			t.Errorf("%q: err = %v", bad, err)
+		}
+	}
+
+	_, err = Load(sessEnv(map[string]string{
+		"SITEBIN_EMBED_ORIGINS":   "https://a.example",
+		"SITEBIN_SESSION_ORIGINS": "https://b.example",
+	}))
+	if err == nil || !strings.Contains(err.Error(), `SITEBIN_SESSION_ORIGINS: "https://b.example" is not in SITEBIN_EMBED_ORIGINS`) {
+		t.Errorf("not embedded: err = %v", err)
+	}
+	_, err = Load(sessEnv(map[string]string{"SITEBIN_SESSION_ORIGINS": "https://b.example"}))
+	if err == nil || !strings.Contains(err.Error(), "is not in SITEBIN_EMBED_ORIGINS") {
+		t.Errorf("no embed origins: err = %v", err)
+	}
+	cfg, err = Load(sessEnv(map[string]string{"SITEBIN_EMBED_ORIGINS": "*", "SITEBIN_SESSION_ORIGINS": "https://anything.example"}))
+	if err != nil || len(cfg.SessionOrigins) != 1 {
+		t.Errorf("wildcard embed: %v %v", cfg.SessionOrigins, err)
+	}
+}
