@@ -235,16 +235,16 @@ func TestProvenanceSettingsDeleteFileAndDomains(t *testing.T) {
 	c := e.createSite(t, nil, map[string]string{"index.html": "x", "old.txt": "o"})
 	edit := editIDFrom(t, c.EditURL)
 
-	req := authed(httptest.NewRequest("PUT", "/api/sites/"+edit, strings.NewReader(`{"view_password":"s3cret-view","name":"Mine"}`)), c.EditPassword)
+	req := authed(httptest.NewRequest("PUT", "/api/sites/"+edit, strings.NewReader(`{"view_password":"s3cret-view","name":"Mine","tags":["secret-tag"]}`)), c.EditPassword)
 	if w := e.public(t, req); w.Code != 200 {
 		t.Fatalf("settings: %d %s", w.Code, w.Body)
 	}
 	got := lastEntry(t, e.trail(t, c.ID))
-	if got.Action != provenance.ActionSettings || !strings.Contains(got.Detail, "view_password") || !strings.Contains(got.Detail, "name") {
+	if got.Action != provenance.ActionSettings || !strings.Contains(got.Detail, "view_password") || !strings.Contains(got.Detail, "name") || !strings.Contains(got.Detail, "tags") {
 		t.Fatalf("settings entry: %+v", got)
 	}
 	for _, en := range e.trail(t, c.ID) {
-		if strings.Contains(en.Detail, "s3cret-view") || strings.Contains(en.Detail, "Mine") {
+		if strings.Contains(en.Detail, "s3cret-view") || strings.Contains(en.Detail, "Mine") || strings.Contains(en.Detail, "secret-tag") {
 			t.Fatalf("a setting's value was recorded: %+v", en)
 		}
 	}

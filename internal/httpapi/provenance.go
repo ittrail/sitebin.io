@@ -262,6 +262,9 @@ func settingsDetail(set updateSet) string {
 	if set.Name != nil {
 		parts = append(parts, "name")
 	}
+	if set.Tags != nil {
+		parts = append(parts, "tags")
+	}
 	if set.Mode != nil {
 		parts = append(parts, "mode="+*set.Mode)
 	}

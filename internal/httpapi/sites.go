@@ -26,6 +26,7 @@ import (
 // zero values; ExpiresAt additionally distinguishes JSON null (= clear).
 type updateSet struct {
 	Name          *string         `json:"name"` // "" clears it
+	Tags          *[]string       `json:"tags"` // nil = leave alone, [] = clear
 	Mode          *string         `json:"mode"`
 	EntryFile     *string         `json:"entry_file"`
 	ViewPassword  *string         `json:"view_password"`
@@ -56,6 +57,18 @@ func settingsFromForm(fields url.Values) (updateSet, error) {
 	// Present-but-empty is meaningful, as for view_password: it clears.
 	if _, ok := fields["name"]; ok {
 		set.Name = strPtr(fields.Get("name"))
+	}
+	// Present means set; each value is split on commas, empty pieces dropped.
+	if vals, ok := fields["tags"]; ok {
+		tags := []string{}
+		for _, v := range vals {
+			for _, p := range strings.Split(v, ",") {
+				if strings.TrimSpace(p) != "" {
+					tags = append(tags, p)
+				}
+			}
+		}
+		set.Tags = &tags
 	}
 	if v := fields.Get("mode"); v != "" {
 		set.Mode = strPtr(v)
@@ -176,6 +189,16 @@ func (a *API) writeSettings(site *store.Site, set updateSet, expires **time.Time
 				return &apiError{400, err.Error()}
 			}
 			m.Name = name
+		}
+		if set.Tags != nil {
+			tags, err := store.CleanTags(*set.Tags)
+			if err != nil {
+				return &apiError{400, err.Error()}
+			}
+			if len(tags) == 0 {
+				tags = nil
+			}
+			m.Tags = tags
 		}
 		if set.Mode != nil {
 			m.Mode = *set.Mode
@@ -522,11 +545,16 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 	protocolsGated := a.gatedAnonymous(site)
 	webdavAvailable := a.cfg.WebDAVAllowed && !protocolsGated
 	ftpAvailable := a.cfg.FTPEnabled && !protocolsGated
+	tags := m.Tags
+	if tags == nil {
+		tags = []string{}
+	}
 	payload := map[string]any{
 		"views":                   stats.Views,
 		"last_seen":               stats.LastSeen,
 		"id":                      m.ID,
 		"name":                    m.Name,
+		"tags":                    tags,
 		"view_url":                a.cfg.ViewURL(m.ID),
 		"edit_url":                a.cfg.EditURL(m.EditID),
 		"mode":                    m.Mode,
