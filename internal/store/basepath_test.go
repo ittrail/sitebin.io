@@ -32,6 +32,7 @@ func TestBasePathWarning(t *testing.T) {
 		{"form action", `<form action='/_sitebin/forms/contact'>`, "/_sitebin/forms/contact"},
 		{"poster", `<video poster="/p.jpg"></video>`, "/p.jpg"},
 		{"sitebin assets are global", `<script src="/_sitebin/altcha.js"></script><link href="/_sitebin/assets/x.css">`, ""},
+		{"the drop and its QR library are global", `<script src="/_sitebin/embed.js" defer></script><script src="/_sitebin/qrcode.min.js"></script>`, ""},
 	}
 	for _, tc := range cases {
 		s, site := basePathSite(t, "<!doctype html><html><head>"+tc.html+"</head></html>")

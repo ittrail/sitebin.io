@@ -20,7 +20,7 @@ var linkAttrRe = regexp.MustCompile(`(?i)\b(src|href|action|poster|srcset)\s*=\s
 
 // globalSitebinPaths are Sitebin's own routes that answer the same on every
 // site, so a site under a path may link them from the root.
-var globalSitebinPaths = []string{"/_sitebin/assets/", "/_sitebin/embed.js", "/_sitebin/altcha.js"}
+var globalSitebinPaths = []string{"/_sitebin/assets/", "/_sitebin/embed.js", "/_sitebin/qrcode.min.js", "/_sitebin/altcha.js"}
 
 // BasePathWarning is what to tell the owner when the static site at addr —
 // a custom domain with a path — links root-absolute URLs outside that path
