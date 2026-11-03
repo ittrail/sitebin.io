@@ -459,6 +459,193 @@ var msgTmpl = template.Must(template.New("msg").Parse(pageHead + `
 </div></div></main>
 ` + pageFoot))
 
+// tagsManageCSS is the tag manager's own layout, on the dashboard's tokens
+// and the palette classes in pageHead (a colour is only ever a class name).
+const tagsManageCSS = `
+<style>
+  .acct.tagsmgr { width: min(820px, 100%); }
+  .acct .tmhead { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+  .acct .tmhead h1 { margin: 0; }
+  .acct .tmhead .btn { margin-left: auto; }
+  .acct .tmlede { margin-bottom: 16px; }
+  .acct .flash { border: 1px dashed rgba(94,207,138,.5); color: var(--ok); border-radius: 9px; padding: 9px 13px; font: 12px var(--mono); margin-bottom: 14px; }
+  .acct .tmwarn { border: 1px dashed rgba(242,109,109,.5); color: var(--danger); border-radius: 9px; padding: 9px 13px; font: 12px var(--mono); margin-bottom: 14px; }
+  .acct .tmgroup { border-top: 1px solid var(--line-soft); padding: 12px 0 8px; }
+  .acct .tmgroup:first-child { border-top: 0; padding-top: 0; }
+  .acct .tmgh, .acct .tmtag { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; }
+  .acct .tmgh { min-height: 30px; }
+  .acct .tmglbl { font: 600 12.5px var(--body); text-transform: uppercase; letter-spacing: .04em; color: var(--ink); min-width: 120px; overflow-wrap: anywhere; }
+  .acct .tmglbl.none { color: var(--ink-dim); }
+  .acct .tmuse { font: 11px var(--mono); color: var(--ink-faint); min-width: 58px; }
+  .acct .tmtag { padding: 5px 0 5px 19px; font-size: 12px; }
+  .acct .tmname { min-width: 150px; }
+  .acct .tminh { font-size: 11.5px; color: var(--ink-faint); min-width: 170px; }
+  .acct .tminh.own { color: var(--amber); }
+  .acct .tmfirst { margin-left: auto; }
+  .acct .tmempty { padding: 4px 0 4px 19px; font-size: 12px; color: var(--ink-faint); }
+  .acct .tmhint { margin-top: 6px; font-size: 11.5px; color: var(--ink-faint); }
+  /* The palette: eight radio inputs, each drawn as a dot in its class's colour. */
+  .acct .pal { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .acct .pal label { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; cursor: pointer; }
+  .acct .pal input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+  .acct .pal label span { width: 14px; height: 14px; border-radius: 50%; background: var(--c); opacity: .45; transition: opacity .12s, box-shadow .12s; }
+  .acct .pal label:hover span { opacity: .8; }
+  .acct .pal input:checked + span { opacity: 1; box-shadow: 0 0 0 2px var(--bg-card), 0 0 0 4px var(--c); }
+  .acct .pal input:focus-visible + span { outline: 2px solid var(--blue); outline-offset: 4px; }
+  .acct .pal .btn { margin-left: 6px; }
+  /* A group's "Set colour" shows once another dot is picked, where :has() is known. */
+  .acct form.pal:has(input.cur:checked) .btn { visibility: hidden; }
+  /* Row actions: disclosures that open a small form beneath the row. */
+  .acct details.tmact summary, .acct button.linkbtn { display: inline-block; cursor: pointer; list-style: none; border: 0; background: none; padding: 0; font: 11.5px var(--body); color: var(--ink-dim); text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
+  .acct details.tmact summary::-webkit-details-marker { display: none; }
+  .acct details.tmact summary:hover, .acct details.tmact[open] summary, .acct button.linkbtn:hover, .acct button.linkbtn:focus-visible { color: var(--ink); text-decoration-color: var(--amber); }
+  .acct button.linkbtn.danger:hover, .acct button.linkbtn.danger:focus-visible { color: var(--danger); text-decoration-color: var(--danger); }
+  .acct .tminh button.linkbtn { color: var(--amber); }
+  .acct details.tmact[open] { flex-basis: 100%; order: 1; padding: 2px 0 6px; }
+  .acct details.tmact form, .acct details.tmnew form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 8px; }
+  .acct.tagsmgr input[type=text], .acct.tagsmgr select { width: auto; min-width: 180px; max-width: 100%; padding: 6px 10px; font: 13px var(--body); border-radius: 8px; background: var(--bg-raise); }
+  .acct details.tmnew { margin-top: 10px; border-top: 1px solid var(--line-soft); padding-top: 12px; }
+  .acct details.tmnew summary { display: inline-block; cursor: pointer; list-style: none; font: 600 13px var(--body); color: var(--amber); }
+  .acct details.tmnew summary::-webkit-details-marker { display: none; }
+  .acct p.tmnew { margin-top: 10px; border-top: 1px solid var(--line-soft); padding-top: 12px; }
+  /* The confirmation and result steps. */
+  .acct .card p.muted + p.muted { margin-top: 10px; }
+  .acct .card.tmdanger { border-color: rgba(242,109,109,.4); }
+  .acct .card.tmdanger h1 { color: var(--danger); }
+  .acct .tmconfirm { margin-top: 18px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .acct ul.tmskipped { margin: 12px 0 0 18px; font-size: 13px; color: var(--ink-dim); }
+  .acct ul.tmskipped li { margin: 5px 0; overflow-wrap: anywhere; }
+  .acct ul.tmskipped strong { color: var(--ink); }
+  @media (max-width: 640px) {
+    .acct .tmfirst { margin-left: 0; }
+    .acct .tmname, .acct .tminh, .acct .tmglbl { min-width: 0; }
+  }
+</style>`
+
+// tagsTmpl is the tag manager: the groups alphabetically, each with its
+// colour as eight radio dots and its tags beneath, then "No group". Every
+// action is a POST form with the CSRF token; there is no script.
+var tagsTmpl = template.Must(template.New("tags").Parse(pageHead + tagsManageCSS + `
+<main class="acct tagsmgr">
+  <div class="tmhead">
+    <h1>Manage tags</h1>
+    <a class="btn small" href="/account">&larr; Your sites</a>
+  </div>
+  <p class="muted tmlede">A group gives its tags a colour, and a tag can have its own instead. Renaming or deleting a tag changes every site of this account that carries it; groups and colours change no site.</p>
+  {{with .Flash}}<p class="flash" role="status">{{.}}</p>{{end}}
+  {{if .Unreadable}}<p class="tmwarn" role="alert">Your tag settings could not be read, so your tags are shown without groups or colours, and changes to them cannot be saved.</p>{{end}}
+  <div class="card">
+    {{if .Empty}}<p class="muted">No tags yet. Tag a site on <a href="/account">your site list</a>, or start with a group.</p>{{end}}
+    {{range .Blocks}}{{$g := .}}
+    <section class="tmgroup">
+      <div class="tmgh tag-{{.Dot}}">
+        <span class="tdot"></span>
+        {{if .ID}}
+        <span class="tmglbl">{{.Name}}</span>
+        <span class="tmuse">{{len .Tags}} tag{{if ne (len .Tags) 1}}s{{end}}</span>
+        <form class="pal" method="post" action="/account/tags/groups/{{.ID}}">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          {{range $.Colors}}<label class="tag-{{.}}" title="{{.}}"><input type="radio" name="color" value="{{.}}"{{if eq . $g.Color}} checked class="cur"{{end}} required aria-label="{{.}} for the group {{$g.Name}}"><span></span></label>{{end}}
+          <button class="btn small" type="submit">Set colour</button>
+        </form>
+        <details class="tmact tmfirst"><summary>Rename</summary>
+          <form method="post" action="/account/tags/groups/{{.ID}}">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <input type="text" name="name" value="{{.Name}}" maxlength="30" required aria-label="New name for the group {{.Name}}">
+            <button class="btn small primary" type="submit">Save</button>
+          </form>
+        </details>
+        <form class="inline" method="post" action="/account/tags/groups/{{.ID}}/delete">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <button class="linkbtn danger" type="submit" title="Its tags stay, without a group">Delete</button>
+        </form>
+        {{else}}
+        <span class="tmglbl none">{{.Name}}</span>
+        <span class="tmuse">{{len .Tags}} tag{{if ne (len .Tags) 1}}s{{end}}</span>
+        {{end}}
+      </div>
+      {{range .Tags}}{{$t := .}}
+      <div class="tmtag">
+        <span class="tmname"><span class="tchip tag-{{.Color}}">{{.Name}}</span></span>
+        <span class="tmuse">{{.Sites}} site{{if ne .Sites 1}}s{{end}}</span>
+        <div class="tminh{{if .Own}} own{{end}}">{{if .Own}}own colour{{if .Group}} · <form class="inline" method="post" action="/account/tags/tag"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="tag" value="{{.Key}}"><input type="hidden" name="op" value="color"><input type="hidden" name="value" value=""><button class="linkbtn" type="submit">back to group</button></form>{{end}}{{else if .Group}}group colour{{else}}no colour{{end}}</div>
+        <details class="tmact tmfirst"><summary>Colour</summary>
+          <form method="post" action="/account/tags/tag">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <input type="hidden" name="tag" value="{{.Key}}">
+            <input type="hidden" name="op" value="color">
+            <span class="pal">{{range $.Colors}}<label class="tag-{{.}}" title="{{.}}"><input type="radio" name="value" value="{{.}}"{{if eq . $t.Own}} checked{{end}} required aria-label="{{.}} for {{$t.Name}}"><span></span></label>{{end}}</span>
+            <button class="btn small primary" type="submit">Set colour</button>
+          </form>
+        </details>
+        <details class="tmact"><summary>Group</summary>
+          <form method="post" action="/account/tags/tag">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <input type="hidden" name="tag" value="{{.Key}}">
+            <input type="hidden" name="op" value="group">
+            <select name="value" aria-label="Group for {{.Name}}"><option value="">No group</option>{{range $.GroupOpts}}<option value="{{.ID}}"{{if eq .ID $t.Group}} selected{{end}}>{{.Name}}</option>{{end}}</select>
+            <button class="btn small primary" type="submit">Move</button>
+          </form>
+        </details>
+        <details class="tmact"><summary>Rename</summary>
+          <form method="post" action="/account/tags/tag">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <input type="hidden" name="tag" value="{{.Key}}">
+            <input type="hidden" name="op" value="rename">
+            <input type="text" name="value" value="{{.Name}}" maxlength="30" required aria-label="New name for {{.Name}}">
+            <button class="btn small primary" type="submit">Rename</button>
+          </form>
+          <p class="tmhint">Every site that carries it is renamed too. The name of another tag merges the two, after a confirmation.</p>
+        </details>
+        <form class="inline" method="post" action="/account/tags/tag">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <input type="hidden" name="tag" value="{{.Key}}">
+          <input type="hidden" name="op" value="delete">
+          <button class="linkbtn danger" type="submit" title="Asks first">Delete</button>
+        </form>
+      </div>
+      {{else}}<p class="tmempty">No tags in this group yet.</p>
+      {{end}}
+    </section>
+    {{end}}
+    {{if .CanAddGroup}}
+    <details class="tmnew"{{if .Empty}} open{{end}}><summary>+ New group</summary>
+      <form method="post" action="/account/tags/groups">
+        <input type="hidden" name="csrf" value="{{.CSRF}}">
+        <input type="text" name="name" maxlength="30" required placeholder="e.g. Client" aria-label="Name of the new group">
+        <span class="pal">{{range .Colors}}<label class="tag-{{.}}" title="{{.}}"><input type="radio" name="color" value="{{.}}"{{if eq . $.NewColor}} checked{{end}} required aria-label="{{.}} for the new group"><span></span></label>{{end}}</span>
+        <button class="btn small primary" type="submit">Create group</button>
+      </form>
+    </details>
+    {{else}}<p class="muted tmnew">An account has at most {{.MaxGroups}} tag groups.</p>{{end}}
+  </div>
+</main>
+` + pageFoot))
+
+// tagStepTmpl is a rename's or delete's confirmation, with the form that
+// confirms it, or the result of one that could not change every site, with
+// those sites. Rendering it changes nothing.
+var tagStepTmpl = template.Must(template.New("tagstep").Parse(pageHead + tagsManageCSS + `
+<main class="acct"><div class="authwrap"><div class="card{{if .Danger}} tmdanger{{end}}">
+  <h1>{{.Title}}</h1>
+  {{range .Lines}}<p class="muted">{{.}}</p>{{end}}
+  {{if .Skipped}}<ul class="tmskipped">{{range .Skipped}}<li><strong>{{.Label}}</strong>{{if .URL}} · <a class="plain" href="{{.URL}}" target="_blank" rel="noopener">{{.URL}}</a>{{end}} · {{if .Locked}}locked by the operator{{else}}could not be saved{{end}}</li>{{end}}</ul>{{end}}
+  {{if .Op}}
+  <form class="tmconfirm" method="post" action="/account/tags/tag">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <input type="hidden" name="tag" value="{{.Tag}}">
+    <input type="hidden" name="op" value="{{.Op}}">
+    {{if .Value}}<input type="hidden" name="value" value="{{.Value}}">{{end}}
+    <input type="hidden" name="confirm" value="1">
+    <button class="btn {{if .Danger}}danger{{else}}primary{{end}}" type="submit">{{.Button}}</button>
+    <a class="btn" href="/account/tags">Cancel</a>
+  </form>
+  {{else}}
+  <div class="tmconfirm"><a class="btn" href="/account/tags">Back to your tags</a></div>
+  {{end}}
+</div></div></main>
+` + pageFoot))
+
 // adminConsoleCSS is the console's own layout. It rides on the community
 // app.css tokens like the rest of the dashboard; only the wide shell, the
 // figure stubs and the table are page-specific.
