@@ -639,3 +639,33 @@ func TestSessionOrigins(t *testing.T) {
 		t.Errorf("wildcard embed: %v %v", cfg.SessionOrigins, err)
 	}
 }
+
+func TestGitSettings(t *testing.T) {
+	base := map[string]string{"SITEBIN_BASE_DOMAIN": "sitebin.example", "SITEBIN_HTTP_ONLY": "true"}
+	cfg, err := Load(env(base))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.GitEnabled || cfg.GitMaxPushBytes != 536870912 || cfg.GitMaxProcesses != 4 || cfg.GitOAuthClientID != "" {
+		t.Errorf("defaults = %v %d %d %q", cfg.GitEnabled, cfg.GitMaxPushBytes, cfg.GitMaxProcesses, cfg.GitOAuthClientID)
+	}
+	for _, name := range []string{"SITEBIN_GIT_MAX_PUSH_BYTES", "SITEBIN_GIT_MAX_PROCESSES"} {
+		for _, bad := range []string{"0", "-1", "x"} {
+			m := map[string]string{name: bad}
+			for k, v := range base {
+				m[k] = v
+			}
+			if _, err := Load(env(m)); err == nil {
+				t.Errorf("%s=%q should be a startup error", name, bad)
+			}
+		}
+	}
+	m := map[string]string{"SITEBIN_GIT_ENABLED": "false", "SITEBIN_GIT_OAUTH_CLIENT_ID": " cli ", "SITEBIN_GIT_MAX_PROCESSES": "2"}
+	for k, v := range base {
+		m[k] = v
+	}
+	cfg, err = Load(env(m))
+	if err != nil || cfg.GitEnabled || cfg.GitOAuthClientID != "cli" || cfg.GitMaxProcesses != 2 {
+		t.Errorf("overrides = %+v, %v", cfg, err)
+	}
+}

@@ -39,6 +39,11 @@ type Config struct {
 	MaxFiles      int
 	MaxExpiryDays int // 0 = unlimited
 	WebDAVAllowed bool
+	// Git: every site can carry a bare git repository served over smart HTTP.
+	GitEnabled       bool
+	GitMaxPushBytes  int64  // largest push a repository accepts
+	GitMaxProcesses  int    // git processes running at once
+	GitOAuthClientID string // OAuth client id the Git CLI client uses, if any
 	// DomainVerification says how a custom domain proves it belongs to the
 	// site that claims it: "dns" (the default) requires a TXT record carrying
 	// the site's token or a CNAME at the site's view host before the domain is
@@ -221,6 +226,9 @@ func Load(getenv func(string) string) (Config, error) {
 		MaxSiteBytes:       104857600,
 		MaxFiles:           1000,
 		WebDAVAllowed:      true,
+		GitEnabled:         true,
+		GitMaxPushBytes:    536870912,
+		GitMaxProcesses:    4,
 		DomainVerification: DomainVerifyDNS,
 		MCPEnabled:         true,
 		PublicAddr:         ":8080",
@@ -293,6 +301,22 @@ func Load(getenv func(string) string) (Config, error) {
 	if cfg.WebDAVAllowed, err = boolVar(getenv, "SITEBIN_WEBDAV_ENABLED", true); err != nil {
 		return cfg, err
 	}
+	if cfg.GitEnabled, err = boolVar(getenv, "SITEBIN_GIT_ENABLED", true); err != nil {
+		return cfg, err
+	}
+	if cfg.GitMaxPushBytes, err = int64Var(getenv, "SITEBIN_GIT_MAX_PUSH_BYTES", cfg.GitMaxPushBytes); err != nil {
+		return cfg, err
+	}
+	if cfg.GitMaxPushBytes < 1 {
+		return cfg, fmt.Errorf("SITEBIN_GIT_MAX_PUSH_BYTES: must be at least 1")
+	}
+	if cfg.GitMaxProcesses, err = intVar(getenv, "SITEBIN_GIT_MAX_PROCESSES", cfg.GitMaxProcesses); err != nil {
+		return cfg, err
+	}
+	if cfg.GitMaxProcesses < 1 {
+		return cfg, fmt.Errorf("SITEBIN_GIT_MAX_PROCESSES: must be at least 1")
+	}
+	cfg.GitOAuthClientID = strings.TrimSpace(getenv("SITEBIN_GIT_OAUTH_CLIENT_ID"))
 	if cfg.MCPEnabled, err = boolVar(getenv, "SITEBIN_MCP_ENABLED", true); err != nil {
 		return cfg, err
 	}

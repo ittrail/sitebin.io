@@ -5,6 +5,7 @@
 FROM golang:1.25.14-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
+RUN apk add --no-cache git
 RUN go mod download
 COPY . .
 # EDITION=community (default, MIT) or enterprise (adds the ee/ premium tree).
@@ -37,7 +38,7 @@ RUN xcaddy build \
 
 # ---- final: all-in-one, non-root ----
 FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce
-RUN apk add --no-cache ca-certificates tini libcap mailcap \
+RUN apk add --no-cache ca-certificates tini libcap mailcap git \
     && addgroup -S -g 1000 sitebin \
     && adduser -S -u 1000 -G sitebin -h /data sitebin \
     && mkdir -p /data && chown sitebin:sitebin /data
