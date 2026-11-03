@@ -452,8 +452,20 @@ the agent checked it works and kept it as the last step. **Facts, verified
     without changing what `/mcp` answers.
 
 **Stack:** a static client **`sitebin-git`** in the realm, dev and cloud,
-created convergently by the stack's own code (where it already provisions the
-MCP scopes), never by hand:
+created convergently by the stack's own code, never by hand.
+
+- **How it is declared.** Sitebin already sends its MCP resource and scopes
+  in its registration (`ee/stackreg.go`, `mcp` block), and the gateway's
+  `configureMcp` (`services/auth-gateway/src/adapters/keycloak/index.ts`)
+  converges them on every boot. The `mcp` block gains a CLI client, for
+  example `cliClient: {clientId, displayName}`, which Sitebin sends only when
+  `SITEBIN_GIT_OAUTH_CLIENT_ID` is set. `configureMcp` creates the client or
+  brings it in line, beside the scopes.
+- **The stack ships first.** The registration schema is strict: a stack that
+  does not know the field refuses the whole registration.
+  `offline_access` is already among the stack's `MCP_BASE_CLIENT_SCOPES`.
+
+The client:
 
 - public, standard flow with PKCE S256 required;
 - redirect URIs `http://127.0.0.1/*` and `http://localhost/*` (loopback, any
