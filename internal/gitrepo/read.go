@@ -132,7 +132,12 @@ func exitFailure(err error) bool {
 // over is true when the output was cut at max bytes (the command is killed
 // and its status ignored).
 func (r *Runner) run(ctx context.Context, dir string, max int, args ...string) (out []byte, over bool, err error) {
-	ctx, cancel := context.WithTimeout(ctx, ReadTimeout)
+	return r.runFor(ctx, ReadTimeout, dir, max, args...)
+}
+
+// runFor is run with its own timeout.
+func (r *Runner) runFor(ctx context.Context, timeout time.Duration, dir string, max int, args ...string) (out []byte, over bool, err error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	release, err := r.acquire(ctx)
 	if err != nil {
