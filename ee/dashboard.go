@@ -34,6 +34,8 @@ func (p *provider) PublicRoutes() map[string]http.Handler {
 		"POST /account/tier":                               http.HandlerFunc(p.handleSelectTier),
 		"POST /account/sites/{id}/rotate":                  http.HandlerFunc(p.handleRotate),
 		"POST /account/sites/{id}/name":                    http.HandlerFunc(p.handleRenameSite),
+		"POST /account/sites/{id}/tags/add":                http.HandlerFunc(p.handleAddSiteTag),
+		"POST /account/sites/{id}/tags/remove":             http.HandlerFunc(p.handleRemoveSiteTag),
 		"POST /account/sites/{id}/delete":                  http.HandlerFunc(p.handleDeleteSite),
 		"POST /account/delete":                             http.HandlerFunc(p.handleDeleteAccount),
 		"POST /account/delete/confirm":                     http.HandlerFunc(p.handleDeleteAccountConfirm),
@@ -102,7 +104,7 @@ func (p *provider) handleRoot(w http.ResponseWriter, r *http.Request) {
 	}
 	// Sliding lifetime: a render re-issues the cookie for a full term.
 	http.SetCookie(w, p.sessions.Cookie(acc.ID, acc.TokenVersion))
-	p.renderDashboard(w, acc, "")
+	p.renderDashboard(w, r, acc, "")
 }
 
 // ssoRedirect sends the visitor straight to the identity provider when local
@@ -639,6 +641,9 @@ type siteRow struct {
 	// LockedText is the lock's date, for the line a locked site shows in
 	// place of its actions. Who placed it is not shown to the owner.
 	LockedText string
+	// Tags are the site's tags as chips, by group then name. They shadow
+	// SiteInfo.Tags (the stored spellings) in the template.
+	Tags []tagChip
 }
 
 // expiryText is the site row's lifetime line. A downgrade puts a 30-day grace
@@ -677,10 +682,21 @@ type dashView struct {
 	// CancelURL is the stack's cancellation page (§ 312k BGB): where a
 	// customer cancels a contract without signing in. Shown whenever the
 	// instance has one, so it is always there to be found.
-	CancelURL  string
-	Email      string
-	Tier       string
+	CancelURL string
+	Email     string
+	Tier      string
+	// Sites are the rows the tag filter lets through; SitesTotal counts every
+	// site of the account.
 	Sites      []siteRow
+	SitesTotal int
+	// Filter is the tag filter above the list, TagOptions the add form's
+	// datalist (every tag the account knows), Groups its group select, and
+	// Back the current filter as a query string ("" for All), which the tag
+	// forms carry so they come back to it.
+	Filter     tagFilterView
+	TagOptions []string
+	Groups     []account.TagGroup
+	Back       string
 	CSRF       string
 	Base       string
 	SelfSelect bool
@@ -712,7 +728,7 @@ type dashView struct {
 	MCPEndpoint string
 }
 
-func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, flash string) {
+func (p *provider) renderDashboard(w http.ResponseWriter, r *http.Request, acc *account.Account, flash string) {
 	p.securityHeaders(w)
 	token := p.csrf(acc)
 	// Sync first: this render is the first moment a PayGate tier change becomes
@@ -738,6 +754,7 @@ func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, 
 			rows = append(rows, row)
 		}
 	}
+	tags := p.applyTags(r, acc, rows)
 	current := p.effectiveTierFresh(acc)
 	tier := current.Label
 	if tier == "" {
@@ -777,7 +794,8 @@ func (p *provider) renderDashboard(w http.ResponseWriter, acc *account.Account, 
 	}
 	dashTmpl.Execute(w, dashView{
 		MCPEndpoint: p.host.BaseURL() + "/mcp",
-		Email:       acc.Email, Tier: tier, Sites: rows, CSRF: token, Base: p.baseURL(),
+		Email:       acc.Email, Tier: tier, Sites: tags.rows, SitesTotal: len(rows), CSRF: token, Base: p.baseURL(),
+		Filter: tags.filter, TagOptions: tags.options, Groups: tags.groups, Back: tags.back,
 		SelfSelect: p.cfg.SelfSelect, Checkout: checkout, Portal: portal, Tiers: opts,
 		AccountURL: accountURL, StackDeletion: p.stackDeletion(acc), DeletionURL: deletionURL, CancelURL: cancelURL,
 		IsAdmin:  p.isAdmin(acc),

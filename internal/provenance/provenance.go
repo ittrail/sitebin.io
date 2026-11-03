@@ -75,6 +75,7 @@ const (
 	ActionOpenUpload     = "open-upload"
 	ActionRename         = "rename"
 	ActionRotatePassword = "rotate-password"
+	ActionTags           = "tags" // a tag added or removed on the account dashboard
 
 	ActionSignup     = "signup"
 	ActionSignin     = "signin"

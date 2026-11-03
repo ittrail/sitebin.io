@@ -154,7 +154,8 @@ func TestDashboardShowsALockAndOffersNothingItRefuses(t *testing.T) {
 	p, host, mux := setupAccounts(t)
 	acc, cookie := localUser(t, p, "owner@example.com")
 	for _, id := range []string{siteA, siteC} {
-		host.sites.site(id)
+		// tagged, so that an unlocked site offers a chip's remove form
+		host.sites.infos[id] = ext.SiteInfo{ViewID: id, Mode: "webserver", Tags: []string{"kept"}}
 		p.accounts.LinkSite(acc, id)
 	}
 	host.sites.SetLock(siteC, &ext.SiteLock{At: time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC), Reason: "phishing", By: ext.LockByAdmin})
@@ -163,7 +164,7 @@ func TestDashboardShowsALockAndOffersNothingItRefuses(t *testing.T) {
 	if !strings.Contains(body, "Locked by the operator on 2026-09-28: phishing") {
 		t.Fatalf("the dashboard does not show the lock: %s", body)
 	}
-	for _, action := range []string{"/rotate", "/name", "/delete"} {
+	for _, action := range []string{"/rotate", "/name", "/delete", "/tags/add", "/tags/remove"} {
 		if strings.Contains(body, "/account/sites/"+siteC+action) {
 			t.Errorf("a locked site still offers %s", action)
 		}
@@ -176,13 +177,14 @@ func TestDashboardShowsALockAndOffersNothingItRefuses(t *testing.T) {
 	}
 
 	// A form rendered before the lock is answered with the lock.
-	for _, action := range []string{"/rotate", "/name", "/delete"} {
-		w := postAs(mux, "/account/sites/"+siteC+action, cookie, url.Values{"csrf": {p.csrf(acc)}, "name": {"clean"}})
+	for _, action := range []string{"/rotate", "/name", "/delete", "/tags/add", "/tags/remove"} {
+		w := postAs(mux, "/account/sites/"+siteC+action, cookie, url.Values{"csrf": {p.csrf(acc)}, "name": {"clean"}, "tag": {"kept"}})
 		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "locked by the operator") {
 			t.Errorf("%s on a locked site = %d %s", action, w.Code, w.Body)
 		}
 	}
-	if len(host.sites.rotated) != 0 || len(host.sites.deleted) != 0 || host.sites.infos[siteC].Name != "" {
+	if len(host.sites.rotated) != 0 || len(host.sites.deleted) != 0 || host.sites.infos[siteC].Name != "" ||
+		len(host.sites.infos[siteC].Tags) != 1 {
 		t.Error("the owner changed a locked site")
 	}
 	if ids, _ := p.accounts.ListSiteIDs(acc); len(ids) != 2 {

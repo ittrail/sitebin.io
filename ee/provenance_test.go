@@ -143,8 +143,8 @@ func TestAccountLogRecordsSignupSigninAndTokens(t *testing.T) {
 	}
 }
 
-// The dashboard's rename and password rotation go to the site's log; its
-// delete goes to the account's, since the site's own log goes with it.
+// The dashboard's rename, password rotation and tag changes go to the site's
+// log; its delete goes to the account's, since the site's own log goes with it.
 func TestDashboardWritesAreRecorded(t *testing.T) {
 	p, host, mux := setupProvAccounts(t)
 	cookie := signedUpUser(t, mux)
@@ -166,10 +166,18 @@ func TestDashboardWritesAreRecorded(t *testing.T) {
 	}
 	post("/account/sites/siteaaaaaaaaaaaaaaaaaaaaaa/name", url.Values{"name": {"Launch"}})
 	post("/account/sites/siteaaaaaaaaaaaaaaaaaaaaaa/rotate", url.Values{})
+	post("/account/sites/siteaaaaaaaaaaaaaaaaaaaaaa/tags/add", url.Values{"tag": {"Launch"}})
+	post("/account/sites/siteaaaaaaaaaaaaaaaaaaaaaa/tags/add", url.Values{"tag": {"launch"}}) // already there: nothing happened, nothing recorded
+	post("/account/sites/siteaaaaaaaaaaaaaaaaaaaaaa/tags/remove", url.Values{"tag": {"Launch"}})
 	logs, _ := host.sites.SiteProvenance("siteaaaaaaaaaaaaaaaaaaaaaa")
-	if len(logs) != 2 || logs[0].Action != provenance.ActionRename || logs[1].Action != provenance.ActionRotatePassword ||
+	if len(logs) != 4 || logs[0].Action != provenance.ActionRename || logs[1].Action != provenance.ActionRotatePassword ||
 		logs[0].Surface != provenance.SurfaceDashboard || logs[0].Account != acc.ID || logs[0].IP != "203.0.113.20" {
 		t.Fatalf("site log: %+v", logs)
+	}
+	for _, e := range logs[2:] {
+		if e.Action != provenance.ActionTags || e.Surface != provenance.SurfaceDashboard || e.Account != acc.ID || e.IP != "203.0.113.20" {
+			t.Errorf("tag change: %+v", e)
+		}
 	}
 
 	post("/account/sites/siteaaaaaaaaaaaaaaaaaaaaaa/delete", url.Values{})

@@ -39,6 +39,45 @@ const pageHead = `<!doctype html>
   .acct .sitecard details.rename[open] summary { color: var(--ink); }
   .acct .sitecard details.rename form { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
   .acct .sitecard details.rename input[type=text] { flex: 1; min-width: 180px; background: var(--bg-raise); color: var(--ink); border: 1px solid var(--line); border-radius: 9px; padding: 7px 11px; font: 14px var(--body); }
+  /* Tags. The palette is here and only here: data names a palette id, which
+     becomes a class (tag-blue ...), never a value in a style attribute. */
+  :root { --tag-blue: #5b8cff; --tag-green: #5ecf8a; --tag-amber: #f5b84d; --tag-red: #f26d6d; --tag-violet: #a98bff; --tag-teal: #3fc6c6; --tag-pink: #ff86c8; --tag-grey: #97a3b8; }
+  .acct .tag-blue { --c: var(--tag-blue); } .acct .tag-green { --c: var(--tag-green); } .acct .tag-amber { --c: var(--tag-amber); } .acct .tag-red { --c: var(--tag-red); }
+  .acct .tag-violet { --c: var(--tag-violet); } .acct .tag-teal { --c: var(--tag-teal); } .acct .tag-pink { --c: var(--tag-pink); } .acct .tag-grey { --c: var(--tag-grey); }
+  .acct .tdot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; background: var(--c, var(--tag-grey)); }
+  .acct .card > h3 .tagmanage { margin-left: auto; }
+  .acct .tagfilter { margin-bottom: 8px; }
+  .acct .tftop { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .acct a.tfchip { display: inline-flex; align-items: center; gap: 6px; font: 12px var(--body); color: var(--ink-dim); background: var(--bg-raise); border: 1px solid var(--line); border-radius: 20px; padding: 3px 10px; text-decoration: none; overflow-wrap: anywhere; }
+  .acct a.tfchip:hover { border-color: #334160; color: var(--ink); }
+  .acct a.tfchip small { font: 11px var(--mono); color: var(--ink-faint); }
+  .acct a.tfchip.meta { border-style: dashed; }
+  .acct a.tfchip.on { border-color: var(--amber); box-shadow: 0 0 0 1px var(--amber) inset; color: var(--ink); }
+  .acct .tfblocks { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+  .acct .tfblock { background: var(--bg-raise); border: 1px solid var(--line-soft); border-radius: 10px; padding: 9px 10px; min-width: 0; }
+  .acct .tfblock.part { border-color: rgba(245,184,77,.5); }
+  .acct .tfbh { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; font: 600 12px var(--body); color: var(--ink); text-transform: uppercase; letter-spacing: .04em; overflow-wrap: anywhere; }
+  .acct .tfbh a.tfall { margin-left: auto; flex: none; font: 500 11px var(--body); text-transform: none; letter-spacing: 0; color: var(--ink-dim); border: 1px solid var(--line); border-radius: 20px; padding: 1px 8px; text-decoration: none; }
+  .acct .tfbh a.tfall:hover { color: var(--ink); border-color: #334160; }
+  .acct .tfbh a.tfall.on { color: var(--bg); background: var(--amber); border-color: var(--amber); }
+  .acct .tfbt { display: flex; flex-wrap: wrap; gap: 5px; }
+  .acct .tfsum { margin: 12px 0 0; font: 12px var(--mono); color: var(--ink-dim); overflow-wrap: anywhere; }
+  .acct .sitecard .stags { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 6px; }
+  .acct .tchip { display: inline-flex; align-items: center; gap: 1px; margin: 0; padding: 1px 7px; border-radius: 6px; font: 11.5px var(--body); overflow-wrap: anywhere;
+    border: 1px solid var(--line); color: var(--ink);
+    border-color: color-mix(in srgb, var(--c, var(--tag-grey)) 50%, transparent);
+    background: color-mix(in srgb, var(--c, var(--tag-grey)) 14%, transparent);
+    color: color-mix(in srgb, var(--c, var(--tag-grey)) 65%, #fff); }
+  .acct form.tchip { padding-right: 1px; }
+  .acct .tchip button { border: 0; background: none; color: inherit; opacity: .55; cursor: pointer; font: 13px/1 var(--body); padding: 0 4px; border-radius: 4px; }
+  .acct .tchip button:hover, .acct .tchip button:focus-visible { opacity: 1; color: var(--danger); background: rgba(242,109,109,.12); }
+  .acct .sitecard details.addtag summary { display: inline-flex; cursor: pointer; list-style: none; font: 11.5px var(--body); color: var(--ink-dim); border: 1px dashed var(--line); border-radius: 6px; padding: 1px 7px; }
+  .acct .sitecard details.addtag summary::-webkit-details-marker { display: none; }
+  .acct .sitecard details.addtag summary:hover, .acct .sitecard details.addtag[open] summary { color: var(--ink); border-color: var(--amber); }
+  .acct .sitecard details.addtag[open] { flex-basis: 100%; }
+  .acct .sitecard details.addtag form { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+  .acct .sitecard details.addtag input[type=text] { flex: 1; min-width: 160px; background: var(--bg-raise); color: var(--ink); border: 1px solid var(--line); border-radius: 9px; padding: 7px 11px; font: 14px var(--body); }
+  .acct .sitecard details.addtag select { background: var(--bg-raise); color: var(--ink); border: 1px solid var(--line); border-radius: 9px; padding: 7px 9px; font: 14px var(--body); max-width: 100%; }
   .acct .authwrap { width: min(420px, 100%); margin: 10vh auto; }
   .acct .switch-link { text-align: center; margin-top: 14px; font-size: 14px; }
   .acct label.f { display:block; font-size: 13px; color: var(--ink-dim); margin: 12px 0 6px; }
@@ -166,9 +205,25 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
   {{end}}
 
   <div class="card">
-    <h3>Your sites <span class="count">{{len .Sites}}</span></h3>
-    {{if not .Sites}}<p class="muted">No sites yet. <a href="/">Publish one</a> — it will be owned by this account.</p>{{end}}
-    {{range .Sites}}
+    <h3>Your sites <span class="count">{{.SitesTotal}}</span><a class="btn small tagmanage" href="/account/tags">Manage tags</a></h3>
+    {{/* The tag filter: every chip and toggle is a link to the next filter
+         state, so it works without script. */}}
+    {{with .Filter}}{{if .Show}}
+    <nav class="tagfilter" aria-label="Filter by tag">
+      <div class="tftop"><a class="tfchip{{if .AllSelected}} on{{end}}" href="{{.AllHref}}">All <small>{{.All}}</small></a><a class="tfchip meta{{if .UntaggedSelected}} on{{end}}" href="{{.UntaggedHref}}">Untagged <small>{{.Untagged}}</small></a></div>
+      {{if .Blocks}}<div class="tfblocks">
+        {{range .Blocks}}<div class="tfblock{{if .Partial}} part{{end}}">
+          <div class="tfbh tag-{{.Color}}"><span class="tdot"></span>{{.Name}}{{if .WholeHref}}<a class="tfall{{if .Whole}} on{{end}}" href="{{.WholeHref}}" title="Any tag of this group">whole group</a>{{end}}</div>
+          <div class="tfbt">{{range .Chips}}<a class="tfchip tag-{{.Color}}{{if .Selected}} on{{end}}" href="{{.Href}}"><span class="tdot"></span>{{.Name}} <small>{{.Count}}</small></a>{{end}}</div>
+        </div>
+        {{end}}
+      </div>{{end}}
+      {{if .Summary}}<p class="tfsum">{{.Summary}} · <a href="{{.ClearHref}}">Clear filter</a></p>{{end}}
+    </nav>
+    {{end}}{{end}}
+    {{if not .SitesTotal}}<p class="muted">No sites yet. <a href="/">Publish one</a> — it will be owned by this account.</p>{{else if not .Sites}}<p class="muted">No site matches this filter. <a href="/account">Show all sites</a></p>{{end}}
+    {{if .Sites}}<datalist id="tagopts">{{range .TagOptions}}<option value="{{.}}">{{end}}</datalist>{{end}}
+    {{range .Sites}}{{$site := .}}
     <div class="sitecard">
       <div class="grow">
         {{if .Name}}<span class="sname">{{.Name}}</span>{{end}}
@@ -176,9 +231,23 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
         {{if .DomainLinks}}<div class="doms">{{range .DomainLinks}}{{if .Pending}}<span class="pend" title="Claimed, waiting for its DNS record">{{.Domain}} · pending DNS</span>{{else if .RedirectTo}}<span class="redir" title="Redirects to {{.RedirectTo}}"><a href="{{.URL}}" target="_blank" rel="noopener">{{.Domain}}</a> &rarr; {{.RedirectTo}}</span>{{else}}<a href="{{.URL}}" target="_blank" rel="noopener">{{.Domain}}</a>{{end}}{{end}}</div>{{end}}
         <div class="u">{{.Mode}} · {{.SizeText}} · {{.Files}} files · {{.ExpiryText}}</div>
         {{if .Locked}}
+        {{if .Tags}}<div class="stags">{{range .Tags}}<span class="tchip tag-{{.Color}}"><span class="tn">{{.Name}}</span></span>{{end}}</div>{{end}}
         <div class="locked">Locked by the operator on {{.LockedText}}{{if .Locked.Reason}}: {{.Locked.Reason}}{{end}}. It is not served, and it cannot be changed or deleted.</div>
       </div>
       {{else}}
+        <div class="stags">
+          {{range .Tags}}<form class="tchip tag-{{.Color}}" method="post" action="/account/sites/{{$site.ViewID}}/tags/remove"><span class="tn">{{.Name}}</span><input type="hidden" name="csrf" value="{{$site.CSRF}}"><input type="hidden" name="tag" value="{{.Name}}"><input type="hidden" name="back" value="{{$.Back}}"><button type="submit" title="Remove this tag" aria-label="Remove the tag {{.Name}}">&times;</button></form>{{end}}
+          <details class="addtag">
+            <summary>+ Tag</summary>
+            <form method="post" action="/account/sites/{{.ViewID}}/tags/add">
+              <input type="hidden" name="csrf" value="{{.CSRF}}">
+              <input type="hidden" name="back" value="{{$.Back}}">
+              <input type="text" name="tag" maxlength="30" required list="tagopts" autocomplete="off" placeholder="New or existing tag" aria-label="Tag for {{.ViewID}}">
+              {{if $.Groups}}<select name="group" aria-label="Group, for a new tag" title="Used only when the tag is new"><option value="">No group</option>{{range $.Groups}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select>{{end}}
+              <button class="btn small primary" type="submit">Add</button>
+            </form>
+          </details>
+        </div>
         <details class="rename">
           <summary>&#9998; {{if .Name}}Rename{{else}}Add a name{{end}}</summary>
           <form method="post" action="/account/sites/{{.ViewID}}/name">
