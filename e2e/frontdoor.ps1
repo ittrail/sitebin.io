@@ -3,11 +3,16 @@
 #   powershell -File e2e\frontdoor.ps1 [-Image sitebin:dev-ee] [-Port 8089]
 #
 # Verifies: GET / leaves for the home URL when signed out and for the dashboard
-# when signed in; /account/status answers signed_in true|false and speaks CORS
-# only to a session origin (browser-shaped creates carry Sec-Fetch-Site, as a
-# browser sends it); a create from the session origin with the
-# X-Sitebin-Session header and the cookie is owned, without the header or from
-# another embed origin it is not; the preflight allows the session header.
+# when signed in, and no cache may keep either answer; /account/status answers
+# signed_in true|false and speaks CORS only to a session origin; a create from
+# the session origin with the X-Sitebin-Session header and the cookie is
+# owned, without the header or from another embed origin it is not; a
+# signed-out drop from the session origin without Sec-Fetch-Site (Safari
+# before 16.4) is an anonymous drop; the preflight allows the session header.
+# The browser-shaped creates send Sec-Fetch-Site: same-site, which is what a
+# browser sends here: the door, the other embed origin and the instance are
+# all on localtest.me (one registrable domain, same scheme; the port does not
+# count).
 param(
     [string]$Image = "sitebin:dev-ee",
     [int]$Port = 8089
@@ -62,6 +67,7 @@ if (-not $up) { docker logs $name; docker rm -f $name | Out-Null; docker volume 
 $r = Req "GET" "$origin/"
 Assert "signed out: GET / is 302 (got $($r.code))" ($r.code -eq 302) "got $($r.code)"
 Assert "signed out: GET / goes to the home URL" ($r.headers -match "(?im)^Location:\s*$([regex]::Escape($door))/?\s*$") "$($r.headers)"
+Assert "signed out: GET / is no-store" ($r.headers -match "(?im)^Cache-Control:\s*no-store\s*$") "$($r.headers)"
 
 # sign up, keep the cookie
 $jar = Join-Path $work "door-cookies.txt"
@@ -73,6 +79,7 @@ Assert "signup succeeds (303)" ($r.code -eq 303) "got $($r.code): $($r.body)"
 $r = Req "GET" "$origin/" @("-b", $jar)
 Assert "signed in: GET / is 303" ($r.code -eq 303) "got $($r.code)"
 Assert "signed in: GET / goes to /account" ($r.headers -match "(?im)^Location:\s*/account\s*$") "$($r.headers)"
+Assert "signed in: GET / is no-store" ($r.headers -match "(?im)^Cache-Control:\s*no-store\s*$") "$($r.headers)"
 
 # the status call
 $r = Req "GET" "$origin/account/status" @("-b", $jar)
@@ -93,13 +100,22 @@ $r = Req "POST" "$origin/api/sites" @("-b", $jar, "-H", "Origin: $door", "-H", "
 Assert "create from the session origin with the header (201)" ($r.code -eq 201) "got $($r.code): $($r.body)"
 Assert "... is owned" ($r.body -match '"owned"\s*:\s*true') "$($r.body)"
 
-$r = Req "POST" "$origin/api/sites" @("-b", $jar, "-H", "Origin: $door", "-H", "Sec-Fetch-Site: cross-site", "-F", "files=@$idx;filename=index.html")
+$r = Req "POST" "$origin/api/sites" @("-b", $jar, "-H", "Origin: $door", "-H", "Sec-Fetch-Site: same-site", "-F", "files=@$idx;filename=index.html")
 Assert "create from the session origin without the header (201)" ($r.code -eq 201) "got $($r.code): $($r.body)"
 Assert "... is not owned" ($r.body -match '"owned"\s*:\s*false') "$($r.body)"
 
-$r = Req "POST" "$origin/api/sites" @("-b", $jar, "-H", "Origin: $other", "-H", "Sec-Fetch-Site: cross-site", "-H", "X-Sitebin-Session: 1", "-F", "files=@$idx;filename=index.html")
+$r = Req "POST" "$origin/api/sites" @("-b", $jar, "-H", "Origin: $other", "-H", "Sec-Fetch-Site: same-site", "-H", "X-Sitebin-Session: 1", "-F", "files=@$idx;filename=index.html")
 Assert "create from another embed origin with the header (201)" ($r.code -eq 201) "got $($r.code): $($r.body)"
 Assert "... is not owned" ($r.body -match '"owned"\s*:\s*false') "$($r.body)"
+
+# Safari before 16.4: Origin, no Sec-Fetch-Site. Signed out, a drop from the
+# session origin is still an anonymous drop from a browser; from another embed
+# origin it is refused like a script.
+$r = Req "POST" "$origin/api/sites" @("-H", "Origin: $door", "-H", "X-Sitebin-Session: 1", "-F", "files=@$idx;filename=index.html")
+Assert "signed-out drop from the session origin without fetch metadata (201)" ($r.code -eq 201) "got $($r.code): $($r.body)"
+Assert "... is not owned" ($r.body -match '"owned"\s*:\s*false') "$($r.body)"
+$r = Req "POST" "$origin/api/sites" @("-H", "Origin: $other", "-F", "files=@$idx;filename=index.html")
+Assert "drop from another embed origin without fetch metadata is refused (401)" ($r.code -eq 401) "got $($r.code): $($r.body)"
 
 # preflight
 $r = Req "OPTIONS" "$origin/api/sites" @("-H", "Origin: $door", "-H", "Access-Control-Request-Method: POST", "-H", "Access-Control-Request-Headers: x-sitebin-session")
