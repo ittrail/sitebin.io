@@ -171,6 +171,35 @@ func TestCreateSameSiteWithCookieIsAnonymous(t *testing.T) {
 	}
 }
 
+// Safari before 16.4 sends Origin but no Sec-Fetch-Site. A signed-out
+// visitor's drop on the front door is still an anonymous drop from a browser,
+// not a script; a plain embed origin keeps needing the fetch metadata. The
+// session itself still needs the session header: the cookie rule does not
+// move.
+func TestCreateFromSessionOriginWithoutFetchMetadata(t *testing.T) {
+	t.Run("signed out", func(t *testing.T) {
+		e, _ := frontDoorEnv(t)
+		created(t, e, dropFrom(t, e, frontDoorOrigin, "", true, ""), "")
+	})
+	t.Run("signed in", func(t *testing.T) {
+		e, _ := frontDoorEnv(t)
+		created(t, e, dropFrom(t, e, frontDoorOrigin, "", true, "owner-cookie"), "acct-1")
+	})
+	t.Run("cookie without the session header", func(t *testing.T) {
+		e, p := frontDoorEnv(t)
+		created(t, e, dropFrom(t, e, frontDoorOrigin, "", false, "owner-cookie"), "")
+		if len(p.created) != 0 {
+			t.Errorf("OnSiteCreated = %v, want nothing linked", p.created)
+		}
+	})
+	t.Run("plain embed origin is still refused", func(t *testing.T) {
+		e, _ := frontDoorEnv(t)
+		if w := dropFrom(t, e, plainEmbedOrigin, "", false, ""); w.Code != 401 {
+			t.Fatalf("create = %d %s, want 401", w.Code, w.Body)
+		}
+	})
+}
+
 func TestCreateSameOriginStillOwned(t *testing.T) {
 	// The landing page's own fetch: no session marker, the cookie counts.
 	for _, c := range []struct{ name, origin string }{

@@ -57,6 +57,13 @@ func (a *API) fromOwnBrowser(r *http.Request) bool {
 	if a.originIsOwnHost(origin) {
 		return true
 	}
+	// The same holds for the operator's own front door (a session origin):
+	// a signed-out visitor on Safari < 16.4 drops from there with Origin and
+	// no Sec-Fetch-Site. Only this heuristic moves; whether the session
+	// counts stays sessionOriginRequest's question.
+	if a.isSessionOrigin(origin) {
+		return true
+	}
 	if r.Header.Get("Sec-Fetch-Site") == "" {
 		return false
 	}
