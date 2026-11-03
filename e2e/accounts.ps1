@@ -4,7 +4,9 @@
 #
 # Verifies: community-open behavior is gated off, anonymous create is blocked,
 # signup/login set a session, logged-in create is owned, the dashboard lists
-# owned sites, edit-password reset works, and account deletion cascades.
+# owned sites, edit-password reset works, and account deletion cascades; a tag
+# is added on the site list, filters it, and is renamed across two sites on the
+# manage page.
 param(
     [string]$Image = "sitebin:dev-ee",
     [int]$Port = 8087
@@ -136,6 +138,24 @@ if ($site) {
     Assert "the tag filter leaves the other site out" ($null -ne $site2 -and -not $r.body.Contains($site2.id))
     $r = Req "GET" "$origin/account/tags" @("-b", $jar)
     Assert "the tags page is served (200)" ($r.code -eq 200) "got $($r.code)"
+
+    # an account-wide rename through the manage page renames the tag on every
+    # site that carries it, and the old tag is gone
+    if ($site2) {
+        $r = Req "POST" "$origin/account/sites/$($site2.id)/tags/add" @("-b", $jar, "--data-urlencode", "csrf=$csrf", "--data-urlencode", "tag=Mockup", "--data-urlencode", "group=", "--data-urlencode", "back=")
+        Assert "the second site gets the same tag (303)" ($r.code -eq 303) "got $($r.code): $($r.body)"
+        $r = Req "POST" "$origin/account/tags/tag" @("-b", $jar, "--data-urlencode", "csrf=$csrf", "--data-urlencode", "tag=mockup", "--data-urlencode", "op=rename", "--data-urlencode", "value=Entwurf")
+        Assert "the manage page renames the tag across sites (303)" ($r.code -eq 303 -and $r.headers -match "Location: /account/tags\?flash=renamed") "got $($r.code): $($r.headers) $($r.body)"
+        $r = Req "GET" "$origin/account?t=entwurf" @("-b", $jar)
+        Assert "the new tag's filter lists both sites" ($r.code -eq 200 -and $r.body.Contains($site.id) -and $r.body.Contains($site2.id) -and $r.body.Contains("2 of 2")) "got $($r.code)"
+        Assert "the old tag is gone from the site list" ($r.body -notmatch '<span class="tn">mockup</span>' -and $r.body -notmatch '<option value="mockup">' -and $r.body -match '<span class="tn">Entwurf</span>')
+        foreach ($s in @(@{ s = $site; n = "first" }, @{ s = $site2; n = "second" })) {
+            $e = ($s.s.edit_url -split "/e/")[1]
+            $r = Req "GET" "$origin/api/sites/$e" @("-H", "X-Edit-Password: $($s.s.edit_password)")
+            $tags = $null; if ($r.code -eq 200) { $tags = ($r.body | ConvertFrom-Json).tags }
+            Assert "the $($s.n) site carries only the new tag" ((@($tags) -join ",") -eq "Entwurf") "got $($r.code): $($r.body)"
+        }
+    }
 }
 
 # duplicate email rejected
