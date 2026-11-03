@@ -26,6 +26,9 @@ const (
 	MaxTreeEntries = 5000
 	// ReadTimeout bounds every read command.
 	ReadTimeout = 15 * time.Second
+	// StreamTimeout bounds a file or ZIP download, which a slow client may
+	// take minutes to receive.
+	StreamTimeout = 10 * time.Minute
 
 	// binarySniff is how much of a file git itself looks at for a NUL.
 	binarySniff = 8000
@@ -162,7 +165,7 @@ func (r *Runner) run(ctx context.Context, dir string, max int, args ...string) (
 
 // stream runs git with its stdout going straight to w.
 func (r *Runner) stream(ctx context.Context, dir string, w io.Writer, args ...string) error {
-	ctx, cancel := context.WithTimeout(ctx, ReadTimeout)
+	ctx, cancel := context.WithTimeout(ctx, StreamTimeout)
 	defer cancel()
 	release, err := r.acquire(ctx)
 	if err != nil {
@@ -233,7 +236,24 @@ func (r *Runner) Resolve(ctx context.Context, dir, ref string) (string, error) {
 	if ref == "" || strings.HasPrefix(ref, "-") || strings.ContainsAny(ref, "\x00\n") {
 		return "", ErrBadRef
 	}
-	for _, name := range []string{"refs/heads/" + ref, "refs/tags/" + ref, ref} {
+	// Only a plain ref name or a hex object name is accepted: git would
+	// otherwise read "main@{0}", "main~1", ":/text" and the like as revision
+	// expressions, in any of the three spellings.
+	valid, err := r.validRefName(ctx, dir, "refs/heads/"+ref)
+	if err != nil {
+		return "", err
+	}
+	candidates := []string{}
+	if valid {
+		candidates = append(candidates, "refs/heads/"+ref, "refs/tags/"+ref)
+		if strings.HasPrefix(ref, "refs/") {
+			candidates = append(candidates, ref)
+		}
+	}
+	if isHex(ref) && len(ref) >= 4 && len(ref) <= 64 {
+		candidates = append(candidates, ref)
+	}
+	for _, name := range candidates {
 		out, _, err := r.run(ctx, dir, 4096, "rev-parse", "--verify", "--quiet", "--end-of-options", name+"^{commit}")
 		if err != nil {
 			if exitFailure(errors.Unwrap(err)) {
@@ -249,13 +269,35 @@ func (r *Runner) Resolve(ctx context.Context, dir, ref string) (string, error) {
 	return "", ErrBadRef
 }
 
+func isHex(s string) bool {
+	for _, c := range s {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// validRefName asks git whether name (which starts with "refs/") is a
+// well-formed full ref name.
+func (r *Runner) validRefName(ctx context.Context, dir, name string) (bool, error) {
+	_, _, err := r.run(ctx, dir, 4096, "check-ref-format", name)
+	if err == nil {
+		return true, nil
+	}
+	if exitFailure(errors.Unwrap(err)) {
+		return false, nil
+	}
+	return false, err
+}
+
 // DefaultBranch is the short name HEAD points at, even when it is unborn.
 func (r *Runner) DefaultBranch(ctx context.Context, dir string) (string, error) {
-	out, _, err := r.run(ctx, dir, 4096, "symbolic-ref", "--short", "HEAD")
+	out, _, err := r.run(ctx, dir, 4096, "symbolic-ref", "HEAD")
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(out)), nil
+	return strings.TrimPrefix(strings.TrimSpace(string(out)), "refs/heads/"), nil
 }
 
 func parseTime(s string) time.Time {
@@ -477,7 +519,7 @@ func (r *Runner) Blob(ctx context.Context, dir, sha, path string) (Blob, error) 
 	if err != nil {
 		return Blob{}, err
 	}
-	if strings.HasSuffix(obj, ":") {
+	if obj == sha+":" {
 		return Blob{}, ErrNotFound
 	}
 	size, err := r.blobSize(ctx, dir, obj)
@@ -520,7 +562,7 @@ func (r *Runner) WriteBlob(ctx context.Context, dir, sha, path string, w io.Writ
 	if err != nil {
 		return err
 	}
-	if strings.HasSuffix(obj, ":") {
+	if obj == sha+":" {
 		return ErrNotFound
 	}
 	if _, err := r.blobSize(ctx, dir, obj); err != nil {

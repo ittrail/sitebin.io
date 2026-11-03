@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // importer builds fixture history with git fast-import, so file names that a
@@ -86,6 +87,7 @@ func TestRefsListsBranchesAndTagsWithDefault(t *testing.T) {
 	main := head(t, c, dir, "refs/heads/main")
 	c.mustGit(dir, "tag", "light", main)
 	c.mustGit(dir, "tag", "-a", "-m", "annotated", "ann", main)
+	c.mustGit(dir, "tag", "main", main) // a tag named like the default branch
 	refs, err := r.Refs(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
@@ -94,8 +96,11 @@ func TestRefsListsBranchesAndTagsWithDefault(t *testing.T) {
 	for _, x := range refs {
 		got[x.Kind+":"+x.Name] = x
 	}
-	if len(got) != 4 {
+	if len(got) != 5 {
 		t.Fatalf("refs = %+v", refs)
+	}
+	if b, err := r.DefaultBranch(t.Context(), dir); err != nil || b != "main" {
+		t.Fatalf("DefaultBranch with a tag named main = %q, %v", b, err)
 	}
 	m := got["branch:main"]
 	if !m.Default || m.Commit.SHA != main || m.Commit.Subject != "first" || m.Commit.Author != "T" || m.Commit.Date.IsZero() {
@@ -204,7 +209,7 @@ func TestOddNamesAndRefs(t *testing.T) {
 	// Plumbing: fast-import refuses a newline in a name, and a Windows
 	// filesystem cannot hold one.
 	subTree := plumb(t, c, dir, blobEntry(t, c, dir, "in side.txt", "deep"), "mktree", "-z")
-	tree := plumb(t, c, dir, blobEntry(t, c, dir, odd, "odd content")+blobEntry(t, c, dir, "ümlaut.md", "umlaut")+"040000 tree "+subTree+"\tdir\x00", "mktree", "-z")
+	tree := plumb(t, c, dir, blobEntry(t, c, dir, odd, "odd content")+blobEntry(t, c, dir, "ümlaut.md", "umlaut")+blobEntry(t, c, dir, "x:", "colon")+"040000 tree "+subTree+"\tdir\x00", "mktree", "-z")
 	commitA := plumb(t, c, dir, "", "commit-tree", tree, "-m", "odd")
 	c.mustGit(dir, "update-ref", "refs/heads/main", commitA)
 	im := &importer{}
@@ -220,10 +225,10 @@ func TestOddNamesAndRefs(t *testing.T) {
 	for _, e := range tr.Entries {
 		names[e.Name] = e
 	}
-	if names[odd].Type != "file" || names["ümlaut.md"].Type != "file" || names["dir"].Type != "dir" || len(names) != 3 {
+	if names[odd].Type != "file" || names["ümlaut.md"].Type != "file" || names["dir"].Type != "dir" || len(names) != 4 {
 		t.Fatalf("entries = %+v", tr.Entries)
 	}
-	for name, want := range map[string]string{odd: "odd content", "ümlaut.md": "umlaut", "dir/in side.txt": "deep"} {
+	for name, want := range map[string]string{"x:": "colon", odd: "odd content", "ümlaut.md": "umlaut", "dir/in side.txt": "deep"} {
 		b, err := r.Blob(ctx, dir, sha, name)
 		if err != nil || b.Text != want || b.Binary || b.Size != int64(len(want)) {
 			t.Fatalf("Blob(%q) = %+v, %v", name, b, err)
@@ -272,9 +277,22 @@ func TestOddNamesAndRefs(t *testing.T) {
 
 func TestResolveRefusesOptions(t *testing.T) {
 	r, dir := newBare(t)
-	for _, ref := range []string{"--upload-pack=x", "-x", "a\x00b", "main\nx", ""} {
+	c := newClient(t)
+	im := &importer{}
+	im.commit("refs/heads/main", "one", map[string]string{"a": "1"})
+	im.commit("refs/heads/main", "two", map[string]string{"a": "2"})
+	im.run(t, c, dir)
+	tip := head(t, c, dir, "refs/heads/main")
+	c.mustGit(dir, "tag", "v1", tip)
+	for _, ref := range []string{"--upload-pack=x", "-x", "a\x00b", "main\nx", "",
+		":/x", ":/two", "main@{0}", "main~1", "main^", "HEAD", "refs/heads/main~1", "v1^{tree}", "main:a", "refs/../x"} {
 		if _, err := r.Resolve(t.Context(), dir, ref); !errors.Is(err, ErrBadRef) {
 			t.Errorf("Resolve(%q) = %v, want ErrBadRef", ref, err)
+		}
+	}
+	for _, ref := range []string{"main", "v1", "refs/tags/v1", "refs/heads/main", tip[:7], strings.ToUpper(tip[:12]), tip} {
+		if got, err := r.Resolve(t.Context(), dir, ref); err != nil || got != tip {
+			t.Errorf("Resolve(%q) = %q, %v; want %s", ref, got, err, tip)
 		}
 	}
 	// A sha argument that is not a hex object name never reaches git.
@@ -372,4 +390,10 @@ func plumb(t *testing.T, c *client, dir, stdin string, args ...string) string {
 func blobEntry(t *testing.T, c *client, dir, name, content string) string {
 	sha := plumb(t, c, dir, content, "hash-object", "-w", "--stdin")
 	return "100644 blob " + sha + "\t" + name + "\x00"
+}
+
+func TestStreamingOutlivesQueries(t *testing.T) {
+	if StreamTimeout != 10*time.Minute || StreamTimeout <= ReadTimeout {
+		t.Fatalf("StreamTimeout = %v, ReadTimeout = %v", StreamTimeout, ReadTimeout)
+	}
 }
