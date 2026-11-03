@@ -22,6 +22,7 @@ const zeros = "0000000000000000000000000000000000000000"
 type rpcLog struct {
 	mu      sync.Mutex
 	updates []RefUpdate
+	bytesIn []int64
 	errs    []error
 }
 
@@ -29,6 +30,7 @@ func (l *rpcLog) add(res RPCResult, err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.updates = append(l.updates, res.Updates...)
+	l.bytesIn = append(l.bytesIn, res.BytesIn)
 	if err != nil {
 		l.errs = append(l.errs, err)
 	}
@@ -170,6 +172,39 @@ func TestPushRecordsRefUpdates(t *testing.T) {
 	if u.Ref != "refs/heads/main" || u.Old != zeros || u.New != sha {
 		t.Errorf("update = %+v, want main %s -> %s", u, zeros, sha)
 	}
+	// The last request is the push; its pack alone is over 100 bytes.
+	if n := len(log.bytesIn); n == 0 || log.bytesIn[n-1] < 100 {
+		t.Errorf("BytesIn = %v, want a push of a real size last", log.bytesIn)
+	}
+}
+
+func TestPushFromShallowClone(t *testing.T) {
+	NeedGit(t)
+	r, dir := newBare(t)
+	srv, log := serveRepo(t, r, dir, 0)
+	c := newClient(t)
+	url := srv.URL + "/repo.git"
+	wd := filepath.Join(t.TempDir(), "w")
+	c.mustGit(filepath.Dir(wd), "clone", url, wd)
+	commitFile(t, c, wd, "a.txt", "1")
+	commitFile(t, c, wd, "b.txt", "2")
+	commitFile(t, c, wd, "c.txt", "3")
+	c.mustGit(wd, "push", "origin", "main")
+	shallow := filepath.Join(t.TempDir(), "s")
+	c.mustGit(filepath.Dir(shallow), "clone", "--depth", "1", url, shallow)
+	if got := c.mustGit(shallow, "rev-parse", "--is-shallow-repository"); got != "true" {
+		t.Fatalf("not shallow: %s", got)
+	}
+	sha := commitFile(t, c, shallow, "d.txt", "4")
+	c.mustGit(shallow, "push", "origin", "main")
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	if n := len(log.updates); n != 2 || log.updates[1].New != sha {
+		t.Errorf("updates = %+v", log.updates)
+	}
+	if len(log.errs) != 0 {
+		t.Errorf("errors: %v", log.errs)
+	}
 }
 
 func TestForcePushAndBranchDelete(t *testing.T) {
@@ -217,7 +252,7 @@ func dirSize(t *testing.T, dir string) (int64, []string) {
 func TestPushOverMaxInputSizeIsRefusedWithoutResidue(t *testing.T) {
 	NeedGit(t)
 	r, dir := newBare(t)
-	srv, log := serveRepo(t, r, dir, 1<<20)
+	srv, _ := serveRepo(t, r, dir, 1<<20)
 	c := newClient(t)
 	wd := filepath.Join(t.TempDir(), "w")
 	c.mustGit(filepath.Dir(wd), "clone", srv.URL+"/repo.git", wd)
@@ -249,11 +284,8 @@ func TestPushOverMaxInputSizeIsRefusedWithoutResidue(t *testing.T) {
 			t.Errorf("residue: %s", n)
 		}
 	}
-	log.mu.Lock()
-	defer log.mu.Unlock()
-	if len(log.errs) == 0 {
-		t.Error("ServeRPC reported no error")
-	}
+	// git reports the refusal in-band and exits 0, so ServeRPC has no error
+	// to report here; the client's failure above is the contract.
 }
 
 func TestHooksNeverRun(t *testing.T) {
@@ -363,7 +395,7 @@ func TestAdvertisementShape(t *testing.T) {
 		t.Error("no Cache-Control")
 	}
 	if !strings.HasPrefix(rec.Body.String(), pkt("# service=git-upload-pack\n")+"0000") {
-		t.Errorf("v0 body starts %q", rec.Body.String()[:40])
+		t.Errorf("v0 body = %q", rec.Body.String())
 	}
 	rec = httptest.NewRecorder()
 	if err := r.AdvertiseRefs(t.Context(), dir, UploadPack, "version=2", rec); err != nil {

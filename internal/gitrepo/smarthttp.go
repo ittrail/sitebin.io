@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"time"
 )
 
 // Service is a smart HTTP service name.
@@ -89,14 +92,16 @@ func (c *capWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// countReader counts bytes read; atomic because git's stdin copier may still
+// be reading after Run gave up waiting for it.
 type countReader struct {
 	r io.Reader
-	n int64
+	n atomic.Int64
 }
 
 func (c *countReader) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
-	c.n += int64(n)
+	c.n.Add(int64(n))
 	return n, err
 }
 
@@ -122,6 +127,7 @@ func (r *Runner) AdvertiseRefs(ctx context.Context, dir string, svc Service, pro
 		}
 	}
 	cmd := r.commandWith(ctx, dir, nil, protoEnv(protocol), svc.sub(), "--stateless-rpc", "--advertise-refs", ".")
+	guardProcess(cmd)
 	errBuf := &capWriter{max: maxStderr}
 	cmd.Stdout, cmd.Stderr = fw, errBuf
 	if err := cmd.Run(); err != nil {
@@ -143,7 +149,21 @@ type RPCOptions struct {
 // RPCResult reports what a request did.
 type RPCResult struct {
 	Updates []RefUpdate
-	BytesIn int64 // request body bytes as received (before gunzip)
+	// BytesIn counts request body bytes as received on the wire, that is
+	// before gzip decoding.
+	BytesIn int64
+}
+
+// processWait bounds how long Run waits for git's pipes after git has exited
+// or been cancelled. Without it a client that stalls on the request body
+// would hold a process slot until the server's read timeout.
+const processWait = 3 * time.Second
+
+// guardProcess makes cmd end promptly: the whole process group dies on
+// cancel (where supported) and Run stops waiting for I/O after processWait.
+func guardProcess(cmd *exec.Cmd) {
+	ownProcessGroup(cmd)
+	cmd.WaitDelay = processWait
 }
 
 // ServeRPC answers POST <svc>: body is the request, git's answer streams to w.
@@ -157,6 +177,12 @@ func (r *Runner) ServeRPC(ctx context.Context, dir string, svc Service, body io.
 		return res, err
 	}
 	defer release()
+
+	// On HTTP/1.x the request body may become unreadable once the response
+	// starts, and we stream git's output while still feeding its stdin. The
+	// error is ignored: HTTP/2 is full duplex already and test recorders do
+	// not implement it.
+	_ = http.NewResponseController(w).EnableFullDuplex()
 
 	cr := &countReader{r: body}
 	var in io.Reader = cr
@@ -177,19 +203,24 @@ func (r *Runner) ServeRPC(ctx context.Context, dir string, svc Service, body io.
 		for {
 			p, flush, err := readPkt(in, &raw)
 			if err != nil {
-				res.BytesIn = cr.n
+				res.BytesIn = cr.n.Load()
 				return res, fmt.Errorf("gitrepo: push commands: %w", err)
 			}
 			if flush {
 				break
 			}
 			if raw.Len() > maxCommandBytes {
-				res.BytesIn = cr.n
+				res.BytesIn = cr.n.Load()
 				return res, errors.New("gitrepo: push commands too long")
+			}
+			if bytes.HasPrefix(p, []byte("shallow ")) {
+				// A push from a shallow clone lists its shallow boundary
+				// first; git still gets the line, it is no ref update.
+				continue
 			}
 			u, err := parseCommand(p)
 			if err != nil {
-				res.BytesIn = cr.n
+				res.BytesIn = cr.n.Load()
 				return res, err
 			}
 			res.Updates = append(res.Updates, u)
@@ -203,11 +234,27 @@ func (r *Runner) ServeRPC(ctx context.Context, dir string, svc Service, body io.
 	w.Header().Set("Content-Type", "application/x-"+string(svc)+"-result")
 	w.Header().Set("Cache-Control", "no-cache")
 	cmd := r.commandWith(ctx, dir, extraC, protoEnv(o.Protocol), svc.sub(), "--stateless-rpc", ".")
+	guardProcess(cmd)
 	errBuf := &capWriter{max: maxStderr}
-	cmd.Stdin = in
 	cmd.Stdout, cmd.Stderr = newFlushWriter(w), errBuf
-	runErr := cmd.Run()
-	res.BytesIn = cr.n
+	// Feed stdin ourselves instead of through cmd.Stdin: exec's own copier
+	// cannot be interrupted while it blocks on the client's request body, so
+	// a git that exits early (refusal, bad pack, size limit) would keep this
+	// call, and its process slot, until the server's read timeout. Our copier
+	// is simply abandoned when git is gone; it ends when the body does.
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return res, fmt.Errorf("gitrepo: %s: %w", svc, err)
+	}
+	if err := cmd.Start(); err != nil {
+		return res, fmt.Errorf("gitrepo: %s: %w", svc, err)
+	}
+	go func() {
+		_, _ = io.Copy(stdin, in)
+		_ = stdin.Close()
+	}()
+	runErr := cmd.Wait()
+	res.BytesIn = cr.n.Load()
 	if runErr != nil {
 		return res, fmt.Errorf("gitrepo: %s: %w: %s", svc, runErr, strings.TrimSpace(errBuf.buf.String()))
 	}
