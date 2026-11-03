@@ -158,7 +158,7 @@ func buildTagsPage(reg account.TagRegistry, sites []ext.SiteInfo) tagsPageView {
 			keys = append(keys, k)
 		}
 	}
-	sort.Strings(keys)
+	sortKeysByName(keys, func(k string) string { return tagName(reg, inUse, k) })
 
 	byGroup := map[string][]manageTag{}
 	for _, k := range keys {

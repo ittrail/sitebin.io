@@ -5,6 +5,7 @@ package ee
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 
@@ -167,15 +168,19 @@ func (s tagSelection) facets(reg account.TagRegistry) []facet {
 	for _, f := range byGroup {
 		out = append(out, *f)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		a, b := store.TagKey(out[i].label), store.TagKey(out[j].label)
-		if a != b {
-			return a < b
+	// By label as the pages order names (compareTagNames); a group's id, or
+	// an ungrouped tag's key, settles a tie.
+	slices.SortFunc(out, func(a, b facet) int {
+		if c := compareTagNames(a.label, b.label); c != 0 {
+			return c
 		}
-		return out[i].group < out[j].group
+		return strings.Compare(a.group, b.group)
 	})
-	sort.Slice(ungrouped, func(i, j int) bool {
-		return store.TagKey(ungrouped[i].label) < store.TagKey(ungrouped[j].label)
+	slices.SortFunc(ungrouped, func(a, b facet) int {
+		if c := compareTagNames(a.label, b.label); c != 0 {
+			return c
+		}
+		return strings.Compare(a.keys[0], b.keys[0])
 	})
 	return append(out, ungrouped...)
 }
@@ -244,7 +249,7 @@ func (s tagSelection) Summary(reg account.TagRegistry, matched, total int) strin
 			for i, k := range f.keys {
 				names[i] = s.display(reg, k)
 			}
-			sort.Slice(names, func(i, j int) bool { return store.TagKey(names[i]) < store.TagKey(names[j]) })
+			slices.SortFunc(names, compareTagNames)
 			parts = append(parts, "("+strings.Join(names, " or ")+")")
 		}
 	}

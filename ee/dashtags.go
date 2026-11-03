@@ -6,7 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/ittrail/sitebin.io/ee/account"
@@ -120,38 +120,49 @@ func tagName(reg account.TagRegistry, inUse map[string]string, key string) strin
 	return key
 }
 
+// compareGroups orders groups by name (compareTagNames), then by id.
+func compareGroups(a, b account.TagGroup) int {
+	if c := compareTagNames(a.Name, b.Name); c != 0 {
+		return c
+	}
+	return strings.Compare(a.ID, b.ID)
+}
+
 // sortedGroups is the registry's groups by name.
 func sortedGroups(reg account.TagRegistry) []account.TagGroup {
 	gs := append([]account.TagGroup(nil), reg.Groups...)
-	sort.SliceStable(gs, func(i, j int) bool { return store.TagKey(gs[i].Name) < store.TagKey(gs[j].Name) })
+	slices.SortStableFunc(gs, compareGroups)
 	return gs
 }
 
-// siteChips orders a site's tags by group (alphabetically, ungrouped last),
-// then by name, keeping the site's own spelling.
+// siteChips orders a site's tags by group (by name, ungrouped last), then by
+// name, keeping the site's own spelling.
 func siteChips(tags []string, reg account.TagRegistry) []tagChip {
 	type sortable struct {
 		tagChip
-		group string // the group's name key; "" for ungrouped
+		group   account.TagGroup
+		grouped bool
 	}
 	out := make([]sortable, 0, len(tags))
 	for _, t := range tags {
 		k := store.TagKey(t)
 		s := sortable{tagChip: tagChip{Name: t, Key: k, Color: paletteID(reg.ColorOf(k))}}
-		if g, ok := reg.GroupOf(k); ok {
-			s.group = store.TagKey(g.Name)
-		}
+		s.group, s.grouped = reg.GroupOf(k)
 		out = append(out, s)
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		a, b := out[i], out[j]
-		if (a.group == "") != (b.group == "") {
-			return b.group == ""
+	slices.SortStableFunc(out, func(a, b sortable) int {
+		if a.grouped != b.grouped {
+			if a.grouped {
+				return -1
+			}
+			return 1
 		}
-		if a.group != b.group {
-			return a.group < b.group
+		if a.grouped {
+			if c := compareGroups(a.group, b.group); c != 0 {
+				return c
+			}
 		}
-		return a.Key < b.Key
+		return compareTagNames(a.Name, b.Name)
 	})
 	chips := make([]tagChip, len(out))
 	for i, s := range out {
@@ -161,7 +172,7 @@ func siteChips(tags []string, reg account.TagRegistry) []tagChip {
 }
 
 // tagOptions is the datalist: every tag the account knows, by registry or by
-// use, once, in key order.
+// use, once, by name.
 func tagOptions(reg account.TagRegistry, inUse map[string]string) []string {
 	keys := make([]string, 0, len(reg.Tags)+len(inUse))
 	seen := map[string]bool{}
@@ -173,7 +184,7 @@ func tagOptions(reg account.TagRegistry, inUse map[string]string) []string {
 			keys = append(keys, k)
 		}
 	}
-	sort.Strings(keys)
+	sortKeysByName(keys, func(k string) string { return tagName(reg, inUse, k) })
 	out := make([]string, len(keys))
 	for i, k := range keys {
 		out[i] = tagName(reg, inUse, k)
@@ -230,7 +241,7 @@ func buildTagFilter(sel tagSelection, reg account.TagRegistry, inUse map[string]
 	}
 
 	block := func(g account.TagGroup, keys []string) tagFilterBlock {
-		sort.Strings(keys)
+		sortKeysByName(keys, func(k string) string { return tagName(reg, inUse, k) })
 		b := tagFilterBlock{Name: g.Name, Color: paletteID(g.Color), Whole: g.ID != "" && sel.Groups[g.ID]}
 		if g.ID != "" {
 			b.WholeHref = dashHref(sel.ToggleGroup(g.ID).Query())
