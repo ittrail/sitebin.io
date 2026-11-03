@@ -247,6 +247,31 @@ func TestGDPRExportCarriesEverythingHeld(t *testing.T) {
 	}
 }
 
+func TestGDPRExportCarriesTagRegistry(t *testing.T) {
+	p, host, mux := setupStackInstance(t, testGDPRSecret)
+	acc, _ := stackUser(t, p, host, "11111111-1111-4111-8111-111111111111", "subject@example.com")
+	if err := p.accounts.UpdateTags(acc.ID, func(r *account.TagRegistry) error {
+		r.Groups = append(r.Groups, account.TagGroup{ID: "g_1", Name: "Kunde", Color: "blue"})
+		r.Tags["urgent"] = account.TagMeta{Name: "Urgent", Group: "g_1"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w := serve(mux, stackOrder(gdprExportPath, testGDPRSecret, time.Now(), `{"userId":"`+acc.OAuthSubject+`","email":"subject@example.com"}`))
+	if w.Code != 200 {
+		t.Fatalf("export = %d (%s)", w.Code, w.Body)
+	}
+	var out struct {
+		Tags *account.TagRegistry `json:"tags"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Tags == nil || len(out.Tags.Groups) != 1 || out.Tags.Groups[0].Name != "Kunde" || out.Tags.Tags["urgent"].Group != "g_1" {
+		t.Errorf("tags = %+v", out.Tags)
+	}
+}
+
 func TestGDPRExportOfAnUnknownUserIsEmptyNotAnError(t *testing.T) {
 	_, _, mux := setupStackInstance(t, testGDPRSecret)
 	w := serve(mux, stackOrder(gdprExportPath, testGDPRSecret, time.Now(), `{"userId":"99999999-9999-4999-8999-999999999999","email":"nobody@example.com"}`))
@@ -256,6 +281,9 @@ func TestGDPRExportOfAnUnknownUserIsEmptyNotAnError(t *testing.T) {
 	var out map[string]json.RawMessage
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
+	}
+	if _, has := out["tags"]; has {
+		t.Errorf("an unknown user has no tags key: %s", w.Body)
 	}
 	if string(out["account"]) != "null" || string(out["sites"]) != "[]" || string(out["api_tokens"]) != "[]" {
 		t.Errorf("an unknown user must export nothing, in the same shape: %s", w.Body)

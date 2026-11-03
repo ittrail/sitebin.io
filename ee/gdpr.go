@@ -228,11 +228,12 @@ type gdprSiteProvenance struct {
 }
 
 type gdprExport struct {
-	Account    *gdprAccount    `json:"account"`
-	Sites      []gdprSite      `json:"sites"`
-	APITokens  []gdprToken     `json:"api_tokens"`
-	Sessions   *gdprSessions   `json:"sessions"`
-	Provenance *gdprProvenance `json:"provenance,omitempty"`
+	Account    *gdprAccount         `json:"account"`
+	Sites      []gdprSite           `json:"sites"`
+	APITokens  []gdprToken          `json:"api_tokens"`
+	Sessions   *gdprSessions        `json:"sessions"`
+	Provenance *gdprProvenance      `json:"provenance,omitempty"`
+	Tags       *account.TagRegistry `json:"tags,omitempty"`
 }
 
 // handleGDPRExport answers with everything this instance holds about the
@@ -288,6 +289,11 @@ func (p *provider) handleGDPRExport(w http.ResponseWriter, r *http.Request) {
 			out.APITokens = append(out.APITokens, gdprToken{ID: t.ID, Name: t.Name, Prefix: t.Prefix, CreatedAt: t.CreatedAt})
 		}
 		out.Provenance = p.gdprProvenance(acc, ids)
+		if reg, err := p.accounts.Tags(acc.ID); err != nil {
+			slog.Error("gdpr: could not read the account's tag registry for an export", "account", acc.ID, "err", err)
+		} else {
+			out.Tags = &reg
+		}
 		out.Sessions = &gdprSessions{
 			Stored:       false,
 			Note:         "sessions are signed cookies held by the browser; the instance stores no session list and can name no device",
