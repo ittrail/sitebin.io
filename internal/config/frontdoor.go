@@ -27,6 +27,16 @@ func originOf(raw string) string {
 	return strings.ToLower(u.Scheme + "://" + u.Host)
 }
 
+// hostnameOf returns the lowercased host name of a URL, without its port,
+// "" if it has none.
+func hostnameOf(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Hostname())
+}
+
 // HomeOrigin is the scheme://host[:port] of HomeURL, lowercased.
 func (c Config) HomeOrigin() string { return originOf(c.HomeURL) }
 
@@ -37,7 +47,12 @@ func (c Config) checkFrontDoorStatic() error {
 		return nil
 	}
 	home := c.HomeOrigin()
-	if home == "" || home == originOf(c.SiteURL(c.BaseDomain)) {
+	// The home URL must be on another HOST NAME than the instance, whatever
+	// its scheme and port: behind a TLS terminator (SITEBIN_HTTP_ONLY) the
+	// base URL reads http://<base> while browsers reach https://<base>, and a
+	// home URL there would send GET / to itself, as would <base>:443 (the
+	// reasoning of originIsOwnHost in httpapi, which ignores the scheme).
+	if home == "" || hostnameOf(c.HomeURL) == hostnameOf(c.SiteURL(c.BaseDomain)) {
 		return fmt.Errorf("SITEBIN_FRONT_DOOR needs SITEBIN_HOME_URL set to a site other than this instance")
 	}
 	if !c.embedsOrigin(home) {

@@ -17,6 +17,17 @@ func TestFrontDoorConfig(t *testing.T) {
 			"SITEBIN_FRONT_DOOR needs SITEBIN_HOME_URL set to a site other than this instance"},
 		{"home same origin with path", map[string]string{"SITEBIN_EMBED_ORIGINS": "*", "SITEBIN_HOME_URL": "http://SITEBIN.example/x"},
 			"SITEBIN_FRONT_DOOR needs SITEBIN_HOME_URL set to a site other than this instance"},
+		// The base host under another scheme or port is still this instance:
+		// behind a TLS terminator (SITEBIN_HTTP_ONLY) the browser's root is
+		// https://<base>, and GET / would send it to itself.
+		{"home is the base host over https", map[string]string{"SITEBIN_EMBED_ORIGINS": "*", "SITEBIN_HOME_URL": "https://sitebin.example"},
+			"SITEBIN_FRONT_DOOR needs SITEBIN_HOME_URL set to a site other than this instance"},
+		{"home is the base host on :443", map[string]string{"SITEBIN_EMBED_ORIGINS": "*", "SITEBIN_HOME_URL": "https://sitebin.example:443/"},
+			"SITEBIN_FRONT_DOOR needs SITEBIN_HOME_URL set to a site other than this instance"},
+		{"home is the base host on :80", map[string]string{"SITEBIN_EMBED_ORIGINS": "*", "SITEBIN_HOME_URL": "http://sitebin.example:80"},
+			"SITEBIN_FRONT_DOOR needs SITEBIN_HOME_URL set to a site other than this instance"},
+		{"home is the base host in another case", map[string]string{"SITEBIN_EMBED_ORIGINS": "*", "SITEBIN_HOME_URL": "https://SiteBin.Example/start"},
+			"SITEBIN_FRONT_DOOR needs SITEBIN_HOME_URL set to a site other than this instance"},
 		{"home not embedded", map[string]string{"SITEBIN_EMBED_ORIGINS": "https://other.example", "SITEBIN_HOME_URL": "https://sitebin.io"},
 			"SITEBIN_FRONT_DOOR: the origin of SITEBIN_HOME_URL (https://sitebin.io) must be in SITEBIN_EMBED_ORIGINS"},
 		{"ok", map[string]string{
