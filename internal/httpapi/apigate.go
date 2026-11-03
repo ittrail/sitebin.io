@@ -77,6 +77,70 @@ func (a *API) originIsOwnHost(origin string) bool {
 	return ou.Host != "" && strings.EqualFold(ou.Host, su.Host)
 }
 
+// sessionOriginsHonoured reports whether this edition honours
+// SITEBIN_SESSION_ORIGINS at all: a provider with accounts enabled, the
+// cross-origin embed capability, and a browser session lookup. Without any one
+// of them a session origin is at most a plain embed origin.
+func (a *API) sessionOriginsHonoured() bool {
+	if _, ok := a.sessionProvider(); !ok {
+		return false
+	}
+	p, ok := ext.Get()
+	return ok && p.EmbedOriginsAllowed()
+}
+
+// isSessionOrigin reports whether origin is one of SITEBIN_SESSION_ORIGINS
+// and session origins are honoured. It says nothing about the request: the
+// session header is sessionOriginRequest's to check. Every session origin is
+// also an embed origin; config.Load refuses one that is not.
+func (a *API) isSessionOrigin(origin string) bool {
+	if origin == "" || !a.sessionOriginsHonoured() {
+		return false
+	}
+	origin = strings.ToLower(origin)
+	for _, o := range a.cfg.SessionOrigins {
+		if o == origin {
+			return true
+		}
+	}
+	return false
+}
+
+// sessionOriginRequest reports whether r comes from a session origin's page
+// and asks for the visitor's session with the session header. The header
+// forces a CORS preflight, which only a session origin passes (see
+// createPreflight), so a page elsewhere cannot send it from a browser; and
+// the Origin a browser sends cannot be chosen by the page.
+//
+// THIS IS A SECURITY BOUNDARY, like sessionOwns and unlike fromOwnBrowser: it
+// decides whether a cross-origin request may create a site in the visitor's
+// account. Never relax it into fromOwnBrowser's heuristics.
+func (a *API) sessionOriginRequest(r *http.Request) bool {
+	return r.Header.Get(sessionHeader) == "1" && a.isSessionOrigin(r.Header.Get("Origin"))
+}
+
+// crossOriginBrowser reports whether r is a browser request from a page on
+// another origin: an Origin that is not the instance's own host, or fetch
+// metadata that says anything but same-origin. The landing page's own fetch
+// is not one, and neither is a request with neither header (curl, a CI job,
+// an agent), which carries a cookie only if its sender put it there.
+func (a *API) crossOriginBrowser(r *http.Request) bool {
+	if o := r.Header.Get("Origin"); o != "" && !a.originIsOwnHost(o) {
+		return true
+	}
+	s := r.Header.Get("Sec-Fetch-Site")
+	return s != "" && s != "same-origin"
+}
+
+// withoutCookies is r as the extension sees it when the visitor's session
+// must not count: a clone with no Cookie header, on the same context, so a
+// bearer token and the MCP marker still reach it.
+func withoutCookies(r *http.Request) *http.Request {
+	rc := r.Clone(r.Context())
+	rc.Header.Del("Cookie")
+	return rc
+}
+
 // apiAllowedFor reports whether the caller may drive site through the JSON
 // API. Sites created without an account have no API: their claim ticket
 // manages them through the edit page only.

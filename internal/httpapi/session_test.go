@@ -17,6 +17,11 @@ import (
 type sessionProvider struct {
 	*fakeProvider
 	sessions map[string]string // cookie value -> account id
+	// ownerFromSession makes AuthorizeCreate name the owner from the sb_test
+	// cookie, the way the extension's accountForAPI falls back to the session:
+	// a request with a valid cookie creates an owned site, one without (or one
+	// whose cookie the core took away) an anonymous one.
+	ownerFromSession bool
 }
 
 func (s *sessionProvider) SessionAccount(r *http.Request) (string, bool) {
@@ -26,6 +31,14 @@ func (s *sessionProvider) SessionAccount(r *http.Request) (string, bool) {
 	}
 	id, ok := s.sessions[c.Value]
 	return id, ok
+}
+
+func (s *sessionProvider) AuthorizeCreate(r *http.Request) (ext.CreateGrant, error) {
+	g, err := s.fakeProvider.AuthorizeCreate(r)
+	if s.ownerFromSession {
+		g.OwnerAccountID, _ = s.SessionAccount(r)
+	}
+	return g, err
 }
 
 // ownedSite creates a site owned by acct-1 and returns its edit id.

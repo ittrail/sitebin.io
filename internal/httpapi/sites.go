@@ -612,7 +612,9 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 // createCORS emits CORS headers for POST /api/sites when the request Origin
 // is allowlisted via SITEBIN_EMBED_ORIGINS *and* the enterprise extension is
 // active — cross-origin embedding of the create flow is a premium capability.
-// Reports whether the origin was allowed. Credentials are never allowed.
+// Reports whether the origin was allowed. Credentials are allowed only for a
+// session origin (SITEBIN_SESSION_ORIGINS), whose drop may carry the visitor's
+// session; see createSiteWith.
 func (a *API) createCORS(w http.ResponseWriter, r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" || len(a.cfg.EmbedOrigins) == 0 {
@@ -626,19 +628,29 @@ func (a *API) createCORS(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	w.Header().Set("Access-Control-Allow-Origin", origin)
+	if a.isSessionOrigin(origin) {
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+	}
 	return true
 }
 
 // createPreflight answers CORS preflights for the create endpoint. Multipart
 // posts from <sitebin-drop> are "simple requests" that skip preflight, but
-// answering OPTIONS keeps stricter clients and future headers working.
+// answering OPTIONS keeps stricter clients and future headers working. A
+// session origin's drop sends the session header, which needs this preflight:
+// only a session origin is allowed it, so no other page can ask for the
+// visitor's session from a browser.
 func (a *API) createPreflight(w http.ResponseWriter, r *http.Request) {
 	if !a.createCORS(w, r) {
 		writeError(w, 404, "not found")
 		return
 	}
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	if a.isSessionOrigin(r.Header.Get("Origin")) {
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, "+sessionHeader)
+	} else {
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	}
 	w.Header().Set("Access-Control-Max-Age", "86400")
 	w.WriteHeader(204)
 }
@@ -684,8 +696,19 @@ func (a *API) createSiteWith(r *http.Request, opts createOpts) (*store.Site, str
 	gated := false
 	if p, ok := ext.Get(); ok && p.AccountsEnabled() {
 		gated = true
+		// A browser's session cookie counts for a new site only on the
+		// instance's own pages, or from a session origin that asked for it
+		// with the session header. Any other cross-origin request that
+		// carries the cookie — a same-site page, an embed origin — is handed
+		// to the extension without it, so it creates an anonymous site (or is
+		// refused like any anonymous script), never one in the visitor's
+		// account. Ignored, not refused. Everything else below keeps r.
+		authReq := r
+		if a.crossOriginBrowser(r) && !a.sessionOriginRequest(r) {
+			authReq = withoutCookies(r)
+		}
 		var err error
-		if grant, err = p.AuthorizeCreate(r); err != nil {
+		if grant, err = p.AuthorizeCreate(authReq); err != nil {
 			var ce *ext.CreateError
 			if errors.As(err, &ce) {
 				return nil, "", nil, &apiError{ce.Status, ce.Msg}
@@ -864,6 +887,9 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 
 	resp := a.sitePayload(site)
 	resp["edit_password"] = editPassword
+	// Whether the site went into an account, so an embed can tell an owned
+	// ticket from an anonymous one without asking again.
+	resp["owned"] = site.Meta.OwnerAccountID != ""
 	if len(warnings) > 0 {
 		resp["warnings"] = warnings
 	}

@@ -99,6 +99,7 @@ type createResp struct {
 	AccountsEnabled bool     `json:"accounts_enabled"`
 	WebDAVAvailable bool     `json:"webdav_available"`
 	FTPAvailable    bool     `json:"ftp_available"`
+	Owned           bool     `json:"owned"`
 }
 
 // createSite posts a multipart create request with the given files.
