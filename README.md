@@ -681,7 +681,7 @@ Sitebin's own startpage is built on this component.
 **`session`** makes the component use the visitor's Sitebin account.
 It sends the session cookie and `X-Sitebin-Session: 1` with every request and
 asks `GET /account/status` once. Signed in, the fine print reads "publishes to
-your account at <host>" and the drop is created in that account. The claim
+your account at `<host>`" and the drop is created in that account. The claim
 ticket then follows the create response's `owned` flag. An owned drop shows
 "Saved to your account." with an **Open my account** link, and keeps the edit
 password in a collapsed details. An anonymous drop shows "Sign in, and your
