@@ -32,7 +32,11 @@ var testFS = fstest.MapFS{
 	"static/embed.js":       {Data: []byte("// sitebin-drop")},
 	"vendor/markdown-it.js": {Data: []byte("// md")},
 	"vendor/altcha.min.js":  {Data: []byte("// altcha")},
+	"vendor/qrcode.min.js":  {Data: []byte(qrcodeHead + "\nvar qrcode = function(){};\n")},
 }
+
+// qrcodeHead is how web/vendor/qrcode.min.js begins.
+const qrcodeHead = "//---------------------------------------------------------------------\n//\n// QR Code Generator for JavaScript"
 
 type env struct {
 	api *API
@@ -1156,6 +1160,28 @@ func TestEmbedScriptRoute(t *testing.T) {
 	}
 	if ct := rr.Header().Get("Content-Type"); !strings.Contains(ct, "javascript") {
 		t.Fatalf("content-type = %q", ct)
+	}
+}
+
+// The embed loads the QR library from the directory it was loaded from, so
+// the library sits beside /_sitebin/embed.js, public like it.
+func TestQRScriptRoute(t *testing.T) {
+	e := newEnv(t, nil)
+	rr := e.public(t, httptest.NewRequest("GET", "/_sitebin/qrcode.min.js", nil))
+	if rr.Code != 200 {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("ACAO = %q, want *", got)
+	}
+	if ct := rr.Header().Get("Content-Type"); !strings.Contains(ct, "javascript") {
+		t.Fatalf("content-type = %q", ct)
+	}
+	if got := rr.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("nosniff = %q", got)
+	}
+	if !strings.HasPrefix(rr.Body.String(), qrcodeHead) {
+		t.Fatalf("body = %.80q, want the vendored QR library", rr.Body.String())
 	}
 }
 

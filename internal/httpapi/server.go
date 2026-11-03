@@ -158,6 +158,7 @@ func (a *API) Public() http.Handler {
 
 	mux.HandleFunc("GET /_sitebin/assets/{path...}", a.asset)
 	mux.HandleFunc("GET /_sitebin/embed.js", a.embedScript)
+	mux.HandleFunc("GET /_sitebin/qrcode.min.js", a.qrScript)
 	mux.HandleFunc("POST /_sitebin/unlock", a.unlock)
 	mux.HandleFunc("POST /_sitebin/csp-report", a.handleCSPReport)
 	mux.HandleFunc("POST /_sitebin/forms/{key}", a.submitForm)

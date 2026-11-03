@@ -102,8 +102,20 @@ func (a *API) asset(w http.ResponseWriter, r *http.Request) {
 // itself is public code — the gated surface is cross-origin creation
 // (SITEBIN_EMBED_ORIGINS), not the file.
 func (a *API) embedScript(w http.ResponseWriter, r *http.Request) {
+	a.publicScript(w, r, "static/embed.js")
+}
+
+// qrScript serves the vendored QR library beside the component, at
+// /_sitebin/qrcode.min.js: the component loads it from its own directory
+// after a publish, so a site that vendors embed.js serves its own copy next
+// to it. Public code, like embed.js.
+func (a *API) qrScript(w http.ResponseWriter, r *http.Request) {
+	a.publicScript(w, r, "vendor/qrcode.min.js")
+}
+
+func (a *API) publicScript(w http.ResponseWriter, r *http.Request, name string) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	http.ServeFileFS(w, r, a.webFS, "static/embed.js")
+	http.ServeFileFS(w, r, a.webFS, name)
 }

@@ -11,6 +11,21 @@
 //   no-domains  Hide the custom-domains option (community instances).
 //   event-only  Don't render the built-in ticket; the host page listens for
 //               the event and renders its own.
+//   session     Front door (enterprise): publish with the visitor's own
+//               sign-in, so a signed-in visitor's drop lands in their
+//               account. The create request carries credentials and
+//               X-Sitebin-Session: 1, and the component asks
+//               <instance>/account/status (credentialed) to word its fine
+//               print. The instance must list the page's origin in
+//               SITEBIN_SESSION_ORIGINS: from any other origin the browser's
+//               preflight is refused and publishing fails, so set it only
+//               on such a page. A response with "owned": true shows the
+//               account ticket; the edit password moves behind a disclosure.
+//
+// The built-in ticket of a real publish shows a QR code of the view URL and
+// a "Copy all" button. The QR library is loaded once, after the first
+// publish, from the directory this script came from (qrcode.min.js beside
+// embed.js); if it cannot load, the ticket simply has no QR code.
 // Events (bubbling, composed):
 //   sitebin-published  detail = the create API response body
 //   sitebin-error      detail = {status, error}
@@ -31,6 +46,81 @@
     } catch {}
     return "";
   })();
+
+  // SCRIPT_DIR is the directory this script was loaded from
+  // (https://host/_sitebin/ or https://site/assets/): the QR library is
+  // served beside it. null without a script URL, and then there is no QR.
+  const SCRIPT_DIR = (() => {
+    try {
+      const s = document.currentScript;
+      if (s && s.src) return new URL(".", s.src).href;
+    } catch {}
+    return null;
+  })();
+  // A page with a nonce-based CSP admitted this script by its nonce; the
+  // QR library's script element carries the same one.
+  const SCRIPT_NONCE = (() => {
+    try {
+      const s = document.currentScript;
+      return (s && s.nonce) || "";
+    } catch {}
+    return "";
+  })();
+
+  // loadQR loads the QR library once per page and resolves to whether the
+  // global qrcode() is there. The component runs in the host page's realm,
+  // so the library's global is visible here.
+  let qrLoad = null;
+  function loadQR() {
+    if (typeof qrcode === "function") return Promise.resolve(true);
+    if (!SCRIPT_DIR) return Promise.resolve(false);
+    if (!qrLoad) {
+      qrLoad = new Promise((resolve) => {
+        const s = document.createElement("script");
+        s.src = SCRIPT_DIR + "qrcode.min.js";
+        s.async = true;
+        if (SCRIPT_NONCE) s.nonce = SCRIPT_NONCE;
+        s.addEventListener("load", () => resolve(typeof qrcode === "function"));
+        s.addEventListener("error", () => resolve(false));
+        document.head.appendChild(s);
+      });
+    }
+    return qrLoad;
+  }
+
+  // qrSVG draws url as a QR code: the geometry of the landing page's
+  // createSvgTag({cellSize: 4, margin: 1, scalable: true}), built with DOM
+  // calls so no markup string is ever parsed.
+  function qrSVG(url) {
+    const qr = qrcode(0, "M");
+    qr.addData(url);
+    qr.make();
+    const NS = "http://www.w3.org/2000/svg";
+    const cell = 4, margin = 1, n = qr.getModuleCount();
+    const size = n * cell + margin * 2;
+    let d = "";
+    for (let r = 0; r < n; r++) {
+      for (let c = 0; c < n; c++) {
+        if (qr.isDark(r, c)) {
+          d += "M" + (c * cell + margin) + "," + (r * cell + margin) +
+            "l" + cell + ",0 0," + cell + " -" + cell + ",0 0,-" + cell + "z ";
+        }
+      }
+    }
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", "0 0 " + size + " " + size);
+    svg.setAttribute("preserveAspectRatio", "xMinYMin meet");
+    svg.setAttribute("aria-hidden", "true");
+    const bg = document.createElementNS(NS, "rect");
+    bg.setAttribute("width", "100%");
+    bg.setAttribute("height", "100%");
+    bg.setAttribute("fill", "white");
+    const path = document.createElementNS(NS, "path");
+    path.setAttribute("d", d);
+    path.setAttribute("fill", "black");
+    svg.append(bg, path);
+    return svg;
+  }
 
   const DOC_EXTS = /\.(pdf|md|markdown|docx|txt|png|jpe?g|gif|webp|svg|mp4|webm|mp3|wav|json|log|csv)$/i;
 
@@ -288,6 +378,37 @@ input::placeholder { color: var(--ink-faint); }
   padding: 12px 14px; border-radius: 10px;
 }
 .keepnote svg { flex: none; width: 18px; height: 18px; margin-top: 2px; }
+.acctline {
+  margin-top: 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px;
+  font-size: 14.5px; color: var(--ink);
+  background: rgba(91,140,255,.07); border: 1px solid rgba(91,140,255,.28);
+  padding: 10px 14px; border-radius: 10px;
+}
+.acctline.owned { background: rgba(94,207,138,.07); border-color: rgba(94,207,138,.35); }
+.acctline a { font-weight: 600; }
+.passbox {
+  border: 1px solid var(--line-soft); border-radius: 11px;
+  background: rgba(16, 23, 39, .5);
+}
+.passbox summary {
+  cursor: pointer; list-style: none; user-select: none;
+  display: flex; align-items: center; gap: 8px; padding: 11px 14px;
+  font-size: 13.5px; color: var(--ink-dim); transition: color .15s;
+}
+.passbox summary:hover, .passbox[open] summary { color: var(--ink); }
+.passbox summary::-webkit-details-marker { display: none; }
+.passbox summary .chev { flex: none; color: var(--ink-faint); transition: transform .2s; }
+.passbox[open] summary .chev { transform: rotate(90deg); }
+.passbox .secretrow { margin: 0 8px 8px; }
+.qrbox { margin-top: 20px; display: flex; align-items: center; gap: 16px; }
+.qrbox .qr {
+  width: 112px; height: 112px; background: #fff; border-radius: 12px; padding: 8px; flex: none;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .45), 0 0 0 1px rgba(255, 255, 255, .08);
+}
+.qrbox .qr svg { width: 100%; height: 100%; display: block; }
+.qrbox .qrcap { color: var(--ink-dim); font-size: 14px; }
+@media (max-width: 460px) { .qrbox { flex-direction: column; align-items: flex-start; } }
+.btn.done { color: var(--ok); border-color: rgba(94,207,138,.4); }
 .ticketactions { margin-top: 22px; display: flex; gap: 10px; flex-wrap: wrap; }
 @media (max-width: 560px) {
   .secretrow { grid-template-columns: 1fr; gap: 6px; }
@@ -299,6 +420,7 @@ input::placeholder { color: var(--ink-faint); }
 .secretrow:nth-child(2) { animation: rise .4s .16s cubic-bezier(.2, .7, .25, 1) both; }
 .secretrow:nth-child(3) { animation: rise .4s .24s cubic-bezier(.2, .7, .25, 1) both; }
 .keepnote { animation: rise .4s .34s cubic-bezier(.2, .7, .25, 1) both; }
+.passbox { animation: rise .4s .24s cubic-bezier(.2, .7, .25, 1) both; }
 @media (prefers-reduced-motion: reduce) {
   .slab .tray { animation: none; }
   *, *::before, *::after { animation-duration: .01ms !important; animation-delay: 0ms !important; transition-duration: .01ms !important; }
@@ -403,6 +525,10 @@ input::placeholder { color: var(--ink-faint); }
     <h2>Your claim ticket</h2>
     <p class="sub" id="ticket-sub">Everything you need to view, share and edit this site.</p>
     <p class="sub" id="t-life"></p>
+    <p class="acctline hidden" id="t-acct">
+      <span id="t-acct-text"></span>
+      <a id="t-acct-link" target="_blank" rel="noopener"></a>
+    </p>
 
     <div class="secretrows">
       <div class="secretrow">
@@ -415,11 +541,17 @@ input::placeholder { color: var(--ink-faint); }
         <span class="v"><a id="t-edit" href="#" target="_blank" rel="noopener"></a></span>
         <button class="copybtn" data-copy="t-edit">Copy</button>
       </div>
-      <div class="secretrow pass">
+      <div class="secretrow pass" id="t-passrow">
         <span class="k">Edit password</span>
         <span class="v" id="t-pass"></span>
         <button class="copybtn" data-copy="t-pass">Copy</button>
       </div>
+      <details class="passbox hidden" id="t-passbox">
+        <summary>
+          <svg class="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M9 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Edit password (for scripts and deploys)</span>
+        </summary>
+      </details>
     </div>
 
     <div class="keepnote" id="keepnote">
@@ -427,9 +559,15 @@ input::placeholder { color: var(--ink-faint); }
       <span><strong>Save the edit password now.</strong> It is shown only this once — Sitebin keeps just a hash and cannot recover it for you.</span>
     </div>
 
+    <div class="qrbox hidden" id="t-qrbox">
+      <div class="qr" id="t-qr" role="img" aria-label="QR code for the view URL"></div>
+      <span class="qrcap">Scan to open the site on your phone</span>
+    </div>
+
     <div class="ticketactions">
       <a class="btn primary" id="t-open" href="#" target="_blank" rel="noopener">Open site</a>
       <a class="btn" id="t-editlink" href="#" target="_blank" rel="noopener">Manage site</a>
+      <button class="btn hidden" id="t-copyall">Copy all</button>
       <button class="btn" id="t-again">Publish another</button>
     </div>
   </div>
@@ -448,6 +586,9 @@ input::placeholder { color: var(--ink-faint); }
     constructor() {
       super();
       this.state = { files: [], zip: null, domains: [], userTouchedMode: false, uploading: false };
+      // Bumped by every ticket and every reset, so a QR library that
+      // arrives late never draws into a ticket that is gone.
+      this._qrSeq = 0;
     }
 
     connectedCallback() {
@@ -463,6 +604,7 @@ input::placeholder { color: var(--ink-faint); }
       this._wire();
       this._applyAttrs();
       this._render();
+      this._checkSession();
     }
 
     get instance() {
@@ -471,14 +613,32 @@ input::placeholder { color: var(--ink-faint); }
     }
     get demo() { return this.hasAttribute("demo"); }
     get eventOnly() { return this.hasAttribute("event-only"); }
+    get session() { return this.hasAttribute("session"); }
 
     _applyAttrs() {
       if (this.hasAttribute("no-domains")) this.$("opt-domains").classList.add("hidden");
+      this._setFineprint(false);
+    }
+
+    _setFineprint(signedIn) {
       let host = "";
       try { host = new URL(this.instance).host; } catch {}
       this.$("fineprint").textContent = this.demo
         ? "demo mode — nothing leaves your browser"
-        : (host ? "publishes to " + host : "");
+        : (!host ? "" : (signedIn ? "publishes to your account at " : "publishes to ") + host);
+    }
+
+    // _checkSession asks the instance whether the visitor is signed in, for
+    // the fine print only: the ticket goes by the create response's
+    // "owned", never by this answer. Only with the session attribute, never
+    // in demo mode; any failure (no accounts, an origin the instance does
+    // not trust, the network) reads as signed out.
+    _checkSession() {
+      if (!this.session || this.demo) return;
+      fetch(this.instance + "/account/status", { credentials: "include", cache: "no-store" })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((body) => this._setFineprint(!!body && body.signed_in === true))
+        .catch(() => this._setFineprint(false));
     }
 
     // ---- staging ----
@@ -645,6 +805,12 @@ input::placeholder { color: var(--ink-faint); }
 
       const xhr = new XMLHttpRequest();
       xhr.open("POST", this.instance + "/api/sites");
+      if (this.session) {
+        // The visitor's session counts only with this header, which forces
+        // a CORS preflight that only a session origin passes.
+        xhr.withCredentials = true;
+        xhr.setRequestHeader("X-Sitebin-Session", "1");
+      }
       xhr.upload.addEventListener("progress", (e) => {
         if (e.lengthComputable) this.$("progressbar").style.width = (e.loaded / e.total) * 100 + "%";
       });
@@ -664,7 +830,8 @@ input::placeholder { color: var(--ink-faint); }
       xhr.addEventListener("error", () => {
         this._uploadDone();
         this.$("publish").disabled = false;
-        const msg = "Network error — the upload didn't go through. (Cross-origin embeds need SITEBIN_EMBED_ORIGINS on the instance.)";
+        const msg = "Network error — the upload didn't go through. (Cross-origin embeds need SITEBIN_EMBED_ORIGINS on the instance" +
+          (this.session ? ", and SITEBIN_SESSION_ORIGINS for the session attribute.)" : ".)");
         this._showError(msg);
         this._emit("sitebin-error", { status: 0, error: msg });
       });
@@ -746,6 +913,72 @@ input::placeholder { color: var(--ink-faint); }
         this.$("t-open").href = body.view_url;
         this.$("t-editlink").href = body.edit_url;
       }
+
+      // Which ticket goes by the response's "owned" alone, never by what
+      // /account/status said earlier. An owned site is in the visitor's
+      // account; its edit password still works for scripts and deploys, so
+      // it is shown once as always, just behind a disclosure, and the
+      // warning that it is the only key goes.
+      const owned = !this.demo && body.owned === true;
+      this._placePass(owned);
+      if (owned) {
+        this._accountLine("Saved to your account.", "Open my account", true);
+      } else if (this.session && !this.demo) {
+        this._accountLine("Sign in, and your next drop renews itself.", "Sign in", false);
+      } else {
+        this._accountLine(null);
+      }
+      if (!this.demo) {
+        this.$("keepnote").classList.toggle("hidden", owned);
+        this.$("t-copyall").classList.remove("hidden");
+        this._showQR(body.view_url);
+      }
+    }
+
+    // _placePass puts the edit password row into the disclosure (owned) or
+    // back among the ticket's rows (anonymous), closed either way.
+    _placePass(inBox) {
+      const row = this.$("t-passrow");
+      const box = this.$("t-passbox");
+      if (inBox) box.appendChild(row);
+      else box.parentNode.insertBefore(row, box);
+      box.open = false;
+      box.classList.toggle("hidden", !inBox);
+    }
+
+    // _accountLine shows text plus a link to the instance's account page,
+    // or hides the line when text is null.
+    _accountLine(text, linkText, owned) {
+      const line = this.$("t-acct");
+      const link = this.$("t-acct-link");
+      line.classList.toggle("hidden", !text);
+      line.classList.toggle("owned", !!owned);
+      this.$("t-acct-text").textContent = text || "";
+      link.textContent = linkText || "";
+      if (text) link.href = this.instance + "/account";
+      else link.removeAttribute("href");
+    }
+
+    // _showQR draws the view URL's QR code once the library is there; the
+    // box stays hidden when it cannot load or draw.
+    _showQR(url) {
+      const seq = this._clearQR();
+      if (!url) return;
+      loadQR().then((ok) => {
+        if (!ok || seq !== this._qrSeq) return;
+        try {
+          this.$("t-qr").appendChild(qrSVG(url));
+          this.$("t-qrbox").classList.remove("hidden");
+        } catch {
+          this.$("t-qr").textContent = "";
+        }
+      });
+    }
+
+    _clearQR() {
+      this.$("t-qrbox").classList.add("hidden");
+      this.$("t-qr").textContent = "";
+      return ++this._qrSeq;
     }
 
     _emit(name, detail) {
@@ -764,7 +997,13 @@ input::placeholder { color: var(--ink-faint); }
       this._render();
       this.$("publish").disabled = false;
       this.$("done").classList.add("hidden");
+      this._clearQR();
+      this._accountLine(null);
+      this._placePass(false);
+      this.$("t-copyall").classList.add("hidden");
       this.shadowRoot.querySelector(".create").classList.remove("hidden");
+      // The visitor may have signed in from the last ticket's link.
+      this._checkSession();
     }
 
     // ---- wiring ----
@@ -829,6 +1068,20 @@ input::placeholder { color: var(--ink-faint); }
 
       $("publish").addEventListener("click", () => this._publish());
       $("t-again").addEventListener("click", () => this.reset());
+
+      $("t-copyall").addEventListener("click", async () => {
+        const text = [
+          "View URL:      " + $("t-view").textContent,
+          "Edit URL:      " + $("t-edit").textContent,
+          "Edit password: " + $("t-pass").textContent,
+        ].join("\n");
+        if (await this._copy(text)) {
+          const btn = $("t-copyall");
+          btn.classList.add("done");
+          btn.textContent = "Copied";
+          setTimeout(() => { btn.classList.remove("done"); btn.textContent = "Copy all"; }, 1400);
+        }
+      });
 
       this.shadowRoot.querySelectorAll(".copybtn").forEach((btn) =>
         btn.addEventListener("click", async () => {
