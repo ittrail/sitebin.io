@@ -378,6 +378,8 @@ type fakeHost struct {
 	sites     *fakeSites
 	pathViews bool
 	mcpIssuer string
+	// publishURL is what PublishURL answers; "" means "/", the default.
+	publishURL string
 }
 
 func (h *fakeHost) DataDir() string        { return h.dir }
@@ -397,6 +399,12 @@ func (h *fakeHost) LockRetention() time.Duration { return h.sites.retention }
 func (h *fakeHost) BaseURL() string        { return "http://sitebin.example" }
 func (h *fakeHost) MCPOAuthIssuer() string { return h.mcpIssuer }
 func (h *fakeHost) MCPResource() string    { return "https://sitebin.example/mcp" }
+func (h *fakeHost) PublishURL() string {
+	if h.publishURL == "" {
+		return "/"
+	}
+	return h.publishURL
+}
 
 func setupAccounts(t *testing.T) (*provider, *fakeHost, http.Handler) {
 	t.Helper()

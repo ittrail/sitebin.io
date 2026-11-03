@@ -37,4 +37,12 @@ func (h extHost) MCPResource() string {
 	return h.cfg.SiteURL(h.cfg.BaseDomain) + "/mcp"
 }
 
+// PublishURL is the front door when there is one, else this instance's root.
+func (h extHost) PublishURL() string {
+	if h.cfg.FrontDoor && h.cfg.HomeURL != "" {
+		return h.cfg.HomeURL
+	}
+	return "/"
+}
+
 var _ ext.Host = extHost{}

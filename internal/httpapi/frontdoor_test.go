@@ -416,3 +416,71 @@ func TestCreateFromSessionOriginProvenance(t *testing.T) {
 		t.Errorf("create entry: %+v", got)
 	}
 }
+
+// With the front door on, GET / on the base host sends a signed-in visitor to
+// the dashboard (303) and everyone else to the front door (302). A non-base
+// host is still a 404, and with the front door off the landing page stays.
+func TestFrontDoorRedirects(t *testing.T) {
+	const home = "https://sitebin.io"
+	frontEnv := func(t *testing.T) *env {
+		t.Helper()
+		registerProvider(t, &sessionProvider{
+			fakeProvider: &fakeProvider{enabled: true, embedOK: true},
+			sessions:     map[string]string{"owner-cookie": "acct-1"},
+		})
+		return newEnv(t, map[string]string{
+			"SITEBIN_FRONT_DOOR":      "true",
+			"SITEBIN_HOME_URL":        home,
+			"SITEBIN_EMBED_ORIGINS":   home,
+			"SITEBIN_SESSION_ORIGINS": home,
+		})
+	}
+
+	t.Run("signed out goes to the front door", func(t *testing.T) {
+		e := frontEnv(t)
+		w := e.public(t, httptest.NewRequest("GET", "/", nil))
+		if w.Code != 302 || w.Header().Get("Location") != home {
+			t.Fatalf("got %d %q, want 302 %q", w.Code, w.Header().Get("Location"), home)
+		}
+	})
+	t.Run("an unknown cookie is signed out", func(t *testing.T) {
+		e := frontEnv(t)
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("Cookie", "sb_test=stale")
+		w := e.public(t, req)
+		if w.Code != 302 || w.Header().Get("Location") != home {
+			t.Fatalf("got %d %q, want 302 %q", w.Code, w.Header().Get("Location"), home)
+		}
+	})
+	t.Run("signed in goes to the account", func(t *testing.T) {
+		e := frontEnv(t)
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("Cookie", "sb_test=owner-cookie")
+		w := e.public(t, req)
+		if w.Code != 303 || w.Header().Get("Location") != "/account" {
+			t.Fatalf("got %d %q, want 303 /account", w.Code, w.Header().Get("Location"))
+		}
+	})
+	t.Run("another host is still a 404", func(t *testing.T) {
+		e := frontEnv(t)
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Host = "other.example"
+		w := e.public(t, req)
+		if w.Code != 404 {
+			t.Fatalf("got %d, want 404", w.Code)
+		}
+	})
+	t.Run("front door off keeps the landing page", func(t *testing.T) {
+		registerProvider(t, &sessionProvider{
+			fakeProvider: &fakeProvider{enabled: true},
+			sessions:     map[string]string{"owner-cookie": "acct-1"},
+		})
+		e := newEnv(t, nil)
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("Cookie", "sb_test=owner-cookie")
+		w := e.public(t, req)
+		if w.Code != 200 || !strings.Contains(w.Body.String(), "landing") {
+			t.Fatalf("got %d, want the landing page", w.Code)
+		}
+	})
+}

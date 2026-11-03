@@ -38,6 +38,18 @@ func (a *API) landingPage(w http.ResponseWriter, r *http.Request) {
 		a.notFoundPage(w, r)
 		return
 	}
+	// With a front door, the root is not where people publish: a signed-in
+	// visitor goes to their dashboard, everyone else to the front door.
+	if a.cfg.FrontDoor {
+		if sa, ok := a.sessionProvider(); ok {
+			if _, ok := sa.SessionAccount(r); ok {
+				http.Redirect(w, r, "/account", http.StatusSeeOther)
+				return
+			}
+		}
+		http.Redirect(w, r, a.cfg.HomeURL, http.StatusFound)
+		return
+	}
 	a.servePage(w, "static/index.html")
 }
 

@@ -221,7 +221,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
       {{if .Summary}}<p class="tfsum">{{.Summary}} · <a href="{{.ClearHref}}">Clear filter</a></p>{{end}}
     </nav>
     {{end}}{{end}}
-    {{if not .SitesTotal}}<p class="muted">No sites yet. <a href="/">Publish one</a> — it will be owned by this account.</p>{{else if not .Sites}}<p class="muted">No site matches this filter. <a href="/account">Show all sites</a></p>{{end}}
+    {{if not .SitesTotal}}<p class="muted">No sites yet. <a href="{{.PublishURL}}">Publish one</a> — it will be owned by this account.</p>{{else if not .Sites}}<p class="muted">No site matches this filter. <a href="/account">Show all sites</a></p>{{end}}
     {{if .Sites}}<datalist id="tagopts">{{range .TagOptions}}<option value="{{.}}">{{end}}</datalist>{{end}}
     {{range .Sites}}{{$site := .}}
     <div class="sitecard">

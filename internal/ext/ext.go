@@ -284,6 +284,9 @@ type Host interface {
 	// purges it (SITEBIN_LOCK_RETENTION_DAYS); zero means forever. For
 	// wording only — SiteLock.PurgeAt is the date.
 	LockRetention() time.Duration
+	// PublishURL is where a person goes to publish a new site: the front
+	// door's URL when one is configured, else "/".
+	PublishURL() string
 }
 
 // SiteService lets the extension read and manage sites without importing the

@@ -499,3 +499,25 @@ func TestDashboardSurvivesUnreadableRegistry(t *testing.T) {
 		t.Errorf("add with a corrupt registry = %d, tags %q", res.StatusCode, f.tags(f.ids[6]))
 	}
 }
+
+// The empty dashboard's "Publish one" link goes where the host says people
+// publish: the front door when one is configured, else this instance's root.
+func TestDashboardPublishLinkFollowsFrontDoor(t *testing.T) {
+	for _, tc := range []struct{ publish, want string }{
+		{"https://sitebin.io", `href="https://sitebin.io"`},
+		{"/", `href="/"`},
+	} {
+		t.Run(tc.publish, func(t *testing.T) {
+			_, host, mux, _, cookie := namedAccount(t)
+			host.publishURL = tc.publish
+			w := getAs(mux, "/account", cookie)
+			if w.Code != 200 {
+				t.Fatalf("dashboard = %d", w.Code)
+			}
+			body := w.Body.String()
+			if !strings.Contains(body, "No sites yet. <a "+tc.want+">Publish one</a>") {
+				t.Errorf("publish link is not %s in:\n%s", tc.want, body)
+			}
+		})
+	}
+}

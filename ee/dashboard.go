@@ -670,6 +670,8 @@ type tierOption struct {
 }
 
 type dashView struct {
+	// PublishURL is where the empty dashboard sends a person to publish.
+	PublishURL string
 	// AccountURL is the identity provider's account console — password,
 	// sessions, second factors, data export, account deletion — for an
 	// account that signed in through the generic OIDC provider. Sitebin links
@@ -799,7 +801,7 @@ func (p *provider) renderDashboard(w http.ResponseWriter, r *http.Request, acc *
 	}
 	dashTmpl.Execute(w, dashView{
 		MCPEndpoint: p.host.BaseURL() + "/mcp",
-		Email:       acc.Email, Tier: tier, Sites: tags.rows, SitesTotal: len(rows), CSRF: token, Base: p.baseURL(),
+		Email:       acc.Email, Tier: tier, Sites: tags.rows, SitesTotal: len(rows), CSRF: token, Base: p.baseURL(), PublishURL: p.host.PublishURL(),
 		Filter: tags.filter, TagOptions: tags.options, Groups: tags.groups, Back: tags.back,
 		SelfSelect: p.cfg.SelfSelect, Checkout: checkout, Portal: portal, Tiers: opts,
 		AccountURL: accountURL, StackDeletion: p.stackDeletion(acc), DeletionURL: deletionURL, CancelURL: cancelURL,
