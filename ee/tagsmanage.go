@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 
 	"github.com/ittrail/sitebin.io/ee/account"
@@ -350,13 +351,18 @@ func (p *provider) handleUpdateTagGroup(w http.ResponseWriter, r *http.Request) 
 
 // handleDeleteTagGroup removes a group and keeps its tags, ungrouped, each
 // with its own colour if it has one: a tag that showed the group's colour is
-// grey from now on. A group already gone is deleted.
+// grey from now on. It asks first, saying how many tags the group holds; a
+// group already gone is deleted.
 func (p *provider) handleDeleteTagGroup(w http.ResponseWriter, r *http.Request) {
 	acc, ok := p.tagsForm(w, r)
 	if !ok {
 		return
 	}
 	gid := r.PathValue("gid")
+	if r.PostFormValue("confirm") != "1" {
+		p.confirmDeleteTagGroup(w, r, acc, gid)
+		return
+	}
 	err := p.accounts.UpdateTags(acc.ID, func(reg *account.TagRegistry) error {
 		i := groupIndex(reg, gid)
 		if i < 0 {
@@ -376,6 +382,49 @@ func (p *provider) handleDeleteTagGroup(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	p.redirect(w, r, "/account/tags?flash=group-deleted")
+}
+
+// confirmDeleteTagGroup is a group delete's confirmation: the group's name,
+// how many tags it holds, and what becomes of them. Showing it changes
+// nothing.
+func (p *provider) confirmDeleteTagGroup(w http.ResponseWriter, r *http.Request, acc *account.Account, gid string) {
+	reg, err := p.accounts.Tags(acc.ID)
+	if err != nil {
+		slog.Error("tags: the account's tag registry is unreadable", "account", acc.ID, "err", err)
+		http.Error(w, "could not read your tag settings", http.StatusInternalServerError)
+		return
+	}
+	i := groupIndex(&reg, gid)
+	if i < 0 {
+		p.redirect(w, r, "/account/tags?flash=group-deleted") // deleted already
+		return
+	}
+	g := reg.Groups[i]
+	n := 0
+	for _, m := range reg.Tags {
+		if m.Group == g.ID {
+			n++
+		}
+	}
+	line := "It holds no tags. No site is changed."
+	if n > 0 {
+		line = "It holds " + tagsText(n) + ", which are kept, without a group: a tag that shows the group's colour turns grey, one with its own colour keeps it. No site is changed."
+	}
+	p.renderTagStep(w, tagStepView{
+		Title:  "Delete the group “" + g.Name + "”?",
+		Lines:  []string{line},
+		CSRF:   p.csrf(acc),
+		Action: "/account/tags/groups/" + url.PathEscape(g.ID) + "/delete",
+		Button: "Yes, delete “" + g.Name + "”", Danger: true,
+	})
+}
+
+// tagsText is "1 tag" or "n tags".
+func tagsText(n int) string {
+	if n == 1 {
+		return "1 tag"
+	}
+	return fmt.Sprintf("%d tags", n)
 }
 
 // ---- tags ----
@@ -807,7 +856,8 @@ type tagStepView struct {
 	Title   string
 	Lines   []string
 	CSRF    string
-	Tag     string // the confirm form's fields; Op "" means no form
+	Action  string // where the confirm form posts; "" with an Op is a tag's form, "" without one means no form
+	Tag     string // the tag form's fields
 	Op      string
 	Value   string
 	Button  string
@@ -816,6 +866,9 @@ type tagStepView struct {
 }
 
 func (p *provider) renderTagStep(w http.ResponseWriter, v tagStepView) {
+	if v.Action == "" && v.Op != "" {
+		v.Action = "/account/tags/tag"
+	}
 	p.securityHeaders(w)
 	tagStepTmpl.Execute(w, v)
 }

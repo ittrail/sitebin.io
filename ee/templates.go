@@ -557,7 +557,7 @@ var tagsTmpl = template.Must(template.New("tags").Parse(pageHead + tagsManageCSS
         </details>
         <form class="inline" method="post" action="/account/tags/groups/{{.ID}}/delete">
           <input type="hidden" name="csrf" value="{{$.CSRF}}">
-          <button class="linkbtn danger" type="submit" title="Its tags stay, without a group">Delete</button>
+          <button class="linkbtn danger" type="submit" title="Asks first; its tags stay, without a group">Delete</button>
         </form>
         {{else}}
         <span class="tmglbl none">{{.Name}}</span>
@@ -622,19 +622,20 @@ var tagsTmpl = template.Must(template.New("tags").Parse(pageHead + tagsManageCSS
 </main>
 ` + pageFoot))
 
-// tagStepTmpl is a rename's or delete's confirmation, with the form that
-// confirms it, or the result of one that could not change every site, with
-// those sites. Rendering it changes nothing.
+// tagStepTmpl is a confirmation — a tag's rename or delete, a group's
+// delete — with the form that confirms it, or the result of a change that
+// could not change every site, with those sites. Rendering it changes
+// nothing.
 var tagStepTmpl = template.Must(template.New("tagstep").Parse(pageHead + tagsManageCSS + `
 <main class="acct"><div class="authwrap"><div class="card{{if .Danger}} tmdanger{{end}}">
   <h1>{{.Title}}</h1>
   {{range .Lines}}<p class="muted">{{.}}</p>{{end}}
   {{if .Skipped}}<ul class="tmskipped">{{range .Skipped}}<li><strong>{{.Label}}</strong>{{if .URL}} · <a class="plain" href="{{.URL}}" target="_blank" rel="noopener">{{.URL}}</a>{{end}} · {{if .Locked}}locked by the operator{{else}}could not be saved{{end}}</li>{{end}}</ul>{{end}}
-  {{if .Op}}
-  <form class="tmconfirm" method="post" action="/account/tags/tag">
+  {{if .Action}}
+  <form class="tmconfirm" method="post" action="{{.Action}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
-    <input type="hidden" name="tag" value="{{.Tag}}">
-    <input type="hidden" name="op" value="{{.Op}}">
+    {{if .Tag}}<input type="hidden" name="tag" value="{{.Tag}}">{{end}}
+    {{if .Op}}<input type="hidden" name="op" value="{{.Op}}">{{end}}
     {{if .Value}}<input type="hidden" name="value" value="{{.Value}}">{{end}}
     <input type="hidden" name="confirm" value="1">
     <button class="btn {{if .Danger}}danger{{else}}primary{{end}}" type="submit">{{.Button}}</button>

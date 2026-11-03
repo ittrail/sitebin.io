@@ -416,7 +416,7 @@ func TestManageTagsGroupLifecycle(t *testing.T) {
 	if c := f.registry().ColorOf("inh"); c != "teal" {
 		t.Fatalf("inh before the delete = %s, want the group's teal", c)
 	}
-	wantRedirect(t, f.post("/account/tags/groups/"+gid+"/delete", url.Values{}), "/account/tags?flash=group-deleted")
+	wantRedirect(t, f.post("/account/tags/groups/"+gid+"/delete", url.Values{"confirm": {"1"}}), "/account/tags?flash=group-deleted")
 	reg = f.registry()
 	if len(reg.Groups) != 0 {
 		t.Errorf("groups after delete = %+v", reg.Groups)
@@ -431,7 +431,7 @@ func TestManageTagsGroupLifecycle(t *testing.T) {
 		t.Errorf("deleting a group changed a site: %q", got)
 	}
 	// Deleting it again is done already.
-	wantRedirect(t, f.post("/account/tags/groups/"+gid+"/delete", url.Values{}), "/account/tags?flash=group-deleted")
+	wantRedirect(t, f.post("/account/tags/groups/"+gid+"/delete", url.Values{"confirm": {"1"}}), "/account/tags?flash=group-deleted")
 }
 
 func TestManageTagsColourResetFollowsGroup(t *testing.T) {
@@ -516,7 +516,7 @@ func TestManageTagsRequiresCSRF(t *testing.T) {
 	}{
 		{"/account/tags/groups", url.Values{"name": {"Neu"}, "color": {"blue"}}},
 		{"/account/tags/groups/" + mgKunde, url.Values{"name": {"X"}, "color": {"red"}}},
-		{"/account/tags/groups/" + mgKunde + "/delete", url.Values{}},
+		{"/account/tags/groups/" + mgKunde + "/delete", url.Values{"confirm": {"1"}}},
 		{"/account/tags/tag", url.Values{"tag": {"mockup"}, "op": {"color"}, "value": {"red"}}},
 		{"/account/tags/tag", url.Values{"tag": {"mockup"}, "op": {"group"}, "value": {""}}},
 		{"/account/tags/tag", url.Values{"tag": {"mockup"}, "op": {"rename"}, "value": {"Entwurf"}, "confirm": {"1"}}},
@@ -790,4 +790,60 @@ func TestManageTagsRecordsAccountLineWhenRegistryFails(t *testing.T) {
 	if n := f.accountTagLines("delete"); n != 0 {
 		t.Errorf("account log has %d delete lines for a change that did not happen", n)
 	}
+}
+
+// Deleting a group asks first, like deleting a tag: the page names the group
+// and how many tags it holds, which stay without a group. Only the
+// confirmation's own POST deletes.
+func TestManageTagsGroupDeleteAsksFirst(t *testing.T) {
+	f := manageAccount(t, []string{"Müller GmbH", "live"})
+	f.setRegistry(mgGroups, map[string]account.TagMeta{
+		"müller gmbh": {Name: "Müller GmbH", Group: mgKunde},
+		"archiv":      {Name: "archiv", Group: mgKunde}, // on no site
+		"live":        {Name: "live", Group: mgTyp},
+	})
+	sites, reg := f.allTags(), f.registry()
+
+	w := f.post("/account/tags/groups/"+mgKunde+"/delete", url.Values{})
+	body := w.Body.String()
+	if w.Code != http.StatusOK {
+		t.Fatalf("group delete without confirm = %d %s", w.Code, body)
+	}
+	for _, s := range []string{"Kunde", "2 tags", "without a group"} {
+		if !strings.Contains(body, s) {
+			t.Errorf("the confirmation does not say %q: %s", s, body)
+		}
+	}
+	for _, s := range []string{`action="/account/tags/groups/` + mgKunde + `/delete"`, `name="confirm" value="1"`, `name="csrf" value="` + f.p.csrf(f.acc) + `"`, `href="/account/tags"`} {
+		if !strings.Contains(body, s) {
+			t.Errorf("the confirmation form lacks %s", s)
+		}
+	}
+	if strings.Contains(body, `name="op"`) || strings.Contains(body, `name="tag"`) {
+		t.Error("the group's confirmation carries a tag form's fields")
+	}
+	if strings.Contains(body, "<script") {
+		t.Error("the confirmation carries a script")
+	}
+	if !reflect.DeepEqual(f.allTags(), sites) || !reflect.DeepEqual(f.registry(), reg) {
+		t.Fatal("asking for confirmation changed something")
+	}
+	// One tag is "1 tag".
+	if b := f.post("/account/tags/groups/"+mgTyp+"/delete", url.Values{}).Body.String(); !strings.Contains(b, "1 tag") || strings.Contains(b, "1 tags") {
+		t.Errorf("the confirmation for a group of one tag: %s", b)
+	}
+
+	wantRedirect(t, f.post("/account/tags/groups/"+mgKunde+"/delete", url.Values{"confirm": {"1"}}), "/account/tags?flash=group-deleted")
+	after := f.registry()
+	if len(after.Groups) != 1 || after.Groups[0].ID != mgTyp {
+		t.Errorf("groups after the confirmed delete = %+v", after.Groups)
+	}
+	if m := after.Tags["archiv"]; m != (account.TagMeta{Name: "archiv"}) {
+		t.Errorf("archiv after its group's delete = %+v, want kept without a group", m)
+	}
+	if !reflect.DeepEqual(f.allTags(), sites) {
+		t.Error("deleting a group changed a site")
+	}
+	// A group that is gone already needs no confirmation.
+	wantRedirect(t, f.post("/account/tags/groups/"+mgKunde+"/delete", url.Values{}), "/account/tags?flash=group-deleted")
 }
