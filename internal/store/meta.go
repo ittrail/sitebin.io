@@ -51,6 +51,10 @@ type Meta struct {
 	// existed, which reads as unnamed.
 	Name string `json:"name,omitempty"`
 
+	// Tags are the owner's private labels, validated and ordered by
+	// CleanTags. Never read where the site is served. Missing = untagged.
+	Tags []string `json:"tags,omitempty"`
+
 	// Origin records which surface created the site. Empty — the value every
 	// meta.json written before this field has — means the UI or the JSON API,
 	// so no migration is needed and no existing site is mislabelled. It is
