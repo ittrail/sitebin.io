@@ -119,6 +119,25 @@ if ($site) {
     Assert "a pending claim can be removed (200)" ($r.code -eq 200) "got $($r.code): $($r.body)"
 }
 
+# tags: add one through the dashboard form, filter by it, open the tags page
+if ($site) {
+    $idx2 = Join-Path $work "acct-index2.html"
+    [IO.File]::WriteAllText($idx2, "<h1>second-site-ok</h1>")
+    $r = Req "POST" "$origin/api/sites" @("-b", $jar, "-F", "files=@$idx2;filename=index.html")
+    $site2 = $null; if ($r.code -eq 201) { $site2 = $r.body | ConvertFrom-Json }
+    Assert "a second owned site is created" ($null -ne $site2) "got $($r.code): $($r.body)"
+    $r = Req "GET" "$origin/account" @("-b", $jar)
+    $csrf = ""; if ($r.body -match 'name="csrf" value="([^"]+)"') { $csrf = $Matches[1] }
+    Assert "the dashboard carries a csrf token" ($csrf.Length -gt 0)
+    $r = Req "POST" "$origin/account/sites/$($site.id)/tags/add" @("-b", $jar, "--data-urlencode", "csrf=$csrf", "--data-urlencode", "tag=mockup", "--data-urlencode", "group=", "--data-urlencode", "back=")
+    Assert "adding a tag through the dashboard redirects (303)" ($r.code -eq 303) "got $($r.code): $($r.body)"
+    $r = Req "GET" "$origin/account?t=mockup" @("-b", $jar)
+    Assert "the tag filter lists the tagged site" ($r.code -eq 200 -and $r.body.Contains($site.id)) "got $($r.code)"
+    Assert "the tag filter leaves the other site out" ($null -ne $site2 -and -not $r.body.Contains($site2.id))
+    $r = Req "GET" "$origin/account/tags" @("-b", $jar)
+    Assert "the tags page is served (200)" ($r.code -eq 200) "got $($r.code)"
+}
+
 # duplicate email rejected
 $r = Req "POST" "$origin/account/signup" @("--data-urlencode", "email=e2e@example.com", "--data-urlencode", "password=password12345")
 Assert "duplicate email rejected" ($r.body -match "already registered")

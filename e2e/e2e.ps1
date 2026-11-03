@@ -389,6 +389,28 @@ if ($site) {
     Assert "sites survive recreation" ($r.body -match "sitebin-e2e-webserver-ok") "code $($r.code)"
 }
 
+# ---------- tags ----------
+
+$tsite = CreateSite @("-F", "files=@$fixtures\site\index.html;filename=index.html")
+Assert "create site for tags" ($null -ne $tsite)
+if ($tsite) {
+    $tedit = EditId $tsite
+    $th = @("-H", "X-Edit-Password: $($tsite.edit_password)")
+    $r = Req "GET" "$origin/api/sites/$tedit" $th
+    Assert "a new site reads tags as an empty array" ($r.code -eq 200 -and $r.body -match '"tags":\s*\[\s*\]') "got $($r.code): $($r.body)"
+    $r = Req "PUT" "$origin/api/sites/$tedit" ($th + @("-H", "Content-Type: application/json", "--data", (JsonBody '{"tags":["Beta","alpha"]}')))
+    Assert "PUT tags succeeds" ($r.code -eq 200) "got $($r.code): $($r.body)"
+    $r = Req "GET" "$origin/api/sites/$tedit" $th
+    $tags = @(($r.body | ConvertFrom-Json).tags)
+    Assert "tags read back sorted case-insensitively" (($tags -join ",") -ceq "alpha,Beta") "got $($tags -join ',')"
+    $r = Req "PUT" "$origin/api/sites/$tedit" ($th + @("-H", "Content-Type: application/json", "--data", (JsonBody '{"tags":["a,b"]}')))
+    Assert "a tag with a comma is refused (400)" ($r.code -eq 400) "got $($r.code): $($r.body)"
+    $r = Req "PUT" "$origin/api/sites/$tedit" ($th + @("-H", "Content-Type: application/json", "--data", (JsonBody '{"tags":[]}')))
+    Assert "PUT empty tags clears them" ($r.code -eq 200) "got $($r.code): $($r.body)"
+    $r = Req "GET" "$origin/api/sites/$tedit" $th
+    Assert "cleared tags read back as []" ($r.body -match '"tags":\s*\[\s*\]') "got $($r.body)"
+}
+
 # ---------- graceful shutdown ----------
 
 docker stop -t 20 $name | Out-Null

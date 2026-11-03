@@ -25,7 +25,7 @@ New-Item -ItemType Directory -Force $work | Out-Null
 # Every assertion in this script must run. If one is skipped -- a throw, an
 # early return -- the totals still look healthy, so the count is checked at the
 # end against this number. Update it when you add or remove an assertion.
-$ExpectedAssertions = 53
+$ExpectedAssertions = 55
 $script:pass = 0; $script:fail = 0
 # $c is deliberately untyped. With [bool], PowerShell throws on anything it
 # cannot coerce -- an array from a multi-line command substitution, say -- and a
@@ -187,6 +187,13 @@ Assert "read_file returns the text" ((ToolStruct $r).text -eq "console.log(1)") 
 
 $r = CallTool "get_site" @{ edit_id = $editID; edit_password = $pw }
 Assert "get_site reports the file count" ((ToolStruct $r).file_count -ge 2) (ToolText $r)
+
+Write-Host "== tags" -ForegroundColor Cyan
+$r = CallTool "update_site" @{ edit_id = $editID; edit_password = $pw; settings = @{ tags = @("Beta", "alpha") } }
+Assert "update_site sets tags" (-not (ToolIsError $r)) (ToolText $r)
+$r = CallTool "get_site" @{ edit_id = $editID; edit_password = $pw }
+$mt = @((ToolStruct $r).tags)
+Assert "get_site shows the tags, sorted" (($mt -join ",") -ceq "alpha,Beta") (ToolText $r)
 
 Write-Host "== the password gate" -ForegroundColor Cyan
 $r = CallTool "get_site" @{ edit_id = $editID; edit_password = "wrong-password" }
