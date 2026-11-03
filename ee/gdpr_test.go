@@ -272,6 +272,39 @@ func TestGDPRExportCarriesTagRegistry(t *testing.T) {
 	}
 }
 
+// A site's tags are the subject's own labels: each exported site carries
+// them, and a site without any carries no field.
+func TestGDPRExportCarriesEachSitesTags(t *testing.T) {
+	p, host, mux := setupStackInstance(t, testGDPRSecret)
+	acc, _ := stackUser(t, p, host, "11111111-1111-4111-8111-111111111111", "subject@example.com")
+	tagged := host.sites.infos["aaaaaaaaaaaaaaaaaaaaaaaaaa"]
+	tagged.Tags = []string{"Müller GmbH", "mockup"}
+	host.sites.infos[tagged.ViewID] = tagged
+
+	w := serve(mux, stackOrder(gdprExportPath, testGDPRSecret, time.Now(), `{"userId":"`+acc.OAuthSubject+`","email":"subject@example.com"}`))
+	if w.Code != 200 {
+		t.Fatalf("export = %d (%s)", w.Code, w.Body)
+	}
+	var out struct {
+		Sites []map[string]json.RawMessage `json:"sites"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	tags := map[string]string{}
+	for _, s := range out.Sites {
+		var id string
+		_ = json.Unmarshal(s["id"], &id)
+		tags[id] = string(s["tags"])
+	}
+	if got, want := tags["aaaaaaaaaaaaaaaaaaaaaaaaaa"], `["Müller GmbH","mockup"]`; got != want {
+		t.Errorf("tagged site's tags = %s, want %s", got, want)
+	}
+	if got, ok := tags["bbbbbbbbbbbbbbbbbbbbbbbbbb"]; !ok || got != "" {
+		t.Errorf("untagged site's tags = %q (listed %v), want no field", got, ok)
+	}
+}
+
 func TestGDPRExportOfAnUnknownUserIsEmptyNotAnError(t *testing.T) {
 	_, _, mux := setupStackInstance(t, testGDPRSecret)
 	w := serve(mux, stackOrder(gdprExportPath, testGDPRSecret, time.Now(), `{"userId":"99999999-9999-4999-8999-999999999999","email":"nobody@example.com"}`))

@@ -184,6 +184,7 @@ type gdprSite struct {
 	ViewURL   string     `json:"view_url"`
 	Mode      string     `json:"mode"`
 	Domains   []string   `json:"custom_domains,omitempty"`
+	Tags      []string   `json:"tags,omitempty"`
 	Origin    string     `json:"origin,omitempty"`
 	Bytes     int64      `json:"bytes"`
 	Files     int        `json:"files"`
@@ -275,7 +276,7 @@ func (p *provider) handleGDPRExport(w http.ResponseWriter, r *http.Request) {
 			}
 			out.Sites = append(out.Sites, gdprSite{
 				ID: info.ViewID, ViewURL: info.ViewURL, Mode: info.Mode, Domains: info.Domains,
-				Origin: info.Origin, Bytes: info.Bytes, Files: info.Files,
+				Tags: info.Tags, Origin: info.Origin, Bytes: info.Bytes, Files: info.Files,
 				CreatedAt: info.CreatedAt, ExpiresAt: info.ExpiresAt,
 			})
 		}
