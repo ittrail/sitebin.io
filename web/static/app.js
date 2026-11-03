@@ -126,3 +126,21 @@ $("t-again").addEventListener("click", () => {
 
 $("api-hint").textContent =
   'curl -F "files=@index.html" ' + location.origin + "/api/sites";
+
+// An instance with accounts answers /account/status; the community build
+// answers 404 and the page stays as it is. Any failure changes nothing.
+(async () => {
+  try {
+    const res = await fetch("/account/status", { credentials: "same-origin" });
+    if (!res.ok) return;
+    const body = await res.json();
+    if (!body || typeof body.signed_in !== "boolean") return;
+    const a = $("acct");
+    a.textContent = body.signed_in ? "My account" : "Sign in";
+    a.classList.remove("hidden");
+    const tag = document.querySelector(".topbar .tag");
+    if (tag) tag.classList.add("hidden");
+  } catch (e) {
+    /* leave the page unchanged */
+  }
+})();
