@@ -65,6 +65,12 @@ func New(o Options) (*Runner, error) {
 // command builds a git process running in dir. Its environment starts empty
 // (only PATH is copied in) and the server's -c settings precede args.
 func (r *Runner) command(ctx context.Context, dir string, args ...string) *exec.Cmd {
+	return r.commandWith(ctx, dir, nil, nil, args...)
+}
+
+// commandWith is command plus extra -c settings ("key=value") and extra
+// environment entries (such as GIT_PROTOCOL) for one call.
+func (r *Runner) commandWith(ctx context.Context, dir string, extraC, extraEnv []string, args ...string) *exec.Cmd {
 	full := []string{
 		"-c", "core.hooksPath=" + filepath.Join(r.state, "empty-hooks"),
 		"-c", "core.logAllRefUpdates=false",
@@ -75,6 +81,9 @@ func (r *Runner) command(ctx context.Context, dir string, args ...string) *exec.
 		"-c", "pack.threads=1",
 		"-c", "pack.windowMemory=64m",
 		"-c", "core.packedGitLimit=128m",
+	}
+	for _, c := range extraC {
+		full = append(full, "-c", c)
 	}
 	full = append(full, args...)
 	cmd := exec.CommandContext(ctx, r.bin, full...)
@@ -87,6 +96,7 @@ func (r *Runner) command(ctx context.Context, dir string, args ...string) *exec.
 		"HOME=" + filepath.Join(r.state, "home"),
 		"GIT_TERMINAL_PROMPT=0",
 	}
+	cmd.Env = append(cmd.Env, extraEnv...)
 	return cmd
 }
 
