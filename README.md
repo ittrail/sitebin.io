@@ -676,6 +676,10 @@ from), `demo` (simulate publishing, no network — great for landing pages),
 `no-domains` (hide the custom-domains option), `event-only` (emit events
 instead of rendering the built-in claim ticket). Events: `sitebin-published`
 (detail = create response) and `sitebin-error` (detail = `{status, error}`).
+A network failure (`status` 0, which is also how a browser reports an origin
+the instance does not allow) shows the visitor a plain "try again"; its event
+adds `hint`, a note for the page's developer that names the instance settings
+to check, also logged with `console.warn`.
 Sitebin's own startpage is built on this component.
 
 **`session`** makes the component use the visitor's Sitebin account.

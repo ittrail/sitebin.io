@@ -16,10 +16,11 @@
 //               account. The create request carries credentials and
 //               X-Sitebin-Session: 1, and the component asks
 //               <instance>/account/status (credentialed) to word its fine
-//               print. The instance must list the page's origin in
-//               SITEBIN_SESSION_ORIGINS: from any other origin the browser's
-//               preflight is refused and publishing fails, so set it only
-//               on such a page. A response with "owned": true shows the
+//               print: when it is added to the page and again on every
+//               reset() (the ticket's "Publish another"). The instance must
+//               list the page's origin in SITEBIN_SESSION_ORIGINS: from any
+//               other origin the browser's preflight is refused and
+//               publishing fails, so set it only on such a page. A response with "owned": true shows the
 //               account ticket; the edit password moves behind a disclosure.
 //
 // The built-in ticket of a real publish shows a QR code of the view URL and
@@ -28,7 +29,9 @@
 // embed.js); if it cannot load, the ticket simply has no QR code.
 // Events (bubbling, composed):
 //   sitebin-published  detail = the create API response body
-//   sitebin-error      detail = {status, error}
+//   sitebin-error      detail = {status, error}; a network failure (status 0)
+//                      adds hint, a note for the page's developer that names
+//                      the instance settings (also logged with console.warn)
 // Methods:
 //   reset()     Clear staged files/ticket and show the create area again.
 //
@@ -837,10 +840,16 @@ input::placeholder { color: var(--ink-faint); }
       xhr.addEventListener("error", () => {
         this._uploadDone();
         this.$("publish").disabled = false;
-        const msg = "Network error — the upload didn't go through. (Cross-origin embeds need SITEBIN_EMBED_ORIGINS on the instance" +
-          (this.session ? ", and SITEBIN_SESSION_ORIGINS for the session attribute.)" : ".)");
+        // The visitor sees plain words; the operator's setting goes to the
+        // page's developer only (the event's hint and the console). A
+        // browser does not say whether CORS or the network failed.
+        const msg = "The upload didn't go through. Check your connection and try again.";
+        const hint = "sitebin-drop: the request to " + this.instance + "/api/sites failed. " +
+          "A cross-origin embed needs this page's origin in SITEBIN_EMBED_ORIGINS on the instance" +
+          (this.session ? ", and in SITEBIN_SESSION_ORIGINS for the session attribute." : ".");
+        try { console.warn(hint); } catch {}
         this._showError(msg);
-        this._emit("sitebin-error", { status: 0, error: msg });
+        this._emit("sitebin-error", { status: 0, error: msg, hint });
       });
       xhr.send(fd);
     }
