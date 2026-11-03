@@ -143,6 +143,8 @@ function render() {
   if (document.activeElement !== $("e-name")) $("e-name").value = site.name || "";
   $("clear-name").classList.toggle("hidden", !site.name);
 
+  renderTags();
+
   // mode + entry
   const ct = site.container || {};
   $("mode-container").classList.toggle("hidden", !ct.available && site.mode !== "container");
@@ -1123,6 +1125,78 @@ $("e-name").addEventListener("keydown", (e) => {
 $("clear-name").addEventListener("click", () => {
   $("e-name").value = "";
   put({ name: "" }, "Name removed");
+});
+
+// ---- tags ----
+// tagDraft is the list being edited; null when it equals the saved one.
+let tagDraft = null;
+
+function sameTags(a, b) {
+  return a.length === b.length && a.every((t, i) => t === b[i]);
+}
+
+function renderTags() {
+  const saved = site.tags || [];
+  if (tagDraft && sameTags(tagDraft, saved)) tagDraft = null;
+  const list = tagDraft || saved;
+  const box = $("e-tags");
+  box.replaceChildren();
+  list.forEach((t, i) => {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    const label = document.createElement("span");
+    label.className = "name";
+    label.textContent = t;
+    const x = document.createElement("button");
+    x.type = "button";
+    x.className = "x";
+    x.textContent = "×";
+    x.setAttribute("aria-label", "Remove tag");
+    x.addEventListener("click", () => {
+      tagDraft = list.filter((_, j) => j !== i);
+      renderTags();
+    });
+    chip.append(label, x);
+    box.appendChild(chip);
+  });
+  box.classList.toggle("hidden", list.length === 0);
+  $("save-tags").disabled = tagDraft === null;
+}
+
+function addTagsFrom(text) {
+  const list = (tagDraft || site.tags || []).slice();
+  for (const part of text.split(",")) {
+    const t = part.trim().replace(/\s+/g, " ");
+    if (!t) continue;
+    if (list.some((x) => x.toLowerCase() === t.toLowerCase())) continue;
+    list.push(t);
+  }
+  tagDraft = list;
+  renderTags();
+}
+
+function commitTagInput() {
+  const v = $("e-tag").value;
+  $("e-tag").value = "";
+  addTagsFrom(v);
+}
+
+function saveTags() {
+  if ($("e-tag").value.trim()) commitTagInput();
+  if (tagDraft === null) return;
+  put({ tags: tagDraft }, "Tags saved");
+}
+$("add-tag").addEventListener("click", commitTagInput);
+$("save-tags").addEventListener("click", saveTags);
+$("e-tag").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); commitTagInput(); }
+});
+$("e-tag").addEventListener("input", () => {
+  const v = $("e-tag").value;
+  const i = v.lastIndexOf(",");
+  if (i < 0) return;
+  $("e-tag").value = v.slice(i + 1);
+  addTagsFrom(v.slice(0, i));
 });
 
 document.querySelectorAll("input[name=emode]").forEach((r) =>
