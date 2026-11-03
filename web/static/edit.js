@@ -1107,9 +1107,11 @@ async function put(body, okMsg) {
     refreshDir();
     render();
     if (okMsg) toast(okMsg);
+    return true;
   } catch (err) {
     toast(err.message, true);
     render(); // restore actual state
+    return false;
   }
 }
 
@@ -1133,6 +1135,11 @@ let tagDraft = null;
 
 function sameTags(a, b) {
   return a.length === b.length && a.every((t, i) => t === b[i]);
+}
+
+// The server merges case duplicates and sorts, so "unsaved" ignores both.
+function tagKey(list) {
+  return list.map((t) => t.toLowerCase()).sort().join("\n");
 }
 
 function renderTags() {
@@ -1161,6 +1168,8 @@ function renderTags() {
   });
   box.classList.toggle("hidden", list.length === 0);
   $("save-tags").disabled = tagDraft === null;
+  $("tags-unsaved").classList.toggle("hidden",
+    tagDraft === null || tagKey(tagDraft) === tagKey(saved));
 }
 
 function addTagsFrom(text) {
@@ -1181,10 +1190,13 @@ function commitTagInput() {
   addTagsFrom(v);
 }
 
-function saveTags() {
+async function saveTags() {
   if ($("e-tag").value.trim()) commitTagInput();
   if (tagDraft === null) return;
-  put({ tags: tagDraft }, "Tags saved");
+  if (await put({ tags: tagDraft }, "Tags saved")) {
+    tagDraft = null; // show exactly what the server stored
+    renderTags();
+  }
 }
 $("add-tag").addEventListener("click", commitTagInput);
 $("save-tags").addEventListener("click", saveTags);
