@@ -670,7 +670,9 @@ type tierOption struct {
 }
 
 type dashView struct {
-	// PublishURL is where the empty dashboard sends a person to publish.
+	// PublishURL is where the dashboard sends a person to publish: the front
+	// door when there is one (never "/", which sends a signed-in visitor
+	// back here), else the instance root.
 	PublishURL string
 	// AccountURL is the identity provider's account console — password,
 	// sessions, second factors, data export, account deletion — for an

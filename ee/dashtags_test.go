@@ -521,3 +521,28 @@ func TestDashboardPublishLinkFollowsFrontDoor(t *testing.T) {
 		})
 	}
 }
+
+// An account that already has sites still needs a way to a new drop: "Your
+// sites" always carries a publish link to the same place, because the
+// wordmark's "/" sends a signed-in visitor straight back to the dashboard
+// when the front door is on.
+func TestDashboardWithSitesLinksToPublish(t *testing.T) {
+	p, host, mux, acc, cookie := namedAccount(t)
+	if err := p.accounts.LinkSite(acc, ownedSite); err != nil {
+		t.Fatal(err)
+	}
+	host.sites.infos[ownedSite] = ext.SiteInfo{ViewID: ownedSite, Mode: "webserver",
+		ViewURL: "http://" + ownedSite + ".sitebin.example", EditURL: "http://sitebin.example/e/one"}
+	host.publishURL = "https://sitebin.io"
+	w := getAs(mux, "/account", cookie)
+	if w.Code != 200 {
+		t.Fatalf("dashboard = %d", w.Code)
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "No sites yet.") {
+		t.Fatal("the dashboard does not list the account's site")
+	}
+	if !strings.Contains(body, `href="https://sitebin.io">Publish a new site</a>`) {
+		t.Errorf("no publish link to the front door in:\n%s", body)
+	}
+}

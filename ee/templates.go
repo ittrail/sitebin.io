@@ -46,6 +46,7 @@ const pageHead = `<!doctype html>
   .acct .tag-violet { --c: var(--tag-violet); } .acct .tag-teal { --c: var(--tag-teal); } .acct .tag-pink { --c: var(--tag-pink); } .acct .tag-grey { --c: var(--tag-grey); }
   .acct .tdot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; background: var(--c, var(--tag-grey)); }
   .acct .card > h3 .tagmanage { margin-left: auto; }
+  .acct .card > h3.sitesh { flex-wrap: wrap; }
   .acct .tagfilter { margin-bottom: 8px; }
   .acct .tftop { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
   .acct a.tfchip { display: inline-flex; align-items: center; gap: 6px; font: 12px var(--body); color: var(--ink-dim); background: var(--bg-raise); border: 1px solid var(--line); border-radius: 20px; padding: 3px 10px; text-decoration: none; overflow-wrap: anywhere; }
@@ -205,7 +206,9 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
   {{end}}
 
   <div class="card">
-    <h3>Your sites <span class="count">{{.SitesTotal}}</span><a class="btn small tagmanage" href="/account/tags">Manage tags</a></h3>
+    {{/* The publish link is always here: with a front door, "/" sends a
+         signed-in visitor straight back to this page. */}}
+    <h3 class="sitesh">Your sites <span class="count">{{.SitesTotal}}</span><a class="btn small tagmanage" href="/account/tags">Manage tags</a><a class="btn small primary" href="{{.PublishURL}}">Publish a new site</a></h3>
     {{/* The tag filter: every chip and toggle is a link to the next filter
          state, so it works without script. */}}
     {{with .Filter}}{{if .Show}}
