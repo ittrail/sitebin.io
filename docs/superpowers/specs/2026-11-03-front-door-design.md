@@ -421,3 +421,12 @@ where they differ.
   in the enterprise edition.
 - `/_sitebin/qrcode.min.js` is one of the global Sitebin routes the base-path
   check ignores.
+- §4 said the component asks `/account/status` "once on connect". It asks on
+  connect **and again after "Publish another"**, so the fine print is right
+  after a visitor signs in from the ticket. The create request is the only
+  one that carries `X-Sitebin-Session`.
+- **Operator decisions at ship time:**
+  - The drop on sitebin.io carries `no-domains`, so custom domains are set up
+    in the account or on the edit page.
+  - The sign-in check runs on every page without a consent banner, on the
+    legal basis Art. 6(1)(f) as the privacy page states.
