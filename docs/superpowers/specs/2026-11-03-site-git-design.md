@@ -647,11 +647,22 @@ This is a tiers change (`git`), so the fixed order applies:
   - The reported `bytes` includes the repository, with no new MCP field.
   - A changed repository gets a full `gc` with a one-day prune.
 
-## Before planning
+## Before planning: Git comes before ownership
 
-This worktree branched from `main` at `158012b`. Tags, the front door and
-ownership are on `feat/site-tags` and not here yet: in particular
-`Meta.Admins`, the owner-only gate, `SharingAllowed`, and the tags branch's
-`edit.js` changes the tab bar sits on. **Rebase onto `main` once ownership is
-merged, then write the plan** against the code as it is then. The ownership
-session sends the final gate names before it builds its gate.
+**Changed 2026-11-03, the operator's decision:** tags and the front door are
+merged and live (`462c0f9`). **Ownership is not built yet**, and Git is built
+now, ahead of it. So:
+
+- Git ships **without admins**. Every rule above that names an admin or
+  "once ownership ships" applies when ownership is built. **Whoever builds
+  ownership integrates Git:**
+  - the admin standing reaches the Git endpoint through the shared gate core;
+  - `DELETE /api/sites/{id}/git` joins the owner-only list;
+  - transfer and adopt stamp `quota_git` through the existing paths;
+  - the limits check uses the shared byte function.
+
+  The ownership session was told so on 2026-11-03.
+- Until then "owner-only" for "Delete repository" means: whoever passes the
+  gate today (the edit password, the owner's token, the owner's session),
+  because today every one of them is the owner.
+- The plan is written against `main` at `462c0f9`.
