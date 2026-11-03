@@ -191,6 +191,35 @@ from the account dashboard, which lists every site by its name, its view URL
 and its custom domains (pending ones marked as waiting for DNS) and can rename
 a site without its edit password.
 
+### Site tags
+
+A site may carry up to **10 tags** — private labels for sorting your own list,
+on every plan and never shown to visitors. A tag is 1 to 30 characters of plain
+text without commas; tags are case-insensitive (`Demo` and `demo` are one tag,
+the first spelling wins) and kept in alphabetical order. Set them in the Tags
+card on the edit page (Enter or a comma adds one), as `tags` in the
+[API](#api-for-scripts-and-agents) (a JSON list that replaces the whole set,
+`[]` clears it, leaving it out changes nothing; on a multipart create,
+comma-separated or repeated) or in the [MCP](#mcp-server-for-ai-agents)
+`settings.tags`. Every API payload carries `"tags"`, an array; a bad tag is a
+`400` that names the rule.
+
+On an instance with accounts, "My account" filters **Your sites** by tag:
+*All*, *Untagged*, or a selection. Tags can be put into **groups**: within a
+group the selected tags are OR'd, across groups they are AND'd, and a tag with
+no group is its own facet (AND). The summary line says what is filtered
+(`2 of 9 · (Bäckerei Huber or Müller GmbH) and mockup`), and the filter lives
+in the URL, so it can be bookmarked. Each site shows coloured chips with × to
+remove one and "+ Tag" to add one (suggestions come from your own tags; a new
+tag can be given a group). The **Manage tags** page sets a group's colour (a
+palette of 8: blue, green, amber, red, violet, teal, pink, grey), overrides the
+colour of a single tag, moves a tag to another group, renames a tag across all
+your sites (onto an existing tag it merges; that tag's group and colour win)
+and deletes a tag everywhere (the sites stay). Deleting a group keeps its tags,
+now without a group. Limits: 20 groups and 200 tags per account. Groups and
+colours exist only in "My account"; the API, MCP and edit page know tag names
+only.
+
 ### Modes
 
 - **Web server** — files served exactly as uploaded, `index.html` is the
@@ -268,10 +297,11 @@ curl -F "zip=@site.zip" https://sitebin.example.com/api/sites
 curl -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID
 
 # update settings (any subset; expires_at: null clears it, unless a tier caps the site;
-# name is a private label of up to 60 characters, "" removes it; cache is the
+# name is a private label of up to 60 characters, "" removes it; tags replaces the
+# whole set of up to 10 private tags, [] clears it; cache is the
 # browser-cache policy: auto, revalidate, hour, day, week, year or off)
 curl -X PUT -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
-     -d '{"name":"Client docs","mode":"viewer","entry_file":"report.pdf","webdav_enabled":true}' \
+     -d '{"name":"Client docs","tags":["client","Q3"],"mode":"viewer","entry_file":"report.pdf","webdav_enabled":true}' \
      https://sitebin.example.com/api/sites/$EDIT_ID
 
 # add / remove files
@@ -410,8 +440,8 @@ require stdio) can bridge with `npx mcp-remote https://…/mcp --header …`.
 | Tool | What it does |
 |---|---|
 | `create_site` | Publish files as a new site; returns the URL, the edit id and — once — the edit password |
-| `list_sites` | The connected account's sites, with their names and custom domains *(needs a token)* |
-| `get_site` / `update_site` | Read and change the name, settings, expiry, view password, WebDAV/FTP, SPA fallback, browser caching |
+| `list_sites` | The connected account's sites, with their names, tags and custom domains *(needs a token)* |
+| `get_site` / `update_site` | Read and change the name, tags (`settings.tags` replaces them; an empty list removes all), settings, expiry, view password, WebDAV/FTP, SPA fallback, browser caching |
 | `list_files` / `read_file` | Inspect a site's contents |
 | `write_files` | Add or overwrite files; with `replace`, the site ends up containing exactly what you pass |
 | `delete_file` / `delete_site` | Remove a file, or the whole site |
@@ -421,6 +451,8 @@ require stdio) can bridge with `npx mcp-remote https://…/mcp --header …`.
 | `download_site` | The site as a zip, attached as a resource |
 | `open_upload` | A short-lived token and URLs to upload large files with your own HTTP client (WebDAV or the zip/files upload), with ready-to-run `curl` commands |
 | `list_forms` / `add_form` / `update_form` / `remove_form` / `resend_form_confirmation` | Email forms; a new form works once its recipient confirms |
+
+`get_site` and `list_sites` return `tags` (left out when a site has none; `create_site` takes `settings.tags` too). A connector that cached the tool schemas from before tags existed must reconnect before it can read tagged sites.
 
 **Authentication** mirrors the API exactly:
 
