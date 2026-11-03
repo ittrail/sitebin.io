@@ -39,10 +39,24 @@
   "use strict";
   if (customElements.get("sitebin-drop")) return;
 
-  const SCRIPT_ORIGIN = (() => {
+  // thisScript is the <script> element running this file, or null. Only a
+  // real HTMLScriptElement with a src counts: document.currentScript can be
+  // clobbered by a named element on the host page (<img name="currentScript"
+  // src="https://evil.example/x">), and where this script came from decides
+  // the default instance and where the QR library is loaded from.
+  // HTMLScriptElement itself cannot be clobbered on window.
+  function thisScript() {
     try {
       const s = document.currentScript;
-      if (s && s.src) return new URL(s.src).origin;
+      if (s instanceof HTMLScriptElement && s.src) return s;
+    } catch {}
+    return null;
+  }
+  const SCRIPT = thisScript();
+
+  const SCRIPT_ORIGIN = (() => {
+    try {
+      if (SCRIPT) return new URL(SCRIPT.src).origin;
     } catch {}
     return "";
   })();
@@ -52,20 +66,13 @@
   // served beside it. null without a script URL, and then there is no QR.
   const SCRIPT_DIR = (() => {
     try {
-      const s = document.currentScript;
-      if (s && s.src) return new URL(".", s.src).href;
+      if (SCRIPT) return new URL(".", SCRIPT.src).href;
     } catch {}
     return null;
   })();
   // A page with a nonce-based CSP admitted this script by its nonce; the
   // QR library's script element carries the same one.
-  const SCRIPT_NONCE = (() => {
-    try {
-      const s = document.currentScript;
-      return (s && s.nonce) || "";
-    } catch {}
-    return "";
-  })();
+  const SCRIPT_NONCE = (SCRIPT && SCRIPT.nonce) || "";
 
   // loadQR loads the QR library once per page and resolves to whether the
   // global qrcode() is there. The component runs in the host page's realm,
