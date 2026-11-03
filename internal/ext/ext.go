@@ -311,6 +311,15 @@ type SiteService interface {
 	// whose message states that rule and is safe to show as-is. A site that
 	// no longer exists is ErrSiteGone; a locked one is ErrSiteLocked.
 	SetName(viewID, name string) error
+	// UpdateTags edits a site's tags under the site lock: edit receives the
+	// tags stored in meta.json right now and returns the list to store, so a
+	// change computed from the current list (an account-wide rename) cannot
+	// lose a concurrent write. The result is validated by the core's one rule
+	// (store.CleanTags); a refused list is an error whose message states that
+	// rule and is safe to show as-is, and an error returned by edit is
+	// returned unchanged, with nothing written. A site that no longer exists
+	// is ErrSiteGone; a locked one is ErrSiteLocked.
+	UpdateTags(viewID string, edit func(current []string) ([]string, error)) error
 	// Delete removes a site and its indexes. Like ApplyQuota it reports a site
 	// that no longer exists as ErrSiteGone, so a caller erasing everything an
 	// account owns can tell "already gone, carry on" from "could not delete,
@@ -649,6 +658,9 @@ type SiteInfo struct {
 	// Private: the dashboard and the admin console show it, nothing served
 	// ever does.
 	Name string
+	// Tags are the owner's labels for the site, in stored order; nil when
+	// untagged. Private like Name: nothing served ever shows them.
+	Tags []string
 	// Domains are the site's VERIFIED custom domains, if any. The admin
 	// console lists and searches by them; with the name, they are the only
 	// human-memorable handles a site has.

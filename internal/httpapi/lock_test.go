@@ -323,6 +323,9 @@ func TestSiteServiceLockSeam(t *testing.T) {
 	if err := svc.SetName(c.ID, "clean"); !errors.Is(err, ext.ErrSiteLocked) {
 		t.Errorf("SetName on a locked site = %v, want ErrSiteLocked", err)
 	}
+	if err := svc.UpdateTags(c.ID, func([]string) ([]string, error) { return []string{"x"}, nil }); !errors.Is(err, ext.ErrSiteLocked) {
+		t.Errorf("UpdateTags on a locked site = %v, want ErrSiteLocked", err)
+	}
 	if _, err := svc.RotateEditPassword(c.ID); !errors.Is(err, ext.ErrSiteLocked) {
 		t.Errorf("RotateEditPassword on a locked site = %v, want ErrSiteLocked", err)
 	}
@@ -334,7 +337,7 @@ func TestSiteServiceLockSeam(t *testing.T) {
 		t.Fatalf("ApplyQuota on a locked site = %v", err)
 	}
 	site, _ := e.st.ByViewID(c.ID)
-	if site.Meta.QuotaBytes != 0 || site.Meta.ExpiresAt != nil || site.Meta.Name != "" {
+	if site.Meta.QuotaBytes != 0 || site.Meta.ExpiresAt != nil || site.Meta.Name != "" || site.Meta.Tags != nil {
 		t.Errorf("a locked site changed: %+v", site.Meta)
 	}
 	// The old password still works after the refused rotation.

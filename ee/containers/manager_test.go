@@ -332,15 +332,18 @@ func (s *fakeSites) All() ([]ext.SiteInfo, error)              { return nil, nil
 func (s *fakeSites) SetExpiry(string, *time.Time) error        { return nil }
 func (s *fakeSites) RotateEditPassword(string) (string, error) { return "", nil }
 func (s *fakeSites) SetName(string, string) error              { return nil }
-func (s *fakeSites) Delete(string) error                       { return nil }
-func (s *fakeSites) ForceDelete(string) error                  { return nil }
-func (s *fakeSites) SetLock(string, *ext.SiteLock) error       { return nil }
-func (s *fakeSites) ReleaseLock(string, string) (bool, error)  { return false, nil }
-func (s *fakeSites) SetHold(string, *ext.LockHold) error       { return nil }
-func (s *fakeSites) ClearFindings(string) error                { return nil }
-func (s *fakeSites) Reports() ([]ext.AbuseReport, error)       { return nil, nil }
-func (s *fakeSites) ApplyQuota(string, ext.CreateGrant) error  { return nil }
-func (s *fakeSites) CustomDomainCount() (int, error)           { return 0, nil }
+func (s *fakeSites) UpdateTags(string, func([]string) ([]string, error)) error {
+	return nil
+}
+func (s *fakeSites) Delete(string) error                      { return nil }
+func (s *fakeSites) ForceDelete(string) error                 { return nil }
+func (s *fakeSites) SetLock(string, *ext.SiteLock) error      { return nil }
+func (s *fakeSites) ReleaseLock(string, string) (bool, error) { return false, nil }
+func (s *fakeSites) SetHold(string, *ext.LockHold) error      { return nil }
+func (s *fakeSites) ClearFindings(string) error               { return nil }
+func (s *fakeSites) Reports() ([]ext.AbuseReport, error)      { return nil, nil }
+func (s *fakeSites) ApplyQuota(string, ext.CreateGrant) error { return nil }
+func (s *fakeSites) CustomDomainCount() (int, error)          { return 0, nil }
 
 // ---- harness ----
 

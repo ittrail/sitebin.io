@@ -41,6 +41,7 @@ func (s siteService) infoOf(site *store.Site) ext.SiteInfo {
 		Owner:          site.Meta.OwnerAccountID,
 		Mode:           site.Meta.Mode,
 		Name:           site.Meta.Name,
+		Tags:           append([]string(nil), site.Meta.Tags...),
 		Domains:        site.Meta.CustomDomains,
 		DomainLinks:    s.domainLinks(site),
 		Origin:         site.Meta.Origin,
@@ -148,6 +149,40 @@ func (s siteService) SetName(viewID, name string) error {
 		m.Name = clean
 		return nil
 	})
+	return mapSiteErr(err, viewID)
+}
+
+func (s siteService) UpdateTags(viewID string, edit func(current []string) ([]string, error)) error {
+	site, err := s.a.st.ByViewID(viewID)
+	if err != nil {
+		return mapSiteGone(err, viewID)
+	}
+	// Errors from edit and from validation are the caller's own: they pass
+	// through Update unchanged and are told apart from the store's by identity.
+	var own error
+	err = s.a.st.Update(site, func(m *store.Meta) error {
+		if m.IsLocked() {
+			return store.ErrLocked
+		}
+		next, err := edit(append([]string(nil), m.Tags...))
+		if err != nil {
+			own = err
+			return err
+		}
+		clean, err := store.CleanTags(next)
+		if err != nil {
+			own = err
+			return err
+		}
+		if len(clean) == 0 {
+			clean = nil
+		}
+		m.Tags = clean
+		return nil
+	})
+	if own != nil {
+		return own
+	}
 	return mapSiteErr(err, viewID)
 }
 

@@ -3,11 +3,15 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"mime/multipart"
 	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 func payloadTags(t *testing.T, w *httptest.ResponseRecorder) []string {
@@ -155,5 +159,107 @@ func TestCreateWithBadTagsLeavesNothing(t *testing.T) {
 	}
 	if len(all) != 0 {
 		t.Errorf("a refused creation left %d site(s) behind", len(all))
+	}
+}
+
+// ---- the seam ----
+
+func TestSiteServiceInfoCarriesTags(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+	if w := e.putSettings(t, edit, c.EditPassword, `{"tags":["b","A"]}`); w.Code != 200 {
+		t.Fatalf("set: %d %s", w.Code, w.Body)
+	}
+	info, ok := e.api.SiteService().Info(c.ID)
+	if !ok {
+		t.Fatal("Info: site not found")
+	}
+	if !reflect.DeepEqual(info.Tags, []string{"A", "b"}) {
+		t.Errorf("Info.Tags = %v", info.Tags)
+	}
+}
+
+func TestSiteServiceUpdateTags(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+	ss := e.api.SiteService()
+	if w := e.putSettings(t, edit, c.EditPassword, `{"tags":["a"]}`); w.Code != 200 {
+		t.Fatalf("set: %d %s", w.Code, w.Body)
+	}
+
+	err := ss.UpdateTags(c.ID, func(cur []string) ([]string, error) {
+		if !reflect.DeepEqual(cur, []string{"a"}) {
+			t.Errorf("callback got %v, want [a]", cur)
+		}
+		return []string{"a", "b"}, nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateTags: %v", err)
+	}
+	if got := e.storedTags(t, edit); !reflect.DeepEqual(got, []string{"a", "b"}) {
+		t.Errorf("stored = %v", got)
+	}
+
+	many := make([]string, 11)
+	for i := range many {
+		many[i] = "t" + string(rune('a'+i))
+	}
+	err = ss.UpdateTags(c.ID, func([]string) ([]string, error) { return many, nil })
+	if !errors.Is(err, store.ErrTooManyTags) {
+		t.Errorf("11 tags: %v, want ErrTooManyTags", err)
+	}
+	if got := e.storedTags(t, edit); !reflect.DeepEqual(got, []string{"a", "b"}) {
+		t.Errorf("a refused list changed the site: %v", got)
+	}
+
+	boom := errors.New("boom")
+	err = ss.UpdateTags(c.ID, func([]string) ([]string, error) { return []string{"zzz"}, boom })
+	if err != boom {
+		t.Errorf("callback error: %v, want it unchanged", err)
+	}
+	if got := e.storedTags(t, edit); !reflect.DeepEqual(got, []string{"a", "b"}) {
+		t.Errorf("a callback error wrote: %v", got)
+	}
+
+	if err := ss.UpdateTags(c.ID, func([]string) ([]string, error) { return nil, nil }); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if got := e.storedTags(t, edit); got != nil {
+		t.Errorf("cleared tags stored as %#v, want nil", got)
+	}
+
+	err = ss.UpdateTags("nosuchsiteatallxxxxxxxxxxx", func([]string) ([]string, error) { return nil, nil })
+	if !errors.Is(err, ext.ErrSiteGone) {
+		t.Errorf("missing site: %v, want ErrSiteGone", err)
+	}
+}
+
+func TestSiteServiceUpdateTagsSeesConcurrentWrite(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+	ss := e.api.SiteService()
+
+	if err := ss.UpdateTags(c.ID, func([]string) ([]string, error) { return []string{"one"}, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if w := e.putSettings(t, edit, c.EditPassword, `{"tags":["one","api"]}`); w.Code != 200 {
+		t.Fatalf("PUT: %d %s", w.Code, w.Body)
+	}
+	var seen []string
+	err := ss.UpdateTags(c.ID, func(cur []string) ([]string, error) {
+		seen = append([]string(nil), cur...)
+		return append(cur, "two"), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(seen, []string{"api", "one"}) {
+		t.Errorf("callback saw %v, want [api one]", seen)
+	}
+	if got := e.storedTags(t, edit); !reflect.DeepEqual(got, []string{"api", "one", "two"}) {
+		t.Errorf("stored = %v", got)
 	}
 }

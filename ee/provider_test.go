@@ -172,6 +172,32 @@ func (s *fakeSites) SetName(id, name string) error {
 	return nil
 }
 
+// UpdateTags mirrors the real siteService: gone, locked, then the callback,
+// then the core's one tag rule; an empty result is stored as nil.
+func (s *fakeSites) UpdateTags(id string, edit func([]string) ([]string, error)) error {
+	info, ok := s.infos[id]
+	if !ok {
+		return fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
+	}
+	if info.Locked != nil {
+		return fmt.Errorf("%w: %s", ext.ErrSiteLocked, id)
+	}
+	next, err := edit(append([]string(nil), info.Tags...))
+	if err != nil {
+		return err
+	}
+	clean, err := store.CleanTags(next)
+	if err != nil {
+		return err
+	}
+	if len(clean) == 0 {
+		clean = nil
+	}
+	info.Tags = clean
+	s.infos[id] = info
+	return nil
+}
+
 func (s *fakeSites) RotateEditPassword(id string) (string, error) {
 	if info, ok := s.infos[id]; ok && info.Locked != nil {
 		return "", fmt.Errorf("%w: %s", ext.ErrSiteLocked, id)
