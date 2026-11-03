@@ -78,3 +78,18 @@ func TestCheckFrontDoor(t *testing.T) {
 		t.Errorf("off: %v", err)
 	}
 }
+
+// With accounts off there is no session to use: session origins are set but
+// do nothing, which startup says once.
+func TestSessionOriginsInertWarning(t *testing.T) {
+	c := Config{SessionOrigins: []string{"https://www.sitebin.io"}}
+	if got := c.SessionOriginsWarning(false); !strings.Contains(got, "SITEBIN_SESSION_ORIGINS") || !strings.Contains(got, "accounts are off") {
+		t.Errorf("accounts off: %q", got)
+	}
+	if got := c.SessionOriginsWarning(true); got != "" {
+		t.Errorf("accounts on: %q, want no warning", got)
+	}
+	if got := (Config{}).SessionOriginsWarning(false); got != "" {
+		t.Errorf("unset: %q, want no warning", got)
+	}
+}

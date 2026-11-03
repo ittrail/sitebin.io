@@ -82,3 +82,14 @@ func (c Config) CheckFrontDoor(embedHonoured, accountsOn bool) error {
 	}
 	return nil
 }
+
+// SessionOriginsWarning is what startup logs when SITEBIN_SESSION_ORIGINS is
+// set on an edition that embeds but has accounts off: there is no session to
+// use, so the origins act as plain embed origins. "" when there is nothing
+// to say. (The community build clears the setting with its own warning.)
+func (c Config) SessionOriginsWarning(accountsOn bool) string {
+	if len(c.SessionOrigins) == 0 || accountsOn {
+		return ""
+	}
+	return "SITEBIN_SESSION_ORIGINS is set, but accounts are off (SITEBIN_ACCOUNT_MODE=open): there is no session to use, so these origins act as plain embed origins"
+}

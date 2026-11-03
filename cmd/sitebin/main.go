@@ -260,6 +260,9 @@ func serve() error {
 		if err := cfg.CheckFrontDoor(p.EmbedOriginsAllowed(), p.AccountsEnabled()); err != nil {
 			return err
 		}
+		if msg := cfg.SessionOriginsWarning(p.AccountsEnabled()); msg != "" {
+			slog.Warn(msg)
+		}
 		slog.Info("extension active", "name", p.Name(), "version", p.Version(),
 			"accounts_enabled", p.AccountsEnabled())
 	}
