@@ -471,6 +471,10 @@ func TestFrontDoorRedirects(t *testing.T) {
 		if w.Code != 302 || w.Header().Get("Location") != home {
 			t.Fatalf("got %d %q, want 302 %q", w.Code, w.Header().Get("Location"), home)
 		}
+		// Where / leads depends on the session: no cache may keep it.
+		if got := w.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("Cache-Control = %q, want no-store", got)
+		}
 	})
 	t.Run("an unknown cookie is signed out", func(t *testing.T) {
 		e := frontEnv(t)
@@ -488,6 +492,9 @@ func TestFrontDoorRedirects(t *testing.T) {
 		w := e.public(t, req)
 		if w.Code != 303 || w.Header().Get("Location") != "/account" {
 			t.Fatalf("got %d %q, want 303 /account", w.Code, w.Header().Get("Location"))
+		}
+		if got := w.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("Cache-Control = %q, want no-store", got)
 		}
 	})
 	t.Run("another host is still a 404", func(t *testing.T) {
@@ -511,5 +518,38 @@ func TestFrontDoorRedirects(t *testing.T) {
 		if w.Code != 200 || !strings.Contains(w.Body.String(), "landing") {
 			t.Fatalf("got %d, want the landing page", w.Code)
 		}
+	})
+}
+
+// The front door rides on cross-origin embedding, an enterprise capability.
+// Where it is not honoured -- the community build (no provider), or a
+// provider without the embed capability -- the root stays the landing page
+// even if SITEBIN_FRONT_DOOR reached the API, whatever main.go cleared.
+func TestFrontDoorInertWithoutEmbedding(t *testing.T) {
+	const home = "https://sitebin.io"
+	over := map[string]string{
+		"SITEBIN_FRONT_DOOR":    "true",
+		"SITEBIN_HOME_URL":      home,
+		"SITEBIN_EMBED_ORIGINS": home,
+	}
+	check := func(t *testing.T, e *env) {
+		t.Helper()
+		if !e.api.cfg.FrontDoor {
+			t.Fatal("the test needs SITEBIN_FRONT_DOOR to reach the API")
+		}
+		w := e.public(t, httptest.NewRequest("GET", "/", nil))
+		if w.Code != 200 || !strings.Contains(w.Body.String(), "landing") {
+			t.Fatalf("got %d %q, want the landing page", w.Code, w.Header().Get("Location"))
+		}
+	}
+	t.Run("community, no provider", func(t *testing.T) {
+		check(t, newEnv(t, over))
+	})
+	t.Run("provider without the embed capability", func(t *testing.T) {
+		registerProvider(t, &sessionProvider{
+			fakeProvider: &fakeProvider{enabled: true, embedOK: false},
+			sessions:     map[string]string{"owner-cookie": "acct-1"},
+		})
+		check(t, newEnv(t, over))
 	})
 }

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ittrail/sitebin.io/internal/ext"
 	"github.com/ittrail/sitebin.io/internal/ids"
 )
 
@@ -40,7 +41,9 @@ func (a *API) landingPage(w http.ResponseWriter, r *http.Request) {
 	}
 	// With a front door, the root is not where people publish: a signed-in
 	// visitor goes to their dashboard, everyone else to the front door.
-	if a.cfg.FrontDoor {
+	// Where / leads depends on the session, so no cache may keep the answer.
+	if a.frontDoorHonoured() {
+		w.Header().Set("Cache-Control", "no-store")
 		if sa, ok := a.sessionProvider(); ok {
 			if _, ok := sa.SessionAccount(r); ok {
 				http.Redirect(w, r, "/account", http.StatusSeeOther)
@@ -51,6 +54,20 @@ func (a *API) landingPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.servePage(w, "static/index.html")
+}
+
+// frontDoorHonoured reports whether SITEBIN_FRONT_DOOR is in effect. The
+// front door is a drop on another origin, which only works where embed
+// origins are honoured: an active provider with the embed capability.
+// Without one the root stays the landing page, so the instance is never left
+// without a working drop -- whatever reached the config (main.go also clears
+// the setting in that case, and logs it).
+func (a *API) frontDoorHonoured() bool {
+	if !a.cfg.FrontDoor {
+		return false
+	}
+	p, ok := ext.Get()
+	return ok && p.EmbedOriginsAllowed()
 }
 
 func (a *API) editPage(w http.ResponseWriter, r *http.Request) {
