@@ -3,13 +3,10 @@
 package ee
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"net/http"
-	"os"
 	"sort"
 
 	"github.com/ittrail/sitebin.io/ee/account"
@@ -255,23 +252,17 @@ func (p *provider) tagsRefused(w http.ResponseWriter, title, why string) {
 	msgTmpl.Execute(w, msgView{Title: title, Body: "Sorry — " + why + ".", Back: "/account/tags"})
 }
 
-// registryFailed answers a registry write that failed: a 400 with the
-// reason when the registry's rules (or the operation's own checks) refused
-// it, a logged 500 when the disk did. The rules' errors — the limits, a
-// taken group name, a colour, a dangling group — all carry messages written
-// for people; the disk's carry paths, and are never shown.
+// registryFailed answers a tag change that failed: a 400 in the rule's
+// words when one of the tag rules refused it (tagRuleText), and a logged 500
+// that shows nothing of the error for anything else — a disk, a listing, an
+// error nobody wrote for people, which may carry a path.
 func (p *provider) registryFailed(w http.ResponseWriter, acc *account.Account, title string, err error) {
-	var pathErr *fs.PathError
-	var linkErr *os.LinkError
-	var syntaxErr *json.SyntaxError
-	var typeErr *json.UnmarshalTypeError
-	if errors.Is(err, account.ErrNotFound) || errors.As(err, &pathErr) || errors.As(err, &linkErr) ||
-		errors.As(err, &syntaxErr) || errors.As(err, &typeErr) {
-		slog.Error("tags: the account's tag registry could not be written", "account", acc.ID, "err", err)
-		http.Error(w, "could not save the tag settings", http.StatusInternalServerError)
+	if why, ok := tagRuleText(err); ok {
+		p.tagsRefused(w, title, why)
 		return
 	}
-	p.tagsRefused(w, title, err.Error())
+	slog.Error("tags: the account's tag settings could not be saved", "account", acc.ID, "err", err)
+	http.Error(w, "could not save the tag settings", http.StatusInternalServerError)
 }
 
 // ---- groups ----
@@ -494,9 +485,10 @@ type skippedSite struct {
 // each under its site lock: edit receives the list stored right then and
 // says whether it changed it. A locked site, or one whose write failed, is
 // skipped and returned; a vanished one is ignored. Each changed site gets a
-// line in its log.
-func (p *provider) retagSites(r *http.Request, acc *account.Account, sites []ext.SiteInfo, key string, edit func(cur []string) ([]string, bool)) []skippedSite {
+// line in its log, and is counted.
+func (p *provider) retagSites(r *http.Request, acc *account.Account, sites []ext.SiteInfo, key string, edit func(cur []string) ([]string, bool)) (int, []skippedSite) {
 	var skipped []skippedSite
+	n := 0
 	for _, s := range sites {
 		if !carriesTag(s.Tags, key) {
 			continue
@@ -510,6 +502,7 @@ func (p *provider) retagSites(r *http.Request, acc *account.Account, sites []ext
 		switch {
 		case err == nil:
 			if changed {
+				n++
 				p.recordSite(r, acc, s.ViewID, provenance.ActionTags, "")
 			}
 		case errors.Is(err, ext.ErrSiteGone):
@@ -525,7 +518,7 @@ func (p *provider) retagSites(r *http.Request, acc *account.Account, sites []ext
 			skipped = append(skipped, skippedSite{Label: label, URL: s.ViewURL, Locked: locked})
 		}
 	}
-	return skipped
+	return n, skipped
 }
 
 // renameIn replaces the tag key in cur by target, unless cur carries the
@@ -679,17 +672,16 @@ func (p *provider) tagRename(w http.ResponseWriter, r *http.Request, acc *accoun
 		}
 	}
 
-	skipped := p.retagSites(r, acc, sites, key, func(cur []string) ([]string, bool) {
+	changed, skipped := p.retagSites(r, acc, sites, key, func(cur []string) ([]string, bool) {
 		return renameIn(cur, key, newKey, target)
 	})
-	if err := p.accounts.UpdateTags(acc.ID, func(reg *account.TagRegistry) error {
+	err = p.accounts.UpdateTags(acc.ID, func(reg *account.TagRegistry) error {
 		renameEntry(reg, key, newKey, target)
 		return nil
-	}); err != nil {
-		p.sitesDoneRegistryFailed(w, acc, err)
+	})
+	if p.accountWideFailed(w, r, acc, "rename", changed, "That tag was not renamed", err) {
 		return
 	}
-	p.recordAccount(r, acc.ID, provenance.ActionTags, provenance.SurfaceDashboard, provenance.AuthSession, "rename")
 	flash, verb := "renamed", "renamed"
 	if merge {
 		flash, verb = "merged", "merged"
@@ -725,17 +717,16 @@ func (p *provider) tagDelete(w http.ResponseWriter, r *http.Request, acc *accoun
 		return
 	}
 
-	skipped := p.retagSites(r, acc, sites, key, func(cur []string) ([]string, bool) {
+	changed, skipped := p.retagSites(r, acc, sites, key, func(cur []string) ([]string, bool) {
 		return removeFrom(cur, key)
 	})
-	if err := p.accounts.UpdateTags(acc.ID, func(reg *account.TagRegistry) error {
+	err := p.accounts.UpdateTags(acc.ID, func(reg *account.TagRegistry) error {
 		delete(reg.Tags, key)
 		return nil
-	}); err != nil {
-		p.sitesDoneRegistryFailed(w, acc, err)
+	})
+	if p.accountWideFailed(w, r, acc, "delete", changed, "That tag was not deleted", err) {
 		return
 	}
-	p.recordAccount(r, acc.ID, provenance.ActionTags, provenance.SurfaceDashboard, provenance.AuthSession, "delete")
 	p.finishAccountWide(w, r, "deleted", "Tag deleted", "“"+name+"”", skipped)
 }
 
@@ -756,6 +747,27 @@ func (p *provider) tagState(w http.ResponseWriter, acc *account.Account) ([]ext.
 		return nil, account.TagRegistry{}, false
 	}
 	return sites, reg, true
+}
+
+// accountWideFailed records an account-wide rename or delete (op) in the
+// account's log once it changed something — a site (changed counts them) or
+// the registry — and answers the request itself when the registry write
+// (err) failed, reporting whether it did. Sites changed before a failed
+// registry write keep the change, so the log says it happened; with none
+// changed nothing did, and nothing is recorded.
+func (p *provider) accountWideFailed(w http.ResponseWriter, r *http.Request, acc *account.Account, op string, changed int, title string, err error) bool {
+	if err == nil || changed > 0 {
+		p.recordAccount(r, acc.ID, provenance.ActionTags, provenance.SurfaceDashboard, provenance.AuthSession, op)
+	}
+	switch {
+	case err == nil:
+		return false
+	case changed == 0:
+		p.registryFailed(w, acc, title, err)
+	default:
+		p.sitesDoneRegistryFailed(w, acc, err)
+	}
+	return true
 }
 
 // sitesDoneRegistryFailed answers an account-wide change whose sites were

@@ -10,6 +10,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 func tagsFile(s *Store, id string) string { return filepath.Join(s.accountDir(id), "tags.json") }
@@ -94,11 +96,19 @@ func TestTagRegistryLimits(t *testing.T) {
 			r.Tags["a"] = TagMeta{Name: "a", Color: "orange"}
 			return nil
 		}},
-		{"unknown group", nil, func(r *TagRegistry) error {
+		{"unknown group", ErrUnknownGroup, func(r *TagRegistry) error {
 			r.Tags["a"] = TagMeta{Name: "a", Group: "g_nope"}
 			return nil
 		}},
-		{"key mismatch", nil, func(r *TagRegistry) error {
+		{"dup group id", ErrBadGroupID, func(r *TagRegistry) error {
+			r.Groups = append(r.Groups, TagGroup{ID: "g_1", Name: "Typ"})
+			return nil
+		}},
+		{"no group id", ErrBadGroupID, func(r *TagRegistry) error {
+			r.Groups = append(r.Groups, TagGroup{Name: "Typ"})
+			return nil
+		}},
+		{"key mismatch", store.ErrBadTag, func(r *TagRegistry) error {
 			r.Tags["b"] = TagMeta{Name: "a"}
 			return nil
 		}},
@@ -111,6 +121,18 @@ func TestTagRegistryLimits(t *testing.T) {
 		after, _ := os.ReadFile(tagsFile(s, a.ID))
 		if string(after) != string(before) {
 			t.Errorf("%s: file changed", c.name)
+		}
+	}
+	// The limit counts the registry, not the tags the sites carry, and its
+	// message says so; the two refusals that used to be anonymous keep
+	// their words.
+	for err, want := range map[error]string{
+		ErrTooManyRegistryTags: "an account can give at most 200 tags a group or colour",
+		ErrBadGroupID:          "a tag group needs a unique id",
+		ErrUnknownGroup:        "unknown tag group",
+	} {
+		if err.Error() != want {
+			t.Errorf("message %q, want %q", err.Error(), want)
 		}
 	}
 	// A mutate error passes through and writes nothing.

@@ -20,18 +20,24 @@ import (
 const (
 	// MaxTagGroups caps the groups one account keeps.
 	MaxTagGroups = 20
-	// MaxRegistryTags caps the tags one account keeps in its registry.
+	// MaxRegistryTags caps the entries of the registry: the tags with a
+	// group or a colour, or created ahead of use. The tags the sites carry
+	// are not counted; store.MaxSiteTags caps those per site.
 	MaxRegistryTags = 200
 )
 
 // TagColors are the palette ids a group or tag may carry (hex lives in CSS).
 var TagColors = []string{"blue", "green", "amber", "red", "violet", "teal", "pink", "grey"}
 
+// The registry's refusals. Every message is written for the person who
+// made the change, so a page may show it as it is.
 var (
 	ErrTooManyGroups       = errors.New("an account has at most 20 tag groups")
-	ErrTooManyRegistryTags = errors.New("an account has at most 200 tags")
+	ErrTooManyRegistryTags = errors.New("an account can give at most 200 tags a group or colour")
 	ErrGroupNameTaken      = errors.New("a tag group with that name already exists")
 	ErrBadColor            = errors.New("unknown tag colour")
+	ErrBadGroupID          = errors.New("a tag group needs a unique id")
+	ErrUnknownGroup        = errors.New("unknown tag group")
 )
 
 // TagGroup is a named, optionally coloured bundle of tags.
@@ -121,7 +127,7 @@ func (r *TagRegistry) validate() error {
 		}
 		r.Groups[i].Name = name
 		if g.ID == "" || groupIDs[g.ID] {
-			return errors.New("a tag group needs a unique id")
+			return ErrBadGroupID
 		}
 		groupIDs[g.ID] = true
 		if k := store.TagKey(name); names[k] {
@@ -144,7 +150,7 @@ func (r *TagRegistry) validate() error {
 			return ErrBadColor
 		}
 		if m.Group != "" && !groupIDs[m.Group] {
-			return errors.New("unknown tag group")
+			return ErrUnknownGroup
 		}
 	}
 	return nil

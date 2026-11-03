@@ -3,10 +3,16 @@
 package ee
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
@@ -675,5 +681,113 @@ func TestManageTagsPageListsGroupsAndTags(t *testing.T) {
 	}
 	if b := getAs(f.mux, "/account/tags?flash=%3Ci%3Ehi", f.cookie).Body.String(); strings.Contains(b, `class="flash"`) || strings.Contains(b, "<i>hi") {
 		t.Error("an unknown flash code reached the page")
+	}
+}
+
+// Only a rule's refusal reaches the page, as a 400 in the rule's words;
+// anything else is the instance's trouble: a logged 500 that shows none of
+// its text, which may carry paths. The manage page and the dashboard's add
+// form decide alike.
+func TestTagRefusalsShowOnlyRuleErrors(t *testing.T) {
+	f := manageAccount(t)
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	answer := map[string]func(err error) *httptest.ResponseRecorder{
+		"manage page": func(err error) *httptest.ResponseRecorder {
+			w := httptest.NewRecorder()
+			f.p.registryFailed(w, f.acc, "Nothing was saved", err)
+			return w
+		},
+		"add form": func(err error) *httptest.ResponseRecorder {
+			w := httptest.NewRecorder()
+			f.p.tagAddedWithoutGroup(w, httptest.NewRequest(http.MethodPost, "/account/sites/x/tags/add", nil), f.acc, "neu", err)
+			return w
+		},
+	}
+	known := []error{
+		account.ErrTooManyGroups, account.ErrTooManyRegistryTags, account.ErrGroupNameTaken,
+		account.ErrBadColor, account.ErrBadGroupID, account.ErrUnknownGroup, store.ErrBadTag,
+		errNoSuchGroup, errNoSuchTag,
+	}
+	for where, do := range answer {
+		for _, rule := range known {
+			w := do(fmt.Errorf("update tags: %w", rule))
+			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), rule.Error()) {
+				t.Errorf("%s, %q = %d %s, want 400 with its text", where, rule, w.Code, w.Body)
+			}
+			if strings.Contains(w.Body.String(), "update tags") {
+				t.Errorf("%s, %q: the wrapping reached the page", where, rule)
+			}
+		}
+		logs.Reset()
+		for _, other := range []error{
+			errors.New("tags: secret-detail went wrong"),
+			fmt.Errorf("list sites: %w", errors.New("readdir C:/data/secret-detail")),
+			&fs.PathError{Op: "rename", Path: "/data/accounts/secret-detail", Err: errors.New("denied")},
+			account.ErrNotFound,
+		} {
+			w := do(other)
+			if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "secret-detail") || strings.Contains(w.Body.String(), other.Error()) {
+				t.Errorf("%s, %q = %d %s, want a 500 without its text", where, other, w.Code, w.Body)
+			}
+		}
+		if n := strings.Count(logs.String(), "level=ERROR"); n != 4 || !strings.Contains(logs.String(), "secret-detail") {
+			t.Errorf("%s: %d errors logged, want 4 with their text: %s", where, n, logs.String())
+		}
+	}
+}
+
+// breakRegistryWrites makes every later registry write fail while reads
+// still work: the temporary file's name is taken by a directory.
+func (f *manageFixture) breakRegistryWrites() {
+	f.t.Helper()
+	if err := os.Mkdir(filepath.Join(f.host.dir, "accounts", f.acc.ID, "tags.json.tmp"), 0o755); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// An account-wide change whose sites were changed and whose registry write
+// failed still happened on those sites: the account log says so.
+func TestManageTagsRecordsAccountLineWhenRegistryFails(t *testing.T) {
+	for _, c := range []struct {
+		op    string
+		v     url.Values
+		after []string
+	}{
+		{"rename", url.Values{"tag": {"mockup"}, "op": {"rename"}, "value": {"Entwurf"}}, []string{"Entwurf,live", "Entwurf", "live"}},
+		{"delete", url.Values{"tag": {"mockup"}, "op": {"delete"}, "confirm": {"1"}}, []string{"live", "", "live"}},
+	} {
+		t.Run(c.op, func(t *testing.T) {
+			f := manageAccount(t, []string{"mockup", "live"}, []string{"mockup"}, []string{"live"})
+			f.setRegistry(mgGroups, map[string]account.TagMeta{"mockup": {Name: "mockup", Group: mgTyp}})
+			f.breakRegistryWrites()
+
+			w := f.tagOp(c.v)
+			if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "Only partly done") {
+				t.Fatalf("%s with a failing registry = %d %s", c.op, w.Code, w.Body)
+			}
+			if got := f.allTags(); !reflect.DeepEqual(got, c.after) {
+				t.Errorf("sites = %q, want %q", got, c.after)
+			}
+			if n := f.accountTagLines(c.op); n != 1 {
+				t.Errorf("account log has %d %s lines, want 1", n, c.op)
+			}
+		})
+	}
+
+	// Nothing changed on any site, and the registry write failed: nothing
+	// happened, and nothing is recorded.
+	f := manageAccount(t, []string{"live"})
+	f.setRegistry(mgGroups, map[string]account.TagMeta{"archiv": {Name: "archiv", Group: mgKunde}})
+	f.breakRegistryWrites()
+	w := f.tagOp(url.Values{"tag": {"archiv"}, "op": {"delete"}, "confirm": {"1"}})
+	if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "sites were updated") {
+		t.Errorf("a registry-only delete that failed = %d %s", w.Code, w.Body)
+	}
+	if n := f.accountTagLines("delete"); n != 0 {
+		t.Errorf("account log has %d delete lines for a change that did not happen", n)
 	}
 }

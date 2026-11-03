@@ -296,6 +296,27 @@ func tagBack(r *http.Request) string {
 // the account's.
 var errNoSuchGroup = errors.New("that tag group no longer exists")
 
+// tagRules are the refusals whose messages are written for the person who
+// made the change: the registry's rules, the tag rule, and the forms' own
+// checks. Only these ever reach a page; any other error is the instance's
+// trouble and may carry a path.
+var tagRules = []error{
+	account.ErrTooManyGroups, account.ErrTooManyRegistryTags, account.ErrGroupNameTaken,
+	account.ErrBadColor, account.ErrBadGroupID, account.ErrUnknownGroup,
+	store.ErrBadTag, errNoSuchGroup, errNoSuchTag,
+}
+
+// tagRuleText is the message of the rule that refused err, and whether one
+// did. It is the rule's own text, never err's, which may wrap it in more.
+func tagRuleText(err error) (string, bool) {
+	for _, rule := range tagRules {
+		if errors.Is(err, rule) {
+			return rule.Error(), true
+		}
+	}
+	return "", false
+}
+
 // tagFormError answers a tag form refused by the tag rules, and reports
 // whether it did. The rules' messages are written for people.
 func (p *provider) tagFormError(w http.ResponseWriter, r *http.Request, acc *account.Account, viewID string, err error) bool {
@@ -411,13 +432,9 @@ func (p *provider) registerTag(acc *account.Account, key, name, group string) er
 // missing rather than undoing what worked.
 func (p *provider) tagAddedWithoutGroup(w http.ResponseWriter, r *http.Request, acc *account.Account, name string, err error) {
 	status, why := http.StatusInternalServerError, "the account's tag settings could not be saved"
-	for _, known := range []error{errNoSuchGroup, account.ErrTooManyRegistryTags, account.ErrTooManyGroups, account.ErrGroupNameTaken, account.ErrBadColor, store.ErrBadTag} {
-		if errors.Is(err, known) {
-			status, why = http.StatusBadRequest, known.Error()
-			break
-		}
-	}
-	if status == http.StatusInternalServerError {
+	if rule, ok := tagRuleText(err); ok {
+		status, why = http.StatusBadRequest, rule
+	} else {
 		slog.Error("tags: a new tag's registry entry could not be written", "account", acc.ID, "err", err)
 	}
 	p.securityHeaders(w)
