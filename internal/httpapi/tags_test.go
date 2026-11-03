@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"mime/multipart"
+	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
@@ -261,5 +262,117 @@ func TestSiteServiceUpdateTagsSeesConcurrentWrite(t *testing.T) {
 	}
 	if got := e.storedTags(t, edit); !reflect.DeepEqual(got, []string{"api", "one", "two"}) {
 		t.Errorf("stored = %v", got)
+	}
+}
+
+// ---- MCP: tags are a setting like any other ----
+
+func mcpTags(m map[string]any) []any {
+	v, _ := m["tags"].([]any)
+	return v
+}
+
+func TestMCPSiteTags(t *testing.T) {
+	e := newEnv(t, nil)
+	cs := mcpClient(t, e, nil)
+
+	res := mcpCall(t, cs, "create_site", map[string]any{
+		"files":    []any{map[string]any{"path": "index.html", "text": "hi"}},
+		"settings": map[string]any{"tags": []any{"b", "a"}},
+	})
+	if res.IsError {
+		t.Fatalf("create_site: %s", mcpText(res))
+	}
+	m := res.StructuredContent.(map[string]any)
+	editID, _ := m["edit_id"].(string)
+	pw, _ := m["edit_password"].(string)
+	if got := mcpTags(m); !reflect.DeepEqual(got, []any{"a", "b"}) {
+		t.Errorf("create_site tags = %v", got)
+	}
+
+	res = mcpCall(t, cs, "update_site", map[string]any{
+		"edit_id": editID, "edit_password": pw,
+		"settings": map[string]any{"tags": []any{"c"}},
+	})
+	if res.IsError {
+		t.Fatalf("update_site: %s", mcpText(res))
+	}
+	if got := mcpTags(res.StructuredContent.(map[string]any)); !reflect.DeepEqual(got, []any{"c"}) {
+		t.Errorf("update_site tags = %v", got)
+	}
+
+	res = mcpCall(t, cs, "update_site", map[string]any{
+		"edit_id": editID, "edit_password": pw,
+		"settings": map[string]any{"tags": []any{strings.Repeat("t", 31)}},
+	})
+	if !res.IsError || !strings.Contains(mcpText(res), "30 characters") {
+		t.Errorf("an over-long tag must be a tool error that states the rule: %s", mcpText(res))
+	}
+
+	res = mcpCall(t, cs, "update_site", map[string]any{
+		"edit_id": editID, "edit_password": pw,
+		"settings": map[string]any{"tags": []any{}},
+	})
+	if res.IsError {
+		t.Fatalf("update_site clear: %s", mcpText(res))
+	}
+	site, _ := e.st.ByEditID(editID)
+	if len(site.Meta.Tags) != 0 {
+		t.Errorf("an empty list did not clear the tags: %v", site.Meta.Tags)
+	}
+}
+
+func TestMCPResultOmitsEmptyTags(t *testing.T) {
+	e := newEnv(t, nil)
+	cs := mcpClient(t, e, nil)
+	res := mcpCall(t, cs, "create_site", map[string]any{
+		"files": []any{map[string]any{"path": "index.html", "text": "hi"}},
+	})
+	if res.IsError {
+		t.Fatalf("create_site: %s", mcpText(res))
+	}
+	m := res.StructuredContent.(map[string]any)
+	res = mcpCall(t, cs, "get_site", map[string]any{
+		"edit_id": m["edit_id"], "edit_password": m["edit_password"],
+	})
+	if res.IsError {
+		t.Fatalf("get_site: %s", mcpText(res))
+	}
+	raw, _ := json.Marshal(res.StructuredContent)
+	if strings.Contains(string(raw), `"tags"`) {
+		t.Errorf("an untagged site's result must carry no tags key: %s", raw)
+	}
+}
+
+func TestMCPListSitesCarriesTags(t *testing.T) {
+	e := newEnv(t, nil)
+	p := &fakeProvider{
+		enabled: true,
+		owner:   "acct-1",
+		bearer:  map[string]string{"sbp_tok": "acct-1"},
+		owned:   map[string][]string{},
+	}
+	ext.Register(p)
+	defer ext.Reset()
+
+	cs := mcpClient(t, e, http.Header{"Authorization": {"Bearer sbp_tok"}})
+	res := mcpCall(t, cs, "create_site", map[string]any{
+		"files":    []any{map[string]any{"path": "index.html", "text": "hi"}},
+		"settings": map[string]any{"tags": []any{"Work", "client"}},
+	})
+	if res.IsError {
+		t.Fatalf("create_site: %s", mcpText(res))
+	}
+	editID := res.StructuredContent.(map[string]any)["edit_id"].(string)
+	site, _ := e.st.ByEditID(editID)
+	p.owned["acct-1"] = []string{site.ViewID}
+
+	res = mcpCall(t, cs, "list_sites", map[string]any{})
+	if res.IsError {
+		t.Fatalf("list_sites: %s", mcpText(res))
+	}
+	sites := res.StructuredContent.(map[string]any)["sites"].([]any)
+	if len(sites) != 1 || !reflect.DeepEqual(mcpTags(sites[0].(map[string]any)), []any{"client", "Work"}) {
+		t.Errorf("list_sites does not carry the tags: %v", sites)
 	}
 }

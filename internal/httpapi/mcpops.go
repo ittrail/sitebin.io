@@ -186,6 +186,7 @@ func (o mcpOps) siteResult(site *store.Site) *mcp.SiteResult {
 		ViewURL:       o.a.cfg.ViewURL(m.ID),
 		EditURL:       o.a.cfg.EditURL(m.EditID),
 		Name:          m.Name,
+		Tags:          append([]string(nil), m.Tags...),
 		Mode:          m.Mode,
 		EntryFile:     m.EntryFile,
 		SPAFallback:   m.SPAFallback,
@@ -253,6 +254,7 @@ func mcpLock(l *store.SiteLock) *mcp.SiteLock {
 func settingsToUpdateSet(s mcp.Settings) updateSet {
 	set := updateSet{
 		Name:         s.Name,
+		Tags:         s.Tags,
 		Mode:         s.Mode,
 		EntryFile:    s.EntryFile,
 		ViewPassword: s.ViewPassword,
@@ -335,6 +337,7 @@ func (o mcpOps) ListSites(_ context.Context, auth mcp.Auth) ([]mcp.SiteSummary, 
 			EditID:    site.Meta.EditID,
 			ViewURL:   o.a.cfg.ViewURL(site.Meta.ID),
 			Name:      site.Meta.Name,
+			Tags:      append([]string(nil), site.Meta.Tags...),
 			Mode:      site.Meta.Mode,
 			Bytes:     b,
 			FileCount: count,

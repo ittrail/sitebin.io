@@ -129,15 +129,16 @@ type DecodedFile struct {
 // field is optional; a nil pointer means "leave it alone", which is the same
 // distinction the JSON API's updateSet draws with the same technique.
 type Settings struct {
-	Name         *string `json:"name,omitempty" jsonschema:"a private label for the site, up to 60 characters, shown to its owner in the account's site list and on the edit page, never to visitors; an empty string removes it"`
-	Mode         *string `json:"mode,omitempty" jsonschema:"webserver (serve the files as a site), viewer (wrap a single document in a viewer), or container (Enterprise: run the services sitebin-container-compose.yaml declares; every change to that file restarts them)"`
-	EntryFile    *string `json:"entry_file,omitempty" jsonschema:"the file to serve at the site root"`
-	ViewPassword *string `json:"view_password,omitempty" jsonschema:"password visitors must enter; an empty string removes the protection"`
-	WebDAV       *bool   `json:"webdav_enabled,omitempty" jsonschema:"expose the site over WebDAV"`
-	FTP          *bool   `json:"ftp_enabled,omitempty" jsonschema:"expose the site over FTP"`
-	SPA          *bool   `json:"spa_fallback,omitempty" jsonschema:"webserver mode: serve index.html for unknown paths, for single-page apps"`
-	Cache        *string `json:"cache,omitempty" jsonschema:"browser caching: auto (the default — pages and data revalidate, content-hashed build files like index-BqCz7v8e.js are cached for a year), revalidate (every file is re-checked on every visit), hour, day, week or year (every file but pages and data is cached that long — only for files that never change under their name), or off (no Cache-Control header)"`
-	ExpiresAt    *string `json:"expires_at,omitempty" jsonschema:"RFC3339 timestamp when the site stops serving; the empty string clears it, where the plan allows"`
+	Name         *string   `json:"name,omitempty" jsonschema:"a private label for the site, up to 60 characters, shown to its owner in the account's site list and on the edit page, never to visitors; an empty string removes it"`
+	Tags         *[]string `json:"tags,omitempty" jsonschema:"private tags for the site, shown only to its owner: up to 10, each 1 to 30 characters without commas; case-insensitive, so Demo and demo are one tag; the list replaces the current tags, an empty list removes them all"`
+	Mode         *string   `json:"mode,omitempty" jsonschema:"webserver (serve the files as a site), viewer (wrap a single document in a viewer), or container (Enterprise: run the services sitebin-container-compose.yaml declares; every change to that file restarts them)"`
+	EntryFile    *string   `json:"entry_file,omitempty" jsonschema:"the file to serve at the site root"`
+	ViewPassword *string   `json:"view_password,omitempty" jsonschema:"password visitors must enter; an empty string removes the protection"`
+	WebDAV       *bool     `json:"webdav_enabled,omitempty" jsonschema:"expose the site over WebDAV"`
+	FTP          *bool     `json:"ftp_enabled,omitempty" jsonschema:"expose the site over FTP"`
+	SPA          *bool     `json:"spa_fallback,omitempty" jsonschema:"webserver mode: serve index.html for unknown paths, for single-page apps"`
+	Cache        *string   `json:"cache,omitempty" jsonschema:"browser caching: auto (the default — pages and data revalidate, content-hashed build files like index-BqCz7v8e.js are cached for a year), revalidate (every file is re-checked on every visit), hour, day, week or year (every file but pages and data is cached that long — only for files that never change under their name), or off (no Cache-Control header)"`
+	ExpiresAt    *string   `json:"expires_at,omitempty" jsonschema:"RFC3339 timestamp when the site stops serving; the empty string clears it, where the plan allows"`
 }
 
 // SiteResult is what every site-shaped tool returns. It is deliberately the
@@ -150,6 +151,7 @@ type SiteResult struct {
 	ViewURL       string   `json:"view_url" jsonschema:"the public URL of the site"`
 	EditURL       string   `json:"edit_url" jsonschema:"the human edit page for this site"`
 	Name          string   `json:"name,omitempty" jsonschema:"the site's private label, if it has one"`
+	Tags          []string `json:"tags,omitempty" jsonschema:"the site's private tags, if it has any"`
 	Mode          string   `json:"mode"`
 	EntryFile     string   `json:"entry_file,omitempty"`
 	SPAFallback   bool     `json:"spa_fallback"`
@@ -247,6 +249,7 @@ type SiteSummary struct {
 	EditID    string     `json:"edit_id"`
 	ViewURL   string     `json:"view_url"`
 	Name      string     `json:"name,omitempty" jsonschema:"the site's private label, if it has one"`
+	Tags      []string   `json:"tags,omitempty" jsonschema:"the site's private tags, if it has any"`
 	Mode      string     `json:"mode"`
 	Bytes     int64      `json:"bytes"`
 	FileCount int        `json:"file_count"`

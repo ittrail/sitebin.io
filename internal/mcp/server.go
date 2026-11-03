@@ -172,7 +172,8 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 	addTool(s, auth, &sdk.Tool{
 		Name: "update_site",
 		Description: "Change a site's settings, including its name — a private label the owner sees in the account's " +
-			"site list. Any field you omit is left alone. Setting name to an empty string removes it; setting " +
+			"site list — and its tags, private labels for grouping (the list replaces the current tags; an empty " +
+			"list removes them all). Any field you omit is left alone. Setting name to an empty string removes it; setting " +
 			"expires_at to an empty string clears the expiry, where the site's plan allows it.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in updateArgs) (*sdk.CallToolResult, *SiteResult, error) {
 		return out(ops.UpdateSite(ctx, auth, in.ref(), in.Settings))
