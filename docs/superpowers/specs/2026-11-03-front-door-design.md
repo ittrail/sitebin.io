@@ -360,3 +360,30 @@ website or the account.
      ticket"), so it brings a new terms version with it.
 2. **The sign-in check runs on all 25 pages.** The privacy page describes it
    (Section 7). The legal assessment is the operator's.
+
+## Corrections (planning / implementation)
+
+Earlier text above is left as written; these rulings replace it where they differ.
+
+- `GET /account/status` is a core route through `ext.SessionAccounts`, not an
+  ee `PublicRoutes` route. It answers CORS with credentials only for session
+  origins and is 404 without accounts.
+- The QR library is served at `/_sitebin/qrcode.min.js` on the instance, and
+  vendored beside `embed.js` elsewhere.
+- `edit.js`'s "Publish something new" stays `/`.
+- Provenance: the spec left the surface to the builder. A session-origin
+  create is recorded like any create (`recordCreate`: surface, auth = session,
+  account, IP, user agent). There is no new field, because `Meta.Origin` stays
+  the MCP marker.
+- The create gate clones the request without the `Cookie` header
+  (`createSiteWith`) when a cross-origin browser request does not come from a
+  session origin with `X-Sitebin-Session: 1`. This also closes a latent
+  same-site create hole.
+- The embed trusts only a real `<script>` element for the script's location
+  (DOM-clobbering hardening).
+- Accounts mode needs `SITEBIN_ALLOW_ANON_CREATE` (or an anonymous tier) for
+  anonymous drops; the hosted instance uses a drop tier.
+- Any page on a session origin can create sites in a signed-in visitor's
+  account, including any host/path address on sitebin.io / www.sitebin.io,
+  which "one owner per host" keeps to the operator's account. A landing page
+  reached through an alias host (not `BaseDomain`) now creates anonymous sites.

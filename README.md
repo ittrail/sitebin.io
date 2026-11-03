@@ -120,6 +120,8 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | `SITEBIN_TRACK_VIEWS` | `true` | Count per-site page views (Accept: text/html) + last-seen. |
 | `SITEBIN_READONLY` | `false` | Freeze new site creation. |
 | `SITEBIN_EMBED_ORIGINS` | — | Origins allowed to embed the create flow cross-origin (comma-separated, or `*`). *(Enterprise; ignored with a warning in community.)* See [Embed the drop area](#embed-the-drop-area-on-your-own-site). |
+| `SITEBIN_SESSION_ORIGINS` | — | Embed origins that may also use the visitor's **session** cross-origin: to create a site owned by the signed-in account, and to ask `GET /account/status` whether the visitor is signed in. Comma-separated `https://host[:port]` origins (`http://` only with `SITEBIN_HTTP_ONLY`; `*` is refused), each also allowed by `SITEBIN_EMBED_ORIGINS`, or the instance refuses to start. *(Enterprise with accounts; ignored with a warning in community.)* The session cookie is `SameSite=Lax`, so it reaches the instance from a session origin only when both share a registrable domain (`www.example.com` and `app.example.com`); a page on an unrelated domain gets no session. See [Embed the drop area](#embed-the-drop-area-on-your-own-site). |
+| `SITEBIN_FRONT_DOOR` | `false` | Make the instance's `/` a door to the operator's own site: a signed-in visitor gets `303 /account`, everyone else `302` to `SITEBIN_HOME_URL`. Needs `SITEBIN_HOME_URL` on another origin that is in `SITEBIN_EMBED_ORIGINS` (and, with accounts, in `SITEBIN_SESSION_ORIGINS`), so the drop can run there; startup refuses otherwise. *(Enterprise; ignored with a warning in community.)* |
 | `SITEBIN_RATE_CREATE_PER_HOUR` / `SITEBIN_RATE_CREATE_BURST` | `30` / `10` | Anonymous creation limit per IP. |
 | `SITEBIN_RATE_AUTH_PER_5MIN` | `10` | Password-attempt limit per (IP, site) — edit, view, and WebDAV auth. |
 | `SITEBIN_CLEANUP_INTERVAL` | `10m` | Expiry sweep interval. |
@@ -675,6 +677,29 @@ from), `demo` (simulate publishing, no network — great for landing pages),
 instead of rendering the built-in claim ticket). Events: `sitebin-published`
 (detail = create response) and `sitebin-error` (detail = `{status, error}`).
 Sitebin's own startpage is built on this component.
+
+**`session`** makes the component use the visitor's Sitebin account.
+It sends the session cookie and `X-Sitebin-Session: 1` with every request and
+asks `GET /account/status` once. Signed in, the fine print reads "publishes to
+your account at <host>" and the drop is created in that account. The claim
+ticket then follows the create response's `owned` flag. An owned drop shows
+"Saved to your account." with an **Open my account** link, and keeps the edit
+password in a collapsed details. An anonymous drop shows "Sign in, and your
+next drop renews itself." with a **Sign in** link. Every real publish also gets a
+QR code and a **Copy all** button. The QR library is loaded from the
+component's own directory (`/_sitebin/qrcode.min.js` on an instance; vendor it
+beside `embed.js` anywhere else). Only a real `<script>` element is trusted for
+that location.
+
+`session` works only on a page whose origin is in `SITEBIN_SESSION_ORIGINS`.
+On any other page the browser's preflight is refused and publishing fails,
+since that origin is not allowed to carry the session. Accounts mode also needs
+an anonymous tier (`SITEBIN_ANON_TIER`) or `SITEBIN_ALLOW_ANON_CREATE` for
+visitors who are not signed in.
+
+Any page on a session origin can create sites in a signed-in visitor's
+account. On sitebin.io that includes every host/path address under it, which
+"one owner per host" keeps to the operator's account.
 
 Embedding on a **different origin** needs the instance to allowlist that
 origin — set `SITEBIN_EMBED_ORIGINS=https://your-site.com` (or `*`) so the
@@ -1469,6 +1494,14 @@ the apex is same-site with the app.) It is a browser convenience, not a script
 credential — scripts and agents use an account API token, and MCP never reads
 the session. Signing out ends it at once. Anonymous sites and other accounts'
 sites still ask for the password.
+
+Creation follows the same rule. A cross-origin browser request creates a site
+in the signed-in account only from a `SITEBIN_SESSION_ORIGINS` origin and with
+`X-Sitebin-Session: 1`; from any other origin the session is ignored and the
+request counts as anonymous. Same-origin requests and non-browser clients
+(no `Origin`, no `Sec-Fetch-Site`) are unchanged. `GET /account/status`
+answers `{"signed_in":true|false}` to a session origin, never slides the
+session and sets no cookie.
 
 ### Account API tokens *(Enterprise)*
 

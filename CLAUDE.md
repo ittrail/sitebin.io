@@ -97,6 +97,15 @@ the owner's **browser session** (`sessionOwns`, via the optional
 `X-Sitebin-Session: 1` and a same-origin `Sec-Fetch-Site` when one is sent —
 and must never be loosened into `fromOwnBrowser`, which is a forgeable plan
 heuristic. MCP never reads the session, and the dashboard never reads a token.
+
+**Creation has the same rule.** A cross-origin browser request's session counts
+for `POST /api/sites` only from a session origin
+(`SITEBIN_SESSION_ORIGINS`) with `X-Sitebin-Session: 1`. Otherwise
+`createSiteWith` hands `AuthorizeCreate` a clone of the request without the
+`Cookie` header, so the site is anonymous (this closed a same-site create hole
+from sibling subdomains). Same-origin and non-browser requests (no `Origin`, no
+`Sec-Fetch-Site`) are unchanged. See
+`docs/superpowers/specs/2026-11-03-front-door-design.md` (Corrections).
 See `docs/superpowers/specs/2026-09-25-owner-session-edit-design.md`.
 
 ## Locked sites are an evidence hold
