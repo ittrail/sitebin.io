@@ -683,8 +683,10 @@ to check, also logged with `console.warn`.
 Sitebin's own startpage is built on this component.
 
 **`session`** makes the component use the visitor's Sitebin account.
-It sends the session cookie and `X-Sitebin-Session: 1` with every request and
-asks `GET /account/status` once. Signed in, the fine print reads "publishes to
+Its create request carries the session cookie and `X-Sitebin-Session: 1`. It
+also asks `GET /account/status` (with the cookie, without the header) when it
+is added to the page and again after **Publish another** (every `reset()`).
+Signed in, the fine print reads "publishes to
 your account at `<host>`" and the drop is created in that account. The claim
 ticket then follows the create response's `owned` flag. An owned drop shows
 "Saved to your account." with an **Open my account** link, and keeps the edit
@@ -697,9 +699,9 @@ that location.
 
 `session` works only on a page whose origin is in `SITEBIN_SESSION_ORIGINS`.
 On any other page the browser's preflight is refused and publishing fails,
-since that origin is not allowed to carry the session. Accounts mode also needs
-an anonymous tier (`SITEBIN_ANON_TIER`) or `SITEBIN_ALLOW_ANON_CREATE` for
-visitors who are not signed in.
+since that origin is not allowed to carry the session. Visitors who are not
+signed in can publish only where anonymous creation is allowed:
+`SITEBIN_ANON_TIER` in tiers mode, `SITEBIN_ALLOW_ANON_CREATE` in accounts mode.
 
 Any page on a session origin can create sites in a signed-in visitor's
 account. On sitebin.io that includes every host/path address under it, which
@@ -1504,8 +1506,9 @@ in the signed-in account only from a `SITEBIN_SESSION_ORIGINS` origin and with
 `X-Sitebin-Session: 1`; from any other origin the session is ignored and the
 request counts as anonymous. Same-origin requests and non-browser clients
 (no `Origin`, no `Sec-Fetch-Site`) are unchanged. `GET /account/status`
-answers `{"signed_in":true|false}` to a session origin, never slides the
-session and sets no cookie.
+answers `{"signed_in":true|false}` (with CORS credentials only for a session
+origin), never slides the session and sets no cookie; without accounts it is
+a `404`.
 
 ### Account API tokens *(Enterprise)*
 
