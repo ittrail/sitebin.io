@@ -703,8 +703,10 @@ func (a *API) createSiteWith(r *http.Request, opts createOpts) (*store.Site, str
 		// to the extension without it, so it creates an anonymous site (or is
 		// refused like any anonymous script), never one in the visitor's
 		// account. Ignored, not refused. Everything else below keeps r.
+		// A surface that is never one of Sitebin's pages (MCP, browserOK
+		// false) never has its session read, whatever headers it carries.
 		authReq := r
-		if a.crossOriginBrowser(r) && !a.sessionOriginRequest(r) {
+		if !opts.browserOK || (a.crossOriginBrowser(r) && !a.sessionOriginRequest(r)) {
 			authReq = withoutCookies(r)
 		}
 		var err error

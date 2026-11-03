@@ -1,12 +1,14 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/mcp"
 	"github.com/ittrail/sitebin.io/internal/provenance"
 )
 
@@ -552,4 +554,39 @@ func TestFrontDoorInertWithoutEmbedding(t *testing.T) {
 		})
 		check(t, newEnv(t, over))
 	})
+}
+
+// MCP never reads the session, by construction: a create through MCP hands
+// the extension a request without the Cookie header, whatever else it
+// carries -- no fetch metadata (an agent), or the shape of a front-door drop.
+// With no token the caller is anonymous, and MCP refuses an anonymous create
+// on a gated instance.
+func TestMCPCreateNeverReadsTheSession(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		headers map[string]string
+	}{
+		{"cookie only", nil},
+		{"cookie from the front door with the session header", map[string]string{
+			"Origin": frontDoorOrigin, "Sec-Fetch-Site": "same-site", sessionHeader: "1"}},
+		{"cookie with same-origin fetch metadata", map[string]string{"Sec-Fetch-Site": "same-origin"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e, p := frontDoorEnv(t)
+			req := httptest.NewRequest("POST", "/mcp", nil)
+			req.Header.Set("Cookie", "sb_test=owner-cookie")
+			for k, v := range c.headers {
+				req.Header.Set(k, v)
+			}
+			res, err := mcpOps{e.api}.CreateSite(context.Background(),
+				mcp.Auth{AccountsEnabled: true, ClientIP: "192.0.2.9", Request: req},
+				mcp.CreateInput{Files: []mcp.DecodedFile{{Path: "index.html", Data: []byte("<h1>hi</h1>")}}})
+			if err == nil {
+				t.Fatalf("MCP create with only a session cookie = %+v, want refused as anonymous", res)
+			}
+			if len(p.created) != 0 {
+				t.Errorf("OnSiteCreated = %v, want nothing linked", p.created)
+			}
+		})
+	}
 }

@@ -105,7 +105,8 @@ for `POST /api/sites` only from a session origin
 `createSiteWith` hands `AuthorizeCreate` a clone of the request without the
 `Cookie` header, so the site is anonymous (this closed a same-site create hole
 from sibling subdomains). Same-origin and non-browser requests (no `Origin`, no
-`Sec-Fetch-Site`) are unchanged. See
+`Sec-Fetch-Site`) are unchanged. MCP (`createOpts.browserOK` false) always
+gets the clone, so it never reads the session whatever it sends. See
 `docs/superpowers/specs/2026-11-03-front-door-design.md` (Corrections).
 
 ## Locked sites are an evidence hold
