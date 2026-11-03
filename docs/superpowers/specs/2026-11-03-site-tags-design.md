@@ -346,3 +346,29 @@ push the website docs.
   break only on tagged sites. Raised by the builder check, following the
   site-names precedent.
 - The dashboard stays script-free. Autocomplete is an HTML `<datalist>`.
+
+## Corrections (post-implementation, final review 2026-11-03)
+
+- **Deleting a group asks first**, like deleting a tag: a confirmation page
+  names the group and how many tags it holds, which stay without a group.
+  Only its own POST (`confirm=1`) deletes.
+- **"Alphabetical" means the reader's order**, not byte order: every list
+  "My account" shows (filter blocks and chips, a site's chips, the datalist,
+  the group selects, the manage page, the summary's facets) is ordered by the
+  Unicode root collation (`golang.org/x/text/collate`, `language.Und`, which
+  is German's standard order: Ä with A). The stored order in `meta.json`
+  (`CleanTags`) and the filter's URL (`Query`) keep their byte order, so no
+  data and no bookmark changes.
+- **The 200 limit counts registry entries** — tags with a group or a colour,
+  or created ahead of use — not the tags the sites carry. The error says so:
+  "an account can give at most 200 tags a group or colour".
+- **Only the rules' refusals reach a page** (400, in the rule's words):
+  the registry's limits, a taken group name, a colour, a bad group id
+  (`ErrBadGroupID`), an unknown group (`ErrUnknownGroup`), the tag rule and
+  the forms' "no longer exists". Everything else is a logged 500 that shows
+  nothing of the error. One list (`tagRuleText`) serves the manage page and
+  the dashboard's add form.
+- **An account-wide rename or delete that changed sites is recorded** in the
+  account log even when its registry write then fails.
+- **The GDPR export carries each site's tags** (`sites[].tags`), beside the
+  registry.

@@ -216,9 +216,14 @@ palette of 8: blue, green, amber, red, violet, teal, pink, grey), overrides the
 colour of a single tag, moves a tag to another group, renames a tag across all
 your sites (onto an existing tag it merges; that tag's group and colour win)
 and deletes a tag everywhere (the sites stay). Deleting a group keeps its tags,
-now without a group. Limits: 20 groups and 200 tags per account. Groups and
-colours exist only in "My account"; the API, MCP and edit page know tag names
-only.
+now without a group. Both deletes ask first. Limits per account: 20 groups, and
+200 tags with a group or a colour (or created ahead of use with a group) — a
+tag that only sits on sites is not counted; a site carries up to 10. Groups
+and colours exist only in "My account"; the API, MCP and edit page know tag
+names only. "My account" lists tags and groups alphabetically as a reader
+expects (Ä with A); the stored order and the filter's URL stay as they are.
+The GDPR export carries each site's tags and the account's groups and
+colours.
 
 ### Modes
 
