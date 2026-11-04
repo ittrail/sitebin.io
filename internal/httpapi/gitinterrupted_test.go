@@ -41,7 +41,6 @@ func TestGitInterruptedPushIsMarked(t *testing.T) {
 	}()
 	waitReceiving(t, site, body)
 	hangUp()
-	<-done
 
 	deadline := time.Now().Add(20 * time.Second)
 	for {
@@ -52,6 +51,14 @@ func TestGitInterruptedPushIsMarked(t *testing.T) {
 			t.Fatal("the interrupted push did not mark the repository")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	// The server is done with it; let the client's body writer, still
+	// waiting on the gate, run out against the closed connection.
+	close(body.gate)
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the client never returned")
 	}
 	if n := len(gitPushes(t, e, site)); n != 0 {
 		t.Errorf("%d git-push entries for an interrupted push", n)
