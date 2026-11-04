@@ -126,6 +126,7 @@ func (a *API) admit(w http.ResponseWriter, r *http.Request, site *store.Site, pa
 			return
 		}
 		a.countView(r, site)
+		a.recordPageView(r, site, addr, mount, pathMode)
 		w.Header().Set(upstreamHeader, upstream)
 		// Its folder too: the file server never sees it, but the trust
 		// marker in it decides the security headers on a custom domain,
@@ -138,6 +139,7 @@ func (a *API) admit(w http.ResponseWriter, r *http.Request, site *store.Site, pa
 		return
 	}
 	a.countView(r, site)
+	a.recordPageView(r, site, addr, mount, pathMode)
 	// A file site's Cache-Control, which Caddy sets on a 2xx or 304 only —
 	// computed on the path the file server will see.
 	prefix := mount

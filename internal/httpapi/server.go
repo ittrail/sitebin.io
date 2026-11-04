@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ittrail/sitebin.io/internal/analytics"
 	"github.com/ittrail/sitebin.io/internal/auth"
 	"github.com/ittrail/sitebin.io/internal/config"
 	"github.com/ittrail/sitebin.io/internal/ext"
@@ -68,6 +69,8 @@ type API struct {
 	git            *gitrepo.Runner // nil: Git is turned off, or no git binary
 	gitInspect     pushInspector   // nil: git; a test's stand-in for the push bookkeeping
 	sharingWarn    *auth.Limiter   // one "plan unknown" log line per account a minute
+	analytics      *analytics.Recorder
+	analyticsSalts *analytics.Salts // the one salt store: the recorder hashes with it, the sweep prunes it
 }
 
 // New wires the API. secret signs view-session cookies; webFS provides the
@@ -113,7 +116,34 @@ func New(cfg config.Config, st *store.Store, secret []byte, webFS fs.FS) (*API, 
 	// process) becomes a line in the operator's digest.
 	st.SetPurgeHook(a.onLockPurged)
 	a.git = newGitRunner(cfg, a.log)
+	a.analyticsSalts = analytics.NewSalts(cfg.DataDir)
+	a.analytics = newAnalyticsRecorder(cfg, st, a.analyticsSalts, a.log)
 	return a, nil
+}
+
+// AnalyticsRecorder is the writer of every site's analytics records. The
+// server runs it (Run) beside the cleanup sweep.
+func (a *API) AnalyticsRecorder() *analytics.Recorder { return a.analytics }
+
+// AnalyticsSalts is the salt store the recorder hashes visitor ids with, for
+// the sweep to prune.
+func (a *API) AnalyticsSalts() *analytics.Salts { return a.analyticsSalts }
+
+// newAnalyticsRecorder wires the recorder. A GeoIP database that does not
+// open never stops the instance: it is logged, and records carry no location.
+func newAnalyticsRecorder(cfg config.Config, st *store.Store, salts *analytics.Salts, log *slog.Logger) *analytics.Recorder {
+	geo, err := analytics.OpenGeo(cfg.AnalyticsGeoIP)
+	if err != nil {
+		log.Warn("analytics: GeoIP database not opened, records carry no location", "path", cfg.AnalyticsGeoIP, "err", err)
+		geo = nil
+	}
+	return analytics.NewRecorder(analytics.RecorderConfig{
+		DailyCap: cfg.AnalyticsDailyCap,
+		Salts:    salts,
+		Geo:      geo,
+		WithSite: st.WithStatsLock,
+		Log:      log,
+	})
 }
 
 // GitRunner is the runner the Git endpoint uses; nil when git is unavailable.

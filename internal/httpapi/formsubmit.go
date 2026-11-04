@@ -32,7 +32,7 @@ const (
 // mount is the path of the custom domain the form was posted under ("" at
 // a host's root): the site's own paths are below it.
 func (a *API) formSite(r *http.Request) (site *store.Site, viaPath bool, mount string, err error) {
-	if id := r.URL.Query().Get("_site"); id != "" && a.cfg.PathViews() && strings.EqualFold(hostWithoutPort(r.Host), a.cfg.BaseDomain) {
+	if id := a.formPathViewID(r); id != "" {
 		site, err := a.st.ByViewID(id)
 		if err == nil && !servesPathView(site) {
 			return nil, true, "", store.ErrNotFound
@@ -42,6 +42,15 @@ func (a *API) formSite(r *http.Request) (site *store.Site, viaPath bool, mount s
 	// An address that redirects or is off posts nothing.
 	site, mount, err = a.servingSiteByAddress(r)
 	return site, false, mount, err
+}
+
+// formPathViewID is the site id a /_sitebin/forms request names through a
+// path view (?_site= on the main domain), or "".
+func (a *API) formPathViewID(r *http.Request) string {
+	if id := r.URL.Query().Get("_site"); id != "" && a.cfg.PathViews() && strings.EqualFold(hostWithoutPort(r.Host), a.cfg.BaseDomain) {
+		return id
+	}
+	return ""
 }
 
 // submitForm is POST /_sitebin/forms/{key}. The checks run cheapest first,
@@ -170,6 +179,7 @@ func (a *API) submitForm(w http.ResponseWriter, r *http.Request) {
 	}
 	// Never the values, the filenames or the recipient.
 	a.log.Info("form submitted", "id", site.ViewID, "form", f.Key, "bytes", len(m.Data), "files", len(sub.Files))
+	a.recordFormEvent(r, site, f.Key)
 	a.formSucceeded(w, r, site, f, viaPath, mount, wantJSON)
 }
 

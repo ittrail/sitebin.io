@@ -326,6 +326,16 @@ func serve() error {
 	go func() { errs <- fmt.Errorf("public listener: %w", public.ListenAndServe()) }()
 	go func() { errs <- fmt.Errorf("internal listener: %w", internal.ListenAndServe()) }()
 	go cleanup.Run(ctx, st, cfg.CleanupInterval, api.GitRunner())
+	// The analytics writer. It stops after the listeners (below), so a page
+	// view authz admits while they shut down is still written, and it drains
+	// its queue for at most 2 seconds before it returns.
+	analyticsCtx, stopAnalytics := context.WithCancel(context.Background())
+	defer stopAnalytics()
+	analyticsDone := make(chan struct{})
+	go func() {
+		defer close(analyticsDone)
+		api.AnalyticsRecorder().Run(analyticsCtx)
+	}()
 
 	// Optional FTP server (off by default). Login is the edit UUID + edit
 	// password; each session is confined to that site's files.
@@ -386,6 +396,11 @@ func serve() error {
 	internal.Shutdown(shutdownCtx)
 	if ftpSrv != nil {
 		ftpSrv.Stop()
+	}
+	stopAnalytics()
+	select { // the analytics writer's last records
+	case <-analyticsDone:
+	case <-time.After(3 * time.Second):
 	}
 	select { // give caddy a moment to drain
 	case <-caddyDone:

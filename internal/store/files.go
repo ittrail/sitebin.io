@@ -107,6 +107,13 @@ func openContent(site *Site) (*os.Root, error) {
 // (WebDAV, FTP). The caller closes it.
 func OpenContentRoot(site *Site) (*os.Root, error) { return openContent(site) }
 
+// OpenServedRoot opens the folder the file server serves — files/, which in
+// viewer mode holds the generated wrapper beside _raw/ — as an os.Root. Unlike
+// OpenContentRoot it never creates the folder: it is for a reader that may run
+// after the site was deleted (the analytics page check), which must not bring
+// the folder back. The caller closes it.
+func OpenServedRoot(site *Site) (*os.Root, error) { return os.OpenRoot(site.FilesDir()) }
+
 // usage returns the current byte and file count under dir (0s if missing).
 // Only regular files count: a symlink or a socket a container left behind is
 // not content anyone uploaded, and nothing Sitebin serves.
