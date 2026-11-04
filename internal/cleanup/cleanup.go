@@ -363,6 +363,11 @@ func collectOne(ctx context.Context, st *store.Store, git *gitrepo.Runner, site 
 		slog.Info("git: removed the leftovers of an interrupted push", "site", site.ViewID, "entries", n)
 	}
 	if _, err := git.Collect(ctx, site.GitDir()); err != nil {
+		if ctx.Err() != nil {
+			// Cancelled on purpose: a delete, a lock or the shutdown.
+			slog.Debug("git gc stopped", "site", site.ViewID, "err", err)
+			return
+		}
 		slog.Error("git gc", "site", site.ViewID, "err", err)
 	}
 }
