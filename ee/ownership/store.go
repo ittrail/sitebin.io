@@ -69,6 +69,9 @@ var (
 	// ErrSiteOffered is a site that another offer which is not final
 	// already holds. A site is in at most one such offer.
 	ErrSiteOffered = errors.New("a site is already in an open offer")
+	// ErrDailyLimit is an account that has already created its limit of
+	// offers and invitations on the UTC day of the new record.
+	ErrDailyLimit = errors.New("the daily limit of offers and invitations is reached")
 )
 
 // Offer is a bundle of sites one account offers to an email address.
@@ -221,7 +224,7 @@ func (s *Store) checkSitesFree(self string, sites []string) error {
 // an empty State becomes open, a zero Created becomes now. It refuses a site
 // another non-final offer holds with ErrSiteOffered, and writes nothing then.
 // The stored offer is returned.
-func (s *Store) CreateOffer(o Offer) (Offer, error) {
+func (s *Store) CreateOffer(o Offer, dailyLimit int) (Offer, error) {
 	if len(o.Sites) == 0 {
 		return Offer{}, errors.New("an offer needs at least one site")
 	}
@@ -235,6 +238,9 @@ func (s *Store) CreateOffer(o Offer) (Offer, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.checkDailyLimit(o.From, o.Created, dailyLimit); err != nil {
+		return Offer{}, err
+	}
 	if !IsFinal(o.State) {
 		if err := s.checkSitesFree(o.ID, o.Sites); err != nil {
 			return Offer{}, err
@@ -342,7 +348,7 @@ func (s *Store) OpenOffers() ([]Offer, error) {
 // ---- invitations ----
 
 // CreateInvite stores i under a fresh id; the same normalising as CreateOffer.
-func (s *Store) CreateInvite(i Invite) (Invite, error) {
+func (s *Store) CreateInvite(i Invite, dailyLimit int) (Invite, error) {
 	i.ID = ids.New()
 	i.ToEmail = normEmail(i.ToEmail)
 	if i.State == "" {
@@ -353,6 +359,9 @@ func (s *Store) CreateInvite(i Invite) (Invite, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.checkDailyLimit(i.From, i.Created, dailyLimit); err != nil {
+		return Invite{}, err
+	}
 	if err := writeJSON(filepath.Join(s.invitesDir(), i.ID+".json"), i); err != nil {
 		return Invite{}, err
 	}
@@ -461,6 +470,60 @@ func (s *Store) DailyCount(accountID string, day time.Time) int {
 		}
 	}
 	return n
+}
+
+// strictCount counts the records in dir that match, reading every one. Unlike
+// the listings it does NOT skip a record it cannot read: a count that missed
+// one could let a request past a limit, so any read error is returned.
+func strictCount[T any](dir string, match func(T) bool) (int, error) {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, e := range ents {
+		id, ok := strings.CutSuffix(e.Name(), ".json")
+		if !ok || !ids.ValidID(id) {
+			continue
+		}
+		var v T
+		if err := readJSON(filepath.Join(dir, e.Name()), &v); err != nil {
+			if errors.Is(err, ErrNotFound) {
+				continue // vanished between the listing and the read
+			}
+			return 0, err
+		}
+		if match(v) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// checkDailyLimit refuses (ErrDailyLimit) a new record when the account has
+// already created limit offers and invitations on the UTC day of at. It runs
+// under s.mu, in the same locked section as the write, so parallel creates
+// cannot all pass. limit <= 0 means no limit. A read error is an error, never
+// a partial count. The caller holds s.mu.
+func (s *Store) checkDailyLimit(accountID string, at time.Time, limit int) error {
+	if limit <= 0 {
+		return nil
+	}
+	start := at.UTC().Truncate(24 * time.Hour)
+	end := start.Add(24 * time.Hour)
+	in := func(t time.Time) bool { t = t.UTC(); return !t.Before(start) && t.Before(end) }
+	no, err := strictCount(s.offersDir(), func(o Offer) bool { return o.From == accountID && in(o.Created) })
+	if err != nil {
+		return fmt.Errorf("could not count the offers: %w", err)
+	}
+	ni, err := strictCount(s.invitesDir(), func(i Invite) bool { return i.From == accountID && in(i.Created) })
+	if err != nil {
+		return fmt.Errorf("could not count the invitations: %w", err)
+	}
+	if no+ni >= limit {
+		return ErrDailyLimit
+	}
+	return nil
 }
 
 // ---- the share index ----

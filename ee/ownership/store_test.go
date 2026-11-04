@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,7 +36,7 @@ func TestOfferRoundTrip(t *testing.T) {
 		AvailableFrom: &avail, AcceptBy: acceptBy, Created: created,
 		State: StateOpen, Done: []string{a},
 	}
-	got, err := s.CreateOffer(in)
+	got, err := s.CreateOffer(in, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +70,7 @@ func TestInviteRoundTrip(t *testing.T) {
 	until := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
 	in := Invite{Site: ids.New(), From: ids.New(), ToEmail: " Carol@Example.com", Until: &until,
 		Created: time.Date(2026, 11, 4, 9, 0, 0, 0, time.UTC), State: StateOpen}
-	got, err := s.CreateInvite(in)
+	got, err := s.CreateInvite(in, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +90,7 @@ func TestInviteRoundTrip(t *testing.T) {
 
 func TestUpdateRunsUnderMutexAndMayRefuse(t *testing.T) {
 	s := newStore(t)
-	o, _ := s.CreateOffer(Offer{Sites: []string{ids.New()}, From: ids.New(), ToEmail: "a@b.c", State: StateOpen})
+	o, _ := s.CreateOffer(Offer{Sites: []string{ids.New()}, From: ids.New(), ToEmail: "a@b.c", State: StateOpen}, 0)
 	refuse := errors.New("no")
 	if _, err := s.UpdateOffer(o.ID, func(o *Offer) error { o.State = StateAccepted; return refuse }); err != refuse {
 		t.Fatalf("refusal = %v", err)
@@ -104,7 +105,7 @@ func TestUpdateRunsUnderMutexAndMayRefuse(t *testing.T) {
 	if _, err := s.UpdateOffer(ids.New(), func(*Offer) error { return nil }); !errors.Is(err, ErrNotFound) {
 		t.Errorf("update of a missing offer = %v", err)
 	}
-	i, _ := s.CreateInvite(Invite{Site: ids.New(), From: ids.New(), ToEmail: "a@b.c", State: StateOpen})
+	i, _ := s.CreateInvite(Invite{Site: ids.New(), From: ids.New(), ToEmail: "a@b.c", State: StateOpen}, 0)
 	if _, err := s.UpdateInvite(i.ID, func(i *Invite) error { i.State = StateDeclined; return nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -116,18 +117,18 @@ func TestUpdateRunsUnderMutexAndMayRefuse(t *testing.T) {
 func TestASiteIsInAtMostOneOpenOffer(t *testing.T) {
 	s := newStore(t)
 	site, other, third := ids.New(), ids.New(), ids.New()
-	first, err := s.CreateOffer(Offer{Sites: []string{site}, From: ids.New(), ToEmail: "a@b.c", State: StateOpen})
+	first, err := s.CreateOffer(Offer{Sites: []string{site}, From: ids.New(), ToEmail: "a@b.c", State: StateOpen}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateOffer(Offer{Sites: []string{other, site}, From: ids.New(), ToEmail: "x@b.c", State: StateOpen}); !errors.Is(err, ErrSiteOffered) {
+	if _, err := s.CreateOffer(Offer{Sites: []string{other, site}, From: ids.New(), ToEmail: "x@b.c", State: StateOpen}, 0); !errors.Is(err, ErrSiteOffered) {
 		t.Fatalf("create with an offered site = %v, want ErrSiteOffered", err)
 	}
 	// Nothing of the refused offer was written.
 	if open, _ := s.OpenOffers(); len(open) != 1 {
 		t.Fatalf("open offers = %d", len(open))
 	}
-	second, err := s.CreateOffer(Offer{Sites: []string{other}, From: ids.New(), ToEmail: "x@b.c", State: StateOpen})
+	second, err := s.CreateOffer(Offer{Sites: []string{other}, From: ids.New(), ToEmail: "x@b.c", State: StateOpen}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,13 +147,13 @@ func TestASiteIsInAtMostOneOpenOffer(t *testing.T) {
 	// Paused and accepting offers still hold their sites.
 	for _, st := range []string{StatePaused, StateAccepting} {
 		s.UpdateOffer(first.ID, func(o *Offer) error { o.State = st; return nil })
-		if _, err := s.CreateOffer(Offer{Sites: []string{site}, From: ids.New(), ToEmail: "z@b.c", State: StateOpen}); !errors.Is(err, ErrSiteOffered) {
+		if _, err := s.CreateOffer(Offer{Sites: []string{site}, From: ids.New(), ToEmail: "z@b.c", State: StateOpen}, 0); !errors.Is(err, ErrSiteOffered) {
 			t.Fatalf("site of a %s offer = %v, want ErrSiteOffered", st, err)
 		}
 	}
 	// Once the first offer is cancelled, the site can be offered again.
 	s.UpdateOffer(first.ID, func(o *Offer) error { o.State = StateCancelled; return nil })
-	if _, err := s.CreateOffer(Offer{Sites: []string{site}, From: ids.New(), ToEmail: "z@b.c", State: StateOpen}); err != nil {
+	if _, err := s.CreateOffer(Offer{Sites: []string{site}, From: ids.New(), ToEmail: "z@b.c", State: StateOpen}, 0); err != nil {
 		t.Fatalf("offer after cancel = %v", err)
 	}
 }
@@ -162,10 +163,10 @@ func TestLookups(t *testing.T) {
 	alice, bob := ids.New(), ids.New()
 	s1, s2, s3 := ids.New(), ids.New(), ids.New()
 	t0 := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
-	o1, _ := s.CreateOffer(Offer{Sites: []string{s1, s2}, From: alice, ToEmail: "Z@Example.com", State: StateOpen, Created: t0})
-	o2, _ := s.CreateOffer(Offer{Sites: []string{s3}, From: bob, ToEmail: "z@example.com", State: StateAccepted, Created: t0.Add(time.Hour)})
-	i1, _ := s.CreateInvite(Invite{Site: s1, From: alice, ToEmail: "Y@example.com", State: StateOpen, Created: t0})
-	i2, _ := s.CreateInvite(Invite{Site: s1, From: alice, ToEmail: "y@example.com", State: StateDeclined, Created: t0.Add(time.Hour)})
+	o1, _ := s.CreateOffer(Offer{Sites: []string{s1, s2}, From: alice, ToEmail: "Z@Example.com", State: StateOpen, Created: t0}, 0)
+	o2, _ := s.CreateOffer(Offer{Sites: []string{s3}, From: bob, ToEmail: "z@example.com", State: StateAccepted, Created: t0.Add(time.Hour)}, 0)
+	i1, _ := s.CreateInvite(Invite{Site: s1, From: alice, ToEmail: "Y@example.com", State: StateOpen, Created: t0}, 0)
+	i2, _ := s.CreateInvite(Invite{Site: s1, From: alice, ToEmail: "y@example.com", State: StateDeclined, Created: t0.Add(time.Hour)}, 0)
 
 	offerIDs := func(os []Offer) []string {
 		var out []string
@@ -210,7 +211,7 @@ func TestLookups(t *testing.T) {
 func TestAtomicWritesSurviveAndCrashedTempIsIgnored(t *testing.T) {
 	dir := t.TempDir()
 	s, _ := New(dir)
-	o, _ := s.CreateOffer(Offer{Sites: []string{ids.New()}, From: ids.New(), ToEmail: "a@b.c", State: StateOpen})
+	o, _ := s.CreateOffer(Offer{Sites: []string{ids.New()}, From: ids.New(), ToEmail: "a@b.c", State: StateOpen}, 0)
 	for i := 0; i < 5; i++ {
 		if _, err := s.UpdateOffer(o.ID, func(o *Offer) error { o.Done = append(o.Done, "x"); return nil }); err != nil {
 			t.Fatal(err)
@@ -241,7 +242,7 @@ func TestDailyCount(t *testing.T) {
 	day := time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)
 	mk := func(from string, at time.Time) {
 		t.Helper()
-		if _, err := s.CreateOffer(Offer{Sites: []string{ids.New()}, From: from, ToEmail: "a@b.c", State: StateOpen, Created: at}); err != nil {
+		if _, err := s.CreateOffer(Offer{Sites: []string{ids.New()}, From: from, ToEmail: "a@b.c", State: StateOpen, Created: at}, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -253,7 +254,7 @@ func TestDailyCount(t *testing.T) {
 		t.Errorf("DailyCount = %d, want 2 (two today, one yesterday)", got)
 	}
 	// An invite counts too, and a later cancel does not take it back.
-	i, err := s.CreateInvite(Invite{Site: ids.New(), From: me, ToEmail: "a@b.c", State: StateOpen, Created: day.Add(2 * time.Hour)})
+	i, err := s.CreateInvite(Invite{Site: ids.New(), From: me, ToEmail: "a@b.c", State: StateOpen, Created: day.Add(2 * time.Hour)}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,5 +299,74 @@ func TestShareMarkers(t *testing.T) {
 	}
 	if err := s.LinkShare(acc, "bad"); err == nil {
 		t.Error("a bad site id was accepted")
+	}
+}
+
+func TestDailyLimitHoldsUnderParallelCreates(t *testing.T) {
+	s := newStore(t)
+	me := ids.New()
+	for i := 0; i < 19; i++ {
+		if _, err := s.CreateInvite(Invite{Site: ids.New(), From: me, ToEmail: "a@b.c"}, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	okOffers, okInvites := 0, 0
+	for i := 0; i < 10; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if _, err := s.CreateOffer(Offer{Sites: []string{ids.New()}, From: me, ToEmail: "a@b.c"}, 20); err == nil {
+				mu.Lock()
+				okOffers++
+				mu.Unlock()
+			} else if !errors.Is(err, ErrDailyLimit) {
+				t.Error(err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			if _, err := s.CreateInvite(Invite{Site: ids.New(), From: me, ToEmail: "a@b.c"}, 20); err == nil {
+				mu.Lock()
+				okInvites++
+				mu.Unlock()
+			} else if !errors.Is(err, ErrDailyLimit) {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if okOffers+okInvites != 1 {
+		t.Fatalf("%d offers and %d invitations got through at 19/20, want exactly 1 in all", okOffers, okInvites)
+	}
+	if n := s.DailyCount(me, time.Now()); n != 20 {
+		t.Errorf("count = %d, want 20", n)
+	}
+	// Another account and another day are not affected.
+	if _, err := s.CreateOffer(Offer{Sites: []string{ids.New()}, From: ids.New(), ToEmail: "a@b.c"}, 20); err != nil {
+		t.Errorf("another account: %v", err)
+	}
+	if _, err := s.CreateOffer(Offer{Sites: []string{ids.New()}, From: me, ToEmail: "a@b.c", Created: time.Now().Add(-48 * time.Hour)}, 20); err != nil {
+		t.Errorf("another day: %v", err)
+	}
+}
+
+func TestDailyLimitRefusesWhenTheCountCannotBeRead(t *testing.T) {
+	s := newStore(t)
+	me := ids.New()
+	if err := os.WriteFile(filepath.Join(s.offersDir(), ids.New()+".json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.CreateOffer(Offer{Sites: []string{ids.New()}, From: me, ToEmail: "a@b.c"}, 20)
+	if err == nil || errors.Is(err, ErrDailyLimit) {
+		t.Fatalf("err = %v, want a read error (a refusal, not a partial count)", err)
+	}
+	if _, err := s.CreateInvite(Invite{Site: ids.New(), From: me, ToEmail: "a@b.c"}, 20); err == nil {
+		t.Error("an invitation got through an unreadable count")
+	}
+	// Without a limit nothing is counted.
+	if _, err := s.CreateOffer(Offer{Sites: []string{ids.New()}, From: me, ToEmail: "a@b.c"}, 0); err != nil {
+		t.Errorf("no limit: %v", err)
 	}
 }

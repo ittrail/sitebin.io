@@ -158,6 +158,7 @@ type refusal struct {
 	plan      bool     // the plan has no sharing
 	retry     bool     // a lookup failed: nothing is known, nothing was done
 	conflicts []string // the sender's other sites sharing a host with the bundle
+	blocked   []string // those of them that are locked: they cannot be added
 }
 
 func refuse(msg string) *refusal { return &refusal{status: http.StatusBadRequest, msg: msg} }
@@ -214,7 +215,13 @@ func (p *provider) hostRule(acc *account.Account, bundle []string) *refusal {
 		return nil
 	}
 	sort.Strings(conflicts)
-	return &refusal{status: http.StatusConflict, conflicts: conflicts}
+	ref := &refusal{status: http.StatusConflict, conflicts: conflicts}
+	for _, id := range conflicts {
+		if info, ok := p.host.Sites().Info(id); ok && info.Locked != nil {
+			ref.blocked = append(ref.blocked, id)
+		}
+	}
+	return ref
 }
 
 // openOffersOf returns the open offers (any non-final state) that hold any of
@@ -239,6 +246,7 @@ func (p *provider) openOffersOf(ids []string, except string) ([]ownership.Offer,
 
 var (
 	errOfferNotEditable = errors.New("the offer can no longer be changed")
+	dailyLimitText      = fmt.Sprintf("You have reached today's limit of %d offers and invitations. Try again tomorrow.", maxOffersPerDay)
 	msgInOtherOffer     = "A site is already in another open offer. Cancel that offer first."
 )
 
@@ -293,7 +301,7 @@ func (p *provider) planOffer(acc *account.Account, in offerInput) (*offerPlan, *
 		return nil, ref
 	}
 	if p.owner.DailyCount(acc.ID, now) >= maxOffersPerDay {
-		return nil, refuse(fmt.Sprintf("You have reached today's limit of %d offers and invitations. Try again tomorrow.", maxOffersPerDay))
+		return nil, refuse(dailyLimitText)
 	}
 	others, ref := p.openOffersOf(in.Sites, "")
 	if ref != nil {
@@ -384,7 +392,18 @@ type transferConflictView struct {
 	Action    string
 	Fields    []hiddenField
 	Conflicts []transferOfferSite
+	Blocked   []transferOfferSite // locked conflicts: no button can resolve them
 	Back      string
+}
+
+// transferAddConfirmView is the review step for sites added to an open offer.
+type transferAddConfirmView struct {
+	CSRF    string
+	Action  string
+	Fields  []hiddenField
+	Email   string
+	Added   []transferOfferSite
+	Notices transferNotices
 }
 
 func (p *provider) labelOf(id string) string {
@@ -652,13 +671,17 @@ func (p *provider) handleTransferCreate(w http.ResponseWriter, r *http.Request) 
 	step := r.PostFormValue("step")
 	f := transferForm{Email: in.Email, AcceptBy: in.AcceptBy, AvailableFrom: in.AvailableFrom, Selected: in.Sites}
 	if step == "form" {
+		if ref := p.sharingOK(acc); ref != nil {
+			p.renderRefusal(w, acc, ref, f)
+			return
+		}
 		p.renderTransfer(w, acc, http.StatusOK, f)
 		return
 	}
 	plan, ref := p.planOffer(acc, in)
 	if ref != nil {
 		if len(ref.conflicts) > 0 {
-			p.renderCreateConflict(w, acc, in, ref.conflicts)
+			p.renderCreateConflict(w, acc, in, ref)
 			return
 		}
 		p.renderRefusal(w, acc, ref, f)
@@ -724,8 +747,13 @@ func (p *provider) createOffer(w http.ResponseWriter, acc *account.Account, in o
 	o, err := p.owner.CreateOffer(ownership.Offer{
 		Sites: plan.Sites, From: acc.ID, ToEmail: plan.Email,
 		AvailableFrom: plan.AvailableFrom, AcceptBy: plan.AcceptBy, State: ownership.StateOpen,
-	})
+	}, maxOffersPerDay)
 	if err != nil {
+		if errors.Is(err, ownership.ErrDailyLimit) {
+			restore()
+			p.renderTransfer(w, acc, http.StatusBadRequest, transferForm{Error: dailyLimitText, Email: in.Email, AcceptBy: in.AcceptBy, AvailableFrom: in.AvailableFrom, Selected: in.Sites})
+			return ownership.Offer{}, false
+		}
 		if errors.Is(err, ownership.ErrSiteOffered) {
 			changed()
 			return ownership.Offer{}, false
@@ -755,19 +783,22 @@ func (p *provider) renderConfirm(w http.ResponseWriter, acc *account.Account, in
 	transferConfirmTmpl.Execute(w, v)
 }
 
-func (p *provider) renderCreateConflict(w http.ResponseWriter, acc *account.Account, in offerInput, conflicts []string) {
+func (p *provider) renderCreateConflict(w http.ResponseWriter, acc *account.Account, in offerInput, ref *refusal) {
 	all := slices.Clone(in.Sites)
-	for _, c := range conflicts {
+	for _, c := range ref.conflicts {
 		if !slices.Contains(all, c) {
 			all = append(all, c)
 		}
 	}
+	p.renderConflict(w, acc, transferPath, append(fieldsOf(in, all), hiddenField{"step", "form"}), ref)
+}
+
+func (p *provider) renderConflict(w http.ResponseWriter, acc *account.Account, action string, fields []hiddenField, ref *refusal) {
 	p.securityHeaders(w)
 	w.WriteHeader(http.StatusConflict)
 	transferConflictTmpl.Execute(w, transferConflictView{
-		CSRF: p.csrf(acc), Action: transferPath,
-		Fields:    append(fieldsOf(in, all), hiddenField{"step", "form"}),
-		Conflicts: p.offerSites(conflicts), Back: transferPath,
+		CSRF: p.csrf(acc), Action: action, Fields: fields,
+		Conflicts: p.offerSites(ref.conflicts), Blocked: p.offerSites(ref.blocked), Back: transferPath,
 	})
 }
 
@@ -872,8 +903,6 @@ func (p *provider) handleTransferSites(w http.ResponseWriter, r *http.Request) {
 	after := bundleAfter(o.Sites, add, remove)
 	fail := func(ref *refusal) {
 		if len(ref.conflicts) > 0 {
-			p.securityHeaders(w)
-			w.WriteHeader(http.StatusConflict)
 			fs := []hiddenField{}
 			for _, id := range bundleAfter(add, ref.conflicts, nil) {
 				fs = append(fs, hiddenField{"add", id})
@@ -883,10 +912,7 @@ func (p *provider) handleTransferSites(w http.ResponseWriter, r *http.Request) {
 					fs = append(fs, hiddenField{"remove", id})
 				}
 			}
-			transferConflictTmpl.Execute(w, transferConflictView{
-				CSRF: p.csrf(acc), Action: transferPath + "/" + o.ID + "/sites", Fields: fs,
-				Conflicts: p.offerSites(ref.conflicts), Back: transferPath,
-			})
+			p.renderConflict(w, acc, transferPath+"/"+o.ID+"/sites", fs, ref)
 			return
 		}
 		p.renderRefusal(w, acc, ref, transferForm{})
@@ -916,6 +942,23 @@ func (p *provider) handleTransferSites(w http.ResponseWriter, r *http.Request) {
 	}
 	if ref := p.hostRule(acc, after); ref != nil {
 		fail(ref)
+		return
+	}
+	if len(add) > 0 && r.PostFormValue("confirm") != "1" {
+		// Sites joining an open offer get the same review as a new one: what
+		// will not move, who their forms mail, what does not travel.
+		fs := []hiddenField{{"confirm", "1"}}
+		for _, id := range add {
+			fs = append(fs, hiddenField{"add", id})
+		}
+		for _, id := range remove {
+			fs = append(fs, hiddenField{"remove", id})
+		}
+		p.securityHeaders(w)
+		transferAddConfirmTmpl.Execute(w, transferAddConfirmView{
+			CSRF: p.csrf(acc), Action: transferPath + "/" + o.ID + "/sites", Fields: fs,
+			Email: o.ToEmail, Added: p.offerSites(add), Notices: p.noticesFor(acc, after),
+		})
 		return
 	}
 	if p.editOffer(w, acc, o.ID, func(x *ownership.Offer) error {

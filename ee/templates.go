@@ -1100,12 +1100,35 @@ var transferConflictTmpl = template.Must(template.New("transferconflict").Parse(
   <h1>These sites share a host</h1>
   <p class="muted">A host travels whole: an address cannot stay with you while another address on the same host moves. These other sites of yours use a host the bundle uses:</p>
   <ul style="margin:10px 0 0 18px">{{range .Conflicts}}<li style="overflow-wrap:anywhere">{{.Label}}</li>{{end}}</ul>
+  {{if .Blocked}}
+  <div class="inline-status err" role="alert" style="margin-top:12px"><strong>A locked site blocks this host.</strong> The operator has locked these sites, so they cannot be added to a transfer:
+    <ul style="margin:6px 0 0 18px">{{range .Blocked}}<li style="overflow-wrap:anywhere">{{.Label}}</li>{{end}}</ul>
+    Remove their addresses on that host (or take the host out of the bundle) once they are unlocked.
+  </div>
+  <div style="margin-top:16px"><a class="btn" href="{{.Back}}">Back</a></div>
+  {{else}}
   <p class="muted" style="margin-top:12px">Add them to the bundle, or remove their addresses on that host first.</p>
   <form method="post" action="{{.Action}}" style="margin-top:16px">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     {{range .Fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}
     <button class="btn primary" type="submit">Add them to the bundle</button>
     <a class="btn" href="{{.Back}}">Back</a>
+  </form>
+  {{end}}
+</div></div></main>
+` + pageFoot))
+
+var transferAddConfirmTmpl = template.Must(template.New("transferaddconfirm").Parse(pageHead + `
+<main class="acct"><div class="authwrap"><div class="card">
+  <h1>Add these sites to the offer?</h1>
+  <p class="muted">The offer to {{.Email}} gets:</p>
+  <ul style="margin:10px 0 0 18px">{{range .Added}}<li style="overflow-wrap:anywhere">{{.Label}}</li>{{end}}</ul>
+  ` + transferNoticesBlock + `
+  <form method="post" action="{{.Action}}" style="margin-top:16px">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    {{range .Fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}
+    <button class="btn primary" type="submit">Add them to the offer</button>
+    <a class="btn" href="/account/transfer">Back</a>
   </form>
 </div></div></main>
 ` + pageFoot))

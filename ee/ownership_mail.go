@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"strings"
 	"time"
 
@@ -37,9 +38,20 @@ func (p *provider) mailVerified(email, subject, body string) {
 	go func() {
 		defer p.mailWG.Done()
 		if err := mailer.Send(to, subject, body); err != nil {
-			slog.Warn("could not send an ownership mail", "account", acc.ID, "err", err)
+			// err's text can carry the recipient (an SMTP reply often
+			// quotes it), so only a coarse class is logged.
+			slog.Warn("could not send an ownership mail", "account", acc.ID, "class", mailErrClass(err))
 		}
 	}()
+}
+
+// mailErrClass is the kind of a send failure without its text.
+func mailErrClass(err error) string {
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return "timeout"
+	}
+	return fmt.Sprintf("%T", err)
 }
 
 // mailInBackground runs mailVerified off the request, counted in mailWG.

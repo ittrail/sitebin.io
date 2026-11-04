@@ -3,6 +3,7 @@
 package ee
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -235,12 +236,12 @@ func TestTransferDailyLimit(t *testing.T) {
 	x := newXferEnv(t, "pro")
 	x.site(tid(1))
 	for i := 0; i < 10; i++ {
-		if _, err := x.p.owner.CreateInvite(ownership.Invite{Site: tid(100 + i), From: x.acc.ID, ToEmail: "a@example.com"}); err != nil {
+		if _, err := x.p.owner.CreateInvite(ownership.Invite{Site: tid(100 + i), From: x.acc.ID, ToEmail: "a@example.com"}, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for i := 0; i < 9; i++ {
-		if _, err := x.p.owner.CreateOffer(ownership.Offer{Sites: []string{tid(200 + i)}, From: x.acc.ID, ToEmail: "a@example.com", AcceptBy: time.Now().Add(time.Hour)}); err != nil {
+		if _, err := x.p.owner.CreateOffer(ownership.Offer{Sites: []string{tid(200 + i)}, From: x.acc.ID, ToEmail: "a@example.com", AcceptBy: time.Now().Add(time.Hour)}, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -352,8 +353,13 @@ func TestTransferPlanLookupErrorIsRetryNeverPass(t *testing.T) {
 	x := newXferEnv(t, "nosuchtier")
 	x.site(tid(1))
 	w := x.post("/account/transfer", offerForm("a@example.com", daysAhead(5), "", tid(1)))
-	if w.Code == http.StatusOK || len(x.offers()) != 0 {
-		t.Fatalf("= %d with %d offers, want a refusal", w.Code, len(x.offers()))
+	if w.Code != http.StatusServiceUnavailable || len(x.offers()) != 0 {
+		t.Fatalf("= %d with %d offers, want exactly 503 and none", w.Code, len(x.offers()))
+	}
+	v := offerForm("a@example.com", daysAhead(5), "", tid(1))
+	v.Set("step", "form")
+	if w := x.post("/account/transfer", v); w.Code != http.StatusServiceUnavailable {
+		t.Errorf("step=form with an unknown plan = %d, want 503", w.Code)
 	}
 }
 
@@ -574,7 +580,16 @@ func TestTransferSenderCanCancelChangeDatesAndSites(t *testing.T) {
 	}
 
 	// Sites: add one, remove one.
-	if w := x.post(base+"/sites", url.Values{"add": {tid(3)}, "remove": {tid(1)}}); w.Code != http.StatusSeeOther {
+	// Adding is reviewed first: nothing changes until the notices are confirmed.
+	x.fs.ad().forms[tid(3)] = []string{"office@kunde.at"}
+	review := x.post(base+"/sites", url.Values{"add": {tid(3)}, "remove": {tid(1)}})
+	if review.Code != http.StatusOK || !strings.Contains(review.Body.String(), "office@kunde.at") || !strings.Contains(review.Body.String(), "do not travel") || !strings.Contains(review.Body.String(), `name="confirm" value="1"`) {
+		t.Fatalf("add review = %d, want the notices page (%s)", review.Code, review.Body)
+	}
+	if got, _ = x.p.owner.GetOffer(o.ID); !slices.Equal(sorted(got.Sites), []string{tid(1), tid(2)}) {
+		t.Fatalf("the review changed the offer: %v", got.Sites)
+	}
+	if w := x.post(base+"/sites", url.Values{"add": {tid(3)}, "remove": {tid(1)}, "confirm": {"1"}}); w.Code != http.StatusSeeOther {
 		t.Fatalf("sites = %d (%s)", w.Code, w.Body)
 	}
 	got, _ = x.p.owner.GetOffer(o.ID)
@@ -606,7 +621,7 @@ func TestTransferSenderCanCancelChangeDatesAndSites(t *testing.T) {
 	if got, _ = x.p.owner.GetOffer(o.ID); slices.Contains(got.Sites, tid(5)) {
 		t.Error("the conflicting site was added")
 	}
-	if w := x.post(base+"/sites", url.Values{"add": {tid(5), tid(6)}}); w.Code != http.StatusSeeOther {
+	if w := x.post(base+"/sites", url.Values{"add": {tid(5), tid(6)}, "confirm": {"1"}}); w.Code != http.StatusSeeOther {
 		t.Errorf("adding both = %d (%s)", w.Code, w.Body)
 	}
 	if w := x.post(base+"/sites", url.Values{"remove": {tid(6)}}); w.Code != http.StatusConflict {
@@ -692,5 +707,114 @@ func TestTransferOthersGetNotFoundAndNoCSRFIsForbidden(t *testing.T) {
 	// And not to the other account.
 	if body := getAs(x.mux, "/account/transfer", otherCookie).Body.String(); strings.Contains(body, o.ID) || strings.Contains(body, "a@example.com") {
 		t.Error("another account sees the offer")
+	}
+}
+
+// ---- fix round 1 ----
+
+func TestTransferParallelCreatesRespectTheDailyLimit(t *testing.T) {
+	x := newXferEnv(t, "pro")
+	x.person("known@example.com", true)
+	const n = 12
+	for i := 0; i < n; i++ {
+		x.site(tid(i + 1))
+	}
+	for i := 0; i < 19; i++ {
+		if _, err := x.p.owner.CreateInvite(ownership.Invite{Site: tid(300 + i), From: x.acc.ID, ToEmail: "a@example.com"}, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wg sync.WaitGroup
+	codes := make([]int, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			codes[i] = x.post("/account/transfer", offerForm("known@example.com", daysAhead(5), "", tid(i+1))).Code
+		}()
+	}
+	wg.Wait()
+	ok := 0
+	for _, c := range codes {
+		if c == http.StatusOK {
+			ok++
+		}
+	}
+	if ok != 1 || len(x.offers()) != 1 {
+		t.Fatalf("%d requests succeeded and %d offers exist, want exactly 1 (codes %v)", ok, len(x.offers()), codes)
+	}
+	if mails := x.sent(); len(mails) != 1 {
+		t.Errorf("mails = %d, want 1", len(mails))
+	}
+}
+
+func TestTransferInOtherAccountsOfferIsRefusedGenerically(t *testing.T) {
+	x := newXferEnv(t, "pro")
+	x.site(tid(1))
+	other, err := x.p.owner.CreateOffer(ownership.Offer{Sites: []string{tid(1)}, From: "someone-else", ToEmail: "z@example.com", AcceptBy: time.Now().Add(time.Hour)}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := x.post("/account/transfer", offerForm("a@example.com", daysAhead(5), "", tid(1)))
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "another open offer") {
+		t.Fatalf("= %d, want the generic refusal (%s)", w.Code, w.Body)
+	}
+	if strings.Contains(w.Body.String(), "z@example.com") || strings.Contains(w.Body.String(), "someone-else") {
+		t.Error("the refusal names the other offer")
+	}
+	if got, _ := x.p.owner.GetOffer(other.ID); got.State != ownership.StateOpen {
+		t.Errorf("the other account's offer was touched: %q", got.State)
+	}
+	if len(x.offers()) != 0 {
+		t.Error("an offer was created")
+	}
+}
+
+func TestTransferEditsNeitherMailNorCountTowardTheLimit(t *testing.T) {
+	x := newXferEnv(t, "pro")
+	x.person("known@example.com", true)
+	x.site(tid(1))
+	x.site(tid(2))
+	if w := x.post("/account/transfer", offerForm("known@example.com", daysAhead(10), daysAhead(5), tid(1))); w.Code != http.StatusOK {
+		t.Fatal(w.Body)
+	}
+	o := x.offers()[0]
+	base := "/account/transfer/" + o.ID
+	day := time.Now()
+	before := x.p.owner.DailyCount(x.acc.ID, day)
+	if w := x.post(base+"/dates", url.Values{"accept_by": {daysAhead(30)}, "available_from": {daysAhead(-1)}}); w.Code != http.StatusSeeOther {
+		t.Fatalf("dates = %d", w.Code)
+	}
+	if w := x.post(base+"/sites", url.Values{"add": {tid(2)}, "confirm": {"1"}}); w.Code != http.StatusSeeOther {
+		t.Fatalf("sites = %d", w.Code)
+	}
+	if after := x.p.owner.DailyCount(x.acc.ID, day); after != before {
+		t.Errorf("daily count %d -> %d: edits must not count", before, after)
+	}
+	if mails := x.sent(); len(mails) != 0 {
+		t.Errorf("edits mailed %d", len(mails))
+	}
+}
+
+func TestTransferLockedSiteBlocksAHostAndOffersNoButton(t *testing.T) {
+	x := newXferEnv(t, "pro")
+	x.site(tid(1), "kunde.at")
+	x.site(tid(2), "kunde.at/blog")
+	i := x.fs.infos[tid(2)]
+	i.Locked = &ext.SiteLock{At: time.Now(), By: "operator"}
+	x.fs.infos[tid(2)] = i
+	w := x.post("/account/transfer", offerForm("a@example.com", daysAhead(5), "", tid(1)))
+	body := w.Body.String()
+	if w.Code != http.StatusConflict || !strings.Contains(body, "A locked site blocks this host") {
+		t.Fatalf("= %d, want the blocked page (%s)", w.Code, body)
+	}
+	if strings.Contains(body, "Add them to the bundle") || strings.Contains(body, `name="step"`) {
+		t.Error("the page offers a button that can never resolve the conflict")
+	}
+}
+
+func TestTransferMailFailureLogCarriesNoAddress(t *testing.T) {
+	if got := mailErrClass(fmt.Errorf("550 5.1.1 <victim@example.com>: user unknown")); strings.Contains(got, "victim") {
+		t.Errorf("class = %q", got)
 	}
 }
