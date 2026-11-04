@@ -669,3 +669,41 @@ func TestGitSettings(t *testing.T) {
 		t.Errorf("overrides = %+v, %v", cfg, err)
 	}
 }
+
+func TestConfigAnalyticsDefaults(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"SITEBIN_BASE_DOMAIN": "sitebin.example",
+		"SITEBIN_HTTP_ONLY":   "true",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AnalyticsEnabled || cfg.AnalyticsTimezone != "UTC" || cfg.AnalyticsGeoIP != "" ||
+		cfg.AnalyticsDailyCap != 50000 || cfg.AnalyticsRetentionDays != 760 {
+		t.Errorf("analytics defaults wrong: %+v", cfg)
+	}
+}
+
+func TestConfigAnalyticsOverridesAndBadZone(t *testing.T) {
+	base := map[string]string{"SITEBIN_BASE_DOMAIN": "s.example", "SITEBIN_HTTP_ONLY": "true"}
+	with := func(k, v string) map[string]string {
+		m := map[string]string{}
+		for a, b := range base {
+			m[a] = b
+		}
+		m[k] = v
+		return m
+	}
+	cfg, err := Load(env(with("SITEBIN_ANALYTICS_TIMEZONE", "Europe/Vienna")))
+	if err != nil || cfg.AnalyticsTimezone != "Europe/Vienna" {
+		t.Fatalf("zone: %v %q", err, cfg.AnalyticsTimezone)
+	}
+	if _, err := Load(env(with("SITEBIN_ANALYTICS_TIMEZONE", "Mars/Olympus"))); err == nil ||
+		!strings.Contains(err.Error(), "SITEBIN_ANALYTICS_TIMEZONE") {
+		t.Fatalf("bad zone: %v", err)
+	}
+	cfg, err = Load(env(with("SITEBIN_ANALYTICS", "false")))
+	if err != nil || cfg.AnalyticsEnabled {
+		t.Fatalf("switch: %v %v", err, cfg.AnalyticsEnabled)
+	}
+}

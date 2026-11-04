@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	_ "time/tzdata" // LoadLocation works without system zoneinfo
 )
 
 // Config holds all runtime configuration. See README for the full reference.
@@ -44,6 +45,13 @@ type Config struct {
 	GitMaxPushBytes  int64  // largest push a repository accepts
 	GitMaxProcesses  int    // git processes running at once
 	GitOAuthClientID string // OAuth client id the Git CLI client uses, if any
+
+	// Analytics: privacy-first visit statistics a site opts into.
+	AnalyticsEnabled       bool   // instance switch; off collects nothing anywhere
+	AnalyticsTimezone      string // default zone for day boundaries (IANA name)
+	AnalyticsGeoIP         string // path to a country/region database; empty = no geography
+	AnalyticsDailyCap      int    // events one site records per day
+	AnalyticsRetentionDays int    // days a day of events is kept
 	// DomainVerification says how a custom domain proves it belongs to the
 	// site that claims it: "dns" (the default) requires a TXT record carrying
 	// the site's token or a CNAME at the site's view host before the domain is
@@ -229,6 +237,8 @@ func Load(getenv func(string) string) (Config, error) {
 		GitEnabled:         true,
 		GitMaxPushBytes:    536870912,
 		GitMaxProcesses:    4,
+		AnalyticsEnabled:   true,
+		AnalyticsTimezone:  "UTC",
 		DomainVerification: DomainVerifyDNS,
 		MCPEnabled:         true,
 		PublicAddr:         ":8080",
@@ -317,6 +327,28 @@ func Load(getenv func(string) string) (Config, error) {
 		return cfg, fmt.Errorf("SITEBIN_GIT_MAX_PROCESSES: must be at least 1")
 	}
 	cfg.GitOAuthClientID = strings.TrimSpace(getenv("SITEBIN_GIT_OAUTH_CLIENT_ID"))
+	if cfg.AnalyticsEnabled, err = boolVar(getenv, "SITEBIN_ANALYTICS", true); err != nil {
+		return cfg, err
+	}
+	if v := strings.TrimSpace(getenv("SITEBIN_ANALYTICS_TIMEZONE")); v != "" {
+		cfg.AnalyticsTimezone = v
+	}
+	if _, zerr := time.LoadLocation(cfg.AnalyticsTimezone); zerr != nil {
+		return cfg, fmt.Errorf("SITEBIN_ANALYTICS_TIMEZONE: %w", zerr)
+	}
+	cfg.AnalyticsGeoIP = strings.TrimSpace(getenv("SITEBIN_ANALYTICS_GEOIP"))
+	if cfg.AnalyticsDailyCap, err = intVar(getenv, "SITEBIN_ANALYTICS_DAILY_CAP", 50000); err != nil {
+		return cfg, err
+	}
+	if cfg.AnalyticsDailyCap < 1 {
+		return cfg, fmt.Errorf("SITEBIN_ANALYTICS_DAILY_CAP: must be at least 1")
+	}
+	if cfg.AnalyticsRetentionDays, err = intVar(getenv, "SITEBIN_ANALYTICS_RETENTION_DAYS", 760); err != nil {
+		return cfg, err
+	}
+	if cfg.AnalyticsRetentionDays < 1 {
+		return cfg, fmt.Errorf("SITEBIN_ANALYTICS_RETENTION_DAYS: must be at least 1")
+	}
 	if cfg.MCPEnabled, err = boolVar(getenv, "SITEBIN_MCP_ENABLED", true); err != nil {
 		return cfg, err
 	}
