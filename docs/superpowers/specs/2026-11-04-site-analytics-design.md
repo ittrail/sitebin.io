@@ -244,10 +244,12 @@ Recorded only when **all** of these hold:
   `Slackbot`, `TelegramBot`, `Discordbot`, `HeadlessChrome`, `Lighthouse`,
   `curl`, `wget`, `python-`, `Go-http-client`, `uptime`, `monitor` and
   similar; case-insensitive).
-- **File sites only:** the path resolves to a page, with the same
-  resolution `cacheValue` makes: an existing regular file, a directory with
-  an index, or the SPA fallback on an SPA site. A missing file without SPA
-  is a 404 and is not counted.
+- **File sites only:** the path resolves to a page: an existing regular
+  file, a directory with an index file, or the SPA fallback on an SPA
+  site. A missing file without SPA is a 404 and is not counted.
+  `cacheValue` only knows "regular file", so this is a small new check,
+  and it runs **in the recorder** (through `store.OpenContentRoot`), never
+  in authz.
 - The address is in `addresses` (when set), the path matches no `exclude`
   glob, and the request carries no opt-out cookie (below).
 
@@ -347,8 +349,24 @@ A second button removes both.
 
 The cookie is set only at the visitor's explicit request and serves only
 that request, so it needs no consent. authz checks it in server mode. The
-Settings sub-tab links this page for each counted address. The site's own
-`?statistik=aus` keeps working through `umami.disabled`.
+Settings sub-tab links this page for each counted address.
+
+The site's own `?statistik=aus` keeps working **in both modes**. When the
+script finds `umami.disabled` set, it sends nothing. It also mirrors the
+flag into the same opt-out cookie, through `POST
+/_sitebin/analytics/opt-out` (`fetch`, same-origin), and from then on
+authz skips that browser's page views in server mode. The mirror only ever
+stops counting, and only follows an opt-out the visitor made, so it stays
+within the "explicitly requested by the user" exception.
+`localStorage.removeItem("umami.disabled")` (morgenfertig's
+`?statistik=an`) clears the cookie the same way on the next load.
+
+**Path views** (`/v/<id>/`, `SITEBIN_VIEW_ACCESS=path|both`): server mode
+counts there, because authz knows the site. The script, the send endpoint
+and the opt-out are not available on path views. They answer on the main
+domain, where no site can be named safely: the script is the no-op stub,
+and send and opt-out answer 204 / 404. The docs and the Settings sub-tab
+say so. Hosted uses no path views.
 
 ### Sanitizing: what a record may hold
 
@@ -438,6 +456,12 @@ rewrites old lines.
 - **Location** comes from `github.com/oschwald/maxminddb-golang/v2`, when
   `SITEBIN_ANALYTICS_GEOIP` is set (a country database fills `c` only). It
   is looked up in the recorder; the IP is never written.
+  - `rg` is the ISO 3166-2 code when the database has one (as Umami
+    stores, e.g. `AT-4`), otherwise the subdivision's English name. DB-IP
+    Lite may have names only, so imported Umami rows and new rows can name
+    the same region differently. That is accepted; regions are a minor
+    table.
+  - `ct` is the English city name.
 - **Channel**, at read time, from the entry record of a visit:
   - **Paid search:** a click id, or a `utm_medium` of
     `cpc|ppc|paid|paidsearch` with a search source;
@@ -522,10 +546,15 @@ rewrites old lines.
 
   So "utm_source=meta" plus the events table shows the events of Meta
   visits, the operator's own report.
-- **Funnels.** For each visitor-day, the ordered first matches of each
-  step, each later step within `window_minutes` of step 1. The result per
-  step is visitors, drop-off and conversion. Path values are globs, as in
-  Umami (`/app-entwickeln-lassen/*`).
+- **Funnels, with Umami's semantics,** so the numbers can be checked
+  against Umami. For each visitor-day, a visitor reaches step k when there
+  is a chain of matching records t1 < t2 < … < tk where each step falls
+  within `window_minutes` **of the previous step's match**, and **any**
+  chain counts, not only the first occurrence of step 1. Computed per
+  visitor-day as reachable times per step: step k's matches that follow
+  some reachable step-(k−1) time within the window. The result per step
+  is visitors, drop-off and conversion. Path values are globs, as in Umami
+  (`/app-entwickeln-lassen/*`).
 - **Goals.** The visitors who matched at least once, the number of
   completions, and the conversion rate over all visitors in the range.
 
@@ -626,9 +655,18 @@ linked.
 ## Umami import, per site
 
 - **CLI:** `sitebin analytics import-umami <siteViewID> <events.jsonl>
-  [--reports <reports.json>]`. It runs inside the container (`docker exec
-  sitebin sitebin analytics …`) while the server runs; it writes under the
-  stats lock, as the CLI already does for other per-site writes.
+  [--reports <reports.json>]`, run inside the container (`docker exec
+  sitebin sitebin analytics …`). **The running server does the import.**
+  The CLI only streams the files to `POST /internal/analytics/import` on
+  the internal listener, which is bound to `127.0.0.1` and never proxied,
+  the same listener the healthcheck uses, and prints the server's report.
+
+  The reason: `lockStats` is an in-process mutex, so a second process could
+  not stop the recorder from appending to a day file the importer is
+  rewriting, and could race `meta.json`. In the server the import takes
+  the site's stats lock per day file, writes funnels and goals through
+  `store.Update` (the site lock), and drops the parsed-day cache entries it
+  touched. With the server down the CLI fails with a clear message.
 - **Input.** One JSON object per Umami `website_event`, joined with its
   `session` and aggregated `event_data`. The SQL that produces it lives in
   the runbook below. It is run against Umami's Postgres for exactly one
@@ -663,6 +701,12 @@ linked.
   report types are listed as skipped.
 - **The daily cap does not apply to an import.** Retention does: days
   older than the retention are skipped and reported.
+- **No double counting at the switch-over.** The import stops at the
+  site's **first own record**, the earliest `srv` or `js` line in any day
+  file. Umami events at or after that moment are skipped and counted in the
+  report, because from then on Sitebin itself was measuring. `--until
+  <RFC3339>` moves the cut earlier, never later. The runbook says to turn
+  analytics on and swap the `src` in the same deploy, then import.
 
 ### Runbook: importing one site
 
@@ -798,3 +842,14 @@ and how summaries are encoded.
   and a daily cap of 50 000 records per site.
 - Visits split at 30 minutes of inactivity.
 - No MCP tools, world map, CSV or share link in this version.
+- From the builder check:
+  - The import runs **in the server** through the loopback internal
+    listener, so it can never race the recorder or `meta.json`.
+  - It stops at the site's first own record, so no visit is counted twice.
+  - `umami.disabled` is mirrored into the opt-out cookie, so `?statistik=aus`
+    works in server mode too. **The operator should glance at this:** it
+    is the only cookie, set only after the visitor's own opt-out.
+  - Funnels follow Umami (window from the previous step, any chain).
+  - Path views get server-mode counting only.
+  - Regions are stored as a code where the database has one, else as a
+    name.
