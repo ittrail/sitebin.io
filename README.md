@@ -391,7 +391,7 @@ curl -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/co
 # a site's Git repository: read-only views (pushing is plain `git`, see "Git")
 curl -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/git                 # availability, url, bytes, default branch, last push
 curl -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/git/refs            # branches and tags with their tips
-curl -H "X-Edit-Password: $PW" "https://sitebin.example.com/api/sites/$EDIT_ID/git/log?ref=main"  # 30 commits a page; &after=<sha> for the next
+curl -H "X-Edit-Password: $PW" "https://sitebin.example.com/api/sites/$EDIT_ID/git/log?ref=main"  # 30 commits a page; answers {"sha","commits","next_skip"}; next page: ?ref=<that sha>&skip=<next_skip>, null on the last
 curl -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/git/commit/$SHA     # message, people, parents, changed files
 curl -H "X-Edit-Password: $PW" "https://sitebin.example.com/api/sites/$EDIT_ID/git/tree?ref=main&path=src"
 curl -H "X-Edit-Password: $PW" "https://sitebin.example.com/api/sites/$EDIT_ID/git/blob?ref=main&path=src/app.js"   # &download=1 sends the raw file
@@ -761,9 +761,7 @@ never deletes a repository.
 
 **Lifecycle.** **The repository belongs to its site.** Deleting the site
 deletes it, and so does the site's expiry; a locked site keeps it, frozen, as
-evidence until the lock is purged. Once site ownership ships (transfer,
-adoption), it will move with the site and the usual credential rotation will
-apply to it; that is not built yet. "Delete repository" on the Git tab, or
+evidence until the lock is purged. "Delete repository" on the Git tab, or
 `DELETE /api/sites/{id}/git`, removes only the repository and frees its bytes
 at once; only the site's owner may. A push does not renew a tier-imposed
 expiry. History a force push replaced is collected by the cleanup sweep
