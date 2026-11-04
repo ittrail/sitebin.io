@@ -678,3 +678,23 @@ func splitSelectors(list string) []string {
 	}
 	return append(out, strings.TrimSpace(list[start:]))
 }
+
+func TestRegistrationCarriesCLIClientOnlyWhenConfigured(t *testing.T) {
+	decl := func(clientID string) stackRegistration {
+		p := stackProvider(t, "")
+		// The declaration only reads the host; a full MCP OAuth Init needs a live issuer.
+		p.host = &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}, mcpIssuer: "https://auth.example/realms/x", gitClientID: clientID}
+		return p.stackDeclaration("sitebin")
+	}
+	if reg := decl(""); reg.MCP == nil || reg.MCP.CLIClient != nil {
+		t.Fatalf("without a client id: MCP=%+v", reg.MCP)
+	}
+	reg := decl("sitebin-git")
+	if reg.MCP == nil || reg.MCP.CLIClient == nil || reg.MCP.CLIClient.ClientID != "sitebin-git" || reg.MCP.CLIClient.DisplayName != "Sitebin Git" {
+		t.Fatalf("with a client id: %+v", reg.MCP)
+	}
+	b, _ := json.Marshal(reg.MCP)
+	if !strings.Contains(string(b), `"cliClient":{"clientId":"sitebin-git","displayName":"Sitebin Git"}`) {
+		t.Errorf("json = %s", b)
+	}
+}

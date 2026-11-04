@@ -639,6 +639,7 @@ func (h *storeHost) PathViews() bool              { return false }
 func (h *storeHost) Sites() ext.SiteService       { return h.sites }
 func (h *storeHost) BaseURL() string              { return "http://sitebin.example" }
 func (h *storeHost) MCPOAuthIssuer() string       { return "" }
+func (h *storeHost) GitOAuthClientID() string     { return "" }
 func (h *storeHost) MCPResource() string          { return "https://sitebin.example/mcp" }
 func (h *storeHost) PublishURL() string           { return "/" }
 func (h *storeHost) LockRetention() time.Duration { return 180 * 24 * time.Hour }

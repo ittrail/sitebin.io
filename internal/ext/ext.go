@@ -350,6 +350,9 @@ type Host interface {
 	// MCPResource is this server's OAuth resource identifier — the value that
 	// must appear in a token's audience.
 	MCPResource() string
+	// GitOAuthClientID is the OAuth client id the Git CLI client signs in
+	// with (SITEBIN_GIT_OAUTH_CLIENT_ID), or empty when none is offered.
+	GitOAuthClientID() string
 	// Sites exposes the core site operations the dashboard needs.
 	Sites() SiteService
 	// LockRetention is how long a lock keeps a site before the cleanup sweep

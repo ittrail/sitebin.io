@@ -27,6 +27,8 @@ func (h extHost) LockRetention() time.Duration { return h.cfg.LockRetention }
 func (h extHost) BaseURL() string        { return h.cfg.SiteURL(h.cfg.BaseDomain) }
 func (h extHost) MCPOAuthIssuer() string { return h.cfg.MCPOAuthIssuer }
 
+func (h extHost) GitOAuthClientID() string { return h.cfg.GitOAuthClientID }
+
 // MCPResource falls back to the endpoint's own URL, which is what it is. An
 // operator only needs to set it when the instance is reached under a different
 // name than it generates for itself.

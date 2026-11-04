@@ -180,6 +180,15 @@ type stackMCP struct {
 	ResourceURL string     `json:"resourceUrl"`
 	Scopes      []mcpScope `json:"scopes"`
 	DCR         *stackDCR  `json:"dcr,omitempty"`
+
+	// CLIClient asks the stack to create a public client for the Git
+	// Credential Manager, so the Git tab can offer account sign-in.
+	CLIClient *stackCLIClient `json:"cliClient,omitempty"`
+}
+
+type stackCLIClient struct {
+	ClientID    string `json:"clientId"`
+	DisplayName string `json:"displayName"`
 }
 
 type mcpScope struct {
@@ -300,6 +309,9 @@ func (p *provider) stackDeclaration(appID string) stackRegistration {
 			ResourceURL: resource,
 			Scopes:      scopes,
 			DCR:         &stackDCR{Enabled: true, MaxClients: 500, ConsentRequired: true},
+		}
+		if id := p.host.GitOAuthClientID(); id != "" {
+			reg.MCP.CLIClient = &stackCLIClient{ClientID: id, DisplayName: "Sitebin Git"}
 		}
 	}
 	return reg

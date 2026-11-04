@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -63,8 +64,13 @@ type gitInfoPayload struct {
 }
 
 // gitOAuthCredentials is what the info route says about signing in with
-// OAuth; nil until the OAuth sign-in is offered.
-func (a *API) gitOAuthCredentials() any { return nil }
+// OAuth; nil (JSON null) unless the sign-in is offered.
+func (a *API) gitOAuthCredentials(ctx context.Context) any {
+	if info := a.gitOAuthInfo(ctx); info != nil {
+		return info
+	}
+	return nil
+}
 
 // gitReadError answers a failed read without echoing git's message, which
 // may carry filesystem paths.
@@ -100,7 +106,7 @@ func (a *API) gitInfo(w http.ResponseWriter, r *http.Request, site *store.Site) 
 		Credentials: gitCredentials{
 			Password: true,
 			Token:    a.accountsEnabled(),
-			OAuth:    a.gitOAuthCredentials(),
+			OAuth:    a.gitOAuthCredentials(r.Context()),
 		},
 		ExpiresAt: site.Meta.ExpiresAt,
 	}

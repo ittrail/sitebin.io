@@ -39,11 +39,12 @@ var Version = "dev"
 
 // API holds the wired-up handler state.
 type API struct {
-	cfg    config.Config
-	st     *store.Store
-	signer auth.TokenSigner
-	webFS  fs.FS
-	log    *slog.Logger
+	gitOAuthCache gitOAuthCache
+	cfg           config.Config
+	st            *store.Store
+	signer        auth.TokenSigner
+	webFS         fs.FS
+	log           *slog.Logger
 
 	verifyCache    *auth.VerifyCache
 	createLimiter  *auth.Limiter

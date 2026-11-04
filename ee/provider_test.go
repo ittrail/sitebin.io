@@ -375,10 +375,11 @@ func (s *fakeSites) site(id string) {
 }
 
 type fakeHost struct {
-	dir       string
-	sites     *fakeSites
-	pathViews bool
-	mcpIssuer string
+	dir         string
+	sites       *fakeSites
+	pathViews   bool
+	mcpIssuer   string
+	gitClientID string
 	// publishURL is what PublishURL answers; "" means "/", the default.
 	publishURL string
 }
@@ -397,9 +398,10 @@ func (h *fakeHost) LockRetention() time.Duration { return h.sites.retention }
 // mcpIssuer is empty by default: the enterprise suite must keep proving that
 // everything works with MCP OAuth switched off, which is how every instance
 // starts.
-func (h *fakeHost) BaseURL() string        { return "http://sitebin.example" }
-func (h *fakeHost) MCPOAuthIssuer() string { return h.mcpIssuer }
-func (h *fakeHost) MCPResource() string    { return "https://sitebin.example/mcp" }
+func (h *fakeHost) BaseURL() string          { return "http://sitebin.example" }
+func (h *fakeHost) MCPOAuthIssuer() string   { return h.mcpIssuer }
+func (h *fakeHost) MCPResource() string      { return "https://sitebin.example/mcp" }
+func (h *fakeHost) GitOAuthClientID() string { return h.gitClientID }
 func (h *fakeHost) PublishURL() string {
 	if h.publishURL == "" {
 		return "/"
