@@ -423,6 +423,13 @@ func (a *API) gitPush(w http.ResponseWriter, r *http.Request, site *store.Site, 
 			a.gitFail(w, r, site, svc, false, err)
 		}
 	}
+	// A git that did not end cleanly (killed, cancelled, cut off) may have
+	// moved objects in that no ref reaches: marked, the repository gets the
+	// sweep's next collection. That sweep also removes what a killed git
+	// leaves in the object store (cleanup.CollectGit).
+	if err != nil && res.Started {
+		a.markPushed(site)
+	}
 	// What the push changed is recorded whatever git's exit status, and
 	// before the registration ends: a delete waits for it.
 	a.recordPush(bctx, r, site, act, before, res, err == nil)

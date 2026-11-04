@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -108,4 +109,91 @@ func collectDue(pushed, collected time.Time, haveGC bool, now time.Time) bool {
 	}
 	settled := pushed.Add(PruneAge + pruneSlack)
 	return collected.Before(settled) && !now.Before(settled)
+}
+
+// Leftovers of a push that did not end: receive-pack's quarantine
+// (objects/tmp_objdir-incoming-*, and objects/incoming-* from older git)
+// and half-written packs (objects/pack/tmp_*). Git removes them itself when
+// it ends normally, and a killed git cannot.
+var (
+	objectLeftovers = []string{"tmp_objdir-", "incoming-"}
+	packLeftovers   = []string{"tmp_"}
+)
+
+// RemoveLeftovers deletes what a push that was killed left in dir's object
+// store, and reports how many entries it removed. They count against the
+// site's quota, and no later push or gc removes them: gc runs only on a
+// changed repository, and git cleans up only its own temporary files.
+//
+// Call it only while no git process can write into dir — inside the site's
+// registration (store.BeginGitWrite), which every push holds — or it would
+// pull a running push's pack from under it. It stays strictly inside dir's
+// objects/ and never follows a symbolic link: an objects/ or objects/pack/
+// that is a link is left alone, and a link among the leftovers is removed as
+// a link.
+func RemoveLeftovers(dir string) (removed int, err error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	defer root.Close()
+	pack := filepath.Join("objects", "pack")
+	for _, sub := range []struct {
+		dir      string
+		prefixes []string
+	}{{"objects", objectLeftovers}, {pack, packLeftovers}} {
+		real, err := realDir(root, sub.dir)
+		if err != nil || !real {
+			return removed, err // objects/ that is not git's: not even pack/
+		}
+		n, err := removePrefixed(root, sub.dir, sub.prefixes)
+		removed += n
+		if err != nil {
+			return removed, err
+		}
+	}
+	return removed, nil
+}
+
+// realDir reports whether root's dir is a directory itself, not a link to
+// one (and not missing).
+func realDir(root *os.Root, dir string) (bool, error) {
+	fi, err := root.Lstat(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return fi.IsDir(), nil
+}
+
+// removePrefixed removes the entries of root's directory dir whose names
+// begin with one of prefixes.
+func removePrefixed(root *os.Root, dir string, prefixes []string) (int, error) {
+	f, err := root.Open(dir)
+	if err != nil {
+		return 0, err
+	}
+	names, err := f.Readdirnames(-1)
+	f.Close()
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, name := range names {
+		for _, p := range prefixes {
+			if strings.HasPrefix(name, p) {
+				if err := root.RemoveAll(filepath.Join(dir, name)); err != nil {
+					return removed, err
+				}
+				removed++
+				break
+			}
+		}
+	}
+	return removed, nil
 }

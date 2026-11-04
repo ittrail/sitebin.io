@@ -157,6 +157,9 @@ type RPCResult struct {
 	// BytesIn counts request body bytes as received on the wire, that is
 	// before gzip decoding.
 	BytesIn int64
+	// Started: git ran. A push that started and then failed (killed,
+	// cancelled, cut off) may have left objects behind.
+	Started bool
 }
 
 // processWait bounds how long Run waits for git's pipes after git has exited
@@ -262,6 +265,7 @@ func (r *Runner) ServeRPC(ctx context.Context, dir string, svc Service, body io.
 	if err := cmd.Start(); err != nil {
 		return res, fmt.Errorf("gitrepo: %s: %w", svc, err)
 	}
+	res.Started = true
 	go func() {
 		_, _ = io.Copy(stdin, in)
 		_ = stdin.Close()

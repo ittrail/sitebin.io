@@ -110,10 +110,13 @@ func TestDeltaBombIsRefusedQuickly(t *testing.T) {
 	body := cmdPkt(zeros, sha1b, "refs/heads/main", "report-status side-band-64k") + "0000" + string(pack)
 	rec := httptest.NewRecorder()
 	start := time.Now()
-	_, err := r.ServeRPC(context.Background(), dir, ReceivePack, strings.NewReader(body), rec, RPCOptions{MaxInputSize: 100 << 20})
+	res, err := r.ServeRPC(context.Background(), dir, ReceivePack, strings.NewReader(body), rec, RPCOptions{MaxInputSize: 100 << 20})
 	took := time.Since(start)
 	out := rec.Body.String()
 	t.Logf("took %v, err %v", took, err)
+	if !res.Started {
+		t.Fatal("git never ran")
+	}
 	if strings.Contains(out, "unpack ok") {
 		t.Fatalf("the bomb was unpacked:\n%q", out)
 	}

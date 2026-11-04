@@ -315,11 +315,13 @@ func reconcile(st *store.Store, site *store.Site, now time.Time) (keep bool, err
 // CollectGit runs garbage collection on every site's repository where one is
 // due (gitrepo.Collect: pushed to since its last collection, or once more a
 // day after a push), one repository at a time (gc holds a git process slot
-// for up to ten minutes). It is only for the process that
+// for up to ten minutes), and first removes what an interrupted push left in
+// its object store (gitrepo.RemoveLeftovers). It is only for the process that
 // serves pushes: each repository is registered through BeginGitWrite first,
-// so a delete or a lock that arrives during gc cancels it, and a repository
-// with a push running is skipped until the next round. A locked site is never
-// collected. Errors are logged and never stop the round.
+// so no push runs beside it, a delete or a lock that arrives during gc
+// cancels it, and a repository with a push running is skipped until the next
+// round. A locked site is never touched. Errors are logged and never stop the
+// round.
 func CollectGit(ctx context.Context, st *store.Store, git *gitrepo.Runner) {
 	if git == nil {
 		return
@@ -353,6 +355,13 @@ func collectOne(ctx context.Context, st *store.Store, git *gitrepo.Runner, site 
 		return
 	}
 	defer end()
+	// The registration means no push runs: whatever a killed one left in
+	// the object store is nobody's now, and it counts against the quota.
+	if n, err := gitrepo.RemoveLeftovers(site.GitDir()); err != nil {
+		slog.Error("git: remove the leftovers of an interrupted push", "site", site.ViewID, "err", err)
+	} else if n > 0 {
+		slog.Info("git: removed the leftovers of an interrupted push", "site", site.ViewID, "entries", n)
+	}
 	if _, err := git.Collect(ctx, site.GitDir()); err != nil {
 		slog.Error("git gc", "site", site.ViewID, "err", err)
 	}
