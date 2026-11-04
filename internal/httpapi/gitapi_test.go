@@ -3,6 +3,8 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -395,5 +397,73 @@ func TestGitReadRoutesRefuseOAuth(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &in)
 	if !in.Credentials.Token {
 		t.Errorf("credentials.token = false on an accounts instance")
+	}
+}
+
+func TestGitEmptyDownloadHasHeaders(t *testing.T) {
+	e := newEnv(t, nil)
+	g := newGitServer(t, e)
+	edit, pw := gitSite(t, e, nil)
+	cl := newGitClient(t)
+	wd := cl.work()
+	cl.commit(wd, "empty.txt", []byte{})
+	cl.mustGit(wd, "push", "-q", g.remote(edit, pw), "HEAD:main")
+	w := gitGet(t, e, edit, pw, "/blob?ref=main&path=empty.txt&download=1")
+	if w.Code != 200 || w.Body.Len() != 0 {
+		t.Fatalf("empty download = %d, %d bytes", w.Code, w.Body.Len())
+	}
+	h := w.Header()
+	if !strings.HasPrefix(h.Get("Content-Disposition"), "attachment") || !strings.Contains(h.Get("Content-Disposition"), "empty.txt") ||
+		h.Get("Content-Type") != "application/octet-stream" || h.Get("X-Content-Type-Options") != "nosniff" || h.Get("Content-Security-Policy") != "sandbox" {
+		t.Errorf("headers = %v", h)
+	}
+}
+
+func TestGitLogBadSkip(t *testing.T) {
+	e := newEnv(t, nil)
+	g := newGitServer(t, e)
+	edit, pw := gitSite(t, e, nil)
+	cl := newGitClient(t)
+	pushed(t, cl, cl.work(), g.remote(edit, pw), "a.txt", []byte("a"))
+	for _, v := range []string{"x", "-1", "99999999999999999999999"} {
+		w := gitGet(t, e, edit, pw, "/log?skip="+v)
+		if w.Code != 400 || !strings.Contains(w.Body.String(), `"bad skip"`) {
+			t.Errorf("skip=%s = %d %s", v, w.Code, w.Body)
+		}
+	}
+}
+
+// A broken repository answers a generic 500: git's message, with its
+// filesystem paths, never reaches the client.
+func TestGitCorruptRepoDoesNotLeakPaths(t *testing.T) {
+	e := newEnv(t, nil)
+	g := newGitServer(t, e)
+	edit, pw := gitSite(t, e, nil)
+	cl := newGitClient(t)
+	wd := cl.work()
+	pushed(t, cl, wd, g.remote(edit, pw), "a.txt", []byte("a"))
+	site := siteByEdit(t, e, edit)
+	dir := site.GitDir()
+	// Corrupt the repository: garbage in the branch ref and in the HEAD file.
+	if err := os.WriteFile(filepath.Join(dir, "refs", "heads", "main"), []byte("garbage\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Remove(filepath.Join(dir, "packed-refs"))
+	var saw500 bool
+	for _, p := range []string{"/refs", "/log?ref=main", "/tree?ref=main", "/log"} {
+		w := gitGet(t, e, edit, pw, p)
+		body := w.Body.String()
+		if strings.Contains(body, dir) || strings.Contains(body, filepath.ToSlash(dir)) || strings.Contains(body, "fatal:") {
+			t.Errorf("GET git%s leaked: %s", p, body)
+		}
+		if w.Code == 500 {
+			saw500 = true
+			if !strings.Contains(body, msgGitInternal) {
+				t.Errorf("GET git%s = 500 %s, want the generic message", p, body)
+			}
+		}
+	}
+	if !saw500 {
+		t.Error("no route answered 500 on the corrupt repository; the fixture does not exercise the generic error")
 	}
 }

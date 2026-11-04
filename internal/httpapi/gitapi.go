@@ -167,14 +167,19 @@ func (a *API) gitLog(w http.ResponseWriter, r *http.Request, site *store.Site) {
 	if !a.gitReadable(w, site) {
 		return
 	}
+	skip := 0
+	if v := r.URL.Query().Get("skip"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			writeError(w, 400, "bad skip")
+			return
+		}
+		skip = n
+	}
 	sha, err := a.resolveRef(r, site)
 	if err != nil {
 		a.gitReadError(w, site, err)
 		return
-	}
-	skip, _ := strconv.Atoi(r.URL.Query().Get("skip"))
-	if skip < 0 {
-		skip = 0
 	}
 	dir := site.GitDir()
 	commits, err := a.git.Log(r.Context(), dir, sha, skip, gitrepo.LogPage)
@@ -255,7 +260,9 @@ func (a *API) gitBlob(w http.ResponseWriter, r *http.Request, site *store.Site) 
 	dl := &gitDownload{w: w, name: path.Base(p)}
 	if err := a.git.WriteBlob(r.Context(), dir, sha, p, dl); err != nil {
 		a.gitDownloadError(dl, site, err)
+		return
 	}
+	dl.finish()
 }
 
 func (a *API) gitArchive(w http.ResponseWriter, r *http.Request, site *store.Site) {
@@ -270,7 +277,9 @@ func (a *API) gitArchive(w http.ResponseWriter, r *http.Request, site *store.Sit
 	dl := &gitDownload{w: w, name: site.ViewID + "-" + sha[:7] + ".zip"}
 	if err := a.git.Archive(r.Context(), site.GitDir(), sha, dl); err != nil {
 		a.gitDownloadError(dl, site, err)
+		return
 	}
+	dl.finish()
 }
 
 // gitDownloadError answers a failed download with JSON when nothing has been
@@ -291,19 +300,28 @@ type gitDownload struct {
 	started bool
 }
 
-func (d *gitDownload) Write(p []byte) (int, error) {
-	if !d.started {
-		d.started = true
-		h := d.w.Header()
-		h.Set("Content-Type", "application/octet-stream")
-		h.Set("Content-Disposition", attachmentDisposition(d.name))
-		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("Content-Security-Policy", "sandbox")
-		h.Set("Cache-Control", "no-store")
-		d.w.WriteHeader(200)
+func (d *gitDownload) start() {
+	if d.started {
+		return
 	}
+	d.started = true
+	h := d.w.Header()
+	h.Set("Content-Type", "application/octet-stream")
+	h.Set("Content-Disposition", attachmentDisposition(d.name))
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Security-Policy", "sandbox")
+	h.Set("Cache-Control", "no-store")
+	d.w.WriteHeader(200)
+}
+
+func (d *gitDownload) Write(p []byte) (int, error) {
+	d.start()
 	return d.w.Write(p)
 }
+
+// finish completes a download that succeeded: an empty file never called
+// Write, and still gets its headers.
+func (d *gitDownload) finish() { d.start() }
 
 var _ io.Writer = (*gitDownload)(nil)
 
