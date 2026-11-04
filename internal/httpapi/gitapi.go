@@ -3,7 +3,6 @@ package httpapi
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"mime"
 	"net/http"
@@ -329,7 +328,13 @@ func (d *gitDownload) Write(p []byte) (int, error) {
 // Write, and still gets its headers.
 func (d *gitDownload) finish() { d.start() }
 
-var _ io.Writer = (*gitDownload)(nil)
+// SetWriteDeadline lets gitrepo bound each write of the download, so a client
+// that stops reading frees its git process slot.
+func (d *gitDownload) SetWriteDeadline(t time.Time) error {
+	return http.NewResponseController(d.w).SetWriteDeadline(t)
+}
+
+var _ gitrepo.WriteDeadliner = (*gitDownload)(nil)
 
 // attachmentDisposition is a Content-Disposition value for name that cannot
 // break out of the header: control characters and separators become "_",

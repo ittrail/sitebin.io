@@ -170,6 +170,39 @@ func (r *Runner) runFor(ctx context.Context, timeout time.Duration, dir string, 
 	return cb.buf.Bytes(), false, nil
 }
 
+// WriteDeadliner is a download target that can bound each write, such as an
+// HTTP response. stream gives every write to one the same idle bound as a
+// smart HTTP response: without it, a client that stops reading keeps git's
+// output copier blocked, and with it the process slot, for as long as the
+// connection lives, whatever StreamTimeout says.
+type WriteDeadliner interface {
+	io.Writer
+	SetWriteDeadline(time.Time) error
+}
+
+// deadlineWriter bounds each write to w: idle from its start, never past end.
+// A write that fails cancels git through fail.
+type deadlineWriter struct {
+	w    WriteDeadliner
+	idle time.Duration
+	end  time.Time
+	fail context.CancelFunc
+}
+
+func (d *deadlineWriter) Write(p []byte) (int, error) {
+	t := time.Now().Add(d.idle)
+	if t.After(d.end) {
+		t = d.end
+	}
+	// A target without deadlines (a test recorder) cannot block either.
+	_ = d.w.SetWriteDeadline(t)
+	n, err := d.w.Write(p)
+	if err != nil {
+		d.fail()
+	}
+	return n, err
+}
+
 // stream runs git with its stdout going straight to w.
 func (r *Runner) stream(ctx context.Context, dir string, w io.Writer, args ...string) error {
 	ctx, cancel := context.WithTimeout(ctx, StreamTimeout)
@@ -179,6 +212,12 @@ func (r *Runner) stream(ctx context.Context, dir string, w io.Writer, args ...st
 		return err
 	}
 	defer release()
+	if dw, ok := w.(WriteDeadliner); ok {
+		// Lifted once git's output is copied: the connection outlives the
+		// download.
+		defer func() { _ = dw.SetWriteDeadline(time.Time{}) }()
+		w = &deadlineWriter{w: dw, idle: r.responseIdle, end: time.Now().Add(StreamTimeout), fail: cancel}
+	}
 	var stderr bytes.Buffer
 	cmd := r.command(ctx, dir, args...)
 	guardProcess(cmd)
