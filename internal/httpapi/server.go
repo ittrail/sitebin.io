@@ -169,6 +169,15 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("DELETE /api/sites/{editID}/forms/{key}", a.withEditAuth(a.recorded(provenance.ActionFormRemove, a.removeForm)))
 	mux.HandleFunc("POST /api/sites/{editID}/forms/{key}/confirmation", a.withEditAuth(a.recorded(provenance.ActionFormResend, a.resendFormConfirmation)))
 
+	mux.HandleFunc("GET /api/sites/{editID}/git", a.withEditAuth(a.gitInfo))
+	mux.HandleFunc("GET /api/sites/{editID}/git/refs", a.withEditAuth(a.gitRefs))
+	mux.HandleFunc("GET /api/sites/{editID}/git/log", a.withEditAuth(a.gitLog))
+	mux.HandleFunc("GET /api/sites/{editID}/git/commit/{sha}", a.withEditAuth(a.gitCommit))
+	mux.HandleFunc("GET /api/sites/{editID}/git/tree", a.withEditAuth(a.gitTree))
+	mux.HandleFunc("GET /api/sites/{editID}/git/blob", a.withEditAuth(a.gitBlob))
+	mux.HandleFunc("GET /api/sites/{editID}/git/archive", a.withEditAuth(a.gitArchive))
+	mux.HandleFunc("DELETE /api/sites/{editID}/git", a.withEditAuth(a.recorded(provenance.ActionGitDelete, a.deleteGitRepo)))
+
 	mux.Handle("/dav/", http.HandlerFunc(a.webdav))
 
 	// Every site's repository, /git/<edit-id>.git, smart HTTP only. The
