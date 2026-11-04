@@ -186,6 +186,41 @@ func (s siteService) DeleteSiteIfOwner(viewID, owner string) error {
 	return mapOwnershipErr(err, viewID)
 }
 
+// ownedBy is the guard of the *IfOwner writers: under the site lock, the
+// fresh meta must name owner (never empty).
+func ownedBy(owner string) func(*store.Meta) error {
+	return func(m *store.Meta) error {
+		if owner == "" || m.OwnerAccountID != owner {
+			return store.ErrNotOwner
+		}
+		return nil
+	}
+}
+
+func (s siteService) RotateEditPasswordIfOwner(viewID, owner string) (string, error) {
+	site, err := s.a.st.ByViewID(viewID)
+	if err != nil {
+		return "", mapSiteGone(err, viewID)
+	}
+	pw, err := s.a.st.SetEditPasswordIfOwner(site, owner)
+	if err != nil {
+		return "", mapOwnershipErr(err, viewID)
+	}
+	// As RotateEditPassword: a verification cached for the old password and
+	// every upload token issued under it end with it.
+	s.a.verifyCache.Drop(site.EditID + ":")
+	s.a.uploads.revokeSite(site.ViewID)
+	return pw, nil
+}
+
+func (s siteService) SetNameIfOwner(viewID, expectedOwner, name string) error {
+	return s.setName(viewID, name, ownedBy(expectedOwner))
+}
+
+func (s siteService) UpdateTagsIfOwner(viewID, expectedOwner string, edit func([]string) ([]string, error)) error {
+	return s.updateTags(viewID, ownedBy(expectedOwner), edit)
+}
+
 // extAdmins maps the store's admins onto the seam's; nil stays nil.
 func extAdmins(in []store.SiteAdmin) []ext.SiteAdmin {
 	if len(in) == 0 {

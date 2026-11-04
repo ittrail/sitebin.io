@@ -168,6 +168,72 @@ type ownerGuardedDeleter interface {
 	DeleteSiteIfOwner(viewID, owner string) error
 }
 
+// The dashboard's writes that its owner check allowed: the owner is checked
+// again by the core under the site lock, so a transfer that commits between
+// the check and the write refuses the write (ext.ErrNotOwner).
+type ownerGuardedRotator interface {
+	RotateEditPasswordIfOwner(viewID, owner string) (string, error)
+}
+
+type ownerGuardedNamer interface {
+	SetNameIfOwner(viewID, expectedOwner, name string) error
+}
+
+type ownerGuardedTagger interface {
+	UpdateTagsIfOwner(viewID, expectedOwner string, edit func([]string) ([]string, error)) error
+}
+
+// Every narrow seam is a part of the core's ext.OwnershipSites. A signature
+// that drifts from it fails the build here, instead of turning the
+// assertion at its call into a silent "the site service cannot".
+var (
+	_ siteAdopter         = ext.OwnershipSites(nil)
+	_ siteSizer           = ext.OwnershipSites(nil)
+	_ moveReporter        = ext.OwnershipSites(nil)
+	_ siteOwnersLister    = ext.OwnershipSites(nil)
+	_ siteAdminSetter     = ext.OwnershipSites(nil)
+	_ siteAdminsReader    = ext.OwnershipSites(nil)
+	_ siteOwnerReader     = ext.OwnershipSites(nil)
+	_ ownerGuardedDeleter = ext.OwnershipSites(nil)
+	_ ownerGuardedRotator = ext.OwnershipSites(nil)
+	_ ownerGuardedNamer   = ext.OwnershipSites(nil)
+	_ ownerGuardedTagger  = ext.OwnershipSites(nil)
+	_ siteTransferrer     = ext.OwnershipSites(nil)
+	_ siteLockReader      = ext.OwnershipSites(nil)
+	_ hostConflictReader  = ext.OwnershipSites(nil)
+	_ formRecipientReader = ext.OwnershipSites(nil)
+)
+
+// rotateIfOwner issues a new edit password if, under the site lock, owner
+// still owns the site.
+func (p *provider) rotateIfOwner(viewID, owner string) (string, error) {
+	s, ok := p.host.Sites().(ownerGuardedRotator)
+	if !ok {
+		return "", errors.New("the site service cannot rotate a password for its owner only")
+	}
+	return s.RotateEditPasswordIfOwner(viewID, owner)
+}
+
+// setNameIfOwner names the site if, under the site lock, expectedOwner still
+// owns it.
+func (p *provider) setNameIfOwner(viewID, expectedOwner, name string) error {
+	s, ok := p.host.Sites().(ownerGuardedNamer)
+	if !ok {
+		return errors.New("the site service cannot rename a site for its owner only")
+	}
+	return s.SetNameIfOwner(viewID, expectedOwner, name)
+}
+
+// updateTagsIfOwner edits the site's tags if, under the site lock,
+// expectedOwner still owns it.
+func (p *provider) updateTagsIfOwner(viewID, expectedOwner string, edit func([]string) ([]string, error)) error {
+	s, ok := p.host.Sites().(ownerGuardedTagger)
+	if !ok {
+		return errors.New("the site service cannot tag a site for its owner only")
+	}
+	return s.UpdateTagsIfOwner(viewID, expectedOwner, edit)
+}
+
 // siteOwner is the owner in a site's meta.json, through the core's optional
 // ext.OwnershipSites. It reads meta only. A SiteService without it cannot
 // vouch for any owner, which every caller treats as "not yours".

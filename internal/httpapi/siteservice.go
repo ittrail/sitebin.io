@@ -136,7 +136,12 @@ func (s siteService) SetExpiry(viewID string, at *time.Time) error {
 	return mapSiteGone(err, viewID)
 }
 
-func (s siteService) SetName(viewID, name string) error {
+func (s siteService) SetName(viewID, name string) error { return s.setName(viewID, name, nil) }
+
+// setName writes the name under the site lock; guard, when set, is asked
+// first on the fresh meta and refuses with its error (the owner check of
+// SetNameIfOwner).
+func (s siteService) setName(viewID, name string, guard func(*store.Meta) error) error {
 	clean, err := store.CleanSiteName(name)
 	if err != nil {
 		return err
@@ -146,16 +151,27 @@ func (s siteService) SetName(viewID, name string) error {
 		return mapSiteGone(err, viewID)
 	}
 	err = s.a.st.Update(site, func(m *store.Meta) error {
+		if guard != nil {
+			if err := guard(m); err != nil {
+				return err
+			}
+		}
 		if m.IsLocked() {
 			return store.ErrLocked
 		}
 		m.Name = clean
 		return nil
 	})
-	return mapSiteErr(err, viewID)
+	return mapOwnershipErr(err, viewID)
 }
 
 func (s siteService) UpdateTags(viewID string, edit func(current []string) ([]string, error)) error {
+	return s.updateTags(viewID, nil, edit)
+}
+
+// updateTags is UpdateTags with an optional guard, asked first on the fresh
+// meta under the site lock (the owner check of UpdateTagsIfOwner).
+func (s siteService) updateTags(viewID string, guard func(*store.Meta) error, edit func(current []string) ([]string, error)) error {
 	site, err := s.a.st.ByViewID(viewID)
 	if err != nil {
 		return mapSiteGone(err, viewID)
@@ -164,6 +180,11 @@ func (s siteService) UpdateTags(viewID string, edit func(current []string) ([]st
 	// through Update unchanged and are told apart from the store's by identity.
 	var own error
 	err = s.a.st.Update(site, func(m *store.Meta) error {
+		if guard != nil {
+			if err := guard(m); err != nil {
+				return err
+			}
+		}
 		if m.IsLocked() {
 			return store.ErrLocked
 		}
@@ -186,7 +207,7 @@ func (s siteService) UpdateTags(viewID string, edit func(current []string) ([]st
 	if own != nil {
 		return own
 	}
-	return mapSiteErr(err, viewID)
+	return mapOwnershipErr(err, viewID)
 }
 
 func (s siteService) RotateEditPassword(viewID string) (string, error) {

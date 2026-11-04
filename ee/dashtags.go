@@ -373,6 +373,14 @@ func (p *provider) tagForm(w http.ResponseWriter, r *http.Request) (acc *account
 	return acc, viewID, admin, true
 }
 
+// ownerTagEdit is the owner's tag edit on the site: the core checks under
+// the site lock that the account still owns it, so a transfer that lands
+// after tagForm refuses the write (ext.ErrNotOwner) instead of putting the
+// old owner's label on the new owner's site.
+func (p *provider) ownerTagEdit(acc *account.Account, viewID string, edit func([]string) ([]string, error)) error {
+	return p.updateTagsIfOwner(viewID, acc.ID, edit)
+}
+
 // sharedTagsInUse maps every tag key the admin has put on a site shared with
 // them to the first spelling found.
 func (p *provider) sharedTagsInUse(acc *account.Account) map[string]string {
@@ -436,7 +444,7 @@ func (p *provider) handleAddSiteTag(w http.ResponseWriter, r *http.Request) {
 	if admin {
 		err = p.adminTagEdit(acc, viewID, add)
 	} else {
-		err = p.host.Sites().UpdateTags(viewID, add)
+		err = p.ownerTagEdit(acc, viewID, add)
 	}
 	if p.tagFormError(w, r, acc, viewID, err) {
 		return
@@ -530,7 +538,7 @@ func (p *provider) handleRemoveSiteTag(w http.ResponseWriter, r *http.Request) {
 	if admin {
 		err = p.adminTagEdit(acc, viewID, remove)
 	} else {
-		err = p.host.Sites().UpdateTags(viewID, remove)
+		err = p.ownerTagEdit(acc, viewID, remove)
 	}
 	if p.tagFormError(w, r, acc, viewID, err) {
 		return

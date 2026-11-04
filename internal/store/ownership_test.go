@@ -375,3 +375,102 @@ func TestAccountBoundAddresses(t *testing.T) {
 		t.Fatalf("an unreadable zone passed: %v", got)
 	}
 }
+
+// A rotate the old owner started before a transfer committed must not land
+// after it: the owner is decided under the site lock from fresh meta, so the
+// recipient's password stays the only one (final review C1).
+func TestSetEditPasswordIfOwnerRefusesAfterATransfer(t *testing.T) {
+	s := newTestStore(t)
+	site := ownSite(t, s, "sender")
+	stale, err := s.ByViewID(site.ViewID) // the handle the sender's request loaded
+	if err != nil {
+		t.Fatal(err)
+	}
+	newPW, err := s.TransferOwner(site, "sender", "recipient", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, _ := s.ByViewID(site.ViewID)
+	hash := after.Meta.EditPasswordHash
+
+	if pw, err := s.SetEditPasswordIfOwner(stale, "sender"); !errors.Is(err, ErrNotOwner) || pw != "" {
+		t.Fatalf("the old owner's rotate = %q, %v; want ErrNotOwner and no password", pw, err)
+	}
+	got, _ := s.ByViewID(site.ViewID)
+	if got.Meta.EditPasswordHash != hash || !auth.VerifyPassword(got.Meta.EditPasswordHash, newPW) {
+		t.Fatal("the refused rotate replaced the recipient's password")
+	}
+	if _, err := s.SetEditPasswordIfOwner(stale, ""); !errors.Is(err, ErrNotOwner) {
+		t.Errorf("an empty owner = %v, want ErrNotOwner", err)
+	}
+}
+
+// The interleaving itself: the rotate is under way while the transfer holds
+// the site lock and commits. Whatever the rotate looked at before it reached
+// the lock, it must write nothing.
+func TestSetEditPasswordIfOwnerDecidesUnderTheLock(t *testing.T) {
+	s := newTestStore(t)
+	site := ownSite(t, s, "sender")
+	stale, err := s.ByViewID(site.ViewID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := s.lockSite(site.ViewID)
+	l.Lock() // the transfer holds the lock
+	type result struct {
+		pw  string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		pw, err := s.SetEditPasswordIfOwner(stale, "sender")
+		done <- result{pw, err}
+	}()
+	m, err := readMeta(site.dir)
+	if err != nil {
+		l.Unlock()
+		t.Fatal(err)
+	}
+	m.OwnerAccountID = "recipient"
+	m.EditPasswordHash = auth.HashPassword("recipients-one-time-password")
+	if err := writeMeta(site.dir, m); err != nil {
+		l.Unlock()
+		t.Fatal(err)
+	}
+	l.Unlock() // the transfer commits
+	select {
+	case r := <-done:
+		if !errors.Is(r.err, ErrNotOwner) || r.pw != "" {
+			t.Fatalf("the racing rotate = %q, %v; want ErrNotOwner", r.pw, r.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the rotate never finished")
+	}
+	got, _ := s.ByViewID(site.ViewID)
+	if !auth.VerifyPassword(got.Meta.EditPasswordHash, "recipients-one-time-password") {
+		t.Fatal("the racing rotate replaced the recipient's password")
+	}
+}
+
+func TestSetEditPasswordIfOwner(t *testing.T) {
+	s := newTestStore(t)
+	site := ownSite(t, s, "a")
+	pw, err := s.SetEditPasswordIfOwner(site, "a")
+	if err != nil || pw == "" {
+		t.Fatalf("the owner's rotate = %q, %v", pw, err)
+	}
+	got, _ := s.ByViewID(site.ViewID)
+	if !auth.VerifyPassword(got.Meta.EditPasswordHash, pw) {
+		t.Fatal("the new password does not verify")
+	}
+	if _, err := s.SetLock(site, &SiteLock{At: time.Now(), By: "operator"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetEditPasswordIfOwner(site, "a"); !errors.Is(err, ErrLocked) {
+		t.Errorf("locked = %v, want ErrLocked", err)
+	}
+	got, _ = s.ByViewID(site.ViewID)
+	if !auth.VerifyPassword(got.Meta.EditPasswordHash, pw) {
+		t.Error("a locked site's password changed")
+	}
+}

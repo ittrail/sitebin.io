@@ -85,6 +85,10 @@ type fakeSites struct {
 	onTransferRecord func(id string, e provenance.Entry)
 	// onOwner, when set, runs at the start of every SiteOwner read.
 	onOwner func(id string)
+	// onGuarded, when set, runs at the start of every owner-guarded write
+	// (RotateEditPasswordIfOwner, SetNameIfOwner, UpdateTagsIfOwner): a
+	// transfer that lands between the handler's check and the write.
+	onGuarded func(id string)
 }
 
 func (s *fakeSites) Info(id string) (ext.SiteInfo, bool) {
@@ -314,6 +318,46 @@ func (s *fakeSites) RotateEditPassword(id string) (string, error) {
 	}
 	s.rotated = append(s.rotated, id)
 	return "freshEditPw123456789012", nil
+}
+
+// guardOwner is the owner check the core's *IfOwner writers make under the
+// site lock: onGuarded first, then a site that is gone, then the owner.
+func (s *fakeSites) guardOwner(id, owner string) error {
+	if s.onGuarded != nil {
+		s.onGuarded(id)
+	}
+	i, ok := s.info(id)
+	if !ok {
+		return fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
+	}
+	if owner == "" || i.Owner != owner {
+		return fmt.Errorf("%w: %s", ext.ErrNotOwner, id)
+	}
+	return nil
+}
+
+func (s *fakeSites) RotateEditPasswordIfOwner(id, owner string) (string, error) {
+	if err := s.guardOwner(id, owner); err != nil {
+		return "", err
+	}
+	return s.RotateEditPassword(id)
+}
+
+func (s *fakeSites) SetNameIfOwner(id, owner, name string) error {
+	if _, err := store.CleanSiteName(name); err != nil {
+		return err
+	}
+	if err := s.guardOwner(id, owner); err != nil {
+		return err
+	}
+	return s.SetName(id, name)
+}
+
+func (s *fakeSites) UpdateTagsIfOwner(id, owner string, edit func([]string) ([]string, error)) error {
+	if err := s.guardOwner(id, owner); err != nil {
+		return err
+	}
+	return s.UpdateTags(id, edit)
 }
 
 // SetLock and ReleaseLock mirror store.SetLock and store.ReleaseLock: an

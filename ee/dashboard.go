@@ -335,9 +335,16 @@ func (p *provider) handleRotate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	pw, err := p.host.Sites().RotateEditPassword(viewID)
+	// The core checks the owner again under the site lock: a transfer that
+	// committed after owns() must not hand the sender a password to the
+	// recipient's site.
+	pw, err := p.rotateIfOwner(viewID, acc.ID)
 	if errors.Is(err, ext.ErrSiteLocked) {
 		p.renderLocked(w)
+		return
+	}
+	if errors.Is(err, ext.ErrNotOwner) {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	if err != nil {
@@ -369,13 +376,18 @@ func (p *provider) handleRenameSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The owner, or an admin the site is shared with (manages). Rotate and
-	// delete stay the owner's alone.
-	if owner, admin := p.manages(acc, viewID); !owner && !admin {
+	// delete stay the owner's alone. The core checks the owner the answer
+	// was decided against again under the site lock.
+	ownerID, owner, admin := p.managedBy(acc, viewID)
+	if !owner && !admin {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	err := p.host.Sites().SetName(viewID, r.PostFormValue("name"))
+	err := p.setNameIfOwner(viewID, ownerID, r.PostFormValue("name"))
 	switch {
+	case errors.Is(err, ext.ErrNotOwner):
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
 	case errors.Is(err, store.ErrBadSiteName):
 		p.securityHeaders(w)
 		w.WriteHeader(http.StatusBadRequest)

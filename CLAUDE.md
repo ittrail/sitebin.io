@@ -162,7 +162,13 @@ the plan flag `sharing`. Read
   (`TransferSite`, `AdoptSite`, `SetAdmins`) take `ext.ChangeBy`, so the site's
   provenance names the actor; `DeleteSiteIfOwner` does not. The addresses that
   will not move are computed UNDER the lock from fresh meta (`detach`), never
-  from a list the caller read earlier.
+  from a list the caller read earlier. The dashboard's own writes go the same
+  way: rotate, rename and the owner's tags call `RotateEditPasswordIfOwner`,
+  `SetNameIfOwner` and `UpdateTagsIfOwner` with the owner their check was
+  decided against (an admin passes the sharing owner, `managedBy`), so a
+  transfer that commits in between refuses the write. A new password is
+  hashed BEFORE the site lock is taken (`TransferOwner`,
+  `SetEditPasswordIfOwner`).
 - **A transfer is stamped like a creation, from the strict tier**
   (`effectiveTierStrict`: an unknown plan refuses the move, never fails open),
   through `stampGrant`, the one function creation uses. Only an expiry the owner

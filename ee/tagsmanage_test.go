@@ -569,6 +569,15 @@ func (s *interleaveSites) UpdateTags(id string, edit func([]string) ([]string, e
 	return s.provSites.UpdateTags(id, edit)
 }
 
+// UpdateTagsIfOwner is the owner-guarded write the rename makes: the same
+// interleaving, then the owner check.
+func (s *interleaveSites) UpdateTagsIfOwner(id, owner string, edit func([]string) ([]string, error)) error {
+	if err := s.guardOwner(id, owner); err != nil {
+		return err
+	}
+	return s.UpdateTags(id, edit)
+}
+
 type interleaveHost struct {
 	*provHost
 	sites ext.SiteService

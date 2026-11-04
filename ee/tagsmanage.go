@@ -523,8 +523,8 @@ type skippedSite struct {
 // retagSites applies edit to every site of the account that carries key,
 // each under its site lock: edit receives the list stored right then and
 // says whether it changed it. A locked site, or one whose write failed, is
-// skipped and returned; a vanished one is ignored. Each changed site gets a
-// line in its log, and is counted.
+// skipped and returned; a vanished one, or one no longer the account's, is
+// ignored. Each changed site gets a line in its log, and is counted.
 func (p *provider) retagSites(r *http.Request, acc *account.Account, sites []ext.SiteInfo, key string, edit func(cur []string) ([]string, bool)) (int, []skippedSite) {
 	var skipped []skippedSite
 	n := 0
@@ -533,7 +533,9 @@ func (p *provider) retagSites(r *http.Request, acc *account.Account, sites []ext
 			continue
 		}
 		changed := false
-		err := p.host.Sites().UpdateTags(s.ViewID, func(cur []string) ([]string, error) {
+		// The owner is checked again under the site lock: a site transferred
+		// since the list was read is no longer the account's to retag.
+		err := p.updateTagsIfOwner(s.ViewID, acc.ID, func(cur []string) ([]string, error) {
 			next, ok := edit(cur)
 			changed = ok
 			return next, nil
@@ -544,7 +546,7 @@ func (p *provider) retagSites(r *http.Request, acc *account.Account, sites []ext
 				n++
 				p.recordSite(r, acc, s.ViewID, provenance.ActionTags, "")
 			}
-		case errors.Is(err, ext.ErrSiteGone):
+		case errors.Is(err, ext.ErrSiteGone), errors.Is(err, ext.ErrNotOwner):
 		default:
 			locked := errors.Is(err, ext.ErrSiteLocked)
 			if !locked {

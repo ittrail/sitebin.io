@@ -959,6 +959,22 @@ type OwnershipSites interface {
 	// locked site is ErrSiteLocked, a running push is stopped, a missing
 	// site is ErrSiteGone. An unreadable meta.json is ErrNotOwner.
 	DeleteSiteIfOwner(viewID, owner string) error
+	// RotateEditPasswordIfOwner is SiteService.RotateEditPassword with the
+	// owner checked where the write happens: under the site lock, meta.json
+	// must name owner (never empty), else ErrNotOwner and nothing is
+	// written. A rotate that passed the caller's own check and then lost a
+	// race with a transfer must never hand the old owner a password to the
+	// new owner's site. A locked site is ErrSiteLocked, a missing one
+	// ErrSiteGone.
+	RotateEditPasswordIfOwner(viewID, owner string) (newPassword string, err error)
+	// SetNameIfOwner is SiteService.SetName with the same owner check under
+	// the site lock: expectedOwner is the owner the caller's standing was
+	// decided against (for an admin, the owner who shared the site).
+	SetNameIfOwner(viewID, expectedOwner, name string) error
+	// UpdateTagsIfOwner is SiteService.UpdateTags with the same owner check
+	// under the site lock, so a racing transfer never receives the old
+	// owner's labels.
+	UpdateTagsIfOwner(viewID, expectedOwner string, edit func(current []string) ([]string, error)) error
 }
 
 // DomainLink is one custom domain of a site as the dashboard shows it. A

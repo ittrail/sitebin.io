@@ -734,3 +734,111 @@ func TestSiteOwnersReadsMetaOnly(t *testing.T) {
 		t.Errorf("an unreadable site was listed: %v", got)
 	}
 }
+
+// The owner-guarded writers decide the owner under the site lock: after a
+// transfer, the old owner's rotate, rename and tag write are refused with
+// nothing written, even through a handle loaded before (final review C1).
+func TestOwnerGuardedWritersRefuseAfterATransfer(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1"})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+	o := e.own(t)
+
+	// The owner's own calls go through, with every effect of a rotate.
+	upload, _, err := e.api.uploads.issue(c.ID, edit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := e.siteStatus(t, edit, "X-Edit-Password", c.EditPassword); code != 200 {
+		t.Fatalf("password before: %d", code) // and cached
+	}
+	pw, err := o.RotateEditPasswordIfOwner(c.ID, "acct-1")
+	if err != nil || pw == "" {
+		t.Fatalf("the owner's rotate = %q, %v", pw, err)
+	}
+	if code := e.siteStatus(t, edit, "X-Edit-Password", c.EditPassword); code != 401 {
+		t.Errorf("the old password after a rotate = %d, want 401", code)
+	}
+	if code := e.siteStatus(t, edit, "X-Edit-Password", pw); code != 200 {
+		t.Errorf("the new password = %d, want 200", code)
+	}
+	if _, ok := e.api.uploads.begin(upload, edit); ok {
+		t.Error("an upload token survived the rotate")
+	}
+	if err := o.SetNameIfOwner(c.ID, "acct-1", "Mine"); err != nil {
+		t.Fatalf("the owner's rename: %v", err)
+	}
+	if err := o.UpdateTagsIfOwner(c.ID, "acct-1", func(cur []string) ([]string, error) { return append(cur, "private"), nil }); err != nil {
+		t.Fatalf("the owner's tag: %v", err)
+	}
+
+	newPW, err := o.TransferSite(c.ID, "acct-1", "acct-2", ext.CreateGrant{}, ext.ChangeBy{Account: "acct-2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := e.siteOf(t, c.ID).Meta
+
+	if got, err := o.RotateEditPasswordIfOwner(c.ID, "acct-1"); !errors.Is(err, ext.ErrNotOwner) || got != "" {
+		t.Errorf("the old owner's rotate = %q, %v; want ErrNotOwner", got, err)
+	}
+	if err := o.SetNameIfOwner(c.ID, "acct-1", "Still mine"); !errors.Is(err, ext.ErrNotOwner) {
+		t.Errorf("the old owner's rename = %v, want ErrNotOwner", err)
+	}
+	called := false
+	if err := o.UpdateTagsIfOwner(c.ID, "acct-1", func(cur []string) ([]string, error) {
+		called = true
+		return append(cur, "private"), nil
+	}); !errors.Is(err, ext.ErrNotOwner) {
+		t.Errorf("the old owner's tag = %v, want ErrNotOwner", err)
+	}
+	if called {
+		t.Error("the tag callback ran for a site the caller no longer owns")
+	}
+	// An empty owner never matches.
+	if _, err := o.RotateEditPasswordIfOwner(c.ID, ""); !errors.Is(err, ext.ErrNotOwner) {
+		t.Errorf("rotate for no owner = %v, want ErrNotOwner", err)
+	}
+	if err := o.SetNameIfOwner(c.ID, "", "x"); !errors.Is(err, ext.ErrNotOwner) {
+		t.Errorf("rename for no owner = %v, want ErrNotOwner", err)
+	}
+	if err := o.UpdateTagsIfOwner(c.ID, "", func(cur []string) ([]string, error) { return cur, nil }); !errors.Is(err, ext.ErrNotOwner) {
+		t.Errorf("tags for no owner = %v, want ErrNotOwner", err)
+	}
+	after := e.siteOf(t, c.ID).Meta
+	if after.EditPasswordHash != before.EditPasswordHash || after.Name != before.Name || len(after.Tags) != 0 {
+		t.Errorf("a refused write changed the site: hash same %v, name %q, tags %v",
+			after.EditPasswordHash == before.EditPasswordHash, after.Name, after.Tags)
+	}
+	if code := e.siteStatus(t, edit, "X-Edit-Password", newPW); code != 200 {
+		t.Errorf("the recipient's password after the refusals = %d, want 200", code)
+	}
+
+	// The new owner's calls go through; a lock and a missing site map as on
+	// every other writer.
+	if err := o.SetNameIfOwner(c.ID, "acct-2", "Theirs"); err != nil {
+		t.Errorf("the new owner's rename: %v", err)
+	}
+	if err := e.api.SiteService().SetLock(c.ID, &ext.SiteLock{At: time.Now(), By: ext.LockByAdmin, Reason: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.RotateEditPasswordIfOwner(c.ID, "acct-2"); !errors.Is(err, ext.ErrSiteLocked) {
+		t.Errorf("locked rotate = %v, want ErrSiteLocked", err)
+	}
+	if err := o.SetNameIfOwner(c.ID, "acct-2", "x"); !errors.Is(err, ext.ErrSiteLocked) {
+		t.Errorf("locked rename = %v, want ErrSiteLocked", err)
+	}
+	if err := o.UpdateTagsIfOwner(c.ID, "acct-2", func(cur []string) ([]string, error) { return cur, nil }); !errors.Is(err, ext.ErrSiteLocked) {
+		t.Errorf("locked tags = %v, want ErrSiteLocked", err)
+	}
+	if _, err := o.RotateEditPasswordIfOwner(noSuchSite, "acct-2"); !errors.Is(err, ext.ErrSiteGone) {
+		t.Errorf("missing rotate = %v, want ErrSiteGone", err)
+	}
+	if err := o.SetNameIfOwner(noSuchSite, "acct-2", "x"); !errors.Is(err, ext.ErrSiteGone) {
+		t.Errorf("missing rename = %v, want ErrSiteGone", err)
+	}
+	if err := o.UpdateTagsIfOwner(noSuchSite, "acct-2", func(cur []string) ([]string, error) { return cur, nil }); !errors.Is(err, ext.ErrSiteGone) {
+		t.Errorf("missing tags = %v, want ErrSiteGone", err)
+	}
+}

@@ -89,7 +89,15 @@ func (s *Store) applyMarker(site *Site, trusted bool) {
 // started is cancelled right after the write, still under the lock. A
 // trust-marker failure is logged, not returned (the sweep corrects the
 // marker), so the new password always reaches the caller once meta holds it.
+// The password is hashed before the lock is taken: argon2id takes 64 MiB and
+// real time, and nothing else on the site should wait for it.
 func (s *Store) TransferOwner(site *Site, from, to string, detach func(m *Meta) ([]string, error), stamp func(*Meta, time.Time) bool) (newPassword string, err error) {
+	if to == "" || from == "" {
+		return "", ErrNotOwner
+	}
+	pw := ids.NewEditPassword()
+	hash := auth.HashPassword(pw)
+
 	l := s.lockSite(site.ViewID)
 	l.Lock()
 	defer l.Unlock()
@@ -98,7 +106,7 @@ func (s *Store) TransferOwner(site *Site, from, to string, detach func(m *Meta) 
 	if err != nil {
 		return "", err
 	}
-	if to == "" || from == "" || m.OwnerAccountID != from {
+	if m.OwnerAccountID != from {
 		return "", ErrNotOwner
 	}
 	if m.Locked != nil {
@@ -131,13 +139,39 @@ func (s *Store) TransferOwner(site *Site, from, to string, detach func(m *Meta) 
 	if stamp != nil {
 		trusted = stamp(&m, now)
 	}
-	pw := ids.NewEditPassword()
-	m.EditPasswordHash = auth.HashPassword(pw)
+	m.EditPasswordHash = hash
 	if err := s.commitOwnership(site, m); err != nil {
 		return "", err
 	}
 	s.stopGitWrite(site.ViewID)
 	s.applyMarker(site, trusted)
+	return pw, nil
+}
+
+// SetEditPasswordIfOwner is SetEditPassword for a request its owner made:
+// the new password is hashed first, outside the site lock, and written only
+// if, under the lock, meta.json still names owner (never empty) as the
+// site's owner (ErrNotOwner otherwise) and the site is not locked
+// (ErrLocked). Checked anywhere earlier, a transfer that committed in
+// between would leave the old owner holding the new owner's password.
+func (s *Store) SetEditPasswordIfOwner(site *Site, owner string) (string, error) {
+	if owner == "" {
+		return "", ErrNotOwner
+	}
+	pw := ids.NewEditPassword()
+	hash := auth.HashPassword(pw)
+	if err := s.Update(site, func(m *Meta) error {
+		if m.OwnerAccountID != owner {
+			return ErrNotOwner
+		}
+		if m.Locked != nil {
+			return ErrLocked
+		}
+		m.EditPasswordHash = hash
+		return nil
+	}); err != nil {
+		return "", err
+	}
 	return pw, nil
 }
 

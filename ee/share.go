@@ -103,32 +103,42 @@ func changeBy(r *http.Request, acc *account.Account) ext.ChangeBy {
 // and the admin share. A plan that cannot be read is not a pass. Rotate and
 // delete stay owner-only (owns) whatever this says.
 func (p *provider) manages(acc *account.Account, viewID string) (owner, admin bool) {
+	_, owner, admin = p.managedBy(acc, viewID)
+	return owner, admin
+}
+
+// managedBy is manages with the owner the answer was decided against: the
+// account itself for the owner, the owner who shared the site for an admin,
+// "" for neither. A write the answer allows passes it on as the expected
+// owner (setNameIfOwner, updateTagsIfOwner), so a transfer that lands in
+// between refuses the write instead of letting it reach the new owner.
+func (p *provider) managedBy(acc *account.Account, viewID string) (ownerID string, owner, admin bool) {
 	if acc == nil {
-		return false, false
+		return "", false, false
 	}
 	if p.owns(acc, viewID) {
-		return true, false
+		return acc.ID, true, false
 	}
 	ownerID, err := p.siteOwner(viewID)
 	if err != nil || ownerID == "" || ownerID == acc.ID {
-		return false, false
+		return "", false, false
 	}
 	admins, err := p.siteAdmins(viewID)
 	if err != nil {
-		return false, false
+		return "", false, false
 	}
 	now := time.Now()
 	if !slices.ContainsFunc(admins, func(a ext.SiteAdmin) bool {
 		return a.Account == acc.ID && (a.Until == nil || a.Until.After(now))
 	}) {
-		return false, false
+		return "", false, false
 	}
 	for _, id := range []string{ownerID, acc.ID} {
 		if ok, err := p.SharingAllowed(id); err != nil || !ok {
-			return false, false
+			return "", false, false
 		}
 	}
-	return false, true
+	return ownerID, false, true
 }
 
 // ownsByMeta reports whether the site's meta.json names the account as its
