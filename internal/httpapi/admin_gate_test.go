@@ -163,7 +163,7 @@ func shareWith(t *testing.T, e *env, viewID string, admins ...store.SiteAdmin) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := e.st.UpdateAdmins(site, func([]store.SiteAdmin) ([]store.SiteAdmin, error) { return admins, nil }); err != nil {
+	if err := e.st.UpdateAdmins(site, site.Meta.OwnerAccountID, func([]store.SiteAdmin) ([]store.SiteAdmin, error) { return admins, nil }); err != nil {
 		t.Fatal(err)
 	}
 }

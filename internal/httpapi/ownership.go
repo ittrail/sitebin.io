@@ -95,12 +95,12 @@ func (s siteService) AdoptSite(viewID, to string, g ext.CreateGrant, by ext.Chan
 	return nil
 }
 
-func (s siteService) SetAdmins(viewID string, by ext.ChangeBy, edit func([]ext.SiteAdmin) ([]ext.SiteAdmin, error)) error {
+func (s siteService) SetAdmins(viewID, expectedOwner string, by ext.ChangeBy, edit func([]ext.SiteAdmin) ([]ext.SiteAdmin, error)) error {
 	site, err := s.a.st.ByViewID(viewID)
 	if err != nil {
 		return mapSiteGone(err, viewID)
 	}
-	err = s.a.st.UpdateAdmins(site, func(cur []store.SiteAdmin) ([]store.SiteAdmin, error) {
+	err = s.a.st.UpdateAdmins(site, expectedOwner, func(cur []store.SiteAdmin) ([]store.SiteAdmin, error) {
 		out, err := edit(extAdmins(cur))
 		if err != nil {
 			return nil, err

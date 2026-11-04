@@ -66,15 +66,15 @@ var errInviteNotOpen = errors.New("the invitation is not open")
 // siteAdminSetter is the core's ext.OwnershipSites.SetAdmins, asserted on its
 // own like the other narrow seams.
 type siteAdminSetter interface {
-	SetAdmins(viewID string, by ext.ChangeBy, edit func([]ext.SiteAdmin) ([]ext.SiteAdmin, error)) error
+	SetAdmins(viewID, expectedOwner string, by ext.ChangeBy, edit func([]ext.SiteAdmin) ([]ext.SiteAdmin, error)) error
 }
 
-func (p *provider) setAdmins(viewID string, by ext.ChangeBy, edit func([]ext.SiteAdmin) ([]ext.SiteAdmin, error)) error {
+func (p *provider) setAdmins(viewID, expectedOwner string, by ext.ChangeBy, edit func([]ext.SiteAdmin) ([]ext.SiteAdmin, error)) error {
 	s, ok := p.host.Sites().(siteAdminSetter)
 	if !ok {
 		return errors.New("the site service cannot change a site's admins")
 	}
-	return s.SetAdmins(viewID, by, edit)
+	return s.SetAdmins(viewID, expectedOwner, by, edit)
 }
 
 // siteLocked is the site's lock, from meta.json, through the core's optional
@@ -291,6 +291,11 @@ func (p *provider) canInvite(acc *account.Account, viewID, email string, now tim
 			return refuse("There is already an open invitation for this address.")
 		}
 	}
+	// Already an admin: the owner sees the admins' addresses anyway, so
+	// this reveals nothing. Changing the end date means ending the share.
+	if existing, err := p.accounts.ByEmail(email); err == nil && existing != nil && listsAccount(admins, existing.ID) {
+		return refuse("That account is already an admin of this site. End the share first to change the date.")
+	}
 	if len(admins)+open >= store.MaxAdmins {
 		return refuse(fmt.Sprintf("A site can have at most %d admins, counting open invitations. End a share or cancel an invitation first.", store.MaxAdmins))
 	}
@@ -418,14 +423,6 @@ func (p *provider) handleInviteAccept(w http.ResponseWriter, r *http.Request) {
 		p.renderShareMessage(w, http.StatusConflict, "This invitation cannot be accepted", inviteUnavailable+" Nothing was changed.")
 		return
 	}
-	before, err := p.siteAdmins(inv.Site)
-	if err != nil {
-		slog.Error("share: could not read a site's admins", "site", inv.Site, "err", err)
-		p.renderShareRetry(w)
-		return
-	}
-	wasAdmin := listsAccount(before, acc.ID)
-
 	// The one state change that decides a race with a cancel or a second
 	// accept; undone below if the share cannot be written.
 	cur, err := p.setInviteState(inv.ID, ownership.StateAccepted)
@@ -439,7 +436,9 @@ func (p *provider) handleInviteAccept(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	undo := func() {
-		if !wasAdmin {
+		// The marker goes unless the site still lists the account (it was an
+		// admin before this invitation); a read error leaves it.
+		if admins, err := p.siteAdmins(inv.Site); err == nil && !listsAccount(admins, acc.ID) {
 			if err := p.owner.UnlinkShare(acc.ID, inv.Site); err != nil {
 				slog.Error("share: could not drop a share marker", "site", inv.Site, "account", acc.ID, "err", err)
 			}
@@ -466,7 +465,10 @@ func (p *provider) handleInviteAccept(w http.ResponseWriter, r *http.Request) {
 		u := *cur.Until
 		until = &u
 	}
-	err = p.setAdmins(inv.Site, changeBy(r, acc), func(admins []ext.SiteAdmin) ([]ext.SiteAdmin, error) {
+	// The core writes only while inv.From still owns the site (under the
+	// site lock), so a transfer that landed after the owner check above
+	// leaves nothing behind.
+	err = p.setAdmins(inv.Site, inv.From, changeBy(r, acc), func(admins []ext.SiteAdmin) ([]ext.SiteAdmin, error) {
 		out := slices.DeleteFunc(slices.Clone(admins), func(a ext.SiteAdmin) bool { return a.Account == acc.ID })
 		return append(out, ext.SiteAdmin{Account: acc.ID, Until: until}), nil
 	})
@@ -479,6 +481,13 @@ func (p *provider) handleInviteAccept(w http.ResponseWriter, r *http.Request) {
 		undo()
 		p.renderShareMessage(w, http.StatusConflict, "This invitation cannot be accepted", inviteUnavailable+" Nothing was changed.")
 		return
+	case errors.Is(err, ext.ErrNotOwner):
+		// Transferred after the invitation: whoever owns the site now never
+		// invited anyone.
+		undo()
+		p.endInvite(inv.ID, ownership.StateCancelled)
+		p.renderShareMessage(w, http.StatusConflict, "This invitation cannot be accepted", inviteGone+" Nothing was changed.")
+		return
 	case errors.Is(err, ext.ErrSiteGone):
 		undo()
 		p.endInvite(inv.ID, ownership.StateCancelled)
@@ -490,21 +499,6 @@ func (p *provider) handleInviteAccept(w http.ResponseWriter, r *http.Request) {
 		p.renderShareRetry(w)
 		return
 	}
-	// A transfer can land between the owner check and the write. The core's
-	// transfer clears admins under the site lock, so one that landed AFTER
-	// the write took this admin with it; one that landed BEFORE left an
-	// admin nobody the new owner invited. Look again, and take it back.
-	if nowOwner, err := p.siteOwner(inv.Site); err == nil && nowOwner != inv.From {
-		if !wasAdmin {
-			if err := p.removeAdminOf(r, acc, inv.Site, acc.ID); err != nil {
-				slog.Error("share: could not take an admin back", "site", inv.Site, "account", acc.ID, "err", err)
-			}
-		}
-		undo()
-		p.endInvite(inv.ID, ownership.StateCancelled)
-		p.renderShareMessage(w, http.StatusConflict, "This invitation cannot be accepted", inviteGone+" Nothing was changed.")
-		return
-	}
 	p.recordShare(r, acc, inv.From, inv.Site, "became an admin; invited by account "+inv.From, "account "+acc.ID+" accepted an invitation and became an admin")
 	subject, body := p.shareAcceptedMail(cur, acc.Email)
 	p.mailVerified(p.emailOf(inv.From), subject, body)
@@ -512,8 +506,8 @@ func (p *provider) handleInviteAccept(w http.ResponseWriter, r *http.Request) {
 }
 
 // removeAdminOf takes an account out of a site's admins, as actor.
-func (p *provider) removeAdminOf(r *http.Request, actor *account.Account, viewID, adminID string) error {
-	return p.setAdmins(viewID, changeBy(r, actor), func(admins []ext.SiteAdmin) ([]ext.SiteAdmin, error) {
+func (p *provider) removeAdminOf(r *http.Request, actor *account.Account, viewID, ownerID, adminID string) error {
+	return p.setAdmins(viewID, ownerID, changeBy(r, actor), func(admins []ext.SiteAdmin) ([]ext.SiteAdmin, error) {
 		return slices.DeleteFunc(slices.Clone(admins), func(a ext.SiteAdmin) bool { return a.Account == adminID }), nil
 	})
 }
@@ -535,6 +529,12 @@ func (p *provider) recordShare(r *http.Request, actor *account.Account, ownerID,
 func (p *provider) handleInviteDecline(w http.ResponseWriter, r *http.Request) {
 	_, inv, ok := p.recipientInvite(w, r)
 	if !ok {
+		return
+	}
+	// A lapsed invitation answers like an ended one, and nobody is mailed.
+	if inv.State == ownership.StateOpen && inviteLapsed(inv, time.Now()) {
+		p.endInvite(inv.ID, ownership.StateExpired)
+		p.renderShareMessage(w, http.StatusConflict, "This invitation cannot be declined", inviteStateText(ownership.StateExpired))
 		return
 	}
 	cur, err := p.setInviteState(inv.ID, ownership.StateDeclined)
@@ -631,8 +631,13 @@ func (p *provider) handleShareLeave(w http.ResponseWriter, r *http.Request) {
 // the tags are idempotent and log their own failures: meta.json already says
 // the admin is gone. ok is false when a response was written.
 func (p *provider) endShare(w http.ResponseWriter, r *http.Request, actor *account.Account, ownerID, viewID, adminID string) bool {
-	err := p.removeAdminOf(r, actor, viewID, adminID)
+	err := p.removeAdminOf(r, actor, viewID, ownerID, adminID)
 	switch {
+	case errors.Is(err, ext.ErrNotOwner):
+		// The site changed hands while this request ran: its new owner's
+		// admins are not this request's to end.
+		http.NotFound(w, r)
+		return false
 	case errors.Is(err, ext.ErrSiteLocked):
 		p.renderShareMessage(w, http.StatusForbidden, "This site is locked by the operator", msgSiteLockedNow)
 		return false
@@ -688,6 +693,8 @@ type inviteCard struct {
 	// cannot be read.
 	CanAccept bool
 	NeedsPlan bool
+	// PlanUnknown: the plan could not be read; the card says to try again.
+	PlanUnknown bool
 }
 
 // inviteCards are the open invitations to acc's verified address that have
@@ -719,7 +726,7 @@ func (p *provider) inviteCards(acc *account.Account) []inviteCard {
 				slog.Error("dashboard: could not read the invitee's plan", "account", acc.ID, "err", err)
 			}
 		}
-		c := inviteCard{ID: inv.ID, From: p.emailOf(inv.From), Site: p.labelOf(inv.Site), CanAccept: planOK, NeedsPlan: planKnown && !planOK}
+		c := inviteCard{ID: inv.ID, From: p.emailOf(inv.From), Site: p.labelOf(inv.Site), CanAccept: planOK, NeedsPlan: planKnown && !planOK, PlanUnknown: !planKnown}
 		if c.From == "" {
 			c.From = "another account"
 		}
@@ -799,6 +806,12 @@ func (p *provider) sharedRows(acc *account.Account, token string, owned map[stri
 		}
 		info, ok := p.host.Sites().Info(id)
 		if !ok || info.Owner == "" || info.Owner == acc.ID {
+			continue
+		}
+		// The Info rendered must still list the account: a former admin
+		// (the site was transferred, the share ended) never sees "shared by"
+		// the new owner.
+		if !listsAccount(info.Admins, acc.ID) {
 			continue
 		}
 		_, admin := p.manages(acc, id)

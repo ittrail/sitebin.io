@@ -180,6 +180,15 @@ func TestAdoptOwner(t *testing.T) {
 func TestUpdateAdmins(t *testing.T) {
 	s := newTestStore(t)
 	site := ownSite(t, s, "a")
+	if err := s.UpdateAdmins(site, "someone-else", func(in []SiteAdmin) ([]SiteAdmin, error) { return append(in, SiteAdmin{Account: "x"}), nil }); !errors.Is(err, ErrNotOwner) {
+		t.Fatalf("wrong expected owner: %v", err)
+	}
+	if err := s.UpdateAdmins(site, "", func(in []SiteAdmin) ([]SiteAdmin, error) { return append(in, SiteAdmin{Account: "x"}), nil }); !errors.Is(err, ErrNotOwner) {
+		t.Fatalf("empty expected owner: %v", err)
+	}
+	if got, _ := s.ByViewID(site.ViewID); len(got.Meta.Admins) != 0 {
+		t.Fatalf("a refused edit wrote: %v", got.Meta.Admins)
+	}
 	add := func(accts ...string) func([]SiteAdmin) ([]SiteAdmin, error) {
 		return func(in []SiteAdmin) ([]SiteAdmin, error) {
 			for _, a := range accts {
@@ -188,29 +197,29 @@ func TestUpdateAdmins(t *testing.T) {
 			return in, nil
 		}
 	}
-	if err := s.UpdateAdmins(site, add("p", "q", "p")); err != nil {
+	if err := s.UpdateAdmins(site, "a", add("p", "q", "p")); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.ByViewID(site.ViewID); len(got.Meta.Admins) != 2 {
 		t.Fatalf("dedupe: %v", got.Meta.Admins)
 	}
-	if err := s.UpdateAdmins(site, add("1", "2", "3", "4", "5", "6", "7", "8")); err != nil {
+	if err := s.UpdateAdmins(site, "a", add("1", "2", "3", "4", "5", "6", "7", "8")); err != nil {
 		t.Fatalf("10 admins: %v", err)
 	}
-	if err := s.UpdateAdmins(site, add("11")); !errors.Is(err, ErrTooManyAdmins) {
+	if err := s.UpdateAdmins(site, "a", add("11")); !errors.Is(err, ErrTooManyAdmins) {
 		t.Fatalf("11th: %v", err)
 	}
 	if got, _ := s.ByViewID(site.ViewID); len(got.Meta.Admins) != 10 {
 		t.Errorf("a refused edit changed the admins: %d", len(got.Meta.Admins))
 	}
 	boom := errors.New("boom")
-	if err := s.UpdateAdmins(site, func([]SiteAdmin) ([]SiteAdmin, error) { return nil, boom }); !errors.Is(err, boom) {
+	if err := s.UpdateAdmins(site, "a", func([]SiteAdmin) ([]SiteAdmin, error) { return nil, boom }); !errors.Is(err, boom) {
 		t.Errorf("edit error: %v", err)
 	}
 	if _, err := s.SetLock(site, &SiteLock{At: time.Now(), By: "operator"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpdateAdmins(site, add("z")); !errors.Is(err, ErrLocked) {
+	if err := s.UpdateAdmins(site, "a", add("z")); !errors.Is(err, ErrLocked) {
 		t.Errorf("locked: %v", err)
 	}
 }

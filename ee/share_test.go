@@ -20,10 +20,16 @@ import (
 
 // SetAdmins mirrors the core's: gone, then locked, then the callback, then the
 // de-duplication and the cap.
-func (s *fakeSites) SetAdmins(id string, by ext.ChangeBy, edit func([]ext.SiteAdmin) ([]ext.SiteAdmin, error)) error {
-	info, ok := s.infos[id]
+func (s *fakeSites) SetAdmins(id, expectedOwner string, by ext.ChangeBy, edit func([]ext.SiteAdmin) ([]ext.SiteAdmin, error)) error {
+	if s.onSetAdmins != nil {
+		s.onSetAdmins(id)
+	}
+	info, ok := s.info(id)
 	if !ok {
 		return fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
+	}
+	if expectedOwner == "" || info.Owner != expectedOwner {
+		return fmt.Errorf("%w: %s", ext.ErrNotOwner, id)
 	}
 	if info.Locked != nil {
 		return fmt.Errorf("%w: %s", ext.ErrSiteLocked, id)
@@ -859,5 +865,103 @@ func TestShareInvitationsCardHidesWhatCannotBeAccepted(t *testing.T) {
 	e.fs.infos[shareSite] = info
 	if b := e.dashboard(e.toCookie); strings.Contains(b, "/account/invites/"+inv2.ID+"/accept") {
 		t.Error("an invitation of a former owner is listed")
+	}
+}
+
+// ---- fix round 1 ----
+
+func TestShareTransferBetweenTheChecksAndTheWriteLeavesNothing(t *testing.T) {
+	e := newShareEnv(t)
+	inv := e.open(shareSite, takerEmail, nil)
+	e.fs.onSetAdmins = func(id string) {
+		// The site changes hands after every check of the handler passed.
+		info := e.fs.infos[id]
+		info.Owner = "new-owner"
+		info.Admins = nil
+		e.fs.infos[id] = info
+		e.fs.onSetAdmins = nil
+	}
+	w := e.accept(inv)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "no longer available") {
+		t.Fatalf("accept = %d (%s)", w.Code, w.Body)
+	}
+	if got := e.admins(shareSite); len(got) != 0 {
+		t.Errorf("the new owner's site lists %+v", got)
+	}
+	if ids, _ := e.p.owner.SharedSites(e.to.ID); len(ids) != 0 {
+		t.Errorf("share markers = %v", ids)
+	}
+	if got := e.inviteState(inv); got != ownership.StateCancelled {
+		t.Errorf("invitation state = %q", got)
+	}
+	if n := len(e.mailsTo("pro@example.com", "accepted")); n != 0 {
+		t.Errorf("the old owner was told of an acceptance")
+	}
+	// A former admin never sees "shared by <new owner>".
+	if b := e.dashboard(e.toCookie); strings.Contains(b, "shared by") {
+		t.Errorf("the dashboard lists the transferred site:\n%s", b)
+	}
+}
+
+func TestShareEndAfterATransferTouchesNothing(t *testing.T) {
+	e := newShareEnv(t)
+	e.shared(nil)
+	e.fs.onSetAdmins = func(id string) {
+		info := e.fs.infos[id]
+		info.Owner = "new-owner"
+		e.fs.infos[id] = info
+		e.fs.onSetAdmins = nil
+	}
+	if w := e.postTo(e.cookie, e.acc, "/account/sites/"+shareSite+"/share/"+e.to.ID+"/end", nil); w.Code != http.StatusNotFound {
+		t.Errorf("end by the former owner = %d", w.Code)
+	}
+	if len(e.admins(shareSite)) != 1 {
+		t.Error("the former owner changed the new owner's admins")
+	}
+}
+
+func TestShareRefusesAnAccountThatIsAlreadyAnAdmin(t *testing.T) {
+	e := newShareEnv(t)
+	e.shared(nil)
+	w := e.invite(takerEmail, daysAhead(5))
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "already an admin") {
+		t.Errorf("= %d (%s)", w.Code, w.Body)
+	}
+	if n := len(e.invitesOf(shareSite)); n != 1 {
+		t.Errorf("invitations = %d", n)
+	}
+}
+
+func TestShareDeclineRespectsLapse(t *testing.T) {
+	e := newShareEnv(t)
+	inv := e.open(shareSite, takerEmail, nil)
+	e.p.owner.UpdateInvite(inv.ID, func(i *ownership.Invite) error { i.Created = time.Now().Add(-31 * 24 * time.Hour); return nil })
+	if w := e.act(e.toCookie, e.to, inv, "decline"); w.Code != http.StatusConflict {
+		t.Errorf("decline of a lapsed invitation = %d", w.Code)
+	}
+	if got := e.inviteState(inv); got != ownership.StateExpired {
+		t.Errorf("state = %q", got)
+	}
+	if n := len(e.mailsTo("pro@example.com", "declined")); n != 0 {
+		t.Errorf("the inviter was mailed %d times", n)
+	}
+}
+
+func TestShareCardSaysTryAgainWhenThePlanCannotBeRead(t *testing.T) {
+	e := newShareEnv(t)
+	inv := e.open(shareSite, takerEmail, nil)
+	e.setTier(e.to, "legacy")
+	body := e.dashboard(e.toCookie)
+	if !strings.Contains(body, "try again") || strings.Contains(body, "/account/invites/"+inv.ID+"/accept") {
+		t.Errorf("the card does not explain the missing Accept:\n%s", body)
+	}
+}
+
+func TestShareInviteMailPromisesNoSharedTags(t *testing.T) {
+	e := newShareEnv(t)
+	e.invite(takerEmail, "")
+	m := e.mailsTo(takerEmail, invSubject)
+	if len(m) != 1 || strings.Contains(strings.ToLower(m[0]), "tags") {
+		t.Errorf("mail = %v", m)
 	}
 }

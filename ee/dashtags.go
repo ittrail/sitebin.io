@@ -441,7 +441,9 @@ func (p *provider) handleAddSiteTag(w http.ResponseWriter, r *http.Request) {
 	if p.tagFormError(w, r, acc, viewID, err) {
 		return
 	}
-	if changed {
+	// An admin's tags are private to the admin and change nothing on the
+	// site, so they are not written to the site's log.
+	if changed && !admin {
 		p.recordSite(r, acc, viewID, provenance.ActionTags, "")
 	}
 
@@ -533,7 +535,7 @@ func (p *provider) handleRemoveSiteTag(w http.ResponseWriter, r *http.Request) {
 	if p.tagFormError(w, r, acc, viewID, err) {
 		return
 	}
-	if changed {
+	if changed && !admin {
 		p.recordSite(r, acc, viewID, provenance.ActionTags, "")
 	}
 	p.redirect(w, r, tagBack(r))

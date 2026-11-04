@@ -889,10 +889,12 @@ type OwnershipSites interface {
 	AdoptSite(viewID, to string, g CreateGrant, by ChangeBy) error
 	// SetAdmins edits the site's admins under the site lock: edit receives
 	// the stored list and returns the one to store (de-duplicated by
-	// account, at most store.MaxAdmins). An error from edit is returned
-	// unchanged, with nothing written. edit runs under the site lock and
-	// must not call back into the site service.
-	SetAdmins(viewID string, by ChangeBy, edit func([]SiteAdmin) ([]SiteAdmin, error)) error
+	// account, at most store.MaxAdmins). Under the same lock the site's
+	// owner must be expectedOwner (never empty), else ErrNotOwner with
+	// nothing written (the DeleteSiteIfOwner pattern). An error from edit is
+	// returned unchanged, with nothing written. edit runs under the site lock
+	// and must not call back into the site service.
+	SetAdmins(viewID, expectedOwner string, by ChangeBy, edit func([]SiteAdmin) ([]SiteAdmin, error)) error
 	// CheckEditPassword verifies a site's edit password through the same
 	// per-address and per-site limits as every other surface. ip must be
 	// auth.ClientIP(r) of the request that carries the password: a caller

@@ -420,9 +420,21 @@ func TestFormRecipients(t *testing.T) {
 func TestSetAdminsAndInfo(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	e.st.Update(e.siteOf(t, c.ID), func(m *store.Meta) error { m.OwnerAccountID = "acct-1"; return nil })
 	by := ext.ChangeBy{Account: "acct-1", IP: "203.0.113.9"}
 	until := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
-	err := e.own(t).SetAdmins(c.ID, by, func(cur []ext.SiteAdmin) ([]ext.SiteAdmin, error) {
+	if err := e.own(t).SetAdmins(c.ID, "acct-9", by, func([]ext.SiteAdmin) ([]ext.SiteAdmin, error) {
+		return []ext.SiteAdmin{{Account: "intruder"}}, nil
+	}); !errors.Is(err, ext.ErrNotOwner) {
+		t.Fatalf("wrong expected owner: %v", err)
+	}
+	if err := e.own(t).SetAdmins(c.ID, "", by, func([]ext.SiteAdmin) ([]ext.SiteAdmin, error) { return nil, nil }); !errors.Is(err, ext.ErrNotOwner) {
+		t.Fatalf("empty expected owner: %v", err)
+	}
+	if got, _ := e.own(t).SiteAdmins(c.ID); len(got) != 0 {
+		t.Fatalf("a refused SetAdmins wrote: %v", got)
+	}
+	err := e.own(t).SetAdmins(c.ID, "acct-1", by, func(cur []ext.SiteAdmin) ([]ext.SiteAdmin, error) {
 		if len(cur) != 0 {
 			t.Errorf("start with %v", cur)
 		}
@@ -436,7 +448,7 @@ func TestSetAdminsAndInfo(t *testing.T) {
 		t.Fatalf("Info.Admins = %+v", info.Admins)
 	}
 	mine := errors.New("mine")
-	if err := e.own(t).SetAdmins(c.ID, by, func([]ext.SiteAdmin) ([]ext.SiteAdmin, error) { return nil, mine }); err != mine {
+	if err := e.own(t).SetAdmins(c.ID, "acct-1", by, func([]ext.SiteAdmin) ([]ext.SiteAdmin, error) { return nil, mine }); err != mine {
 		t.Errorf("edit's own error came back as %v", err)
 	}
 	many := func([]ext.SiteAdmin) ([]ext.SiteAdmin, error) {
@@ -446,10 +458,10 @@ func TestSetAdminsAndInfo(t *testing.T) {
 		}
 		return out, nil
 	}
-	if err := e.own(t).SetAdmins(c.ID, by, many); !errors.Is(err, ext.ErrTooManyAdmins) {
+	if err := e.own(t).SetAdmins(c.ID, "acct-1", by, many); !errors.Is(err, ext.ErrTooManyAdmins) {
 		t.Errorf("too many: %v", err)
 	}
-	if err := e.own(t).SetAdmins(noSuchSite, by, many); !errors.Is(err, ext.ErrSiteGone) {
+	if err := e.own(t).SetAdmins(noSuchSite, "acct-1", by, many); !errors.Is(err, ext.ErrSiteGone) {
 		t.Errorf("unknown site: %v", err)
 	}
 	site := e.siteOf(t, c.ID)
@@ -463,7 +475,7 @@ func TestSetAdminsAndInfo(t *testing.T) {
 	if _, err := e.st.SetLock(site, &store.SiteLock{At: time.Now(), By: "operator"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.own(t).SetAdmins(c.ID, by, func(cur []ext.SiteAdmin) ([]ext.SiteAdmin, error) { return nil, nil }); !errors.Is(err, ext.ErrSiteLocked) {
+	if err := e.own(t).SetAdmins(c.ID, "acct-1", by, func(cur []ext.SiteAdmin) ([]ext.SiteAdmin, error) { return nil, nil }); !errors.Is(err, ext.ErrSiteLocked) {
 		t.Errorf("locked: %v", err)
 	}
 }
@@ -550,7 +562,8 @@ func TestSiteAdminsReadsMetaOnly(t *testing.T) {
 	}
 	until := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
 	by := ext.ChangeBy{Account: "acct-1"}
-	err := o.SetAdmins(c.ID, by, func([]ext.SiteAdmin) ([]ext.SiteAdmin, error) {
+	e.st.Update(e.siteOf(t, c.ID), func(m *store.Meta) error { m.OwnerAccountID = "acct-1"; return nil })
+	err := o.SetAdmins(c.ID, "acct-1", by, func([]ext.SiteAdmin) ([]ext.SiteAdmin, error) {
 		return []ext.SiteAdmin{{Account: "b", Until: &until}, {Account: "c"}}, nil
 	})
 	if err != nil {

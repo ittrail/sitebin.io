@@ -237,7 +237,7 @@ const inviteSubject = "You are invited to help manage a Sitebin site"
 func (p *provider) inviteMail(inv ownership.Invite, ownerEmail string) (subject, body string) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s invites you to be an admin of this site on Sitebin:\n\n  - %s\n\n", ownerEmail, p.labelOf(inv.Site))
-	b.WriteString("An admin can manage the site like its owner (files, name, tags, domains and settings), but cannot delete it, change its expiry, reset its edit password or hand it over.\n")
+	b.WriteString("An admin can manage the site like its owner (files, name, domains and settings), but cannot delete it, change its expiry, reset its edit password or hand it over.\n")
 	if inv.Until != nil {
 		fmt.Fprintf(&b, "\nThe access would end on %s (UTC).\n", dateText(*inv.Until))
 	}

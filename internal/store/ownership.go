@@ -171,8 +171,12 @@ func (s *Store) AdoptOwner(site *Site, to string, stamp func(*Meta, time.Time) b
 
 // UpdateAdmins edits the site's admins under the site lock. The result is
 // de-duplicated by account (first wins) and capped at MaxAdmins
-// (ErrTooManyAdmins). A locked site is refused (ErrLocked).
-func (s *Store) UpdateAdmins(site *Site, edit func([]SiteAdmin) ([]SiteAdmin, error)) error {
+// (ErrTooManyAdmins). A locked site is refused (ErrLocked). The write is
+// guarded like DeleteIfOwner: under the site lock, meta.json's owner must be
+// expectedOwner (never empty), else ErrNotOwner and nothing is written -- a
+// transfer that landed after the caller looked must not leave an admin on the
+// new owner's site.
+func (s *Store) UpdateAdmins(site *Site, expectedOwner string, edit func([]SiteAdmin) ([]SiteAdmin, error)) error {
 	l := s.lockSite(site.ViewID)
 	l.Lock()
 	defer l.Unlock()
@@ -180,6 +184,9 @@ func (s *Store) UpdateAdmins(site *Site, edit func([]SiteAdmin) ([]SiteAdmin, er
 	m, err := ownershipMeta(site)
 	if err != nil {
 		return err
+	}
+	if expectedOwner == "" || m.OwnerAccountID != expectedOwner {
+		return ErrNotOwner
 	}
 	if m.Locked != nil {
 		return ErrLocked

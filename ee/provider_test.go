@@ -70,6 +70,9 @@ type fakeSites struct {
 	infoCalls map[string]int
 	// adminBy records who each SetAdmins call was made for (share_test.go).
 	adminBy []ext.ChangeBy
+	// onSetAdmins, when set, runs at the start of every SetAdmins: a transfer
+	// that lands between the handler's checks and the write.
+	onSetAdmins func(id string)
 	// onOwner, when set, runs at the start of every SiteOwner read.
 	onOwner func(id string)
 }

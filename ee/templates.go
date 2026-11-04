@@ -242,6 +242,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
         <span class="sname">{{.Site}}</span>
         <div class="u">{{.From}} invites you to be an admin of this site{{if .Until}} · until {{.Until}}{{end}}</div>
         {{if .NeedsPlan}}<div class="inline-status err" role="alert" style="margin-top:8px">Your plan cannot be an admin of a shared site. <a href="/account#plan">See the plans</a></div>{{end}}
+        {{if .PlanUnknown}}<div class="inline-status err" role="status" style="margin-top:8px">Not available right now, try again in a minute.</div>{{end}}
       </div>
       {{if .CanAccept}}
       <form class="inline" method="post" action="/account/invites/{{.ID}}/accept">
