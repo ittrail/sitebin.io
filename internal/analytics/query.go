@@ -19,9 +19,11 @@ import (
 // A visit-level filter (VisitLevel) keeps whole visits; a record-level one
 // keeps records (path, title and tag the page views and events carrying the
 // value, event and data:<key> events). Views and visitors count the records
-// kept; visits, bounces and durations are those of the visits holding at
-// least one of them, measured whole. A referrer filter of DirectReferrer
-// keeps the visits that came with no referrer.
+// kept; visits are the visits holding at least one of them. Bounces and
+// durations are measured on a visit's page views, and with a record-level
+// filter on its kept page views only, as Umami filters inside its
+// per-visit query. A referrer filter of DirectReferrer keeps the visits
+// that came with no referrer.
 type Filter struct{ Dim, Value string }
 
 // Query is the range of instants [From, To), read in Loc (nil is UTC): its
@@ -39,7 +41,8 @@ type Query struct {
 // Totals are a range's metrics as Umami defines them. Visitors are the sum
 // of each day's distinct visitors (a visitor id lives one day). Bounce
 // rate is the share of visits with exactly one page view; duration is the
-// average time from a visit's first to its last record, in seconds.
+// average time from a visit's first to its last page view, in seconds (a
+// bounce counts 0, and events never extend it).
 type Totals struct {
 	Views      int     `json:"views"`
 	Visitors   int     `json:"visitors"`
@@ -164,9 +167,9 @@ func (e *Engine) Overview(siteDir string, q Query, compare bool) (Overview, erro
 	return ov, nil
 }
 
-// Table answers one dimension's rows over q, sorted by visitors, then
-// views, then events, most first, then by value; total is the number of
-// values. A limit of 0 or less is no limit.
+// Table answers one dimension's rows over q, most first: the event table
+// by count, then visitors, every other by visitors, then views; ties by
+// value. total is the number of values. A limit of 0 or less is no limit.
 //
 // A visit-level dimension counts each visit holding a kept record under
 // its value: its visitor, and its kept page views ("click_id" a visit under
@@ -326,11 +329,17 @@ func (e *Engine) Realtime(siteDir string, now time.Time, loc *time.Location) (Re
 func top(rows []Row, n int) []Row { return rows[:min(len(rows), n)] }
 
 // compiled is a query ready to scan: its range in Unix milliseconds, the
-// local dates it touches, and its filters by level.
+// local dates it touches, the day files it reads, and its filters by level.
+//
+// The files are the range's dates and one more on each side. A day file is
+// named in the zone the site had when it was written, so after a zone
+// change the records near midnight sit in a neighbouring date's file; scan
+// keeps only the records in range, so reading more is safe.
 type compiled struct {
 	loc           *time.Location
-	from, to      int64 // to exclusive
-	dates         []string
+	from, to      int64    // to exclusive
+	dates         []string // the range's own local dates
+	files         []string // the dates whose day files are read
 	visitFilters  []filter
 	recordFilters []filter
 }
@@ -342,7 +351,7 @@ func compile(from, to time.Time, loc *time.Location, fs []Filter) (*compiled, er
 	if !to.After(from) {
 		return nil, fmt.Errorf("%w: empty range %v .. %v", ErrBadQuery, from, to)
 	}
-	c := &compiled{loc: loc, from: ceilMilli(from), to: ceilMilli(to), dates: localDates(from, to, loc)}
+	c := &compiled{loc: loc, from: ceilMilli(from), to: ceilMilli(to), dates: localDates(from, to, loc, 0), files: localDates(from, to, loc, 1)}
 	for _, f := range fs {
 		d, err := parseDim(f.Dim)
 		if err != nil {
@@ -368,12 +377,13 @@ func ceilMilli(t time.Time) int64 {
 	return ms
 }
 
-// localDates are the local dates in loc that [from, to) touches.
-func localDates(from, to time.Time, loc *time.Location) []string {
+// localDates are the local dates in loc that [from, to) touches, and pad
+// more on each side.
+func localDates(from, to time.Time, loc *time.Location, pad int) []string {
 	f, l := from.In(loc), to.Add(-time.Nanosecond).In(loc)
-	last := time.Date(l.Year(), l.Month(), l.Day(), 0, 0, 0, 0, time.UTC)
+	last := time.Date(l.Year(), l.Month(), l.Day()+pad, 0, 0, 0, 0, time.UTC)
 	var out []string
-	for d := time.Date(f.Year(), f.Month(), f.Day(), 0, 0, 0, 0, time.UTC); !d.After(last); d = d.AddDate(0, 0, 1) {
+	for d := time.Date(f.Year(), f.Month(), f.Day()-pad, 0, 0, 0, 0, time.UTC); !d.After(last); d = d.AddDate(0, 0, 1) {
 		out = append(out, d.Format("2006-01-02"))
 	}
 	return out
@@ -383,7 +393,7 @@ func localDates(from, to time.Time, loc *time.Location) []string {
 // under c's filters. Days come in date order and records in time order.
 func (e *Engine) scan(siteDir string, c *compiled, fn func(*dayScan)) error {
 	var s dayScan
-	for _, date := range c.dates {
+	for _, date := range c.files {
 		d, err := e.day(siteDir, date)
 		if err != nil {
 			return err
@@ -562,10 +572,11 @@ func (a *overviewAcc) add(s *dayScan) {
 			continue
 		}
 		a.visits++
-		if v.views == 1 {
+		bounce, ms := s.bounceAndDuration(v)
+		if bounce {
 			a.bounces++
 		}
-		a.durMs += d.recs[v.last].T - d.recs[v.first].T
+		a.durMs += ms
 	}
 }
 
@@ -681,18 +692,20 @@ func (a *tableAcc) add(s *dayScan) {
 	}
 }
 
-// sorted returns the rows by visitors, views and events, most first, then
-// by value.
+// sorted returns the rows most first, then by value: events by count and
+// visitors, as Umami's events table sorts them, the rest by visitors and
+// views.
 func (a *tableAcc) sorted() []Row {
 	rows := append(make([]Row, 0, len(a.rows)), a.rows...)
+	first, second := func(r Row) int { return r.Visitors }, func(r Row) int { return r.Views }
+	if a.dim.kind == dimEvent {
+		first, second = func(r Row) int { return r.Count }, func(r Row) int { return r.Visitors }
+	}
 	slices.SortFunc(rows, func(x, y Row) int {
-		if c := cmp.Compare(y.Visitors, x.Visitors); c != 0 {
+		if c := cmp.Compare(first(y), first(x)); c != 0 {
 			return c
 		}
-		if c := cmp.Compare(y.Views, x.Views); c != 0 {
-			return c
-		}
-		if c := cmp.Compare(y.Count, x.Count); c != 0 {
+		if c := cmp.Compare(second(y), second(x)); c != 0 {
 			return c
 		}
 		return strings.Compare(x.Value, y.Value)

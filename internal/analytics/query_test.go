@@ -150,9 +150,10 @@ func TestOverviewMetrics(t *testing.T) {
 		t.Fatal(err)
 	}
 	ov := overview(t, dir, days(time.UTC, "2026-11-02", "2026-11-02"), false)
-	// Durations: A's first visit 600 s, its second 0, B's 180 s (to the
-	// event), C's 0: 780 s over 4 visits.
-	want := Totals{Views: 7, Visitors: 3, Visits: 4, BounceRate: 0.5, DurationS: 195}
+	// Durations run from a visit's first to its last page view: A's first
+	// visit 600 s, its second 0, B's 120 s (the event does not extend it),
+	// C's 0: 720 s over 4 visits.
+	want := Totals{Views: 7, Visitors: 3, Visits: 4, BounceRate: 0.5, DurationS: 180}
 	if ov.Totals != want {
 		t.Fatalf("totals = %+v, want %+v", ov.Totals, want)
 	}
@@ -255,7 +256,9 @@ func TestVisitorsAreDailySums(t *testing.T) {
 	}
 }
 
-func TestFilterVisitLevel(t *testing.T) {
+// metaVisits writes two Meta visits, a Google one and a direct one.
+func metaVisits(t *testing.T) string {
+	t.Helper()
 	dir := t.TempDir()
 	writeRecords(t, dir, time.UTC, []Record{
 		// A Meta visit: two page views and an event without the parameter.
@@ -266,6 +269,7 @@ func TestFilterVisitLevel(t *testing.T) {
 		pv("2026-11-02T10:00:00Z", "g", "/landing", q("utm_source", "google")),
 		ev("2026-11-02T10:03:00Z", "g", "/landing", "signup"),
 		ev("2026-11-02T10:04:00Z", "g", "/landing", "click"),
+		pv("2026-11-02T10:05:00Z", "g", "/pricing"),
 		// A direct visit.
 		pv("2026-11-02T11:00:00Z", "n", "/landing"),
 		ev("2026-11-02T11:01:00Z", "n", "/landing", "click"),
@@ -274,9 +278,16 @@ func TestFilterVisitLevel(t *testing.T) {
 		ev("2026-11-02T12:00:00Z", "e", "/landing", "x"),
 		pv("2026-11-02T12:01:00Z", "e", "/landing", q("utm_source", "meta")),
 	})
+	return dir
+}
+
+func TestFilterVisitLevel(t *testing.T) {
+	dir := metaVisits(t)
 	qu := days(time.UTC, "2026-11-02", "2026-11-02", Filter{Dim: "utm_source", Value: "meta"})
 	ov := overview(t, dir, qu, false)
-	want := Totals{Views: 3, Visitors: 2, Visits: 2, BounceRate: 0.5, DurationS: 90}
+	// m's visit: 60 s between its page views; e's: one page view, a bounce
+	// of 0 s.
+	want := Totals{Views: 3, Visitors: 2, Visits: 2, BounceRate: 0.5, DurationS: 30}
 	if ov.Totals != want {
 		t.Fatalf("totals = %+v, want %+v", ov.Totals, want)
 	}
@@ -295,6 +306,23 @@ func TestFilterVisitLevel(t *testing.T) {
 	}
 }
 
+func TestFilterVisitAndRecordLevel(t *testing.T) {
+	dir := metaVisits(t)
+	qu := days(time.UTC, "2026-11-02", "2026-11-02", Filter{Dim: "path", Value: "/pricing"})
+	// Alone, path=/pricing keeps m's and g's page view of it: each visit
+	// holds one kept page view, so both are bounces of 0 s.
+	if ov := overview(t, dir, qu, false); ov.Totals != (Totals{Views: 2, Visitors: 2, Visits: 2, BounceRate: 1}) {
+		t.Fatalf("path=/pricing totals = %+v", ov.Totals)
+	}
+	qu.Filters = append(qu.Filters, Filter{Dim: "utm_source", Value: "meta"})
+	if ov := overview(t, dir, qu, false); ov.Totals != (Totals{Views: 1, Visitors: 1, Visits: 1, BounceRate: 1}) {
+		t.Fatalf("utm_source=meta and path=/pricing totals = %+v", ov.Totals)
+	}
+	sameRows(t, "event", table(t, dir, qu, "event"), []Row{{Value: "signup", Visitors: 1, Count: 1}})
+	sameRows(t, "path", table(t, dir, qu, "path"), []Row{{Value: "/pricing", Visitors: 1, Views: 1}})
+	sameRows(t, "entry", table(t, dir, qu, "entry"), []Row{{Value: "/landing", Visitors: 1, Views: 1}})
+}
+
 func TestFilterRecordLevel(t *testing.T) {
 	dir := t.TempDir()
 	writeRecords(t, dir, time.UTC, []Record{
@@ -308,9 +336,10 @@ func TestFilterRecordLevel(t *testing.T) {
 	})
 	qu := days(time.UTC, "2026-11-02", "2026-11-02", Filter{Dim: "path", Value: "/a"})
 	ov := overview(t, dir, qu, false)
-	// Views and visitors count /a; visits are those holding /a, measured
-	// whole: a's (3 views, 120 s) and c's (1 view, a bounce, 120 s).
-	want := Totals{Views: 3, Visitors: 2, Visits: 2, BounceRate: 0.5, DurationS: 120}
+	// Views and visitors count /a; visits are those holding /a, measured on
+	// their /a page views as Umami does: a's (two, 120 s apart) and c's (one,
+	// a bounce of 0 s).
+	want := Totals{Views: 3, Visitors: 2, Visits: 2, BounceRate: 0.5, DurationS: 60}
 	if ov.Totals != want {
 		t.Fatalf("totals = %+v, want %+v", ov.Totals, want)
 	}
@@ -319,9 +348,81 @@ func TestFilterRecordLevel(t *testing.T) {
 	sameRows(t, "entry", table(t, dir, qu, "entry"), []Row{{Value: "/a", Visitors: 2, Views: 3}})
 
 	qu.Filters = []Filter{{Dim: "event", Value: "click"}}
-	if ov := overview(t, dir, qu, false); ov.Totals != (Totals{Visitors: 1, Visits: 1, BounceRate: 1, DurationS: 120}) {
+	// c's visit holds the click but no kept page view: no bounce, no duration.
+	if ov := overview(t, dir, qu, false); ov.Totals != (Totals{Visitors: 1, Visits: 1}) {
 		t.Fatalf("event=click totals = %+v", ov.Totals)
 	}
+}
+
+func TestRecordFilterMeasuresKeptPageViews(t *testing.T) {
+	dir := t.TempDir()
+	writeRecords(t, dir, time.UTC, []Record{
+		pv("2026-11-02T10:00:00Z", "a", "/a"),
+		pv("2026-11-02T10:05:00Z", "a", "/b"),
+		pv("2026-11-02T10:20:00Z", "a", "/a"),
+		pv("2026-11-02T10:30:00Z", "a", "/c"),
+		pv("2026-11-02T11:00:00Z", "b", "/b"),
+		ev("2026-11-02T11:10:00Z", "b", "/b", "x"), // never extends a duration
+	})
+	for _, tc := range []struct {
+		filters []Filter
+		want    Totals
+	}{
+		// a: 4 page views over 1800 s; b: a bounce of 0 s.
+		{nil, Totals{Views: 5, Visitors: 2, Visits: 2, BounceRate: 0.5, DurationS: 900}},
+		// a's /a page views are 1200 s apart; b holds no /a.
+		{[]Filter{{Dim: "path", Value: "/a"}}, Totals{Views: 2, Visitors: 1, Visits: 1, DurationS: 1200}},
+		// One /b page view in each visit: two bounces.
+		{[]Filter{{Dim: "path", Value: "/b"}}, Totals{Views: 2, Visitors: 2, Visits: 2, BounceRate: 1}},
+	} {
+		qu := days(time.UTC, "2026-11-02", "2026-11-02", tc.filters...)
+		if ov := overview(t, dir, qu, false); ov.Totals != tc.want {
+			t.Fatalf("%v: totals = %+v, want %+v", tc.filters, ov.Totals, tc.want)
+		}
+	}
+}
+
+// TestQueryReadsNeighbouringDays: day files are named in the zone the site
+// had when they were written. After a zone change a query in the new zone
+// still finds the records near midnight in the neighbouring day's file.
+func TestQueryReadsNeighbouringDays(t *testing.T) {
+	vienna, err := time.LoadLocation("Europe/Vienna")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	writeRecords(t, dir, time.UTC, []Record{
+		pv("2026-11-02T23:30:00Z", "late", "/late"), // the UTC file 2026-11-02; 00:30 on 2026-11-03 in Vienna
+		ev("2026-11-02T23:40:00Z", "late", "/late", "late-ev", data(map[string]any{"k": "v"})),
+		pv("2026-11-03T12:00:00Z", "noon", "/noon"),
+	})
+	if err := os.WriteFile(overFile(dir, "2026-11-02"), []byte("7"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e := newTestEngine()
+	nov3 := days(vienna, "2026-11-03", "2026-11-03")
+	ov, err := e.Overview(dir, nov3, false)
+	if err != nil || ov.Totals.Views != 2 {
+		t.Fatalf("Vienna 2026-11-03 = %+v, %v; want both page views", ov.Totals, err)
+	}
+	if ov.OverCap != 0 {
+		t.Fatalf("over_cap = %d: a neighbouring day's count is not the range's", ov.OverCap)
+	}
+	if ov, err := e.Overview(dir, days(vienna, "2026-11-02", "2026-11-02"), false); err != nil || ov.Totals.Views != 0 || ov.OverCap != 7 {
+		t.Fatalf("Vienna 2026-11-02 = %+v over %d, %v; want nothing, over 7", ov.Totals, ov.OverCap, err)
+	}
+	if ov, err := e.Overview(dir, days(vienna, "2026-11-04", "2026-11-04"), true); err != nil || ov.Previous == nil || ov.Previous.Views != 2 {
+		t.Fatalf("compare with 2026-11-03 = %+v, %v", ov.Previous, err)
+	}
+	sameRows(t, "path", table(t, dir, nov3, "path"), []Row{{Value: "/late", Visitors: 1, Views: 1}, {Value: "/noon", Visitors: 1, Views: 1}})
+	if kv, err := e.EventData(dir, nov3, "late-ev"); err != nil || len(kv) != 1 || kv[0].Key != "k" {
+		t.Fatalf("event data = %+v, %v", kv, err)
+	}
+	rt, err := e.Realtime(dir, tm("2026-11-02T23:50:00Z"), vienna) // 00:50 in Vienna: the window is all on 2026-11-03
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameRows(t, "realtime pages", rt.Pages, []Row{{Value: "/late", Visitors: 1, Views: 1}})
 }
 
 func TestTableEntryExitReferrerChannel(t *testing.T) {
@@ -400,6 +501,20 @@ func TestTableEventCounts(t *testing.T) {
 	sameRows(t, "event", table(t, dir, days(time.UTC, "2026-11-02", "2026-11-03"), "event"), []Row{
 		{Value: "signup", Visitors: 3, Count: 4},
 		{Value: "click", Visitors: 1, Count: 1},
+	})
+
+	t.Run("events sort by count, as Umami's do", func(t *testing.T) {
+		dir := t.TempDir()
+		var recs []Record
+		for i := range 1000 {
+			recs = append(recs, ev(tm("2026-11-02T10:00:00Z").Add(time.Duration(i)*time.Second).Format(time.RFC3339), "one", "/", "often"))
+		}
+		recs = append(recs, ev("2026-11-02T11:00:00Z", "x", "/", "shared"), ev("2026-11-02T11:00:00Z", "y", "/", "shared"))
+		writeRecords(t, dir, time.UTC, recs)
+		sameRows(t, "event", table(t, dir, days(time.UTC, "2026-11-02", "2026-11-02"), "event"), []Row{
+			{Value: "often", Visitors: 1, Count: 1000},
+			{Value: "shared", Visitors: 2, Count: 2},
+		})
 	})
 }
 

@@ -18,6 +18,8 @@ type visitInfo struct {
 	attr        int32 // first record carrying a referrer, a query or a click id
 	views       int32 // page views
 	selViews    int32 // page views passing every filter
+	selFirst    int32 // first page view passing every filter
+	selLast     int32 // last page view passing every filter
 	match       bool  // passes every visit-level filter
 	hit         bool  // holds a record passing every filter
 }
@@ -30,11 +32,12 @@ type visitInfo struct {
 // gaps, so visits numbered over the whole day (parsedDay) are the visits of
 // any range within it.
 type dayScan struct {
-	d      *parsedDay
-	lo, hi int
-	vis    []visitInfo
-	sel    []bool
-	buf    []byte
+	d        *parsedDay
+	lo, hi   int
+	vis      []visitInfo
+	sel      []bool
+	byRecord bool // a record-level filter is on
+	buf      []byte
 }
 
 // prepare fills s for records [lo, hi) of d under c's filters: first the
@@ -42,9 +45,10 @@ type dayScan struct {
 // their records pass the record-level ones.
 func (s *dayScan) prepare(d *parsedDay, lo, hi int, c *compiled) {
 	s.d, s.lo, s.hi = d, lo, hi
+	s.byRecord = len(c.recordFilters) > 0
 	s.vis = resize(s.vis, d.nVisits)
 	for i := range s.vis {
-		s.vis[i] = visitInfo{first: -1, last: -1, entry: -1, exit: -1, attr: -1}
+		s.vis[i] = visitInfo{first: -1, last: -1, entry: -1, exit: -1, attr: -1, selFirst: -1, selLast: -1}
 	}
 	for i := lo; i < hi; i++ {
 		r := &d.recs[i]
@@ -77,10 +81,30 @@ func (s *dayScan) prepare(d *parsedDay, lo, hi int, c *compiled) {
 		if ok {
 			v.hit = true
 			if d.recs[i].K == "p" {
+				if v.selFirst < 0 {
+					v.selFirst = int32(i)
+				}
+				v.selLast = int32(i)
 				v.selViews++
 			}
 		}
 	}
+}
+
+// bounceAndDuration measures a visit as Umami does, on page views only: a
+// bounce has exactly one, and the duration runs from the first to the last
+// (0 with fewer than two; an event never extends it). Under a record-level
+// filter only the kept page views count, as Umami applies the filter inside
+// its per-visit query.
+func (s *dayScan) bounceAndDuration(v *visitInfo) (bounce bool, ms int64) {
+	n, first, last := v.views, v.entry, v.exit
+	if s.byRecord {
+		n, first, last = v.selViews, v.selFirst, v.selLast
+	}
+	if n >= 2 {
+		ms = s.d.recs[last].T - s.d.recs[first].T
+	}
+	return n == 1, ms
 }
 
 func (s *dayScan) selected(i int) bool { return s.sel[i-s.lo] }
