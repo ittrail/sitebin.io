@@ -581,9 +581,15 @@ func (p *provider) afterMove(offerID, viewID string, from, to *account.Account, 
 	}
 	sent := e
 	sent.Detail = "handed over in offer " + offerID
+	if by.Account != from.ID {
+		sent = counterpartNotice(sent)
+	}
 	p.RecordAccountProvenance(from.ID, sent)
 	taken := e
 	taken.Detail = "taken over in offer " + offerID
+	if by.Account != to.ID {
+		taken = counterpartNotice(taken)
+	}
 	p.RecordAccountProvenance(to.ID, taken)
 }
 

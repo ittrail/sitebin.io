@@ -522,7 +522,7 @@ func (p *provider) recordShare(r *http.Request, actor *account.Account, ownerID,
 	adminLog.Detail, ownerLog.Detail = adminDetail, ownerDetail
 	p.RecordAccountProvenance(actor.ID, adminLog)
 	if ownerID != actor.ID {
-		p.RecordAccountProvenance(ownerID, ownerLog)
+		p.RecordAccountProvenance(ownerID, counterpartNotice(ownerLog))
 	}
 }
 
@@ -665,6 +665,12 @@ func (p *provider) endShare(w http.ResponseWriter, r *http.Request, actor *accou
 	ownerLog, adminLog := e, e
 	ownerLog.Detail = "ended a share on the site (" + who + " ended it)"
 	adminLog.Detail = "no longer an admin of the site (" + who + " ended it)"
+	// The actor's own line keeps its fields; the other party gets a notice.
+	if actor.ID == adminID {
+		ownerLog = counterpartNotice(ownerLog)
+	} else {
+		adminLog = counterpartNotice(adminLog)
+	}
 	p.RecordAccountProvenance(ownerID, ownerLog)
 	if adminID != ownerID {
 		p.RecordAccountProvenance(adminID, adminLog)

@@ -734,3 +734,70 @@ func TestShareLogLinesNameNoOtherAccount(t *testing.T) {
 		t.Errorf("the owner's export names the deleted admin's account id:\n%s", raw)
 	}
 }
+
+// The stored log keeps what the seam is given; only the export redacts. The
+// core mirrors a deletion by another account (through MCP, with the site's
+// edit password) into the site owner's log, and that line is the only record
+// of who deleted the site and from where.
+func TestMirroredDeletionKeepsItsActorInTheStoredLogButNotInTheExport(t *testing.T) {
+	e := newGDPREnv(t)
+	a := e.oidc("sub-a", "a@example.com")
+	b := e.oidc("sub-b", "b@example.com")
+	e.p.RecordAccountProvenance(a.ID, provenance.Entry{
+		Time: time.Now().UTC(), Action: provenance.ActionSiteDelete, Surface: provenance.SurfaceMCP, Auth: provenance.AuthPassword,
+		Account: b.ID, IP: "198.51.100.77", UA: "mcp-client", Site: "aaaaaaaaaaaaaaaaaaaaaaaabq",
+	})
+	stored, err := e.p.accounts.Provenance(a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept bool
+	for _, en := range stored {
+		if en.Action == provenance.ActionSiteDelete && en.Account == b.ID && en.IP == "198.51.100.77" && en.UA == "mcp-client" {
+			kept = true
+		}
+	}
+	if !kept {
+		t.Fatalf("the stored log lost the actor of a mirrored deletion: %+v", stored)
+	}
+	raw, _ := e.gdprExport(a)
+	if strings.Contains(raw, b.ID) || strings.Contains(raw, "198.51.100.77") || strings.Contains(raw, "mcp-client") {
+		t.Errorf("the export hands the other account's identity to the site's owner:\n%s", raw)
+	}
+	if !strings.Contains(raw, provenance.ActionSiteDelete) {
+		t.Error("the redacted line must still be exported as a notice")
+	}
+	again, _ := e.p.accounts.Provenance(a.ID)
+	if len(again) != len(stored) || again[len(again)-1].Account != b.ID {
+		t.Error("exporting changed the stored log")
+	}
+}
+
+func TestTransferKeepsTheActorsOwnLineAndMakesTheOthersANotice(t *testing.T) {
+	e := newGDPREnv(t)
+	sender := e.oidc("sub-sender", "sender@example.com")
+	rcpt := e.oidc("sub-rcpt", "rcpt@example.com")
+	const moving = "aaaaaaaaaaaaaaaaaaaaaaaabn"
+	e.own(sender, moving)
+	o := e.offerFrom(sender, "rcpt@example.com", true, moving)
+	o = e.change(o, func(x *ownership.Offer) { x.State, x.AcceptedBy = ownership.StateAccepting, rcpt.ID })
+	if _, err := e.p.completeAccepting(o, rcpt, ext.ChangeBy{Account: rcpt.ID, IP: "203.0.113.9", UserAgent: "recipient-browser"}); err != nil {
+		t.Fatal(err)
+	}
+	find := func(acc *account.Account) provenance.Entry {
+		es, _ := e.p.accounts.Provenance(acc.ID)
+		for _, en := range es {
+			if en.Action == provenance.ActionTransfer {
+				return en
+			}
+		}
+		t.Fatalf("no transfer line for %s", acc.Email)
+		return provenance.Entry{}
+	}
+	if got := find(rcpt); got.Account != rcpt.ID || got.IP != "203.0.113.9" || got.UA != "recipient-browser" {
+		t.Errorf("the actor's own line lost its fields: %+v", got)
+	}
+	if got := find(sender); got.Account != "" || got.IP != "" || got.UA != "" {
+		t.Errorf("the counterpart's line carries the actor: %+v", got)
+	}
+}

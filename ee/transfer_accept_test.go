@@ -445,8 +445,11 @@ func TestTakeoverBundle(t *testing.T) {
 		var sites []string
 		for _, en := range es {
 			if en.Action == provenance.ActionTransfer {
-				if acc.ID == e.acc.ID && en.Account != "" {
-					t.Errorf("the sender's log names account %s", en.Account)
+				switch {
+				case acc.ID == e.acc.ID && (en.Account != "" || en.IP != "" || en.UA != ""):
+					t.Errorf("the sender's notice carries the recipient: %+v", en)
+				case acc.ID == e.to.ID && en.Account != e.to.ID:
+					t.Errorf("the recipient's own line lost its account: %+v", en)
 				}
 				sites = append(sites, en.Site)
 			}

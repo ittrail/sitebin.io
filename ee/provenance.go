@@ -43,12 +43,6 @@ func (p *provider) RecordAccountProvenance(accountID string, e provenance.Entry)
 	if p.accounts == nil || accountID == "" {
 		return
 	}
-	// A log line never names another account, nor carries that account's
-	// address or client: the account's export would hand them to its owner.
-	// A transfer or share names the offer or invitation instead.
-	if e.Account != "" && e.Account != accountID {
-		e.Account, e.IP, e.UA = "", "", ""
-	}
 	if err := p.accounts.RecordProvenance(accountID, e); err != nil && !errors.Is(err, account.ErrNotFound) {
 		slog.Warn("provenance: could not record for an account", "account", accountID, "action", e.Action, "err", err)
 	}
@@ -236,4 +230,27 @@ func tokenDetail(tok account.Token) string {
 		d = "\"" + tok.Name + "\" " + d
 	}
 	return d
+}
+
+// counterpartNotice is a log line for the OTHER party of a change: the same
+// notice, without the acting account, address or client. The actor's own
+// line keeps them; the counterpart's log is exported to the counterpart, who
+// must not receive the actor's identity.
+func counterpartNotice(e provenance.Entry) provenance.Entry {
+	e.Account, e.IP, e.UA = "", "", ""
+	return e
+}
+
+// redactForeign copies an account log for export, blanking Account, IP and UA
+// on every entry made by another account (the core mirrors a deletion by
+// another account into the site owner's log). The stored log is untouched.
+func redactForeign(es []provenance.Entry, accountID string) []provenance.Entry {
+	out := make([]provenance.Entry, len(es))
+	for i, e := range es {
+		if e.Account != "" && e.Account != accountID {
+			e = counterpartNotice(e)
+		}
+		out[i] = e
+	}
+	return out
 }

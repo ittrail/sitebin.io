@@ -123,7 +123,7 @@ func (p *provider) beforeAccountDelete(acc *account.Account, by ext.ChangeBy) er
 			Account: acc.ID, IP: by.IP, UA: by.UserAgent, Site: s.site,
 			Detail: "a share on the site ended",
 		}
-		p.RecordAccountProvenance(s.ownerID, e)
+		p.RecordAccountProvenance(s.ownerID, counterpartNotice(e))
 		ownerEmail := p.emailOf(s.ownerID)
 		subject, body := p.shareGoneMail(s.label, ownerEmail, acc.Email, true)
 		p.mailVerified(ownerEmail, subject, body)

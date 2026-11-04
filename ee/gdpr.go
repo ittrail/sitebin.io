@@ -402,7 +402,7 @@ func (p *provider) gdprProvenance(acc *account.Account, siteIDs []string) *gdprP
 	if es, err := p.accounts.Provenance(acc.ID); err != nil {
 		slog.Error("gdpr: could not read the account's provenance for an export", "account", acc.ID, "err", err)
 	} else if es != nil {
-		out.Account = es
+		out.Account = redactForeign(es, acc.ID)
 	}
 	sp, ok := p.host.Sites().(ext.SiteProvenance)
 	if !ok {
