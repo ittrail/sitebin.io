@@ -416,7 +416,7 @@ func (p *provider) gdprProvenance(acc *account.Account, siteIDs []string) *gdprP
 		var own []provenance.Entry
 		for _, e := range es {
 			if e.Account == acc.ID {
-				own = append(own, e)
+				own = append(own, withoutOtherAccounts(e, acc.ID))
 			}
 		}
 		if len(own) > 0 {

@@ -54,10 +54,12 @@ type provider struct {
 	// until Init starts the loop.
 	tickMu        sync.Mutex
 	lastReconcile time.Time
-	loopLogged    map[string]time.Time
-	loopStop      chan struct{}
-	loopDone      chan struct{}
-	loopStopOnce  sync.Once
+	// lastPrune is when the ended records were last pruned (under tickMu).
+	lastPrune    time.Time
+	loopLogged   map[string]time.Time
+	loopStop     chan struct{}
+	loopDone     chan struct{}
+	loopStopOnce sync.Once
 	// billing is the ONE active backend, chosen by SITEBIN_BILLING. Keeping a
 	// single field rather than one per provider is what stops a second
 	// processor from quietly becoming reachable.

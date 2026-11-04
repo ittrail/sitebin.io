@@ -133,7 +133,10 @@ func (p *provider) ownershipTick(now time.Time) {
 	p.step("notify", func() { p.notifyDue(now) })
 	p.step("invites", func() { p.lapseInvites(now) })
 	p.step("admins", func() { p.expireAdmins(now) })
-	p.step("prune", func() { p.pruneEnded(now) })
+	if p.lastPrune.IsZero() || now.Sub(p.lastPrune) >= pruneEvery {
+		p.lastPrune = now
+		p.step("prune", func() { p.pruneEnded(now) })
+	}
 	if p.lastReconcile.IsZero() || now.Sub(p.lastReconcile) >= reconcileEvery {
 		p.lastReconcile = now
 		p.step("reconcile", func() { p.reconcileMarkers(now) })
@@ -662,6 +665,10 @@ func (p *provider) stillAdmin(accID, viewID string) bool {
 // endedRetention is how long a final offer or invitation is kept: 90 days
 // from the day it ended.
 const endedRetention = 90 * 24 * time.Hour
+
+// pruneEvery: the scan holds the store's mutex, so it runs once a day, not
+// on every tick.
+const pruneEvery = 24 * time.Hour
 
 // pruneEnded deletes the final offers and invitations that ended more than
 // endedRetention ago. A read error leaves the record (the store skips it).

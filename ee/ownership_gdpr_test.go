@@ -49,6 +49,7 @@ func newGDPREnv(t *testing.T) *gdprEnv {
 	e := &gdprEnv{shareEnv: newShareEnv(t)}
 	e.p.cfg.GDPRSecret = testGDPRSecret
 	e.sites = &ownSites{provSites: &provSites{fakeSites: e.fs}}
+	e.fs.onTransferRecord = e.sites.RecordSiteProvenance
 	e.p.host = &ownHost{fakeHost: e.p.host.(*fakeHost), sites: e.sites}
 	return e
 }
@@ -880,7 +881,7 @@ func TestExportCarriesAFormerOwnersEntriesOnAHandedOverSite(t *testing.T) {
 		t.Errorf("the former owner's export carries the new owner's id or address:\n%s", rawS)
 	}
 	rawR, out := e.gdprExport(rcpt)
-	if es := exportedSiteEntries(t, out, moving); len(es) != 1 || es[0]["action"] != provenance.ActionUpload {
+	if es := exportedSiteEntries(t, out, moving); len(es) != 2 || es[1]["action"] != provenance.ActionUpload {
 		t.Errorf("the new owner's export: %v", es)
 	}
 	if strings.Contains(rawR, sender.ID) || strings.Contains(rawR, "192.0.2.44") {
@@ -904,7 +905,9 @@ func TestLoopPrunesEndedRecordsPastNinetyDays(t *testing.T) {
 	}
 	oldO, freshO := mk(tid(50), old), mk(tid(51), fresh)
 	oldI := e.inviteFrom(e.acc, takerEmail, shareSite, ownership.StateOpen)
-	e.p.owner.UpdateInvite(oldI.ID, func(i *ownership.Invite) error { i.State, i.EndedAt = ownership.StateDeclined, &old; return nil })
+	if _, err := e.p.owner.UpdateInvite(oldI.ID, func(i *ownership.Invite) error { i.State, i.EndedAt = ownership.StateDeclined, &old; return nil }); err != nil {
+		t.Fatal(err)
+	}
 	e.p.ownershipTick(time.Now())
 	if _, err := e.p.owner.GetOffer(oldO.ID); !errors.Is(err, ownership.ErrNotFound) {
 		t.Error("the loop kept a 91-day-old offer")
@@ -914,5 +917,93 @@ func TestLoopPrunesEndedRecordsPastNinetyDays(t *testing.T) {
 	}
 	if _, err := e.p.owner.GetOffer(freshO.ID); err != nil {
 		t.Errorf("the loop pruned an 89-day-old offer: %v", err)
+	}
+}
+
+// The core's transfer line names both accounts ("from <sender> to
+// <recipient>") for the operator. An export must never hand either party the
+// other's id, in a chain A -> B -> C least of all: B's export carries the site
+// through both hand-overs.
+func TestExportsOfATransferChainNameNoOtherAccount(t *testing.T) {
+	e := newGDPREnv(t)
+	a := e.oidc("sub-a", "a@example.com")
+	b := e.oidc("sub-b", "b@example.com")
+	c := e.oidc("sub-c", "c@example.com")
+	const s = "aaaaaaaaaaaaaaaaaaaaaaaabc"
+	e.own(a, s)
+	hand := func(from, to *account.Account, ip string) {
+		t.Helper()
+		o := e.offerFrom(from, to.Email, true, s)
+		o = e.change(o, func(x *ownership.Offer) { x.State, x.AcceptedBy = ownership.StateAccepting, to.ID })
+		if _, err := e.p.completeAccepting(o, to, ext.ChangeBy{Account: to.ID, IP: ip}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hand(a, b, "198.51.100.1")
+	hand(b, c, "198.51.100.2")
+
+	// The core's line is in the site log, naming both, for the operator.
+	var core bool
+	for _, en := range e.siteLog(s) {
+		if en.Action == provenance.ActionTransfer && strings.Contains(en.Detail, a.ID) && strings.Contains(en.Detail, b.ID) {
+			core = true
+		}
+	}
+	if !core {
+		t.Fatalf("the site log lacks the core-shaped transfer line: %+v", e.siteLog(s))
+	}
+	ids := map[string]*account.Account{"a": a, "b": b, "c": c}
+	for name, who := range ids {
+		raw, out := e.gdprExport(who)
+		for other, o := range ids {
+			if other == name {
+				continue
+			}
+			if strings.Contains(raw, o.ID) {
+				t.Errorf("%s's export carries %s's account id:\n%s", name, other, raw)
+			}
+		}
+		if name == "b" && len(exportedSiteEntries(t, out, s)) == 0 {
+			t.Error("B's export lacks its own entry on the site")
+		}
+	}
+	// The stored line is untouched.
+	var still bool
+	for _, en := range e.siteLog(s) {
+		if strings.Contains(en.Detail, a.ID) {
+			still = true
+		}
+	}
+	if !still {
+		t.Error("the stored site log was rewritten")
+	}
+}
+
+func TestPruneRunsDailyNotEveryTick(t *testing.T) {
+	e := newGDPREnv(t)
+	e.site(tid(60))
+	old := time.Now().UTC().AddDate(0, 0, -91)
+	mk := func(site string) ownership.Offer {
+		o, err := e.p.owner.CreateOffer(ownership.Offer{Sites: []string{site}, From: e.acc.ID, ToEmail: takerEmail, State: ownership.StateCancelled, EndedAt: &old, AcceptBy: time.Now()}, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return o
+	}
+	first := mk(tid(60))
+	now := time.Now()
+	e.p.ownershipTick(now)
+	if _, err := e.p.owner.GetOffer(first.ID); !errors.Is(err, ownership.ErrNotFound) {
+		t.Fatal("the first tick did not prune")
+	}
+	e.site(tid(61))
+	second := mk(tid(61))
+	e.p.ownershipTick(now.Add(10 * time.Minute))
+	if _, err := e.p.owner.GetOffer(second.ID); err != nil {
+		t.Error("a tick ten minutes later pruned again")
+	}
+	e.p.ownershipTick(now.Add(25 * time.Hour))
+	if _, err := e.p.owner.GetOffer(second.ID); !errors.Is(err, ownership.ErrNotFound) {
+		t.Error("a tick a day later did not prune")
 	}
 }

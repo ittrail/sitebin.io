@@ -471,21 +471,46 @@ func TestPruneFinalDeletesPastNinetyDaysOnly(t *testing.T) {
 	openO, openI := mk(StateOpen, nil)
 	for _, p := range []string{filepath.Join(s.offersDir(), openO.ID+".json"), filepath.Join(s.invitesDir(), openI.ID+".json")} {
 		old := time.Now().AddDate(-2, 0, 0)
-		os.Chtimes(p, old, old)
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// A record from before EndedAt existed counts from its file's mtime.
 	legacy, _ := mk(StateExpired, nil)
 	legacy.EndedAt = nil
 	lp := filepath.Join(s.offersDir(), legacy.ID+".json")
 	b, _ := os.ReadFile(lp)
-	os.WriteFile(lp, []byte(strings.Replace(string(b), `"ended_at"`, `"x_ended_at"`, 1)), 0o644)
+	if err := os.WriteFile(lp, []byte(strings.Replace(string(b), `"ended_at"`, `"x_ended_at"`, 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	old := time.Now().AddDate(0, 0, -91)
-	os.Chtimes(lp, old, old)
+	if err := os.Chtimes(lp, old, old); err != nil {
+		t.Fatal(err)
+	}
 	// A record that cannot be read stays.
 	bad := ids.New()
 	bp := filepath.Join(s.offersDir(), bad+".json")
-	os.WriteFile(bp, []byte("{not json"), 0o644)
-	os.Chtimes(bp, old, old)
+	if err := os.WriteFile(bp, []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(bp, old, old); err != nil {
+		t.Fatal(err)
+	}
+	// Paused, accepting and a record with no state survive an old mtime too.
+	pausedO, _ := s.CreateOffer(Offer{Sites: []string{ids.New()}, From: ids.New(), ToEmail: "a@example.com"}, 0)
+	pausedO, _ = s.UpdateOffer(pausedO.ID, func(x *Offer) error { x.State = StatePaused; return nil })
+	accO, _ := s.CreateOffer(Offer{Sites: []string{ids.New()}, From: ids.New(), ToEmail: "a@example.com"}, 0)
+	accO, _ = s.UpdateOffer(accO.ID, func(x *Offer) error { x.State = StateAccepting; return nil })
+	noState := ids.New()
+	np := filepath.Join(s.offersDir(), noState+".json")
+	if err := os.WriteFile(np, []byte(`{"id":"`+noState+`","sites":["x"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{filepath.Join(s.offersDir(), pausedO.ID+".json"), filepath.Join(s.offersDir(), accO.ID+".json"), np} {
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	offers, invites, err := s.PruneFinal(time.Now().AddDate(0, 0, -90))
 	if err != nil {
@@ -514,7 +539,9 @@ func TestPruneFinalDeletesPastNinetyDaysOnly(t *testing.T) {
 			t.Errorf("the %s was not kept: %v", name, err)
 		}
 	}
-	if _, err := os.Stat(bp); err != nil {
-		t.Error("an unreadable record was removed")
+	for name, p := range map[string]string{"unreadable": bp, "paused": filepath.Join(s.offersDir(), pausedO.ID+".json"), "accepting": filepath.Join(s.offersDir(), accO.ID+".json"), "no state": np} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("the %s record was removed", name)
+		}
 	}
 }

@@ -110,6 +110,9 @@ func (s *fakeSites) transfer(x *xferFake, id, from, to string, g ext.CreateGrant
 	x.n++
 	pw := fmt.Sprintf("NEWPW%02d%s", x.n, id[22:])
 	x.calls = append(x.calls, xferCall{id, from, to, g, slices.Clone(detach), by, pw})
+	if s.onTransferRecord != nil {
+		s.onTransferRecord(id, provenance.Entry{Time: time.Now().UTC(), Action: provenance.ActionTransfer, Surface: by.Surface, Account: by.Account, IP: by.IP, UA: by.UserAgent, Site: id, Detail: "from " + from + " to " + to})
+	}
 	return pw, nil
 }
 

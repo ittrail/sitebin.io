@@ -16,6 +16,7 @@ import (
 
 	"github.com/ittrail/sitebin.io/ee/account"
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/provenance"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
@@ -79,6 +80,9 @@ type fakeSites struct {
 	onAdmins func(id string)
 	// conflictsErr fails HostConflicts.
 	conflictsErr error
+	// onTransferRecord, when set, receives the line the core records for a
+	// transfer ("from <sender> to <recipient>").
+	onTransferRecord func(id string, e provenance.Entry)
 	// onOwner, when set, runs at the start of every SiteOwner read.
 	onOwner func(id string)
 }

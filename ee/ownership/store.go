@@ -688,7 +688,8 @@ func (s *Store) RemoveShares(accountID string) error {
 
 // ---- retention ----
 
-// stampEnded is the one place EndedAt is decided: a record that is final and
+// stampEnded is the store's stamping point for EndedAt (every create and
+// update goes through it; a caller may also pass one in): a record that is final and
 // has no end date gets now, and one that is not final has none (an offer put
 // back as it was). Every create and update goes through it.
 func stampEnded(at **time.Time, state string) {
@@ -710,12 +711,11 @@ func stampEnded(at **time.Time, state string) {
 func (s *Store) PruneFinal(before time.Time) (offers, invites int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	offers, err = pruneDir[Offer](s.offersDir(), before, func(o Offer) (string, *time.Time) { return o.State, o.EndedAt })
-	if err != nil {
-		return offers, 0, err
-	}
-	invites, err = pruneDir[Invite](s.invitesDir(), before, func(i Invite) (string, *time.Time) { return i.State, i.EndedAt })
-	return offers, invites, err
+	// A failure in one pass must not skip the other: both run, both errors are
+	// reported.
+	offers, oerr := pruneDir[Offer](s.offersDir(), before, func(o Offer) (string, *time.Time) { return o.State, o.EndedAt })
+	invites, ierr := pruneDir[Invite](s.invitesDir(), before, func(i Invite) (string, *time.Time) { return i.State, i.EndedAt })
+	return offers, invites, errors.Join(oerr, ierr)
 }
 
 func pruneDir[T any](dir string, before time.Time, view func(T) (string, *time.Time)) (int, error) {

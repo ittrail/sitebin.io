@@ -7,11 +7,13 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/ittrail/sitebin.io/ee/account"
 	"github.com/ittrail/sitebin.io/internal/auth"
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/ids"
 	"github.com/ittrail/sitebin.io/internal/provenance"
 )
 
@@ -253,4 +255,27 @@ func redactForeign(es []provenance.Entry, accountID string) []provenance.Entry {
 		out[i] = e
 	}
 	return out
+}
+
+var idLikeToken = regexp.MustCompile(`[A-Za-z0-9]{26}`)
+
+// withoutOtherAccounts is an own entry for the export with every account id
+// but the exporting account's taken out of its Detail. The core's ownership
+// lines name both accounts ("from <sender> to <recipient>") for the operator;
+// the exported copy must not hand one party the other's id. Only the
+// ownership actions are looked at: their detail is the only text that carries
+// account ids. The stored line is untouched.
+func withoutOtherAccounts(e provenance.Entry, self string) provenance.Entry {
+	switch e.Action {
+	case provenance.ActionTransfer, provenance.ActionAdopt, provenance.ActionAdmins:
+	default:
+		return e
+	}
+	e.Detail = idLikeToken.ReplaceAllStringFunc(e.Detail, func(w string) string {
+		if w != self && ids.ValidID(w) {
+			return "another account"
+		}
+		return w
+	})
+	return e
 }
