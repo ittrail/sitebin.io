@@ -126,11 +126,15 @@ func (a *API) gitInfo(w http.ResponseWriter, r *http.Request, site *store.Site) 
 			a.log.Warn("git: could not read the default branch", "id", site.ViewID, "err", err)
 		}
 		if at, ok := gitrepo.LastPush(dir); ok {
+			// The marker is for the sweep: a push cut off after git started
+			// moves it too, though it changed nothing. The time shown is the
+			// recorded push's, beside its own refs; the marker's only when no
+			// record is left (retention) or readable.
 			lp := &gitLastPush{At: at}
 			if es, err := a.st.Provenance(site); err == nil {
 				for i := len(es) - 1; i >= 0; i-- {
 					if es[i].Action == provenance.ActionGitPush {
-						lp.Detail, lp.Auth = es[i].Detail, es[i].Auth
+						lp.At, lp.Detail, lp.Auth = es[i].Time, es[i].Detail, es[i].Auth
 						break
 					}
 				}

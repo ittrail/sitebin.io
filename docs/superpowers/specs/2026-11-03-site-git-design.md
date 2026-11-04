@@ -709,6 +709,10 @@ left as designed.
   every answer carries `X-Content-Type-Options: nosniff` and
   `Content-Security-Policy: sandbox`.
 - **Provenance:** `git-push` entries are never merged.
+- **"Last push" is one event** (found in the live check, 2026-11-04): its time
+  is the recorded push's, beside that push's refs. The `sitebin-pushed` marker
+  is the sweep's, and a push cut off after git started moves it without
+  changing anything; it is shown only when no record is left.
 - **The GCM lines are scoped to the instance's origin** (Git passes a
   credential helper only scheme and host), as the example lines above show;
   the tab, README and the website's `/docs/git/` print the same lines and say

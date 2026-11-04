@@ -98,6 +98,38 @@ func TestGitInfoAfterPush(t *testing.T) {
 	}
 }
 
+// The time "Last push" shows belongs to the push its detail names. A push
+// that was cut off marks the repository for the sweep later, but changed
+// nothing and is not the last push (seen live on app.sitebin.io: the
+// interrupted push's time beside the previous push's refs).
+func TestGitInfoLastPushTimeIsTheRecordedPushs(t *testing.T) {
+	e := newEnv(t, nil)
+	g := newGitServer(t, e)
+	edit, pw := gitSite(t, e, nil)
+	site := siteByEdit(t, e, edit)
+	cl := newGitClient(t)
+	wd := cl.work()
+	cl.commit(wd, "a.txt", []byte("a"))
+	cl.mustGit(wd, "push", "-q", g.remote(edit, pw), "HEAD:main")
+	pushed := time.Now()
+
+	// An interrupted push an hour later marks the repository (gitserve's
+	// "err != nil && res.Started") and records nothing.
+	later := pushed.Add(time.Hour)
+	marker := filepath.Join(site.GitDir(), "sitebin-pushed")
+	if err := os.Chtimes(marker, later, later); err != nil {
+		t.Fatal(err)
+	}
+
+	in := gitInfo(t, e, edit, pw)
+	if in.LastPush == nil || !strings.Contains(in.LastPush.Detail, "refs/heads/main") {
+		t.Fatalf("last_push = %+v", in.LastPush)
+	}
+	if in.LastPush.At.After(pushed) {
+		t.Errorf("last_push.at = %v, after the push it names (%v): the interrupted push's mark", in.LastPush.At, pushed)
+	}
+}
+
 func TestGitInfoReasonPlan(t *testing.T) {
 	e := newEnv(t, nil)
 	g := newGitServer(t, e)
