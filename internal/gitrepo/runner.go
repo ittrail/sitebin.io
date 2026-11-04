@@ -50,6 +50,9 @@ type Runner struct {
 	bin   string
 	state string
 	slots chan struct{}
+
+	// now is the clock Collect decides by and prunes from; a test moves it.
+	now func() time.Time
 }
 
 // New finds the git binary and prepares the state directory.
@@ -72,7 +75,7 @@ func New(o Options) (*Runner, error) {
 	if err := os.WriteFile(filepath.Join(o.StateDir, "empty.gitconfig"), nil, 0o644); err != nil {
 		return nil, fmt.Errorf("gitrepo: %w", err)
 	}
-	return &Runner{bin: bin, state: o.StateDir, slots: make(chan struct{}, o.MaxProcesses)}, nil
+	return &Runner{bin: bin, state: o.StateDir, slots: make(chan struct{}, o.MaxProcesses), now: time.Now}, nil
 }
 
 // command builds a git process for the repository dir, running in it. Its

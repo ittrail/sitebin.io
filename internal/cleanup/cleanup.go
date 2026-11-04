@@ -312,9 +312,10 @@ func reconcile(st *store.Store, site *store.Site, now time.Time) (keep bool, err
 	return site.Meta.ExpiresAt == nil || !now.After(site.Meta.ExpiresAt.Add(grace)), nil
 }
 
-// CollectGit runs garbage collection on every site's repository that was
-// pushed to since its last collection, one repository at a time (gc holds a
-// git process slot for up to ten minutes). It is only for the process that
+// CollectGit runs garbage collection on every site's repository where one is
+// due (gitrepo.Collect: pushed to since its last collection, or once more a
+// day after a push), one repository at a time (gc holds a git process slot
+// for up to ten minutes). It is only for the process that
 // serves pushes: each repository is registered through BeginGitWrite first,
 // so a delete or a lock that arrives during gc cancels it, and a repository
 // with a push running is skipped until the next round. A locked site is never
