@@ -748,13 +748,7 @@ func (a *API) createSiteWith(r *http.Request, opts createOpts) (*store.Site, str
 			m.Origin = opts.origin
 			if gated {
 				m.OwnerAccountID = owner
-				m.QuotaBytes = grant.MaxSiteBytes
-				m.QuotaFiles = grant.MaxFiles
-				m.QuotaExpiryDays = grant.MaxExpiryDays
-				m.QuotaDomains = grant.MaxCustomDomain
-				m.QuotaWebDAV = grant.WebDAV
-				m.QuotaGit = grant.Git
-				m.QuotaForms = grant.MaxForms
+				stampCaps(m, grant)
 			}
 			return nil
 		}); err != nil {
@@ -794,8 +788,7 @@ func (a *API) createSiteWith(r *http.Request, opts createOpts) (*store.Site, str
 	// without an explicit expiry (e.g. anonymous drops on a hosted instance)
 	// expire at the cap instead of living forever.
 	if site.Meta.QuotaExpiryDays > 0 && site.Meta.ExpiresAt == nil {
-		exp := time.Now().Add(time.Duration(site.Meta.QuotaExpiryDays) * 24 * time.Hour).UTC()
-		if err := a.st.Update(site, func(m *store.Meta) error { m.ExpiresAt = &exp; m.ExpiryFromTier = true; return nil }); err != nil {
+		if err := a.st.Update(site, func(m *store.Meta) error { setTierExpiry(m, time.Now()); return nil }); err != nil {
 			return fail(err)
 		}
 	}

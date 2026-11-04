@@ -205,7 +205,35 @@ func (s *Store) RemoveDomain(site *Site, domain string) error {
 	if err != nil {
 		return err
 	}
-	if !slices.Contains(site.Meta.CustomDomains, d) && claimIndex(&site.Meta, d) < 0 {
+	l := s.lockSite(site.ViewID)
+	l.Lock()
+	defer l.Unlock()
+
+	meta, err := readMeta(site.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if err := s.removeDomainLocked(site, &meta, d); err != nil {
+		return err
+	}
+	meta.UpdatedAt = time.Now().UTC()
+	if err := writeMeta(site.dir, meta); err != nil {
+		return err
+	}
+	site.Meta = meta
+	return nil
+}
+
+// removeDomainLocked detaches the normalized address d from meta, which the
+// caller read under the site lock and writes afterwards: the index link goes
+// (when it is this site's, or dangling) and the claim, the domain and every
+// stored rule that mentions it are pruned. ErrNotFound when the site neither
+// holds nor claims d.
+func (s *Store) removeDomainLocked(site *Site, m *Meta, d string) error {
+	if !slices.Contains(m.CustomDomains, d) && claimIndex(m, d) < 0 {
 		return ErrNotFound
 	}
 	// The link is this site's, or nobody's (dangling): a pending claim here
@@ -215,12 +243,10 @@ func (s *Store) RemoveDomain(site *Site, domain string) error {
 			return err
 		}
 	}
-	return s.Update(site, func(m *Meta) error {
-		m.CustomDomains = slices.DeleteFunc(m.CustomDomains, func(x string) bool { return x == d })
-		m.DomainClaims = slices.DeleteFunc(m.DomainClaims, func(c DomainClaim) bool { return c.Domain == d })
-		m.dropAddressRules(d)
-		return nil
-	})
+	m.CustomDomains = slices.DeleteFunc(m.CustomDomains, func(x string) bool { return x == d })
+	m.DomainClaims = slices.DeleteFunc(m.DomainClaims, func(c DomainClaim) bool { return c.Domain == d })
+	m.dropAddressRules(d)
+	return nil
 }
 
 // HasDomainClaim reports whether the site claims domain, verified or not.

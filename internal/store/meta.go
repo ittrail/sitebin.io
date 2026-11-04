@@ -55,6 +55,11 @@ type Meta struct {
 	// CleanTags. Never read where the site is served. Missing = untagged.
 	Tags []string `json:"tags,omitempty"`
 
+	// Admins are other accounts the owner shares the site with. They manage
+	// it but do not own it. Missing = none. Cleared on a transfer. See
+	// ownership.go.
+	Admins []SiteAdmin `json:"admins,omitempty"`
+
 	// Origin records which surface created the site. Empty — the value every
 	// meta.json written before this field has — means the UI or the JSON API,
 	// so no migration is needed and no existing site is mislabelled. It is
@@ -95,6 +100,13 @@ type Meta struct {
 	Abuse     *AbuseState `json:"abuse,omitempty"`
 	CreatedAt time.Time   `json:"created_at"`
 	UpdatedAt time.Time   `json:"updated_at"`
+}
+
+// SiteAdmin is one account the site is shared with; Until, when set, is when
+// the share ends.
+type SiteAdmin struct {
+	Account string     `json:"account"`
+	Until   *time.Time `json:"until,omitempty"`
 }
 
 // OriginMCP marks a site created through the MCP server. See Meta.Origin.
