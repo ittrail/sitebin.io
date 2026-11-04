@@ -92,6 +92,7 @@ const (
 	SurfaceUploadToken = "upload-token"
 	SurfaceWebDAV      = "webdav"
 	SurfaceFTP         = "ftp"
+	SurfaceGit         = "git" // the site's repository, /git/<edit-id>.git
 	SurfaceDashboard   = "dashboard"
 	SurfaceOIDC        = "oidc"  // sign-in through the configured identity provider
 	SurfaceLocal       = "local" // email + password sign-in

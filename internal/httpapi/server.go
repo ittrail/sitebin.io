@@ -322,26 +322,38 @@ func storeError(w http.ResponseWriter, err error) {
 	}
 }
 
+// accountStands reports whether accountID may act on site the way its owner
+// does — manage it, write to it, push to its repository.
+//
+// THIS IS THE ONE PLACE the "who may act on this site" comparison lives. Every
+// gate that has resolved a credential to an account asks it: tokenOwns (an
+// account token on the JSON API), sessionOwns (the owner's browser session),
+// MCP's openSite (the connection's account) and gitAuth (an account or OAuth
+// token on the Git endpoint). None of them compares an account with the owner
+// itself, so when site ownership grows admins, this function is the only
+// check that changes. Today it is the owner alone; an anonymous site (no
+// owner) has nobody standing on it.
+func (a *API) accountStands(site *store.Site, accountID string) bool {
+	return accountID != "" && accountID == site.Meta.OwnerAccountID
+}
+
 // tokenOwns reports whether the request carries an account API token whose
-// account owns this site. The ownership check lives here, in the core, because
-// the core is the side that holds the site's metadata; the extension only says
-// which account the token belongs to.
+// account stands on this site (accountStands). The check lives here, in the
+// core, because the core is the side that holds the site's metadata; the
+// extension only says which account the token belongs to.
 //
 // An OAuth access token never counts, whatever the extension hands back. Its
 // audience is the MCP resource, and this API has no scope check to hold it
 // to what it was granted: honoured here, a read-only grant could overwrite
-// and delete sites. MCP reads its credentials in mcpOps.Authenticate, never
-// through this.
+// and delete sites. MCP reads its credentials in mcpOps.Authenticate and the
+// Git endpoint in gitAuth, never through this.
 func (a *API) tokenOwns(r *http.Request, site *store.Site) bool {
-	if site.Meta.OwnerAccountID == "" {
-		return false // an anonymous site belongs to no account, so no token owns it
-	}
 	p, ok := ext.Get()
 	if !ok {
 		return false
 	}
 	cred, ok := p.BearerCredential(r)
-	return ok && !cred.OAuth && cred.AccountID == site.Meta.OwnerAccountID
+	return ok && !cred.OAuth && a.accountStands(site, cred.AccountID)
 }
 
 // sessionHeader marks a request from Sitebin's own edit page that asks for
@@ -361,9 +373,6 @@ const sessionHeader = "X-Sitebin-Session"
 // with the app — so a Sec-Fetch-Site the browser did send must also say
 // same-origin. Never relax this into fromOwnBrowser's forgeable heuristics.
 func (a *API) sessionOwns(r *http.Request, site *store.Site) bool {
-	if site.Meta.OwnerAccountID == "" {
-		return false // an anonymous site belongs to no account
-	}
 	if r.Header.Get(sessionHeader) != "1" {
 		return false
 	}
@@ -375,7 +384,7 @@ func (a *API) sessionOwns(r *http.Request, site *store.Site) bool {
 		return false
 	}
 	id, ok := sa.SessionAccount(r)
-	return ok && id == site.Meta.OwnerAccountID
+	return ok && a.accountStands(site, id)
 }
 
 // sessionProvider returns the extension's session lookup, when there is a

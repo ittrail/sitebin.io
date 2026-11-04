@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ittrail/sitebin.io/ee/account"
 	"github.com/ittrail/sitebin.io/internal/ext"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
@@ -594,4 +595,63 @@ func sessionCookieMaybe(w *httptest.ResponseRecorder) *http.Cookie {
 		}
 	}
 	return nil
+}
+
+// The Git endpoint is the second place an OAuth access token acts. Its marker
+// opens BearerCredential's verifier exactly as the MCP marker does, and
+// nothing else: site creation (accountForAPI) stays /mcp's alone, and an
+// unmarked request still never reaches the issuer.
+func TestBearerCredentialHonoursGitCaller(t *testing.T) {
+	ti := newTestIssuer(t)
+	p, _ := setupMCPOAuthInstance(t, ti, nil)
+	acc, err := p.accounts.CreateOAuth(account.OIDCProv, testSubject, "agent-owner@example.com", true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok := ti.sign(t, nil, nil)
+	gitRequest := func(secret string) *http.Request {
+		r := bearerRequest(secret, false)
+		return r.WithContext(ext.WithGitCaller(r.Context()))
+	}
+
+	if _, ok := p.BearerCredential(bearerRequest(tok, false)); ok {
+		t.Fatal("an OAuth token was honoured with no marker")
+	}
+	if n := ti.discoveries.Load(); n != 0 {
+		t.Fatalf("an unmarked request reached the issuer (%d discoveries)", n)
+	}
+	cred, ok := p.BearerCredential(gitRequest(tok))
+	if !ok || cred.AccountID != acc.ID || !cred.OAuth || len(cred.Scopes) == 0 {
+		t.Fatalf("BearerCredential with the Git marker = %+v, %v", cred, ok)
+	}
+	if _, ok := p.accountForAPI(gitRequest(tok)); ok {
+		t.Error("accountForAPI honoured an OAuth token on a Git request: Git creates no sites")
+	}
+	// A suspended account's token is refused on Git as everywhere.
+	if err := p.accounts.Update(acc, func(a *account.Account) error { now := time.Now(); a.SuspendedAt = &now; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p.BearerCredential(gitRequest(tok)); ok {
+		t.Error("a suspended account's OAuth token was honoured on a Git request")
+	}
+}
+
+// Through the provider, a consent refusal on a Git request is noted in the
+// request's slot, and the token is refused as before.
+func TestBearerCredentialNotesConsentOnGit(t *testing.T) {
+	ti := newTestIssuer(t)
+	consent := newConsentStack(t)
+	consent.answer(200, outstandingBody)
+	p, _ := setupMCPOAuthInstance(t, ti, stackStub(consent))
+	if _, err := p.accounts.CreateOAuth(account.OIDCProv, testSubject, "agent-owner@example.com", true, ""); err != nil {
+		t.Fatal(err)
+	}
+	r := bearerRequest(ti.sign(t, nil, nil), false)
+	ctx := ext.WithRefusalNote(ext.WithGitCaller(r.Context()))
+	if _, ok := p.BearerCredential(r.WithContext(ctx)); ok {
+		t.Fatal("a token was honoured with consent outstanding")
+	}
+	if got := ext.RefusalFrom(ctx); got != ext.RefusalConsent {
+		t.Fatalf("RefusalFrom = %v, want RefusalConsent", got)
+	}
 }

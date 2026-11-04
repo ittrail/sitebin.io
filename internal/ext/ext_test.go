@@ -23,6 +23,65 @@ func TestMCPCallerMarker(t *testing.T) {
 	}
 }
 
+// The Git marker is the second place an OAuth access token may act. It is a
+// marker of its own: a Git request is not an MCP request, and the OAuth
+// surface is exactly the two of them.
+func TestGitCallerMarkerAndOAuthSurface(t *testing.T) {
+	bare := context.Background()
+	if IsGitCaller(bare) || OAuthSurface(bare) {
+		t.Fatal("a bare context reads as a Git caller or an OAuth surface")
+	}
+	git := WithGitCaller(bare)
+	if !IsGitCaller(git) || !OAuthSurface(git) {
+		t.Fatal("WithGitCaller did not mark the context")
+	}
+	if IsMCPCaller(git) {
+		t.Error("the Git marker reads as the MCP marker")
+	}
+	mcp := WithMCPCaller(bare)
+	if IsGitCaller(mcp) {
+		t.Error("the MCP marker reads as the Git marker")
+	}
+	if !OAuthSurface(mcp) {
+		t.Error("an MCP request is not an OAuth surface")
+	}
+	type ctxKey int
+	forged := context.WithValue(bare, ctxKey(1), true)
+	if IsGitCaller(forged) || OAuthSurface(forged) {
+		t.Fatal("a look-alike key forged the Git marker")
+	}
+	// A credential in the context is not a marker either.
+	if OAuthSurface(WithCredential(bare, Credential{AccountID: "a", OAuth: true})) {
+		t.Error("a credential reads as an OAuth surface")
+	}
+}
+
+// A refusal note is a slot the caller installs: without one, noting is a
+// no-op and the answer is RefusalNone, so a verifier can note on every path
+// (the community build has no verifier at all and never notes anything).
+func TestRefusalNote(t *testing.T) {
+	bare := context.Background()
+	NoteRefusal(bare, RefusalConsent) // no slot: must not panic, must not stick
+	if got := RefusalFrom(bare); got != RefusalNone {
+		t.Fatalf("RefusalFrom(bare) = %v, want RefusalNone", got)
+	}
+	ctx := WithRefusalNote(bare)
+	if got := RefusalFrom(ctx); got != RefusalNone {
+		t.Fatalf("a fresh slot reads %v, want RefusalNone", got)
+	}
+	// A context derived from the slotted one writes into the same slot: the
+	// verifier wraps the request's context before it notes.
+	type k struct{}
+	NoteRefusal(context.WithValue(ctx, k{}, 1), RefusalConsent)
+	if got := RefusalFrom(ctx); got != RefusalConsent {
+		t.Fatalf("RefusalFrom = %v, want RefusalConsent", got)
+	}
+	// Each slot is its own: a second request's note is not this one's.
+	if got := RefusalFrom(WithRefusalNote(bare)); got != RefusalNone {
+		t.Errorf("a new slot inherited a note: %v", got)
+	}
+}
+
 func TestCredentialInContext(t *testing.T) {
 	if _, ok := CredentialFrom(context.Background()); ok {
 		t.Fatal("a bare context carries a credential")

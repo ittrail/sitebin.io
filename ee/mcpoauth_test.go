@@ -3,9 +3,13 @@
 package ee
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/ittrail/sitebin.io/internal/ext"
 )
 
 // The audience claim arrives as either a string or an array, and getting that
@@ -96,5 +100,57 @@ func TestVerifierDoesNotDialAtConstruction(t *testing.T) {
 	}
 	if m.verifier != nil {
 		t.Error("the verifier resolved the issuer eagerly")
+	}
+}
+
+// Verify says why it refused in exactly one case, consent outstanding, and
+// only to a caller that installed a slot for it: the Git gate turns that one
+// refusal into a readable message, because a credential helper never opens a
+// browser on a 401. Every other refusal stays silent, and what /mcp answers
+// does not change.
+func TestVerifyNotesConsentRefusal(t *testing.T) {
+	ti := newTestIssuer(t)
+	m := newMCPOAuth(ti.URL(), testResource, knownSubject(testSubject, "acct-1"))
+	complete := false
+	m.consent = func(context.Context, string) bool { return complete }
+	tok := ti.sign(t, nil, nil)
+
+	ctx := ext.WithRefusalNote(context.Background())
+	if _, ok := m.Verify(ctx, tok); ok {
+		t.Fatal("a token was accepted with consent outstanding")
+	}
+	if got := ext.RefusalFrom(ctx); got != ext.RefusalConsent {
+		t.Fatalf("RefusalFrom = %v, want RefusalConsent", got)
+	}
+	// Without a slot the refusal is the same refusal, and nothing breaks.
+	if _, ok := m.Verify(context.Background(), tok); ok {
+		t.Fatal("a token was accepted with consent outstanding and no slot")
+	}
+
+	// Every other refusal notes nothing.
+	others := map[string]string{
+		"wrong audience": ti.sign(t, func(c map[string]any) { c["aud"] = []string{"https://other.example/mcp"} }, nil),
+		"expired":        ti.sign(t, func(c map[string]any) { c["exp"] = time.Now().Add(-time.Minute).Unix() }, nil),
+		"ID token":       ti.sign(t, func(c map[string]any) { c["typ"] = "ID" }, nil),
+		"not a JWS":      "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4In0.c2ln",
+	}
+	for name, raw := range others {
+		ctx := ext.WithRefusalNote(context.Background())
+		if _, ok := m.Verify(ctx, raw); ok {
+			t.Fatalf("%s: accepted", name)
+		}
+		if got := ext.RefusalFrom(ctx); got != ext.RefusalNone {
+			t.Errorf("%s: RefusalFrom = %v, want RefusalNone", name, got)
+		}
+	}
+
+	// Consent complete: accepted, nothing noted.
+	complete = true
+	ctx = ext.WithRefusalNote(context.Background())
+	if _, ok := m.Verify(ctx, tok); !ok {
+		t.Fatal("a token was refused with consent complete")
+	}
+	if got := ext.RefusalFrom(ctx); got != ext.RefusalNone {
+		t.Errorf("an accepted token noted %v", got)
 	}
 }

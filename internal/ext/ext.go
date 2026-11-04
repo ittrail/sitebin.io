@@ -161,8 +161,9 @@ type Provider interface {
 	// The core uses it to let a credential stand in for a site's edit password
 	// on sites that account owns. The ownership comparison belongs to the core,
 	// which is the side that holds the site's metadata. An OAuth access token
-	// is for /mcp alone: the extension resolves one only on a request carrying
-	// the MCP marker, and the core ignores one anywhere else regardless.
+	// is for /mcp and the Git endpoint alone: the extension resolves one only
+	// on a request carrying one of their markers (OAuthSurface), and the core
+	// ignores one anywhere else regardless.
 	BearerCredential(r *http.Request) (Credential, bool)
 }
 
@@ -176,10 +177,11 @@ type Credential struct {
 	// access token narrows it.
 	Scopes []string
 	// OAuth marks an access token from the configured authorization server,
-	// as opposed to an account API token. Its audience is the MCP resource and
-	// nothing else, so it is honoured only on requests carrying the MCP
-	// marker (WithMCPCaller): the JSON API's owner check never accepts one,
-	// and neither does the extension's account resolution for site creation.
+	// as opposed to an account API token. Its audience is the MCP resource, so
+	// it is honoured only on requests carrying the MCP marker (WithMCPCaller)
+	// or the Git gate's (WithGitCaller), both of which hold it to its scopes:
+	// the JSON API's owner check never accepts one, and neither does the
+	// extension's account resolution for site creation, which is /mcp's alone.
 	// Before this flag existed a read-only token could create, overwrite and
 	// delete sites through /api/*.
 	OAuth bool
@@ -194,6 +196,8 @@ type ctxKey int
 const (
 	mcpCallerKey ctxKey = iota
 	credentialKey
+	gitCallerKey
+	refusalKey
 )
 
 // WithMCPCaller marks a request context as having arrived through the MCP
@@ -203,11 +207,69 @@ func WithMCPCaller(ctx context.Context) context.Context {
 	return context.WithValue(ctx, mcpCallerKey, true)
 }
 
-// IsMCPCaller reports whether the request came through the MCP endpoint —
-// the only place an OAuth access token may act.
+// IsMCPCaller reports whether the request came through the MCP endpoint.
 func IsMCPCaller(ctx context.Context) bool {
 	v, _ := ctx.Value(mcpCallerKey).(bool)
 	return v
+}
+
+// WithGitCaller marks a request context as the Git endpoint's question about
+// an OAuth access token. Only the core's Git gate sets it, and only on the
+// copy of the request it hands BearerCredential for a JWS-shaped password —
+// never on the request its handler goes on to serve.
+func WithGitCaller(ctx context.Context) context.Context {
+	return context.WithValue(ctx, gitCallerKey, true)
+}
+
+// IsGitCaller reports whether the Git gate marked the request.
+func IsGitCaller(ctx context.Context) bool {
+	v, _ := ctx.Value(gitCallerKey).(bool)
+	return v
+}
+
+// OAuthSurface reports whether an OAuth access token may act on this request:
+// it came through /mcp or the Git gate, the only two places one does. The
+// JSON API is neither, and refuses one regardless.
+func OAuthSurface(ctx context.Context) bool {
+	return IsMCPCaller(ctx) || IsGitCaller(ctx)
+}
+
+// Refusal is why the extension refused a credential, for the one caller that
+// must explain itself. The verifier never says why to a client that did not
+// ask (an oracle), so the answer travels only through a slot the caller
+// installed with WithRefusalNote.
+type Refusal int
+
+const (
+	// RefusalNone: nothing was noted — the credential passed, or it failed
+	// for a reason that is not explained.
+	RefusalNone Refusal = iota
+	// RefusalConsent: the token is valid, but its subject has a document the
+	// platform requires outstanding. Signing in once in a browser passes the
+	// consent gate; a Git credential helper never opens one on a 401.
+	RefusalConsent
+)
+
+// WithRefusalNote installs an empty refusal slot in ctx. NoteRefusal on ctx,
+// or on any context derived from it, fills it; RefusalFrom reads it.
+func WithRefusalNote(ctx context.Context) context.Context {
+	return context.WithValue(ctx, refusalKey, new(Refusal))
+}
+
+// NoteRefusal records why a credential was refused. Without a slot it does
+// nothing, so a verifier may note on every path, whoever its caller is.
+func NoteRefusal(ctx context.Context, why Refusal) {
+	if slot, ok := ctx.Value(refusalKey).(*Refusal); ok && slot != nil {
+		*slot = why
+	}
+}
+
+// RefusalFrom returns what was noted in ctx's slot, or RefusalNone.
+func RefusalFrom(ctx context.Context) Refusal {
+	if slot, ok := ctx.Value(refusalKey).(*Refusal); ok && slot != nil {
+		return *slot
+	}
+	return RefusalNone
 }
 
 // WithCredential records the credential the MCP endpoint already verified

@@ -488,11 +488,12 @@ func bearerToken(r *http.Request) string {
 // this method's job so the core never has to. An account API token is
 // recognised by its own prefix and grants everything its account can do, which
 // is why it carries no scopes. Anything else is offered to the OAuth verifier,
-// when one is configured — and only on a request that came through /mcp. An
-// access token is for that resource alone, so elsewhere it is not even
-// verified: a JSON API request cannot make this instance ask the stack about
-// consent or create an account. The core refuses an OAuth credential outside
-// /mcp as well; this is the same rule held on both sides of the seam.
+// when one is configured — and only on a request that came through /mcp or the
+// Git gate (ext.OAuthSurface), the two places that hold a token to its scopes.
+// Elsewhere it is not even verified: a JSON API request cannot make this
+// instance ask the stack about consent or create an account. The core refuses
+// an OAuth credential outside those two as well; this is the same rule held on
+// both sides of the seam.
 func (p *provider) BearerCredential(r *http.Request) (ext.Credential, bool) {
 	if !p.cfg.Enabled() {
 		return ext.Credential{}, false
@@ -511,7 +512,7 @@ func (p *provider) BearerCredential(r *http.Request) (ext.Credential, bool) {
 		}
 		return ext.Credential{AccountID: acc.ID}, true
 	}
-	if p.mcpOAuth != nil && ext.IsMCPCaller(r.Context()) {
+	if p.mcpOAuth != nil && ext.OAuthSurface(r.Context()) {
 		if cred, ok := p.mcpOAuth.Verify(withReqInfo(r.Context(), r), secret); ok {
 			if acc, err := p.accounts.ByID(cred.AccountID); err != nil || acc.Suspended() {
 				return ext.Credential{}, false

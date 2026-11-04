@@ -144,7 +144,7 @@ func (o mcpOps) openSiteEvenLocked(auth mcp.Auth, ref mcp.SiteRef) (*store.Site,
 	if err != nil {
 		return nil, o.mcpError(err)
 	}
-	if auth.AccountID != "" && site.Meta.OwnerAccountID != "" && auth.AccountID == site.Meta.OwnerAccountID {
+	if o.a.accountStands(site, auth.AccountID) {
 		return site, nil
 	}
 	if ref.EditPassword == "" {
