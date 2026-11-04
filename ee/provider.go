@@ -68,7 +68,11 @@ type provider struct {
 	// containerUsage is what a site's running containers use, for the same
 	// tab; nil when containers are off.
 	containerUsage func(viewID string) (ext.ContainerUsage, bool)
-	secret         []byte
+	// servicesOf is how many container services an account runs, for a limits
+	// check that ENFORCES a cap: an error is an error, never zero. nil when
+	// containers are off.
+	servicesOf func(owner string) (int, error)
+	secret     []byte
 }
 
 func newProvider() *provider { return &provider{} }

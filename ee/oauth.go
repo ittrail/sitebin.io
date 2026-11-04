@@ -128,7 +128,7 @@ func (p *provider) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	// id_token_hint -- or, for a provider this instance never signs out of,
 	// the cookie that clears an earlier sign-in's.
 	http.SetCookie(w, p.sessions.HintCookie(id.LogoutHint))
-	p.redirect(w, r, "/account")
+	p.landing(w, r)
 }
 
 func (p *provider) oauthError(w http.ResponseWriter, msg string) {

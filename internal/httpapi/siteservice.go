@@ -49,6 +49,7 @@ func (s siteService) infoOf(site *store.Site) ext.SiteInfo {
 		Bytes:          u.FileBytes,
 		GitBytes:       u.GitBytes,
 		Files:          u.Files,
+		Forms:          len(site.Meta.Forms),
 		ViewURL:        s.a.cfg.ViewURL(site.ViewID),
 		EditURL:        s.a.cfg.EditURL(site.Meta.EditID),
 		CreatedAt:      site.Meta.CreatedAt,

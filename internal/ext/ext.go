@@ -808,7 +808,10 @@ type SiteInfo struct {
 	Bytes    int64
 	GitBytes int64
 	Files    int
-	ViewURL  string
+	// Forms is how many email forms the site holds (pending ones count, as
+	// they do against the plan's cap).
+	Forms   int
+	ViewURL string
 	// ViewOff is set when the generated address (ViewURL) does not serve the
 	// site — its owner switched it off, or it redirects to ViewRedirectTo.
 	// The dashboard then shows it without a link.

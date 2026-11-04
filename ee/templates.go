@@ -197,6 +197,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
     {{if .AccountURL}}<a class="btn small" href="{{.AccountURL}}" rel="noopener" title="Password, sign-in methods, sessions, data export and account deletion">Manage account</a>{{end}}
     <form class="inline" method="post" action="/account/logout"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn small" type="submit">Sign out</button></form>
   </div>
+  {{with .Flash}}<p class="flash" role="status">{{.}}</p>{{end}}
 
   {{with .License}}
   <div class="card licnotice {{.Severity}}" role="alert">
@@ -273,6 +274,23 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
       {{end}}
     </div>
     {{end}}
+  </div>
+
+  <div class="card" id="adopt">
+    <h3>Adopt an anonymous drop</h3>
+    <p class="muted">Published a site without an account? Enter its address and its edit password to take it into this account. Its address and its edit password stay as they are.</p>
+    <form method="post" action="/account/adopt" style="display:flex;gap:8px;align-items:flex-end;margin-top:14px;flex-wrap:wrap">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <div style="flex:2;min-width:220px">
+        <label class="f" for="adoptsite">Site address</label>
+        <input id="adoptsite" type="text" name="site" required maxlength="2048" autocomplete="off" placeholder="https://&hellip;" style="width:100%;background:var(--bg-raise);color:var(--ink);border:1px solid var(--line);border-radius:9px;padding:9px 12px;font:14px var(--body)">
+      </div>
+      <div style="flex:1;min-width:160px">
+        <label class="f" for="adoptpw">Edit password</label>
+        <input id="adoptpw" type="password" name="password" required maxlength="256" autocomplete="off" style="width:100%;background:var(--bg-raise);color:var(--ink);border:1px solid var(--line);border-radius:9px;padding:9px 12px;font:14px var(--body)">
+      </div>
+      <button class="btn small primary" type="submit">Adopt</button>
+    </form>
   </div>
 
   <div class="card">
@@ -362,7 +380,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
   {{end}}
 
   {{if .Tiers}}
-  <div class="card">
+  <div class="card" id="plan">
     <h3>Plan</h3>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
     {{range .Tiers}}
@@ -443,6 +461,32 @@ var handoffTmpl = template.Must(template.New("handoff").Parse(`<!doctype html>
 </div></div></main>
 </body></html>
 `))
+
+// adoptTmpl is the adopt page: the form (prefilled from the ticket's link), the
+// answer to a refusal, and the page a plan without sharing gets. The password
+// is never rendered back. No script.
+var adoptTmpl = template.Must(template.New("adopt").Parse(pageHead + `
+<main class="acct"><div class="authwrap"><div class="card">
+  {{if .NeedsPlan}}
+  <h1>Adopting needs Pro or Studio</h1>
+  <p class="muted">Taking an anonymous drop into an account is part of the Pro and Studio plans.</p>
+  <div style="margin-top:18px"><a class="btn primary" href="/account#plan">See the plans</a> <a class="btn" href="/account">Back</a></div>
+  {{else}}
+  <h1>Adopt an anonymous drop</h1>
+  <p class="muted">Enter the drop's address and its edit password. It becomes a site of this account; its address and its edit password stay as they are.</p>
+  {{with .Error}}<div class="inline-status err" role="alert" style="margin-top:10px">{{.}}</div>{{end}}
+  {{if .Lines}}<ul class="muted" style="margin:10px 0 0 18px">{{range .Lines}}<li><strong>{{.Label}}</strong>{{if .Site}} &middot; {{.Site}}{{end}}: {{.Detail}}</li>{{end}}</ul>{{end}}
+  <form method="post" action="/account/adopt">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label class="f" for="site">Site address</label>
+    <input type="text" id="site" name="site" required maxlength="2048" autocomplete="off" value="{{.Site}}">
+    <label class="f" for="password">Edit password</label>
+    <input type="password" id="password" name="password" required maxlength="256" autocomplete="off">
+    <div style="margin-top:16px"><button class="btn primary" type="submit">Adopt</button> <a class="btn" href="/account">Cancel</a></div>
+  </form>
+  {{end}}
+</div></div></main>
+` + pageFoot))
 
 var msgTmpl = template.Must(template.New("msg").Parse(pageHead + `
 <main class="acct"><div class="authwrap"><div class="card">

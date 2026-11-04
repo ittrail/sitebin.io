@@ -37,6 +37,8 @@ func (p *provider) PublicRoutes() map[string]http.Handler {
 		"POST /account/sites/{id}/tags/add":                http.HandlerFunc(p.handleAddSiteTag),
 		"POST /account/sites/{id}/tags/remove":             http.HandlerFunc(p.handleRemoveSiteTag),
 		"POST /account/sites/{id}/delete":                  http.HandlerFunc(p.handleDeleteSite),
+		"GET /account/adopt":                               http.HandlerFunc(p.handleAdoptGet),
+		"POST /account/adopt":                              http.HandlerFunc(p.handleAdoptPost),
 		"GET /account/tags":                                http.HandlerFunc(p.handleTagsPage),
 		"POST /account/tags/groups":                        http.HandlerFunc(p.handleCreateTagGroup),
 		"POST /account/tags/groups/{gid}":                  http.HandlerFunc(p.handleUpdateTagGroup),
@@ -109,7 +111,7 @@ func (p *provider) handleRoot(w http.ResponseWriter, r *http.Request) {
 	}
 	// Sliding lifetime: a render re-issues the cookie for a full term.
 	http.SetCookie(w, p.sessions.Cookie(acc.ID, acc.TokenVersion))
-	p.renderDashboard(w, r, acc, "")
+	p.renderDashboard(w, r, acc, p.takeNotice(w, r, acc))
 }
 
 // ssoRedirect sends the visitor straight to the identity provider when local
@@ -164,7 +166,7 @@ func (p *provider) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 	// A password sign-in has no provider session to end: a hint an earlier
 	// SSO sign-in left in this browser is not this session's.
 	http.SetCookie(w, p.sessions.ClearHint())
-	p.redirect(w, r, "/account")
+	p.landing(w, r)
 }
 
 func (p *provider) handleSignupGet(w http.ResponseWriter, r *http.Request) {
@@ -208,7 +210,7 @@ func (p *provider) handleSignupPost(w http.ResponseWriter, r *http.Request) {
 	p.recordAccount(r, acc.ID, provenance.ActionSignup, provenance.SurfaceLocal, provenance.AuthPassword, "")
 	http.SetCookie(w, p.sessions.Cookie(acc.ID, acc.TokenVersion))
 	http.SetCookie(w, p.sessions.ClearHint())
-	p.redirect(w, r, "/account")
+	p.landing(w, r)
 }
 
 // signedOutPath is where every sign-out ends, and the address declared to
@@ -675,6 +677,8 @@ type tierOption struct {
 }
 
 type dashView struct {
+	// Flash is a one-time notice at the top of the page (see takeNotice).
+	Flash string
 	// PublishURL is where the dashboard sends a person to publish: the front
 	// door when there is one (never "/", which sends a signed-in visitor
 	// back here), else the instance root.
@@ -808,6 +812,7 @@ func (p *provider) renderDashboard(w http.ResponseWriter, r *http.Request, acc *
 		cancelURL = p.cfg.PayGate.CancelURL
 	}
 	dashTmpl.Execute(w, dashView{
+		Flash:       flash,
 		MCPEndpoint: p.host.BaseURL() + "/mcp",
 		Email:       acc.Email, Tier: tier, Sites: tags.rows, SitesTotal: len(rows), CSRF: token, Base: p.baseURL(), PublishURL: p.host.PublishURL(),
 		Filter: tags.filter, TagOptions: tags.options, Groups: tags.groups, Back: tags.back,

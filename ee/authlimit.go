@@ -34,6 +34,10 @@ const (
 	// bucket has the login rate, since a reset is a sign-in that failed.
 	resetBurst   = 3
 	resetPerHour = 3
+	// adoptPerHour bounds adopt attempts, per source and per account, both as
+	// the burst and as the sustained rate: each attempt is a guess at some
+	// drop's edit password.
+	adoptPerHour = 10
 )
 
 // authLimiters is the set the handlers consult.
@@ -44,6 +48,8 @@ type authLimiters struct {
 	resetEmail *auth.Limiter // per target address
 	resetIP    *auth.Limiter // per source
 	confirmIP  *auth.Limiter // per source: guessing a reset token
+	adoptIP    *auth.Limiter // per source: guessing a drop's edit password
+	adoptAcct  *auth.Limiter // per account: the same, from many addresses
 }
 
 func newAuthLimiters() *authLimiters {
@@ -54,6 +60,8 @@ func newAuthLimiters() *authLimiters {
 		resetEmail: auth.NewLimiter(resetPerHour, resetBurst),
 		resetIP:    auth.NewLimiter(loginPerHour, loginBurst),
 		confirmIP:  auth.NewLimiter(loginPerHour, loginBurst),
+		adoptIP:    auth.NewLimiter(adoptPerHour, adoptPerHour),
+		adoptAcct:  auth.NewLimiter(adoptPerHour, adoptPerHour),
 	}
 }
 
@@ -81,6 +89,15 @@ func (l *authLimiters) allowReset(r *http.Request, email string) bool {
 	okIP := l.resetIP.Allow(auth.ClientIP(r))
 	okEmail := l.resetEmail.Allow(emailKey(email))
 	return okIP && okEmail
+}
+
+// allowAdopt consumes one adopt attempt for the source AND for the account,
+// and reports whether both had one to give. Both are consumed even when one
+// refuses, like allowLogin.
+func (l *authLimiters) allowAdopt(r *http.Request, accountID string) bool {
+	okIP := l.adoptIP.Allow(auth.ClientIP(r))
+	okAcct := l.adoptAcct.Allow(accountID)
+	return okIP && okAcct
 }
 
 func (l *authLimiters) allowResetConfirm(r *http.Request) bool {

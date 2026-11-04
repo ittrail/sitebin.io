@@ -691,6 +691,11 @@ func counts(s ext.ContainerSite) bool {
 		(s.Observed.Status == store.ContainerRunning || s.Observed.Status == store.ContainerStarting)
 }
 
+// Counts reports whether a site's services count against its owner's cap: the
+// rule ServicesOfErr applies, for a caller adding the services of sites that
+// are about to change hands.
+func Counts(s ext.ContainerSite) bool { return counts(s) }
+
 // describe is the spec as the core records it, with the limits each
 // service's container is created with.
 func describe(id string, spec *Spec, limits map[string]ext.ContainerLimits) []ext.ContainerService {

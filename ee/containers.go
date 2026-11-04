@@ -43,6 +43,7 @@ func (p *provider) initContainers() error {
 	p.containers = m
 	p.containerLimits = m.Limits()
 	p.containerUsage = m.Usage
+	p.servicesOf = m.ServicesOfErr
 	if err := m.Limits().Err(); err != nil {
 		slog.Error("containers: the saved default limits could not be read; running containers keep theirs until defaults are saved again", "err", err)
 	}

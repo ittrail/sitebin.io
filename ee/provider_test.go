@@ -59,6 +59,8 @@ type fakeSites struct {
 	// containers are the container sites ContainerSites lists;
 	// SetContainerLimits writes their Limits.
 	containers []ext.ContainerSite
+	// adopt is the state of the OwnershipSites methods adopt_test.go fakes.
+	adopt *adoptFake
 }
 
 func (s *fakeSites) Info(id string) (ext.SiteInfo, bool) {
@@ -131,6 +133,9 @@ func (s *fakeSites) ContainerSite(id string) (ext.ContainerSite, error) {
 		if cs.ViewID == id {
 			return cs, nil
 		}
+	}
+	if _, ok := s.infos[id]; ok {
+		return ext.ContainerSite{ViewID: id}, nil // the real one answers Container=false for any site
 	}
 	return ext.ContainerSite{}, fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
 }
