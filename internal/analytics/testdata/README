@@ -1,0 +1,6 @@
+geo-test.mmdb is MaxMind's GeoIP2-City-Test.mmdb, copied unchanged from
+https://github.com/maxmind/MaxMind-DB (test-data/GeoIP2-City-Test.mmdb).
+MaxMind-DB is dual-licensed under the Apache License 2.0 or the MIT License.
+The test data is fictional sample data, not a real GeoIP database.
+Entries used by the tests: 216.160.83.56 (US, WA, Milton),
+81.2.69.142 (GB, ENG, London).
