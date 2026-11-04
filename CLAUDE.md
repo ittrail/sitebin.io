@@ -513,10 +513,12 @@ second copy of the rule.
   table in `internal/mcp/catalog.go` — add a tool there or it panics at
   registration. The tools check the scope again: the wrapper is a door, not
   the lock, and passes what it cannot parse (oversized, batched) to the SDK.
-- **OAuth tokens act on `/mcp` only.** `/mcp` marks every request
-  (`ext.WithMCPCaller`); `ext.Credential.OAuth` is honoured nowhere without
-  that marker — `tokenOwns` never, `accountForAPI` and `BearerCredential` in ee
-  only with it. A read-only token once could `DELETE /api/sites/{id}`. The
+- **OAuth tokens act on `/mcp` and `/git/` only.** `/mcp` marks every request
+  (`ext.WithMCPCaller`) and the Git gate marks its credential question
+  (`ext.WithGitCaller`); `ext.OAuthSurface` is true for either.
+  `ext.Credential.OAuth` is honoured nowhere without a marker — `tokenOwns`
+  never, `accountForAPI` and `BearerCredential` in ee only with one. The Git
+  marker holds the token to its scopes like MCP does (`mcp.Allows`). A read-only token once could `DELETE /api/sites/{id}`. The
   verified credential rides to the tools in the context (`ext.WithCredential`),
   so a bearer is verified once per request.
 - **The consent gate is never bypassed** (stack instances only): the verifier
@@ -561,6 +563,71 @@ second copy of the rule.
 Read `docs/superpowers/specs/2026-08-28-mcp-server-design.md`,
 `2026-08-29-mcp-oauth-resource-server-design.md` and
 `2026-09-25-mcp-oauth-consent-lazy-auth-design.md`.
+
+## Git repositories
+
+Every site may hold one bare repository at `sites/<id>/git/` (`Site.GitDir()`),
+outside `files/`: never served, zipped, mounted or scanned. Smart HTTP at
+`/git/<edit-id>.git/` on the base domain only; a push stores and never builds,
+deploys or restarts anything. Read
+`docs/superpowers/specs/2026-11-03-site-git-design.md`.
+
+- **One runner, one environment.** Every git process goes through
+  `internal/gitrepo.Runner`. Its environment is built from an empty slice with
+  only `PATH` copied in (never `os.Environ()`): `GIT_CONFIG_NOSYSTEM`,
+  `GIT_ATTR_NOSYSTEM`, `GIT_CONFIG_GLOBAL` = an empty file under
+  `<data>/gitstate/` (never `/dev/null`: Windows test hosts), `HOME`,
+  `GIT_TERMINAL_PROMPT=0`, `GIT_PROTOCOL` only when the client sent exactly
+  `version=2`. Settings travel as `-c` (empty `core.hooksPath`, fsck on,
+  `receive.autogc=false`, memory bounds, `receive.maxInputSize` for a push), so
+  the repository's own `config` cannot weaken them. Never add a way to run git
+  with anything else, and never run anything from a repository.
+- **The gate is the password's shape** (`gitAuth`, `internal/httpapi/gitauth.go`):
+  `sbu_` refused; `sbp_` through the same `tokenAccount`/`accountStands` the
+  API uses; a compact JWS is an OAuth token; anything else is the edit
+  password through `verifyEditIP`. A failing credential never falls back to a
+  weaker one. No cookies, no browser session (no CSRF surface). Never restate
+  the ownership comparison: `accountStands` is the one rule.
+- **Refusals after authentication are readable.** Git prints nothing for a bare
+  401/403, so `info/refs` answers `200` with a service advertisement carrying
+  `ERR <message>` (`fatal: remote error: …`). The messages are constants in
+  `gitserve.go`/`gitauth.go`. **Never echo git's stderr to a client**: it holds
+  server paths. Log it, answer a fixed message.
+- **One byte function.** `store.SiteUsage` counts files plus repository; every
+  write cap check and every size report uses it (`byteChecks` in
+  `usage_test.go` lists them: a new funnel joins that table). The one exception
+  is the container runtime's stop rule (`enforceStorage`), which counts files
+  only: a push must never stop an app. `Store.Usage` stays files-only for file
+  counts, the MCP download bound and that rule. `get_site` `bytes` includes the
+  repository; no field was added to any MCP output.
+- **A push is registered, not locked.** `Store.BeginGitWrite`
+  (`internal/store/gitwrite.go`) registers the running push for the site: a
+  second push is `ErrGitBusy`, a locked or deleted site is refused, and a
+  delete, a lock, the purge or "Delete repository" cancels the push and waits
+  for its git process before going on. `end` takes only the registry's mutex,
+  never the site lock; nothing between `BeginGitWrite` and `end` may take the
+  site lock. **Known limit:** the registry lives in the server process, so a
+  lock or delete from the CLI cannot cancel a running push (the next push reads
+  `meta.json` and is refused). Rare orphan: a CLI delete during a push.
+- **`git init` only inside a registration.** A read on a writable site without
+  a repository registers briefly just for the init, then serves upload-pack
+  outside it. Otherwise a racing delete leaves an orphan folder. gc
+  (`cleanup.CollectGit`, in the sweep, one repository at a time) registers
+  through `BeginGitWrite` too and skips a busy or locked repository; it runs a
+  full `gc --prune=1.day.ago` on a repository pushed to since the
+  `sitebin-gc` marker (`gitrepo/gc.go`), because `gc --auto` never fires.
+- **The plan flag is stamped.** `Meta.QuotaGit` (`*bool`; nil is off with
+  accounts, on without) follows the `Forms` rules: every `store.Quota`
+  constructor passes `Git`, or `ApplyQuota` resets it. `reconcileGit` in the
+  sweep (modelled on `reconcileTrust`) writes only `QuotaGit` when the owner's
+  grant differs, and changes nothing on an error or an unknown tier — that is
+  what turns Git on for existing sites after a `tiers.json` edit, which no
+  tier-id change would. A plan without Git makes the repository read-only
+  (`gitReasonPlan`), never deleted. A push does not renew a tier expiry.
+- **Provenance:** a push is recorded at the gate (`git-push`, refs changed,
+  bytes, credential kind); an update that could not be verified is labelled
+  "requested, not verified", never recorded as applied. "Delete repository" is
+  owner-only.
 
 ## Billing: three backends, one seam
 

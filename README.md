@@ -114,6 +114,10 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | `SITEBIN_FTP_ADDR` / `SITEBIN_FTP_PASV_PORT_MIN` / `_MAX` | `:21` / `21000` / `21010` | FTP control port + passive data-port range (map them in `docker run`). |
 | `SITEBIN_FTP_PUBLIC_HOST` | base domain | Host advertised for FTP passive mode. |
 | `SITEBIN_FTP_TLS_CERT` / `SITEBIN_FTP_TLS_KEY` | — | Optional PEM cert/key for FTPS (encrypts credentials). |
+| `SITEBIN_GIT_ENABLED` | `true` | Global [Git](#git-a-repository-per-site) switch. It also needs a `git` binary on the path at startup (the image has one); without either, Git is off and the edit page's Git tab says so. |
+| `SITEBIN_GIT_MAX_PUSH_BYTES` | `536870912` | Hard ceiling for one push (512 MiB), whatever the site's quota leaves. |
+| `SITEBIN_GIT_MAX_PROCESSES` | `4` | Most Git processes at once, instance-wide. A request over it waits briefly, then gets "instance busy, try again in a minute". |
+| `SITEBIN_GIT_OAUTH_CLIENT_ID` | — | *(Enterprise, with MCP OAuth.)* The public OAuth client the Git Credential Manager signs in with. Empty = the Git tab offers no "sign in with your account". See [Git](#git-a-repository-per-site). |
 | `SITEBIN_MCP_ENABLED` | `true` | Serve the MCP endpoint at `/mcp` for AI agents. See [MCP server](#mcp-server-for-ai-agents). |
 | `SITEBIN_MCP_OAUTH_ISSUER` | — | Authorization server whose access tokens `/mcp` accepts. **Not inherited** from `SITEBIN_OAUTH_OIDC_ISSUER`, but must equal it when set (the enterprise edition refuses to start otherwise): making `/mcp` an OAuth resource is a decision, not a side effect of configuring SSO. Edit passwords and account tokens keep working either way. See [OAuth 2.1](#oauth-21-optional). |
 | `SITEBIN_MCP_OAUTH_RESOURCE` | `<base>/mcp` | This server's OAuth resource identifier — the value a token's audience must contain. Immutable once published. |
@@ -383,6 +387,16 @@ curl -X POST -H "X-Edit-Password: $PW" \
 curl -X POST -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/containers/restart
 curl -H "X-Edit-Password: $PW" "https://sitebin.example.com/api/sites/$EDIT_ID/containers/app/logs?tail=200"
 curl -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/containers/stats
+
+# a site's Git repository: read-only views (pushing is plain `git`, see "Git")
+curl -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/git                 # availability, url, bytes, default branch, last push
+curl -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/git/refs            # branches and tags with their tips
+curl -H "X-Edit-Password: $PW" "https://sitebin.example.com/api/sites/$EDIT_ID/git/log?ref=main"  # 30 commits a page; &after=<sha> for the next
+curl -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/git/commit/$SHA     # message, people, parents, changed files
+curl -H "X-Edit-Password: $PW" "https://sitebin.example.com/api/sites/$EDIT_ID/git/tree?ref=main&path=src"
+curl -H "X-Edit-Password: $PW" "https://sitebin.example.com/api/sites/$EDIT_ID/git/blob?ref=main&path=src/app.js"   # &download=1 sends the raw file
+curl -H "X-Edit-Password: $PW" -o repo.zip "https://sitebin.example.com/api/sites/$EDIT_ID/git/archive?ref=main"
+curl -X DELETE -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/git      # delete the repository (the site's owner only)
 
 # read one file's content (used by the in-browser editor)
 curl -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/content/index.html
@@ -660,6 +674,111 @@ Docker is the part that trips everyone up. Two rules:
 Because of all this, WebDAV (`/dav/<edit-id>/`, plain HTTPS, no extra ports) is
 the smoother remote-mount option; reach for FTP when a client or workflow
 specifically needs it.
+
+### Git (a repository per site)
+
+Every site can hold **one Git repository**, next to its files: the project's
+source beside the project's site. It is an ordinary remote over HTTPS:
+
+```bash
+git remote add sitebin https://sitebin.example.com/git/<edit-id>.git
+git push sitebin main
+git clone https://sitebin.example.com/git/<edit-id>.git
+```
+
+The repository is created by the first authorised request (cloning a fresh
+one gives an empty repository). A push **stores; it never builds, deploys or
+restarts anything**, and there is no deploy from Git: what visitors see
+changes only through the API, WebDAV, FTP or the edit page. The repository is
+never served, listed, zipped by "Download ZIP", mounted over WebDAV or FTP, or
+scanned as site content, and there is no anonymous clone: a site is public,
+its source is not.
+
+**Three ways in.** The credential is the HTTP Basic password; the username is
+not checked (use the drop's id). Its shape decides, and a credential that
+fails is refused, never retried as a weaker kind:
+
+- **The site's edit password** — community and enterprise, one site at a time.
+- **An account API token** (`sbp_…`) *(Enterprise)* — for any site its account
+  owns. An upload token (`sbu_…`) is refused.
+- **Sign in with your account** *(Enterprise, through the SaaS Stack)* — the
+  [Git Credential Manager](https://github.com/git-ecosystem/git-credential-manager)
+  (it ships with Git for Windows) signs in in the browser once and renews by
+  itself. It needs `SITEBIN_GIT_OAUTH_CLIENT_ID` and `SITEBIN_MCP_OAUTH_ISSUER`.
+  The edit page's Git tab prints the exact values for this instance; the
+  configuration has this shape:
+
+  ```bash
+  git config --global credential.https://sitebin.example.com.provider generic
+  git config --global credential.https://sitebin.example.com.oauthClientId <client id>
+  git config --global credential.https://sitebin.example.com.oauthAuthorizeEndpoint <url>
+  git config --global credential.https://sitebin.example.com.oauthTokenEndpoint <url>
+  git config --global credential.https://sitebin.example.com.oauthDeviceEndpoint <url>
+  git config --global credential.https://sitebin.example.com.oauthScopes "<scopes>"
+  ```
+
+  The sign-in is held to its scopes (`sitebin:sites:read` to fetch,
+  `sitebin:sites:write` to push) and to the stack's consent gate: someone who
+  has not accepted the current terms is told to sign in once in the browser.
+  OAuth tokens act on `/mcp` and on `/git/` and nowhere else; the REST API
+  still refuses them.
+
+Browser sessions are not accepted at `/git/`, which lives on the base domain
+only. A **locked** site is refused, reads included, and a site created without
+an account on an instance that runs with accounts has no Git (like WebDAV and
+FTP). A refusal after sign-in is printed by Git as `fatal: remote error: …`:
+storage full, the plan has no Git (with the upgrade link), locked site, another
+push running, instance busy, terms not accepted.
+
+**Quota.** The site's byte cap covers files **and repository together**
+(`bytes(files) + bytes(repository) ≤ max_bytes`); the file-count cap is
+unchanged. The `bytes` that the edit page, `GET /api/sites/{id}` and the MCP
+tool `get_site` report **includes the repository** — it is the figure counted
+against `max_bytes`. One push may bring
+`min(cap − current bytes, SITEBIN_GIT_MAX_PUSH_BYTES)`; with nothing left it is
+refused with "storage full: X of Y used". A pack can leave a site slightly over
+its cap; uploads and pushes are then refused until it is under again, and
+nothing is deleted. A running container app is never stopped for a push (its
+stop rule counts files only).
+
+**Limits.** 512 MiB per push (`SITEBIN_GIT_MAX_PUSH_BYTES`); **one push per
+site at a time** (a second is refused); at most `SITEBIN_GIT_MAX_PROCESSES` Git
+processes on the instance; and a request is bounded by the server's 10-minute
+read timeout, so a very large first push may need to go in parts. Force pushes
+and branch deletion are allowed. Git LFS objects are not stored (pointer files
+push like any file). The server runs no hooks and no repository-supplied
+configuration.
+
+**Plans.** On an instance with tiers, a tier's `"git": true` (absent = false)
+switches Git on for the sites it owns. It is stamped onto each site, and the
+cleanup sweep brings a `tiers.json` edit to every existing site within one
+`SITEBIN_CLEANUP_INTERVAL`. With `SITEBIN_ACCOUNT_MODE=accounts` every account
+has Git; without accounts it follows `SITEBIN_GIT_ENABLED` alone. **After a
+downgrade to a plan without Git the repository stays and stays readable**
+(clone, fetch, the tab, ZIP), so its owner can take it along; pushes are
+refused with the reason. Upgrading restores pushing at the next restamp. A plan
+never deletes a repository.
+
+**Lifecycle.** **The repository belongs to its site.** Deleting the site
+deletes it, and so does the site's expiry; a locked site keeps it, frozen, as
+evidence until the lock is purged. It moves with the site when ownership
+changes (the edit password is rotated and the previous owner's tokens revoked,
+so cached credentials stop working). "Delete repository" on the Git tab, or
+`DELETE /api/sites/{id}/git`, removes only the repository and frees its bytes
+at once; only the site's owner may. A push does not renew a tier-imposed
+expiry. History a force push replaced is collected by the cleanup sweep
+(`git gc --prune=1.day.ago` on a repository changed since its last
+collection), so its bytes come back within a day or two. Every push is
+recorded in the site's provenance (refs changed, bytes, credential kind).
+
+The edit page's **Git tab** shows the connect lines for this instance, the
+size inside the usage bar ("Files X · Git Y"), branches and tags, the history
+(30 commits a page), a commit's changed files and the files at any commit
+(text up to 512 KB; ZIP download of a ref). Repository content reaches the page
+only as text and every download is an attachment. The tab says: "This
+repository belongs to this site. Deleting the site deletes the repository."
+
+Design: `docs/superpowers/specs/2026-11-03-site-git-design.md`.
 
 ### Embed the drop area on your own site
 
@@ -1595,6 +1714,8 @@ Note that an unlimited tier needs explicit large caps, not zeros:
 `custom_domains: 0` means *no* custom domains, and `max_containers: 0`,
 `max_zones: 0` and `max_forms: 0` mean none. Only `max_sites: 0` and
 `max_expiry_days: 0` mean unlimited.
+
+A tier's `git` (bool, absent = false) turns on the [Git repository](#git-a-repository-per-site) for the sites it owns; a plan without it leaves an existing repository read-only, never deleted.
 
 A tier's `price` maps it to provider price IDs, e.g. a tier with
 `"price":{"stripe":"price_123","paddle":"pri_456","display":"€9/mo"}` becomes a
