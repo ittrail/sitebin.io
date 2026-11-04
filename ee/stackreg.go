@@ -303,7 +303,7 @@ func (p *provider) stackDeclaration(appID string) stackRegistration {
 	if resource := p.host.MCPResource(); resource != "" && p.host.MCPOAuthIssuer() != "" {
 		scopes := make([]mcpScope, 0, len(mcp.AllScopes))
 		for _, s := range mcp.AllScopes {
-			scopes = append(scopes, mcpScope{Name: s, DisplayName: map[string]string{"en": scopeLabel(s)}})
+			scopes = append(scopes, mcpScope{Name: s, DisplayName: scopeLabels(s)})
 		}
 		reg.MCP = &stackMCP{
 			ResourceURL: resource,
@@ -352,14 +352,18 @@ func tierFeatures(t eeconfig.Tier) []map[string]string {
 	return out
 }
 
-func scopeLabel(scope string) string {
+// scopeLabels is what the consent screen shows for a scope, per locale. The
+// stack writes one Keycloak text per locale named here, and Keycloak shows the
+// reader's, so a German page is German throughout rather than Keycloak's own
+// lines in German beside ours in English.
+func scopeLabels(scope string) map[string]string {
 	switch scope {
 	case mcp.ScopeRead:
-		return "View your sites"
+		return map[string]string{"en": "View your sites", "de": "Deine Seiten ansehen"}
 	case mcp.ScopeWrite:
-		return "Create and change sites"
+		return map[string]string{"en": "Create and change sites", "de": "Seiten anlegen und ändern"}
 	}
-	return scope
+	return map[string]string{"en": scope}
 }
 
 func postRegistration(ctx context.Context, reg *eeconfig.StackConfig, body stackRegistration) error {

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/mcp"
 )
 
 // The catalogue the hosted instance actually ships: amounts, no provider price
@@ -696,5 +697,37 @@ func TestRegistrationCarriesCLIClientOnlyWhenConfigured(t *testing.T) {
 	b, _ := json.Marshal(reg.MCP)
 	if !strings.Contains(string(b), `"cliClient":{"clientId":"sitebin-git","displayName":"Sitebin Git"}`) {
 		t.Errorf("json = %s", b)
+	}
+}
+
+// The consent screen reads a scope's text in the reader's language: the
+// stack writes one Keycloak text per locale the declaration names, so each
+// scope carries English and German (stack spec 2026-11-04-cli-client-consent-screen).
+func TestRegistrationScopesCarryEnglishAndGerman(t *testing.T) {
+	p := stackProvider(t, "")
+	p.host = &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}, mcpIssuer: "https://auth.example/realms/x"}
+	reg := p.stackDeclaration("sitebin")
+	if reg.MCP == nil || len(reg.MCP.Scopes) == 0 {
+		t.Fatalf("MCP = %+v", reg.MCP)
+	}
+	want := map[string]map[string]string{
+		mcp.ScopeRead:  {"en": "View your sites", "de": "Deine Seiten ansehen"},
+		mcp.ScopeWrite: {"en": "Create and change sites", "de": "Seiten anlegen und ändern"},
+	}
+	for _, s := range reg.MCP.Scopes {
+		w, ok := want[s.Name]
+		if !ok {
+			t.Errorf("unexpected scope %q", s.Name)
+			continue
+		}
+		for loc, text := range w {
+			if s.DisplayName[loc] != text {
+				t.Errorf("%s displayName[%s] = %q, want %q", s.Name, loc, s.DisplayName[loc], text)
+			}
+		}
+		delete(want, s.Name)
+	}
+	if len(want) != 0 {
+		t.Errorf("scopes missing: %v", want)
 	}
 }
