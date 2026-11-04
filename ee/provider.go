@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ittrail/sitebin.io/ee/account"
 	"github.com/ittrail/sitebin.io/ee/authn"
@@ -48,6 +49,15 @@ type provider struct {
 	// acceptRuns holds the offers a run is moving now (claimAccept): one run
 	// per offer in this process, the accept's or the background loop's.
 	acceptRuns sync.Map
+	// The background loop of ownership_loop.go. tickMu lets one tick run at a
+	// time and guards lastReconcile and loopLogged; loopStop/loopDone are nil
+	// until Init starts the loop.
+	tickMu        sync.Mutex
+	lastReconcile time.Time
+	loopLogged    map[string]time.Time
+	loopStop      chan struct{}
+	loopDone      chan struct{}
+	loopStopOnce  sync.Once
 	// billing is the ONE active backend, chosen by SITEBIN_BILLING. Keeping a
 	// single field rather than one per provider is what stops a second
 	// processor from quietly becoming reachable.
@@ -199,6 +209,9 @@ func (p *provider) Init(h ext.Host) error {
 			slog.Warn("Stripe/Paddle credentials are configured but inert; SITEBIN_BILLING selects paygate")
 		}
 	}
+	// The background loop of site ownership: expiry, pauses, mail and the
+	// marker reconciliation (ownership_loop.go).
+	p.startOwnershipLoop()
 	return nil
 }
 

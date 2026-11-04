@@ -73,6 +73,8 @@ type fakeSites struct {
 	// onSetAdmins, when set, runs at the start of every SetAdmins: a transfer
 	// that lands between the handler's checks and the write.
 	onSetAdmins func(id string)
+	// ownersErr fails SiteOwners (the loop's walk over every site).
+	ownersErr error
 	// onOwner, when set, runs at the start of every SiteOwner read.
 	onOwner func(id string)
 }

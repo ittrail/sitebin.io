@@ -246,3 +246,32 @@ func (s *Store) AccountBoundAddresses(m *Meta, account string) ([]string, error)
 	}
 	return out, nil
 }
+
+// SiteOwners maps each site folder's view id to the owner in its meta.json
+// ("" for an anonymous site). It reads meta.json only. A folder that vanishes
+// during the walk is skipped; any other read error is joined into the
+// returned error while the sites that did read stay in the map, so the
+// caller knows the list is incomplete and never reads an unreadable site as
+// a deleted one.
+func (s *Store) SiteOwners() (map[string]string, error) {
+	entries, err := os.ReadDir(s.sitesDir())
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(entries))
+	var failed []error
+	for _, e := range entries {
+		if !e.IsDir() || !ids.ValidID(e.Name()) {
+			continue
+		}
+		site, err := s.ByViewID(e.Name())
+		switch {
+		case errors.Is(err, ErrNotFound):
+		case err != nil:
+			failed = append(failed, fmt.Errorf("site %s: %w", e.Name(), err))
+		default:
+			out[site.ViewID] = site.Meta.OwnerAccountID
+		}
+	}
+	return out, errors.Join(failed...)
+}

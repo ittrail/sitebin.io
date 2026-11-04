@@ -553,11 +553,19 @@ func (s *Store) LinkShare(accountID, viewID string) error {
 	if err := os.MkdirAll(s.shareDir(accountID), 0o755); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(filepath.Join(s.shareDir(accountID), viewID), os.O_CREATE|os.O_WRONLY, 0o644)
+	path := filepath.Join(s.shareDir(accountID), viewID)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		return err
+	}
+	// The marker's age is how the background reconciliation tells a stray
+	// one from one whose admin entry is being written right now, so a
+	// re-link of an old marker makes it young again.
+	now := time.Now()
+	return os.Chtimes(path, now, now)
 }
 
 // UnlinkShare removes the marker; no error if it is already gone.
@@ -590,6 +598,63 @@ func (s *Store) SharedSites(accountID string) ([]string, error) {
 	var out []string
 	for _, e := range ents {
 		if !e.IsDir() && ids.ValidID(e.Name()) {
+			out = append(out, e.Name())
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// ShareMarker is a share marker and when it was last linked.
+type ShareMarker struct {
+	Site string
+	At   time.Time
+}
+
+// ShareMarkers lists the account's markers with their ages, sorted by site.
+// Like SharedSites, a marker proves nothing by itself.
+func (s *Store) ShareMarkers(accountID string) ([]ShareMarker, error) {
+	if !ids.ValidID(accountID) {
+		return nil, nil
+	}
+	ents, err := os.ReadDir(s.shareDir(accountID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []ShareMarker
+	for _, e := range ents {
+		if e.IsDir() || !ids.ValidID(e.Name()) {
+			continue
+		}
+		fi, err := e.Info()
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		out = append(out, ShareMarker{Site: e.Name(), At: fi.ModTime()})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Site < out[j].Site })
+	return out, nil
+}
+
+// SharingAccounts lists the accounts that have a share-marker folder, sorted:
+// the accounts a walk over the shares has to visit.
+func (s *Store) SharingAccounts() ([]string, error) {
+	ents, err := os.ReadDir(s.sharesDir())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []string
+	for _, e := range ents {
+		if e.IsDir() && ids.ValidID(e.Name()) {
 			out = append(out, e.Name())
 		}
 	}

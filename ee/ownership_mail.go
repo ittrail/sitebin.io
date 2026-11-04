@@ -271,3 +271,52 @@ func (p *provider) shareEndedMail(viewID, ownerEmail, adminEmail, byEmail string
 	fmt.Fprintf(&b, "\nYour account: %s/account\n", p.baseURL())
 	return "A Sitebin share has ended", b.String()
 }
+
+// ---- expiry ----
+
+// mailTransferExpired tells both sides that an offer lapsed unaccepted.
+func (p *provider) mailTransferExpired(o ownership.Offer) {
+	senderEmail := p.emailOf(o.From)
+	subject, body := p.transferExpiredMail(o, senderEmail, true)
+	p.mailVerified(senderEmail, subject, body)
+	subject, body = p.transferExpiredMail(o, senderEmail, false)
+	p.mailVerified(o.ToEmail, subject, body)
+}
+
+// transferExpiredMail is "a transfer expired", for one side. It names the
+// sites and the other party's address (the recipient's for the sender, the
+// sender's for the recipient) and never a password: nothing moved, so there
+// is none.
+func (p *provider) transferExpiredMail(o ownership.Offer, senderEmail string, toSender bool) (subject, body string) {
+	var b strings.Builder
+	if senderEmail == "" {
+		senderEmail = "the sender"
+	}
+	if toSender {
+		fmt.Fprintf(&b, "Your transfer to %s was not accepted by %s (UTC) and has expired:\n\n", o.ToEmail, dateText(o.AcceptBy))
+		p.writeSites(&b, o.Sites)
+		fmt.Fprintf(&b, "\nNothing has moved: the sites stay with you. You can make a new offer at any time.\n\nYour transfers: %s%s\n", p.baseURL(), transferPath)
+	} else {
+		fmt.Fprintf(&b, "The transfer %s offered you was not accepted by %s (UTC) and has expired:\n\n", senderEmail, dateText(o.AcceptBy))
+		p.writeSites(&b, o.Sites)
+		fmt.Fprintf(&b, "\nNothing has moved. If you still want these sites, ask %s to make a new offer.\n\nYour account: %s/account\n", senderEmail, p.baseURL())
+	}
+	return "A Sitebin transfer has expired", b.String()
+}
+
+// shareExpiredMail is "a share expired", to either side: the site (name and
+// address), the admin's and the owner's addresses. The same text goes to
+// both. Never a password: an admin signs in with their own account.
+func (p *provider) shareExpiredMail(viewID, ownerEmail, adminEmail string) (subject, body string) {
+	if ownerEmail == "" {
+		ownerEmail = "the owner"
+	}
+	if adminEmail == "" {
+		adminEmail = "the admin"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "The sharing of this site reached its end date and has expired:\n\n  - %s\n\n", p.labelOf(viewID))
+	fmt.Fprintf(&b, "%s no longer manages it as an admin. The owner is %s, who can share it again.\n", adminEmail, ownerEmail)
+	fmt.Fprintf(&b, "\nYour account: %s/account\n", p.baseURL())
+	return "A Sitebin share has expired", b.String()
+}

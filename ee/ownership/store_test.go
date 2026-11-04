@@ -370,3 +370,38 @@ func TestDailyLimitRefusesWhenTheCountCannotBeRead(t *testing.T) {
 		t.Errorf("no limit: %v", err)
 	}
 }
+
+func TestShareMarkerAgesAndAccounts(t *testing.T) {
+	s := newStore(t)
+	a, b, site := ids.New(), ids.New(), ids.New()
+	if got, err := s.SharingAccounts(); err != nil || len(got) != 0 {
+		t.Fatalf("no accounts = %v %v", got, err)
+	}
+	if err := s.LinkShare(a, site); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.LinkShare(b, site); err != nil {
+		t.Fatal(err)
+	}
+	accs, err := s.SharingAccounts()
+	if err != nil || len(accs) != 2 {
+		t.Fatalf("SharingAccounts = %v %v", accs, err)
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	path := filepath.Join(s.sharesDir(), a, site)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	ms, err := s.ShareMarkers(a)
+	if err != nil || len(ms) != 1 || ms[0].Site != site || time.Since(ms[0].At) < 47*time.Hour {
+		t.Fatalf("ShareMarkers = %+v %v, want one old marker", ms, err)
+	}
+	// Linking again makes an old marker young: its admin entry may be
+	// written right now.
+	if err := s.LinkShare(a, site); err != nil {
+		t.Fatal(err)
+	}
+	if ms, _ := s.ShareMarkers(a); len(ms) != 1 || time.Since(ms[0].At) > time.Minute {
+		t.Errorf("a re-linked marker stayed old: %+v", ms)
+	}
+}

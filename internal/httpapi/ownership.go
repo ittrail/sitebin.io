@@ -126,6 +126,10 @@ func (s siteService) SiteOwner(viewID string) (string, error) {
 	return site.Meta.OwnerAccountID, nil
 }
 
+func (s siteService) SiteOwners() (map[string]string, error) {
+	return s.a.st.SiteOwners()
+}
+
 func (s siteService) SiteLocked(viewID string) (bool, error) {
 	site, err := s.a.st.ByViewID(viewID)
 	if err != nil {

@@ -926,6 +926,14 @@ type OwnershipSites interface {
 	// sites. A site that no longer exists is ErrSiteGone, distinct from
 	// any other read error.
 	SiteOwner(viewID string) (owner string, err error)
+	// SiteOwners maps every site's view id to the owner in its meta.json (""
+	// for an anonymous site), reading meta only -- never the content or the
+	// git repository -- so a background walk over all sites stays cheap. A
+	// folder that vanished while the walk ran is simply absent. A site whose
+	// meta.json cannot be read is NOT listed and makes the returned error
+	// non-nil, together with the sites that did read: absence from the map is
+	// "gone" only when the error is nil. ContainerSites is not this list.
+	SiteOwners() (map[string]string, error)
 	// SiteLocked reports whether the operator holds the site locked, from its
 	// meta.json only (never the content or the git repository). A site that
 	// no longer exists is ErrSiteGone.

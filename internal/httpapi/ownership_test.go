@@ -653,3 +653,47 @@ func TestDeleteSiteIfOwnerRefusalLeavesTheLiveStateAlone(t *testing.T) {
 		t.Errorf("password after a refused delete: %d", code)
 	}
 }
+
+func TestSiteOwnersReadsMetaOnly(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1"})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	o := e.own(t)
+	mine := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	anon := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	other := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	e.st.Update(e.siteOf(t, mine.ID), func(m *store.Meta) error { m.OwnerAccountID = "acct-1"; return nil })
+	e.st.Update(e.siteOf(t, anon.ID), func(m *store.Meta) error { m.OwnerAccountID = ""; return nil })
+	e.st.Update(e.siteOf(t, other.ID), func(m *store.Meta) error { m.OwnerAccountID = "acct-2"; return nil })
+
+	got, err := o.SiteOwners()
+	if err != nil {
+		t.Fatalf("SiteOwners: %v", err)
+	}
+	want := map[string]string{mine.ID: "acct-1", anon.ID: "", other.ID: "acct-2"}
+	if len(got) != len(want) {
+		t.Fatalf("SiteOwners = %v, want %v", got, want)
+	}
+	for id, owner := range want {
+		if g, ok := got[id]; !ok || g != owner {
+			t.Errorf("owner of %s = %q (present %v), want %q", id, g, ok, owner)
+		}
+	}
+
+	// A site whose meta.json cannot be read is unknown: the error says the
+	// list is incomplete, and the sites that did read are still returned. It
+	// is NOT silently absent, which a caller would read as "gone".
+	if err := os.WriteFile(filepath.Join(e.cfg.DataDir, "sites", other.ID, "meta.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err = o.SiteOwners()
+	if err == nil {
+		t.Fatal("an unreadable meta.json was not reported")
+	}
+	if got[mine.ID] != "acct-1" {
+		t.Errorf("the readable sites were dropped with the error: %v", got)
+	}
+	if _, ok := got[other.ID]; ok {
+		t.Errorf("an unreadable site was listed: %v", got)
+	}
+}
