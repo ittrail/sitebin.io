@@ -55,8 +55,14 @@ func ReadDay(siteDir, date string) ([]Record, error) {
 		return nil, err
 	}
 	defer f.Close()
+	return readRecords(f)
+}
+
+// readRecords parses day file lines, skipping a line that is not a JSON
+// record. On a read error it returns what it parsed so far with the error.
+func readRecords(r io.Reader) ([]Record, error) {
 	var out []Record
-	br := bufio.NewReader(f)
+	br := bufio.NewReader(r)
 	for {
 		line, err := br.ReadBytes('\n')
 		if line = bytes.TrimSpace(line); len(line) > 0 {
