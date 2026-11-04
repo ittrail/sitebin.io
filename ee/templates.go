@@ -210,7 +210,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
   <div class="card" id="takeover-{{.ID}}">
     <h3>Ready to take over</h3>
     <p class="muted">{{.From}} offers you {{.Count}}. Accept by {{.AcceptBy}} (UTC). Accepting takes all of them at once; declining leaves them with the sender.</p>
-    <ul style="margin:10px 0 0 18px">{{range .Sites}}<li style="overflow-wrap:anywhere">{{.Label}}{{range .Domains}} &middot; {{.}}{{end}}{{if .Forms}}<div class="u">Its forms send their submissions to {{range $i, $f := .Forms}}{{if $i}}, {{end}}{{$f}}{{end}}; you can change that once the site is yours.</div>{{end}}</li>{{end}}</ul>
+    <ul style="margin:10px 0 0 18px">{{range .Sites}}<li style="overflow-wrap:anywhere">{{.Label}}{{range .Domains}} &middot; {{.}}{{end}}{{if .Expires}}<div class="u">Expires on {{.Expires}} (set by the sender). Once the site is yours, you can change or remove the date in its settings.</div>{{end}}{{if .Forms}}<div class="u">Its forms send their submissions to {{range $i, $f := .Forms}}{{if $i}}, {{end}}{{$f}}{{end}}; you can change that once the site is yours.</div>{{end}}</li>{{end}}</ul>
     {{if .Unavailable}}
     <div class="inline-status err" role="status" style="margin-top:12px">This offer is not available right now.</div>
     {{else}}
@@ -1269,6 +1269,8 @@ var takeoverResultTmpl = template.Must(template.New("takeoverresult").Parse(page
   <div class="sitecard"><div class="grow">
     <span class="sname">{{.Label}}</span>
     {{if .Password}}<div class="secretout"><span class="muted">New edit password</span> <code class="val">{{.Password}}</code></div>{{else}}<div class="u">{{$.NoPassword}}</div>{{end}}
+    {{if .Expires}}<div class="u">Expires on {{.Expires}} (set by the sender). <a href="{{.EditURL}}">Change or remove the date</a></div>{{end}}
+    {{if .ViewPassword}}<div class="u">It is behind the sender's view password, which they still know. <a href="{{.EditURL}}">Set a new view password</a></div>{{end}}
     {{if .Forms}}<div class="u">Its forms send their submissions to {{range $i, $f := .Forms}}{{if $i}}, {{end}}{{$f}}{{end}}. <a href="{{.EditURL}}">Change the recipients</a></div>{{end}}
   </div></div>
   {{end}}

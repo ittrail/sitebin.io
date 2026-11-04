@@ -113,12 +113,20 @@ func (p *provider) notifyOfferAt(o ownership.Offer, now time.Time) {
 func (p *provider) offerMail(o ownership.Offer, senderEmail string) (subject, body string) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s wants to hand over %s on Sitebin to your account:\n\n", senderEmail, sitesWord(len(o.Sites)))
+	expiring := false
 	for _, id := range o.Sites {
-		label := id
+		label, expires := id, ""
 		if info, ok := p.host.Sites().Info(id); ok {
-			label = siteLabel(info)
+			label, expires = siteLabel(info), senderExpiry(info)
 		}
 		fmt.Fprintf(&b, "  - %s\n", label)
+		if expires != "" {
+			fmt.Fprintf(&b, "    expires on %s (set by the sender)\n", expires)
+			expiring = true
+		}
+	}
+	if expiring {
+		b.WriteString("\nAn expiry date the sender set stays with the site. Once it is yours, you can change or remove it in the site's settings.\n")
 	}
 	fmt.Fprintf(&b, "\nYou can accept until %s (UTC). After that the offer lapses on its own.\n\n", dateText(o.AcceptBy))
 	fmt.Fprintf(&b, "To review it, sign in to your Sitebin account:\n\n%s/account\n\n", p.baseURL())

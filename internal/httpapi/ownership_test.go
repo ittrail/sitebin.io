@@ -842,3 +842,40 @@ func TestOwnerGuardedWritersRefuseAfterATransfer(t *testing.T) {
 		t.Errorf("missing tags = %v, want ErrSiteGone", err)
 	}
 }
+
+// Info tells an owner-chosen expiry from the plan's lifetime, and says
+// whether a view password guards the site: both survive a transfer, and the
+// extension tells the recipient (final review I1, M8).
+func TestInfoReportsWhatSurvivesATransfer(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1"})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	at := time.Now().Add(48 * time.Hour).UTC()
+	set := func(fromTier, protected bool) ext.SiteInfo {
+		t.Helper()
+		if err := e.st.Update(e.siteOf(t, c.ID), func(m *store.Meta) error {
+			m.ExpiresAt, m.ExpiryFromTier, m.ViewPasswordProtected = &at, fromTier, protected
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		info, ok := e.api.SiteService().Info(c.ID)
+		if !ok {
+			t.Fatal("no info")
+		}
+		return info
+	}
+	if i := set(false, true); !i.ExpiryByOwner || !i.ViewPassword {
+		t.Errorf("owner's date, view password: %+v", i)
+	}
+	if i := set(true, false); i.ExpiryByOwner || i.ViewPassword {
+		t.Errorf("plan's lifetime, no view password: ExpiryByOwner %v, ViewPassword %v", i.ExpiryByOwner, i.ViewPassword)
+	}
+	if err := e.st.Update(e.siteOf(t, c.ID), func(m *store.Meta) error { m.ExpiresAt, m.ExpiryFromTier = nil, false; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if i, _ := e.api.SiteService().Info(c.ID); i.ExpiryByOwner {
+		t.Error("no expiry reads as an owner's date")
+	}
+}

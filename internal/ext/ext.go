@@ -834,6 +834,13 @@ type SiteInfo struct {
 	// the owner gets before the sweep deletes the site — the dashboard must
 	// show it.
 	ExpiresAt *time.Time
+	// ExpiryByOwner is set when ExpiresAt is a date the owner (or the
+	// operator) chose rather than the plan's lifetime. Such a date survives
+	// a transfer, shortened to the recipient's cap, so the recipient is told.
+	ExpiryByOwner bool
+	// ViewPassword is set when the site is behind a view password. It is not
+	// reset by a transfer, so the recipient is told to set a new one.
+	ViewPassword bool
 	// Locked is the operator's hold on the site, or nil. The register shows
 	// and filters it; the owner's dashboard shows it and hides the actions
 	// the lock refuses.

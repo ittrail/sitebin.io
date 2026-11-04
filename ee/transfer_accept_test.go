@@ -1280,3 +1280,59 @@ func TestTakeoverCardReadsEachSiteOnce(t *testing.T) {
 	}
 	counts("paused")
 }
+
+// Final review I1 and M8: a date the sender chose survives a transfer, and so
+// does a view password. The card, the offer mail and the result page tell the
+// recipient; a plan's own lifetime, which the recipient's plan replaces, is
+// not shown as the sender's.
+func TestTakeoverTellsTheRecipientWhatTravels(t *testing.T) {
+	e := newTakeEnv(t, "pro", true)
+	a, b := tid(1), tid(2)
+	e.site(a)
+	e.site(b)
+	chosen := time.Date(2027, 3, 14, 12, 0, 0, 0, time.UTC)
+	plan := time.Date(2027, 5, 1, 0, 0, 0, 0, time.UTC)
+	ia := e.fs.infos[a]
+	ia.ExpiresAt, ia.ExpiryByOwner, ia.ViewPassword, ia.EditURL = &chosen, true, true, "http://sitebin.example/e/edita"
+	e.fs.infos[a] = ia
+	ib := e.fs.infos[b]
+	ib.ExpiresAt = &plan
+	e.fs.infos[b] = ib
+	o := e.offer(a, b)
+
+	const said = "Expires on 2027-03-14 (set by the sender)"
+	card := e.dashboard(e.toCookie)
+	if !strings.Contains(card, said) {
+		t.Errorf("the card does not show the sender's expiry:\n%s", card)
+	}
+	if strings.Contains(card, "2027-05-01") {
+		t.Error("the card shows a plan's lifetime as the sender's date")
+	}
+
+	e.p.notifyOffer(o)
+	mails := e.mailsTo(takerEmail, "A Sitebin transfer is offered to you")
+	if len(mails) != 1 {
+		t.Fatalf("offer mails = %d, want 1", len(mails))
+	}
+	if !strings.Contains(mails[0], "expires on 2027-03-14 (set by the sender)") || !strings.Contains(mails[0], "change or remove it in the site's settings") {
+		t.Errorf("the offer mail does not tell the sender's expiry:\n%s", mails[0])
+	}
+	if strings.Contains(mails[0], "2027-05-01") {
+		t.Error("the offer mail shows a plan's lifetime as the sender's date")
+	}
+
+	w := e.accept(o)
+	if w.Code != http.StatusOK {
+		t.Fatalf("accept = %d", w.Code)
+	}
+	res := w.Body.String()
+	if !strings.Contains(res, said) || !strings.Contains(res, `<a href="http://sitebin.example/e/edita">Change or remove the date</a>`) {
+		t.Errorf("the result page does not show the sender's expiry:\n%s", res)
+	}
+	if strings.Count(res, "Set a new view password") != 1 {
+		t.Errorf("the result page should suggest a new view password for the one site that has one:\n%s", res)
+	}
+	if strings.Contains(res, "2027-05-01") {
+		t.Error("the result page shows a plan's lifetime as the sender's date")
+	}
+}

@@ -647,6 +647,18 @@ type takeoverSite struct {
 	Label   string
 	Domains []string
 	Forms   []string
+	// Expires is the expiry date the sender chose, which travels with the
+	// site (shortened to the recipient's cap); "" for none or the plan's.
+	Expires string
+}
+
+// senderExpiry is the date an owner-chosen expiry shows, "" when the site
+// has none or only its plan's lifetime (which the recipient's plan replaces).
+func senderExpiry(info ext.SiteInfo) string {
+	if info.ExpiresAt == nil || !info.ExpiryByOwner {
+		return ""
+	}
+	return dateText(*info.ExpiresAt)
 }
 
 // takeoverCard is one "Ready to take over" card.
@@ -703,7 +715,7 @@ func (p *provider) takeoverCard(acc *account.Account, o ownership.Offer) takeove
 		info, ok := p.host.Sites().Info(id)
 		if ok {
 			infos[id] = info
-			s.Label, s.Domains = siteLabel(info), info.Domains
+			s.Label, s.Domains, s.Expires = siteLabel(info), info.Domains, senderExpiry(info)
 		}
 		if !ok || info.Owner != o.From {
 			usable = false
@@ -977,6 +989,10 @@ type takeoverResultSite struct {
 	Password string
 	EditURL  string
 	Forms    []string
+	// Expires is the sender's expiry date as it stands after the move;
+	// ViewPassword says the sender's view password still guards the site.
+	Expires      string
+	ViewPassword bool
 }
 
 type takeoverResultView struct {
@@ -1016,6 +1032,7 @@ func (p *provider) renderTakeoverResult(w http.ResponseWriter, o ownership.Offer
 			if info.EditURL != "" {
 				s.EditURL = info.EditURL
 			}
+			s.Expires, s.ViewPassword = senderExpiry(info), info.ViewPassword
 		}
 		for _, m := range moved {
 			if m.ID == id {

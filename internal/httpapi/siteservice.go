@@ -54,6 +54,8 @@ func (s siteService) infoOf(site *store.Site) ext.SiteInfo {
 		EditURL:        s.a.cfg.EditURL(site.Meta.EditID),
 		CreatedAt:      site.Meta.CreatedAt,
 		ExpiresAt:      site.Meta.ExpiresAt,
+		ExpiryByOwner:  site.Meta.ExpiresAt != nil && !site.Meta.ExpiryFromTier,
+		ViewPassword:   site.Meta.ViewPasswordProtected,
 		Locked:         s.a.extLock(site.Meta.Locked),
 		Findings:       extFindings(site.Meta.Abuse),
 	}
