@@ -761,9 +761,9 @@ never deletes a repository.
 
 **Lifecycle.** **The repository belongs to its site.** Deleting the site
 deletes it, and so does the site's expiry; a locked site keeps it, frozen, as
-evidence until the lock is purged. It moves with the site when ownership
-changes (the edit password is rotated and the previous owner's tokens revoked,
-so cached credentials stop working). "Delete repository" on the Git tab, or
+evidence until the lock is purged. Once site ownership ships (transfer,
+adoption), it will move with the site and the usual credential rotation will
+apply to it; that is not built yet. "Delete repository" on the Git tab, or
 `DELETE /api/sites/{id}/git`, removes only the repository and frees its bytes
 at once; only the site's owner may. A push does not renew a tier-imposed
 expiry. History a force push replaced is collected by the cleanup sweep
