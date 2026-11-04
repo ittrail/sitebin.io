@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 	_ "time/tzdata" // LoadLocation works without system zoneinfo (Alpine, Windows)
+	"unicode/utf8"
 
 	"github.com/ittrail/sitebin.io/internal/ids"
 )
@@ -62,6 +63,13 @@ type Analytics struct {
 	Goals     []AnalyticsGoal   `json:"goals,omitempty"`
 }
 
+var idRE = regexp.MustCompile(`^[a-z0-9_-]{1,40}$`)
+
+func nameOK(n string) bool {
+	c := utf8.RuneCountInString(n)
+	return c >= 1 && c <= 100
+}
+
 var queryNameRE = regexp.MustCompile(`^[A-Za-z0-9_.\-\[\]]{1,50}$`)
 
 // Validate checks the settings against siteAddresses (the site's own
@@ -71,7 +79,7 @@ func (a Analytics) Validate(siteAddresses []string) (string, error) {
 		return "mode", errors.New(`mode must be "server" or "script"`)
 	}
 	if a.Timezone != "" {
-		if _, err := time.LoadLocation(a.Timezone); err != nil {
+		if _, err := time.LoadLocation(a.Timezone); err != nil || a.Timezone == "Local" {
 			return "timezone", fmt.Errorf("unknown time zone %q", a.Timezone)
 		}
 	}
@@ -105,8 +113,8 @@ func (a Analytics) Validate(siteAddresses []string) (string, error) {
 	}
 	seen := map[string]bool{}
 	for _, f := range a.Funnels {
-		if f.ID == "" || f.Name == "" {
-			return "funnels", errors.New("a funnel needs an id and a name")
+		if !idRE.MatchString(f.ID) || !nameOK(f.Name) {
+			return "funnels", errors.New("a funnel needs an id (a-z, 0-9, _ or -, up to 40) and a name of 1 to 100 characters")
 		}
 		if seen[f.ID] {
 			return "funnels", fmt.Errorf("duplicate funnel id %q", f.ID)
@@ -129,8 +137,8 @@ func (a Analytics) Validate(siteAddresses []string) (string, error) {
 	}
 	seen = map[string]bool{}
 	for _, g := range a.Goals {
-		if g.ID == "" || g.Name == "" {
-			return "goals", errors.New("a goal needs an id and a name")
+		if !idRE.MatchString(g.ID) || !nameOK(g.Name) {
+			return "goals", errors.New("a goal needs an id (a-z, 0-9, _ or -, up to 40) and a name of 1 to 100 characters")
 		}
 		if seen[g.ID] {
 			return "goals", fmt.Errorf("duplicate goal id %q", g.ID)
@@ -160,9 +168,12 @@ func analyticsTarget(typ, value string) error {
 	return nil
 }
 
-// compileGlob turns a path glob into an anchored regexp: "*" is [^/]*, "**"
-// is .*, everything else is literal.
-func compileGlob(pattern string) (*regexp.Regexp, bool) {
+// Glob is a compiled path glob, for callers that match many paths.
+type Glob struct{ re *regexp.Regexp }
+
+// CompileGlob compiles pattern; false when it is not a usable glob. "*" is
+// [^/]*, "**" is .*, everything else is literal, anchored at both ends.
+func CompileGlob(pattern string) (*Glob, bool) {
 	if !GlobOK(pattern) {
 		return nil, false
 	}
@@ -181,8 +192,14 @@ func compileGlob(pattern string) (*regexp.Regexp, bool) {
 	}
 	b.WriteString("$")
 	re, err := regexp.Compile(b.String())
-	return re, err == nil
+	if err != nil {
+		return nil, false
+	}
+	return &Glob{re}, true
 }
+
+// Match reports whether path matches the glob in full.
+func (g *Glob) Match(path string) bool { return g.re.MatchString(path) }
 
 // GlobOK reports whether pattern is a usable path glob: it starts with "/"
 // and is at most 300 bytes. "*" stands for characters within one path
@@ -194,8 +211,8 @@ func GlobOK(pattern string) bool {
 // GlobMatch reports whether path matches pattern in full. An invalid pattern
 // matches nothing.
 func GlobMatch(pattern, path string) bool {
-	re, ok := compileGlob(pattern)
-	return ok && re.MatchString(path)
+	g, ok := CompileGlob(pattern)
+	return ok && g.Match(path)
 }
 
 // SetAnalytics replaces the site's analytics settings; nil clears them.
@@ -225,6 +242,7 @@ func (s *Store) SetQuotaAnalytics(site *Site, v *bool) error {
 	})
 }
 
+// "Missing" means meta.json is absent: a half-deleted folder counts as missing.
 // WithStatsLock runs fn holding the site's stats lock, with the site folder
 // as argument. A missing folder returns (false, nil) without calling fn, so a
 // writer racing a delete cannot recreate the folder (Delete takes the site

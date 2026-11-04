@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -35,6 +36,7 @@ func TestAnalyticsValidate(t *testing.T) {
 		{"valid", func(a *Analytics) {}, ""},
 		{"empty mode ok", func(a *Analytics) { a.Mode = "" }, ""},
 		{"bad mode", func(a *Analytics) { a.Mode = "pixel" }, "mode"},
+		{"Local zone", func(a *Analytics) { a.Timezone = "Local" }, "timezone"},
 		{"bad zone", func(a *Analytics) { a.Timezone = "Mars/Olympus" }, "timezone"},
 		{"foreign address", func(a *Analytics) { a.Addresses = []string{"evil.example"} }, "addresses"},
 		{"51 excludes", func(a *Analytics) { a.Exclude = many(51, "/x") }, "exclude"},
@@ -61,6 +63,12 @@ func TestAnalyticsValidate(t *testing.T) {
 		}, "goals"},
 		{"goal bad type", func(a *Analytics) { a.Goals[0].Type = "x" }, "goals"},
 		{"goal empty name", func(a *Analytics) { a.Goals[0].Name = "" }, "goals"},
+		{"funnel id upper", func(a *Analytics) { a.Funnels[0].ID = "F1" }, "funnels"},
+		{"funnel id 41", func(a *Analytics) { a.Funnels[0].ID = strings.Repeat("a", 41) }, "funnels"},
+		{"funnel name 101", func(a *Analytics) { a.Funnels[0].Name = strings.Repeat("n", 101) }, "funnels"},
+		{"funnel name 100", func(a *Analytics) { a.Funnels[0].Name = strings.Repeat("n", 100) }, ""},
+		{"goal id space", func(a *Analytics) { a.Goals[0].ID = "a b" }, "goals"},
+		{"goal name 101", func(a *Analytics) { a.Goals[0].Name = strings.Repeat("n", 101) }, "goals"},
 		{"dup funnel id", func(a *Analytics) { a.Funnels = append(a.Funnels, a.Funnels[0]) }, "funnels"},
 		{"dup goal id", func(a *Analytics) { a.Goals = append(a.Goals, a.Goals[0]) }, "goals"},
 	}
@@ -96,6 +104,10 @@ func TestGlobMatch(t *testing.T) {
 	for _, tc := range tests {
 		if got := GlobMatch(tc.pat, tc.path); got != tc.want {
 			t.Errorf("GlobMatch(%q, %q) = %v, want %v", tc.pat, tc.path, got, tc.want)
+		}
+		g, ok := CompileGlob(tc.pat)
+		if !ok || g.Match(tc.path) != tc.want {
+			t.Errorf("CompileGlob(%q).Match(%q) disagrees (ok=%v)", tc.pat, tc.path, ok)
 		}
 	}
 	if GlobOK("kinder") || GlobOK("") || !GlobOK("/x/**") {

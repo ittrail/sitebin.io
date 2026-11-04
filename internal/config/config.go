@@ -51,7 +51,7 @@ type Config struct {
 	AnalyticsTimezone      string // default zone for day boundaries (IANA name)
 	AnalyticsGeoIP         string // path to a country/region database; empty = no geography
 	AnalyticsDailyCap      int    // events one site records per day
-	AnalyticsRetentionDays int    // days a day of events is kept
+	AnalyticsRetentionDays int    // days a day of events is kept; 0 = forever
 	// DomainVerification says how a custom domain proves it belongs to the
 	// site that claims it: "dns" (the default) requires a TXT record carrying
 	// the site's token or a CNAME at the site's view host before the domain is
@@ -333,6 +333,9 @@ func Load(getenv func(string) string) (Config, error) {
 	if v := strings.TrimSpace(getenv("SITEBIN_ANALYTICS_TIMEZONE")); v != "" {
 		cfg.AnalyticsTimezone = v
 	}
+	if cfg.AnalyticsTimezone == "Local" {
+		return cfg, fmt.Errorf("SITEBIN_ANALYTICS_TIMEZONE: Local follows the server zone; name an IANA zone")
+	}
 	if _, zerr := time.LoadLocation(cfg.AnalyticsTimezone); zerr != nil {
 		return cfg, fmt.Errorf("SITEBIN_ANALYTICS_TIMEZONE: %w", zerr)
 	}
@@ -346,8 +349,8 @@ func Load(getenv func(string) string) (Config, error) {
 	if cfg.AnalyticsRetentionDays, err = intVar(getenv, "SITEBIN_ANALYTICS_RETENTION_DAYS", 760); err != nil {
 		return cfg, err
 	}
-	if cfg.AnalyticsRetentionDays < 1 {
-		return cfg, fmt.Errorf("SITEBIN_ANALYTICS_RETENTION_DAYS: must be at least 1")
+	if cfg.AnalyticsRetentionDays < 0 {
+		return cfg, fmt.Errorf("SITEBIN_ANALYTICS_RETENTION_DAYS: must not be negative (0 keeps raw days forever)")
 	}
 	if cfg.MCPEnabled, err = boolVar(getenv, "SITEBIN_MCP_ENABLED", true); err != nil {
 		return cfg, err

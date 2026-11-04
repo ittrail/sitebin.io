@@ -707,3 +707,21 @@ func TestConfigAnalyticsOverridesAndBadZone(t *testing.T) {
 		t.Fatalf("switch: %v %v", err, cfg.AnalyticsEnabled)
 	}
 }
+
+func TestConfigAnalyticsLimits(t *testing.T) {
+	load := func(k, v string) (Config, error) {
+		return Load(env(map[string]string{"SITEBIN_BASE_DOMAIN": "s.example", "SITEBIN_HTTP_ONLY": "true", k: v}))
+	}
+	if cfg, err := load("SITEBIN_ANALYTICS_RETENTION_DAYS", "0"); err != nil || cfg.AnalyticsRetentionDays != 0 {
+		t.Errorf("retention 0 must be accepted: %v %d", err, cfg.AnalyticsRetentionDays)
+	}
+	if _, err := load("SITEBIN_ANALYTICS_RETENTION_DAYS", "-1"); err == nil {
+		t.Error("retention -1 must be refused")
+	}
+	if _, err := load("SITEBIN_ANALYTICS_DAILY_CAP", "0"); err == nil {
+		t.Error("daily cap 0 must be refused")
+	}
+	if _, err := load("SITEBIN_ANALYTICS_TIMEZONE", "Local"); err == nil {
+		t.Error("zone Local must be refused")
+	}
+}
