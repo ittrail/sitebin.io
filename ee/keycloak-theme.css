@@ -247,6 +247,13 @@ html.login-pf body .login-pf-page .card-pf #kc-page-title {
   text-align: left !important;
   color: var(--sb-ink) !important;
 }
+/* The consent screen's title names the client ("Zugang zu Sitebin Git
+   gewähren"), longer than any other page's: smaller, so it ends before the
+   language selector instead of running into it. */
+html.login-pf body .login-pf-page:has(#kc-oauth) .card-pf #kc-page-title {
+  font-size: 20px !important;
+  padding-right: 72px !important;
+}
 html.login-pf body .login-pf-page .card-pf .login-pf-header .subtitle,
 html.login-pf body .login-pf-page .card-pf .login-pf-header .subtitle span {
   font-family: var(--sb-mono) !important;
@@ -578,8 +585,12 @@ html.login-pf body .login-pf-page .card-pf #kc-form-buttons {
   margin-bottom: 0 !important;
 }
 
-/* Secondary (cancel, back, "try another way") */
+/* Secondary (cancel, back, "try another way"). The submit form of
+   pf-m-secondary is named on its own: the primary rule's
+   input[type="submit"].pf-c-button outweighs a class pair, which painted the
+   consent screen's "No" and the terms page's "Decline" amber. */
 html.login-pf body .login-pf-page .card-pf .pf-c-button.pf-m-secondary,
+html.login-pf body .login-pf-page .card-pf input[type="submit"].pf-c-button.pf-m-secondary,
 html.login-pf body .login-pf-page .card-pf .btn-default,
 html.login-pf body .login-pf-page .card-pf input[type="submit"].btn-default {
   height: 46px !important;
@@ -599,6 +610,7 @@ html.login-pf body .login-pf-page .card-pf input[type="submit"].btn-default {
   transition: border-color .15s, box-shadow .15s, transform .15s !important;
 }
 html.login-pf body .login-pf-page .card-pf .pf-c-button.pf-m-secondary:hover,
+html.login-pf body .login-pf-page .card-pf input[type="submit"].pf-c-button.pf-m-secondary:hover,
 html.login-pf body .login-pf-page .card-pf .btn-default:hover {
   border-color: #344160 !important;
   color: var(--sb-ink) !important;
