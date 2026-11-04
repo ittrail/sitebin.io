@@ -60,6 +60,9 @@ func main() {
 	case "cleanup":
 		cfg := mustConfig()
 		st := mustStore(cfg)
+		// No git collection here: this one-shot runs apart from a serving
+		// process, whose push registry it cannot see, so a gc could race a
+		// push or a delete. The serving process collects in cleanup.Run.
 		n, err := cleanup.Sweep(st, time.Now())
 		if err != nil {
 			slog.Error("cleanup", "err", err)
@@ -322,7 +325,7 @@ func serve() error {
 	errs := make(chan error, 4)
 	go func() { errs <- fmt.Errorf("public listener: %w", public.ListenAndServe()) }()
 	go func() { errs <- fmt.Errorf("internal listener: %w", internal.ListenAndServe()) }()
-	go cleanup.Run(ctx, st, cfg.CleanupInterval)
+	go cleanup.Run(ctx, st, cfg.CleanupInterval, api.GitRunner())
 
 	// Optional FTP server (off by default). Login is the edit UUID + edit
 	// password; each session is confined to that site's files.

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/gitrepo"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
@@ -648,5 +649,76 @@ func TestReconcileGitCommunityBuildDoesNothing(t *testing.T) {
 	got, _ := st.ByViewID(site.ViewID)
 	if got.Meta.QuotaGit != nil {
 		t.Fatal("community build must not stamp git")
+	}
+}
+
+// gitSite creates a site with an initialised, pushed-to repository.
+func gitSite(t *testing.T, st *store.Store, r *gitrepo.Runner) *store.Site {
+	t.Helper()
+	site, _, err := st.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Init(site.GitDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := gitrepo.MarkPushed(site.GitDir()); err != nil {
+		t.Fatal(err)
+	}
+	return site
+}
+
+func collectFixture(t *testing.T) (*store.Store, *gitrepo.Runner) {
+	t.Helper()
+	bin := gitrepo.NeedGit(t)
+	r, err := gitrepo.New(gitrepo.Options{Bin: bin, StateDir: filepath.Join(t.TempDir(), "gitstate")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.New(t.TempDir(), "sitebin.example", 1<<20, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st, r
+}
+
+func gcMarker(site *store.Site) string { return filepath.Join(site.GitDir(), "sitebin-gc") }
+
+func TestCollectGitRunsOnChanged(t *testing.T) {
+	st, r := collectFixture(t)
+	site := gitSite(t, st, r)
+	CollectGit(context.Background(), st, r)
+	if _, err := os.Stat(gcMarker(site)); err != nil {
+		t.Fatalf("pushed repository was not collected: %v", err)
+	}
+}
+
+func TestCollectGitSkipsLocked(t *testing.T) {
+	st, r := collectFixture(t)
+	site := gitSite(t, st, r)
+	if _, err := st.SetLock(site, &store.SiteLock{Reason: "phishing", By: store.LockByAdmin}); err != nil {
+		t.Fatal(err)
+	}
+	CollectGit(context.Background(), st, r)
+	if _, err := os.Stat(gcMarker(site)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("locked site's repository was collected (stat err: %v)", err)
+	}
+}
+
+func TestCollectGitSkipsARepositoryWithARunningWrite(t *testing.T) {
+	st, r := collectFixture(t)
+	busy := gitSite(t, st, r)
+	free := gitSite(t, st, r)
+	end, err := st.BeginGitWrite(busy, func() {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer end()
+	CollectGit(context.Background(), st, r)
+	if _, err := os.Stat(gcMarker(busy)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("repository with a running push was collected (stat err: %v)", err)
+	}
+	if _, err := os.Stat(gcMarker(free)); err != nil {
+		t.Fatalf("the other repository was not collected: %v", err)
 	}
 }

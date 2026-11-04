@@ -8,12 +8,14 @@ package cleanup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"time"
 
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/gitrepo"
 	"github.com/ittrail/sitebin.io/internal/provenance"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
@@ -310,8 +312,55 @@ func reconcile(st *store.Store, site *store.Site, now time.Time) (keep bool, err
 	return site.Meta.ExpiresAt == nil || !now.After(site.Meta.ExpiresAt.Add(grace)), nil
 }
 
-// Run sweeps on the given interval until ctx is cancelled.
-func Run(ctx context.Context, st *store.Store, interval time.Duration) {
+// CollectGit runs garbage collection on every site's repository that was
+// pushed to since its last collection, one repository at a time (gc holds a
+// git process slot for up to ten minutes). It is only for the process that
+// serves pushes: each repository is registered through BeginGitWrite first,
+// so a delete or a lock that arrives during gc cancels it, and a repository
+// with a push running is skipped until the next round. A locked site is never
+// collected. Errors are logged and never stop the round.
+func CollectGit(ctx context.Context, st *store.Store, git *gitrepo.Runner) {
+	if git == nil {
+		return
+	}
+	sites, err := st.AllSites()
+	if err != nil {
+		slog.Error("git gc: list sites", "err", err)
+		return
+	}
+	for _, site := range sites {
+		if ctx.Err() != nil {
+			return
+		}
+		if site.Meta.IsLocked() || !gitrepo.Exists(site.GitDir()) {
+			continue
+		}
+		collectOne(ctx, st, git, site)
+	}
+}
+
+func collectOne(ctx context.Context, st *store.Store, git *gitrepo.Runner, site *store.Site) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	end, err := st.BeginGitWrite(site, cancel)
+	if err != nil {
+		if errors.Is(err, store.ErrGitBusy) || errors.Is(err, store.ErrLocked) || errors.Is(err, store.ErrNotFound) {
+			slog.Debug("git gc skipped", "site", site.ViewID, "reason", err)
+		} else {
+			slog.Error("git gc: register", "site", site.ViewID, "err", err)
+		}
+		return
+	}
+	defer end()
+	if _, err := git.Collect(ctx, site.GitDir()); err != nil {
+		slog.Error("git gc", "site", site.ViewID, "err", err)
+	}
+}
+
+// Run sweeps on the given interval until ctx is cancelled. With a non-nil git
+// runner (the one the API pushes through) each sweep is followed by a garbage
+// collection of the changed repositories.
+func Run(ctx context.Context, st *store.Store, interval time.Duration, git *gitrepo.Runner) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -322,6 +371,7 @@ func Run(ctx context.Context, st *store.Store, interval time.Duration) {
 			if _, err := Sweep(st, time.Now()); err != nil {
 				slog.Error("cleanup sweep", "err", err)
 			}
+			CollectGit(ctx, st, git)
 		}
 	}
 }

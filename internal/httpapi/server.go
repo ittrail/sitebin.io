@@ -113,6 +113,10 @@ func New(cfg config.Config, st *store.Store, secret []byte, webFS fs.FS) (*API, 
 	return a, nil
 }
 
+// GitRunner is the runner the Git endpoint uses; nil when git is unavailable.
+// The cleanup sweep collects through the same one, so both share its slots.
+func (a *API) GitRunner() *gitrepo.Runner { return a.git }
+
 // newGitRunner finds the git binary for the Git endpoint. Git never stops
 // the instance from starting: without a binary (or a state directory) it is
 // off, logged once here, and every site says "not available".
