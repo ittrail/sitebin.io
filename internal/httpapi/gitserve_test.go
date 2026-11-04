@@ -613,6 +613,9 @@ func TestGitCutOffBodyKeepsServing(t *testing.T) {
 	}
 }
 
+// throttleChunk is what one receive on a throttled body's gate lets through.
+const throttleChunk = 32 << 10
+
 // throttled hands out head at once, then rest only as gate allows: one
 // chunk per receive, everything once gate is closed.
 type throttled struct {
@@ -635,7 +638,7 @@ func (r *throttled) Read(p []byte) (int, error) {
 			r.open = true
 		}
 	}
-	n := copy(p, r.rest[:min(len(r.rest), 32<<10)])
+	n := copy(p, r.rest[:min(len(r.rest), throttleChunk)])
 	r.rest = r.rest[n:]
 	return n, nil
 }

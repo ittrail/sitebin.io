@@ -273,8 +273,17 @@ func TestGitPushPostGuarantees(t *testing.T) {
 
 // waitReceiving trickles body until git is receiving the pack: its
 // quarantine directory (objects/tmp_objdir-incoming-*) exists.
+//
+// It never lets the last chunk go. A loopback connection buffers megabytes,
+// so the trickle runs ahead of git: a 1 MiB pack was wholly on its way
+// before git had read its header. A git holding the whole pack can then
+// finish between two looks; on CI's runner it did, every time, and the push
+// it was meant to stop answered 200. Held back, git waits in its quarantine
+// until it is seen and the test lets the rest go (or cuts the push off).
 func waitReceiving(t *testing.T, site *store.Site, body *throttled) {
 	t.Helper()
+	// Taken before the first receive: until then Read never changes rest.
+	ticks := (len(body.rest)+throttleChunk-1)/throttleChunk - 1
 	deadline := time.Now().Add(20 * time.Second)
 	for {
 		if m, _ := filepath.Glob(filepath.Join(site.GitDir(), "objects", "tmp_objdir-incoming-*")); len(m) > 0 {
@@ -283,8 +292,13 @@ func waitReceiving(t *testing.T, site *store.Site, body *throttled) {
 		if time.Now().After(deadline) {
 			t.Fatal("the push never started receiving")
 		}
+		if ticks <= 0 {
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
 		select {
 		case body.gate <- struct{}{}:
+			ticks--
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
