@@ -184,6 +184,18 @@ $wcC = Join-Path $tmp "wcC"
 $g = Git $tmp "wrong-password" @("clone", "-q", $remote, $wcC)
 Assert "clone with a wrong password is refused" ($g.code -ne 0 -and -not (Test-Path (Join-Path $wcC ".git"))) "code $($g.code) $($g.out)"
 
+# ---------- an RPC takes only Git's own request type; no answer is rendered ----------
+
+$r = Req "POST" "$remote/git-upload-pack" @("-u", "drop:$pw", "-H", "Content-Type: text/plain", "--data-binary", "0000")
+Assert "an RPC with another content type is 415" ($r.code -eq 415) "code $($r.code) $($r.body)"
+$r = Req "POST" "$remote/git-upload-pack" @("-H", "Content-Type: application/x-www-form-urlencoded", "--data-binary", "0000")
+Assert "a form post is 415 before any credential" ($r.code -eq 415) "code $($r.code) $($r.body)"
+$hfile = Join-Path $work "git-headers.tmp"
+$code = & curl.exe -s -o NUL -D $hfile -w "%{http_code}" --max-time 30 -u "drop:$pw" "$remote/info/refs?service=git-upload-pack"
+$heads = ""; if (Test-Path $hfile) { $heads = [IO.File]::ReadAllText($hfile) }
+Assert "the advertisement is never sniffed" ($code -eq "200" -and $heads -match "(?im)^X-Content-Type-Options:\s*nosniff") "code $code $heads"
+Assert "the advertisement is sandboxed" ($heads -match "(?im)^Content-Security-Policy:\s*sandbox") $heads
+
 # ---------- fetch, branch push, force push, branch delete ----------
 
 Write-File $wcA "d.txt" "dee`n"
