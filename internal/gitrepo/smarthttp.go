@@ -315,9 +315,33 @@ func (r *Runner) ServeRPC(ctx context.Context, dir string, svc Service, body io.
 }
 
 // WriteRefusal answers a smart HTTP request with a git-level error, which the
-// client prints as "fatal: remote error: <msg>".
+// client prints as "fatal: remote error: <msg>". It is shaped as an
+// advertisement: the answer to GET info/refs only. On an RPC's POST git reads
+// it as the RPC's result and loses the message ("bad band #35" on a push);
+// WriteRPCRefusal is that answer.
 func WriteRefusal(w http.ResponseWriter, svc Service, msg string) {
 	setHeaders(w, "application/x-"+string(svc)+"-advertisement")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, pkt("# service="+string(svc)+"\n")+"0000"+pkt("ERR "+msg+"\n"))
+}
+
+// WriteRPCRefusal answers an RPC's POST — a request git has already sent —
+// with an error git prints, in the shape it reads that RPC's result in. A
+// bare 4xx there shows only "RPC failed; HTTP 403" and "unexpected
+// disconnect", and an advertisement's ERR line is lost.
+//   - git-upload-pack: an ERR pkt-line, which a fetch prints as
+//     "fatal: remote error: <msg>" (protocol v0 and v2).
+//   - git-receive-pack: the message on side-band 3 (fatal error), which a
+//     push prints as "remote: <msg>" before it fails; every git since 1.6
+//     asks for side-band-64k, which receive-pack advertises. (A client that
+//     did not would print it as an unparsable unpack status, still naming
+//     the message.)
+func WriteRPCRefusal(w http.ResponseWriter, svc Service, msg string) {
+	setHeaders(w, "application/x-"+string(svc)+"-result")
+	w.WriteHeader(http.StatusOK)
+	if svc == ReceivePack {
+		_, _ = io.WriteString(w, pkt("\x03"+msg+"\n")+"0000")
+		return
+	}
+	_, _ = io.WriteString(w, pkt("ERR "+msg+"\n"))
 }

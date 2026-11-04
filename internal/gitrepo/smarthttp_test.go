@@ -446,3 +446,45 @@ func TestGzipRequestBody(t *testing.T) {
 		t.Errorf("errors: %v", log.errs)
 	}
 }
+
+// An RPC's POST refused with WriteRPCRefusal: a real git prints the message,
+// for a fetch (protocol v0 and v2) and a push alike, and never as a bare
+// HTTP failure or a lost advertisement line.
+func TestRPCRefusalPrintsMessage(t *testing.T) {
+	NeedGit(t)
+	r, dir := newBare(t)
+	plain, _ := serveRepo(t, r, dir, 0)
+	c := newClient(t)
+	wd := filepath.Join(t.TempDir(), "w")
+	c.mustGit(filepath.Dir(wd), "clone", plain.URL+"/repo.git", wd)
+	commitFile(t, c, wd, "a.txt", "x")
+	c.mustGit(wd, "push", "origin", "main")
+
+	const msg = "this credential no longer opens this site"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodGet {
+			svc, _ := ParseService(req.URL.Query().Get("service"))
+			_ = r.AdvertiseRefs(req.Context(), dir, svc, ProtocolFromHeader(req.Header.Get("Git-Protocol")), w)
+			return
+		}
+		_, _ = io.Copy(io.Discard, req.Body)
+		svc, _ := ParseService(filepath.Base(req.URL.Path))
+		WriteRPCRefusal(w, svc, msg)
+	}))
+	defer srv.Close()
+	url := srv.URL + "/repo.git"
+	commitFile(t, c, wd, "b.txt", "y")
+	for _, args := range [][]string{
+		{"-c", "protocol.version=0", "clone", url, filepath.Join(t.TempDir(), "c0")},
+		{"-c", "protocol.version=2", "clone", url, filepath.Join(t.TempDir(), "c2")},
+		{"push", url, "HEAD:refs/heads/main"},
+	} {
+		out, err := c.git(wd, args...)
+		if err == nil {
+			t.Errorf("%v succeeded", args)
+		}
+		if !strings.Contains(out, msg) || strings.Contains(out, "bad band") || strings.Contains(out, "RPC failed") {
+			t.Errorf("%v output does not carry the refusal:\n%s", args, out)
+		}
+	}
+}
