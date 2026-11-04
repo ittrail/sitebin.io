@@ -69,6 +69,7 @@ func (p *provider) PublicRoutes() map[string]http.Handler {
 	p.gdprRoutes(routes)
 	p.zoneRoutes(routes)
 	p.transferRoutes(routes)
+	p.shareRoutes(routes)
 	return routes
 }
 
@@ -363,7 +364,13 @@ func (p *provider) handleRenameSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	viewID := r.PathValue("id")
-	if !p.checkCSRF(r, acc) || !p.owns(acc, viewID) {
+	if !p.checkCSRF(r, acc) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	// The owner, or an admin the site is shared with (manages). Rotate and
+	// delete stay the owner's alone.
+	if owner, admin := p.manages(acc, viewID); !owner && !admin {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -657,6 +664,18 @@ type siteRow struct {
 	// Tags are the site's tags as chips, by group then name. They shadow
 	// SiteInfo.Tags (the stored spellings) in the template.
 	Tags []tagChip
+
+	// The owner's row: whether the share form shows, the admins the site is
+	// shared with and the invitations still open.
+	CanShare   bool
+	AdminRows  []shareAdminRow
+	InviteRows []shareInviteRow
+	// A shared row: a site another account owns and shares with this one.
+	// SharedPaused says the standing does not hold now (no Manage, no tags).
+	Shared       bool
+	SharedBy     string
+	SharedUntil  string
+	SharedPaused bool
 }
 
 // expiryText is the site row's lifetime line. A downgrade puts a 30-day grace
@@ -749,6 +768,9 @@ type dashView struct {
 	// account's verified address that are open or paused and within their
 	// dates (transfer_accept.go).
 	Takeovers []takeoverCard
+	// Invites are the open invitations to be an admin of a site, made to the
+	// account's verified address (share.go).
+	Invites []inviteCard
 }
 
 func (p *provider) renderDashboard(w http.ResponseWriter, r *http.Request, acc *account.Account, flash string) {
@@ -760,7 +782,10 @@ func (p *provider) renderDashboard(w http.ResponseWriter, r *http.Request, acc *
 	p.syncTier(acc)
 	infos, _ := p.ownedSiteInfos(acc)
 	rows := make([]siteRow, 0, len(infos))
+	canShare, openInvites := p.canShareFrom(acc), p.liveInvitesBySite(acc)
+	owned := map[string]bool{}
 	for _, info := range infos {
+		owned[info.ViewID] = true
 		row := siteRow{
 			SiteInfo:   info,
 			SizeText:   humanBytes(info.Bytes + info.GitBytes),
@@ -776,8 +801,11 @@ func (p *provider) renderDashboard(w http.ResponseWriter, r *http.Request, acc *
 			// a deletion that is not coming.
 			row.ExpiryText = "kept while locked"
 		}
+		p.shareRowsFor(&row, canShare, openInvites)
 		rows = append(rows, row)
 	}
+	// Sites shared with the account sit among its own.
+	rows = append(rows, p.sharedRows(acc, token, owned)...)
 	tags := p.applyTags(r, acc, rows)
 	current := p.effectiveTierFresh(acc)
 	tier := current.Label
@@ -829,6 +857,7 @@ func (p *provider) renderDashboard(w http.ResponseWriter, r *http.Request, acc *
 		ZonesMax:  current.MaxZones,
 		License:   p.licenseNotice(),
 		Takeovers: p.takeoverCards(acc),
+		Invites:   p.inviteCards(acc),
 	})
 }
 

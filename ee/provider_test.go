@@ -68,6 +68,8 @@ type fakeSites struct {
 	// core); the fake's own reads do not count.
 	infoMu    sync.Mutex
 	infoCalls map[string]int
+	// adminBy records who each SetAdmins call was made for (share_test.go).
+	adminBy []ext.ChangeBy
 	// onOwner, when set, runs at the start of every SiteOwner read.
 	onOwner func(id string)
 }

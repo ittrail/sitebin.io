@@ -105,7 +105,8 @@ func (s *fakeSites) WillNotMove(id, sender string) []string { return s.ad().notM
 
 const adoptTiersJSON = `[
   {"id":"free","label":"Free","max_site_bytes":1000,"max_files":10,"max_sites":1,"custom_domains":0,"max_expiry_days":7},
-  {"id":"pro","label":"Pro","max_site_bytes":1000,"max_files":10,"max_sites":3,"custom_domains":2,"max_expiry_days":30,"max_containers":2,"max_forms":1,"sharing":true,"trusted":true}
+  {"id":"pro","label":"Pro","max_site_bytes":1000,"max_files":10,"max_sites":3,"custom_domains":2,"max_expiry_days":30,"max_containers":2,"max_forms":1,"sharing":true,"trusted":true},
+  {"id":"admin","label":"Admin","max_site_bytes":1000,"max_files":10,"max_sites":3,"max_expiry_days":30,"admin":true,"sharing":true}
 ]`
 
 const (

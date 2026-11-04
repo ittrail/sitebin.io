@@ -38,7 +38,7 @@ const pageHead = `<!doctype html>
   .acct .sitecard details.rename summary::-webkit-details-marker { display: none; }
   .acct .sitecard details.rename[open] summary { color: var(--ink); }
   .acct .sitecard details.rename form { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
-  .acct .sitecard details.rename input[type=text] { flex: 1; min-width: 180px; background: var(--bg-raise); color: var(--ink); border: 1px solid var(--line); border-radius: 9px; padding: 7px 11px; font: 14px var(--body); }
+  .acct .sitecard details.rename input[type=text], .acct .sitecard details.rename input[type=email], .acct .sitecard details.rename input[type=date] { flex: 1; min-width: 180px; background: var(--bg-raise); color: var(--ink); border: 1px solid var(--line); border-radius: 9px; padding: 7px 11px; font: 14px var(--body); }
   /* Tags. The palette is here and only here: data names a palette id, which
      becomes a class (tag-blue ...), never a value in a style attribute. */
   :root { --tag-blue: #5b8cff; --tag-green: #5ecf8a; --tag-amber: #f5b84d; --tag-red: #f26d6d; --tag-violet: #a98bff; --tag-teal: #3fc6c6; --tag-pink: #ff86c8; --tag-grey: #97a3b8; }
@@ -233,6 +233,31 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
   </div>
   {{end}}
 
+  {{if .Invites}}
+  <div class="card" id="invitations">
+    <h3>Invitations <span class="count">{{len .Invites}}</span></h3>
+    {{range .Invites}}
+    <div class="sitecard">
+      <div class="grow">
+        <span class="sname">{{.Site}}</span>
+        <div class="u">{{.From}} invites you to be an admin of this site{{if .Until}} · until {{.Until}}{{end}}</div>
+        {{if .NeedsPlan}}<div class="inline-status err" role="alert" style="margin-top:8px">Your plan cannot be an admin of a shared site. <a href="/account#plan">See the plans</a></div>{{end}}
+      </div>
+      {{if .CanAccept}}
+      <form class="inline" method="post" action="/account/invites/{{.ID}}/accept">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <button class="btn small primary" type="submit">Accept</button>
+      </form>
+      {{end}}
+      <form class="inline" method="post" action="/account/invites/{{.ID}}/decline">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <button class="btn small" type="submit">Decline</button>
+      </form>
+    </div>
+    {{end}}
+  </div>
+  {{end}}
+
   <div class="card">
     {{/* The publish link is always here: with a front door, "/" sends a
          signed-in visitor straight back to this page. */}}
@@ -261,7 +286,44 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
         {{if .ViewOff}}<span class="viewoff" title="The generated address does not serve this site">{{.ViewURL}} · {{if .ViewRedirectTo}}&rarr; {{.ViewRedirectTo}}{{else}}off{{end}}</span>{{else}}<a class="plain" href="{{.ViewURL}}" target="_blank" rel="noopener">{{.ViewURL}}</a>{{end}}
         {{if .DomainLinks}}<div class="doms">{{range .DomainLinks}}{{if .Pending}}<span class="pend" title="Claimed, waiting for its DNS record">{{.Domain}} · pending DNS</span>{{else if .RedirectTo}}<span class="redir" title="Redirects to {{.RedirectTo}}"><a href="{{.URL}}" target="_blank" rel="noopener">{{.Domain}}</a> &rarr; {{.RedirectTo}}</span>{{else}}<a href="{{.URL}}" target="_blank" rel="noopener">{{.Domain}}</a>{{end}}{{end}}</div>{{end}}
         <div class="u">{{.Mode}} · {{.SizeText}} · {{.Files}} files · {{.ExpiryText}}</div>
-        {{if .Locked}}
+        {{if .Shared}}
+        <div class="u">shared by {{.SharedBy}}{{if .SharedUntil}} · until {{.SharedUntil}}{{end}}</div>
+        {{if .SharedPaused}}<div class="u">not available right now</div>
+        {{else if .Locked}}
+        {{if .Tags}}<div class="stags">{{range .Tags}}<span class="tchip tag-{{.Color}}"><span class="tn">{{.Name}}</span></span>{{end}}</div>{{end}}
+        <div class="locked">Locked by the operator on {{.LockedText}}. It is not served, and it cannot be changed.</div>
+        {{else}}
+        <div class="stags">
+          {{range .Tags}}<form class="tchip tag-{{.Color}}" method="post" action="/account/sites/{{$site.ViewID}}/tags/remove"><span class="tn">{{.Name}}</span><input type="hidden" name="csrf" value="{{$site.CSRF}}"><input type="hidden" name="tag" value="{{.Name}}"><input type="hidden" name="back" value="{{$.Back}}"><button type="submit" title="Remove this tag" aria-label="Remove the tag {{.Name}}">&times;</button></form>{{end}}
+          <details class="addtag">
+            <summary>+ Tag</summary>
+            <form method="post" action="/account/sites/{{.ViewID}}/tags/add">
+              <input type="hidden" name="csrf" value="{{.CSRF}}">
+              <input type="hidden" name="back" value="{{$.Back}}">
+              <input type="text" name="tag" maxlength="30" required list="tagopts" autocomplete="off" placeholder="New or existing tag" aria-label="Tag for {{.ViewID}}">
+              {{if $.Groups}}<select name="group" aria-label="Group, for a new tag" title="Used only when the tag is new"><option value="">No group</option>{{range $.Groups}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select>{{end}}
+              <button class="btn small primary" type="submit">Add</button>
+            </form>
+          </details>
+        </div>
+        <details class="rename">
+          <summary>&#9998; {{if .Name}}Rename{{else}}Add a name{{end}}</summary>
+          <form method="post" action="/account/sites/{{.ViewID}}/name">
+            <input type="hidden" name="csrf" value="{{.CSRF}}">
+            <input type="text" name="name" maxlength="60" value="{{.Name}}" placeholder="e.g. Client docs" aria-label="Name for {{.ViewID}}">
+            <button class="btn small primary" type="submit">Save</button>
+          </form>
+        </details>
+        {{end}}
+      </div>
+      {{if and (not .SharedPaused) (not .Locked)}}<a class="btn small" href="{{.EditURL}}">Manage</a>{{end}}
+      {{if not .Locked}}
+      <form class="inline" method="post" action="/account/sites/{{.ViewID}}/leave">
+        <input type="hidden" name="csrf" value="{{.CSRF}}">
+        <button class="btn small" type="submit" title="Stop managing this site; the owner keeps it">Leave</button>
+      </form>
+      {{end}}
+        {{else if .Locked}}
         {{if .Tags}}<div class="stags">{{range .Tags}}<span class="tchip tag-{{.Color}}"><span class="tn">{{.Name}}</span></span>{{end}}</div>{{end}}
         <div class="locked">Locked by the operator on {{.LockedText}}{{if .Locked.Reason}}: {{.Locked.Reason}}{{end}}. It is not served, and it cannot be changed or deleted.</div>
       </div>
@@ -287,6 +349,19 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
             <button class="btn small primary" type="submit">Save</button>
           </form>
         </details>
+        {{range .AdminRows}}<div class="u" style="margin-top:6px"><form class="inline" method="post" action="/account/sites/{{$site.ViewID}}/share/{{.Account}}/end">{{.Email}} · Admin{{if .Until}} · until {{.Until}}{{end}} <input type="hidden" name="csrf" value="{{$site.CSRF}}"><button class="btn small" type="submit" title="End this share">End</button></form></div>{{end}}
+        {{range .InviteRows}}<div class="u" style="margin-top:6px"><form class="inline" method="post" action="/account/invites/{{.ID}}/cancel">Invited: {{.Email}}{{if .Until}} · until {{.Until}}{{end}} <input type="hidden" name="csrf" value="{{$site.CSRF}}"><button class="btn small" type="submit" title="Withdraw this invitation">Cancel</button></form></div>{{end}}
+        {{if .CanShare}}
+        <details class="rename">
+          <summary>&#43; Share with an admin</summary>
+          <form method="post" action="/account/sites/{{.ViewID}}/share">
+            <input type="hidden" name="csrf" value="{{.CSRF}}">
+            <input type="email" name="email" required maxlength="254" autocomplete="off" placeholder="Their account's email" aria-label="Email of the account to share {{.ViewID}} with">
+            <input type="date" name="until" aria-label="Optional end date of the share">
+            <button class="btn small primary" type="submit">Invite</button>
+          </form>
+        </details>
+        {{end}}
       </div>
       <a class="btn small" href="{{.EditURL}}">Manage</a>
       <a class="btn small" href="/account/transfer?site={{.ViewID}}">Transfer</a>
@@ -1017,6 +1092,15 @@ var reportsTmpl = template.Must(template.New("reports").Parse(pageHead + adminCo
 ` + pageFoot))
 
 // ---- transfer (the sender's side) ----
+
+// sharePlanTmpl answers a sharing request the plan does not cover.
+var sharePlanTmpl = template.Must(template.New("shareplan").Parse(pageHead + `
+<main class="acct"><div class="authwrap"><div class="card">
+  <h1>{{.Title}}</h1>
+  <p class="muted">{{.Body}}</p>
+  <div style="margin-top:18px"><a class="btn primary" href="/account#plan">See the plans</a> <a class="btn" href="/account">Back</a></div>
+</div></div></main>
+` + pageFoot))
 
 var transferPlanTmpl = template.Must(template.New("transferplan").Parse(pageHead + `
 <main class="acct"><div class="authwrap"><div class="card">

@@ -338,6 +338,8 @@ func (p *provider) tagFormError(w http.ResponseWriter, r *http.Request, acc *acc
 		msgTmpl.Execute(w, msgView{Title: "That tag was not saved", Body: "Sorry — " + err.Error() + ".", Back: tagBack(r)})
 	case errors.Is(err, ext.ErrSiteLocked):
 		p.renderLocked(w)
+	case errors.Is(err, ext.ErrNotOwner):
+		http.Error(w, "forbidden", http.StatusForbidden)
 	case errors.Is(err, ext.ErrSiteGone):
 		http.Error(w, "site not found", http.StatusNotFound)
 	default:
@@ -347,20 +349,50 @@ func (p *provider) tagFormError(w http.ResponseWriter, r *http.Request, acc *acc
 	return true
 }
 
-// tagForm opens a tag form: the signed-in owner, the CSRF token, the site
-// they own. It answers the request itself when one of them is missing.
-func (p *provider) tagForm(w http.ResponseWriter, r *http.Request) (*account.Account, string, bool) {
-	acc, ok := p.currentAccount(r)
+// tagForm opens a tag form: the signed-in account, the CSRF token, and a site
+// the account owns or is an admin of (manages). admin says it is the latter:
+// an admin's tags are their own, in their registry, and never touch the
+// site's Meta.Tags. It answers the request itself when one of them is
+// missing.
+func (p *provider) tagForm(w http.ResponseWriter, r *http.Request) (acc *account.Account, viewID string, admin, ok bool) {
+	acc, ok = p.currentAccount(r)
 	if !ok {
 		p.redirect(w, r, "/account/login")
-		return nil, "", false
+		return nil, "", false, false
 	}
-	viewID := r.PathValue("id")
-	if !p.checkCSRF(r, acc) || !p.owns(acc, viewID) {
+	viewID = r.PathValue("id")
+	if !p.checkCSRF(r, acc) {
 		http.Error(w, "forbidden", http.StatusForbidden)
-		return nil, "", false
+		return nil, "", false, false
 	}
-	return acc, viewID, true
+	owner, admin := p.manages(acc, viewID)
+	if !owner && !admin {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return nil, "", false, false
+	}
+	return acc, viewID, admin, true
+}
+
+// sharedTagsInUse maps every tag key the admin has put on a site shared with
+// them to the first spelling found.
+func (p *provider) sharedTagsInUse(acc *account.Account) map[string]string {
+	inUse := map[string]string{}
+	for _, id := range p.SharedSiteIDs(acc.ID) {
+		addInUse(inUse, p.AdminTags(acc.ID, id))
+	}
+	return inUse
+}
+
+// adminTagEdit is UpdateTags for an admin's own tags on a shared site: the
+// same callback, the admin's registry. SetAdminTags refuses (ext.ErrNotOwner)
+// once the account is no longer listed, which is a refusal like a locked
+// site is for the owner.
+func (p *provider) adminTagEdit(acc *account.Account, viewID string, edit func([]string) ([]string, error)) error {
+	next, err := edit(p.AdminTags(acc.ID, viewID))
+	if err != nil {
+		return err
+	}
+	return p.SetAdminTags(acc.ID, viewID, next)
 }
 
 // handleAddSiteTag adds one tag to a site. A tag the account already knows,
@@ -368,7 +400,7 @@ func (p *provider) tagForm(w http.ResponseWriter, r *http.Request) (*account.Acc
 // whatever case was typed and whichever group was chosen; only a new one with
 // a group gets a registry entry in that group.
 func (p *provider) handleAddSiteTag(w http.ResponseWriter, r *http.Request) {
-	acc, viewID, ok := p.tagForm(w, r)
+	acc, viewID, admin, ok := p.tagForm(w, r)
 	if !ok {
 		return
 	}
@@ -379,12 +411,20 @@ func (p *provider) handleAddSiteTag(w http.ResponseWriter, r *http.Request) {
 	key := store.TagKey(clean)
 	reg := p.tagRegistry(acc)
 	inUse := p.tagsInUse(acc)
+	if admin {
+		// An admin's tags are in use on the sites shared with them.
+		for k, n := range p.sharedTagsInUse(acc) {
+			if inUse[k] == "" {
+				inUse[k] = n
+			}
+		}
+	}
 	name := clean
 	if reg.Tags[key].Name != "" || inUse[key] != "" {
 		name = tagName(reg, inUse, key)
 	}
 	changed := false
-	err = p.host.Sites().UpdateTags(viewID, func(cur []string) ([]string, error) {
+	add := func(cur []string) ([]string, error) {
 		for _, t := range cur {
 			if store.TagKey(t) == key {
 				return cur, nil // already there, in the site's own spelling
@@ -392,7 +432,12 @@ func (p *provider) handleAddSiteTag(w http.ResponseWriter, r *http.Request) {
 		}
 		changed = true
 		return append(cur, name), nil
-	})
+	}
+	if admin {
+		err = p.adminTagEdit(acc, viewID, add)
+	} else {
+		err = p.host.Sites().UpdateTags(viewID, add)
+	}
 	if p.tagFormError(w, r, acc, viewID, err) {
 		return
 	}
@@ -459,7 +504,7 @@ func (p *provider) tagAddedWithoutGroup(w http.ResponseWriter, r *http.Request, 
 // keeps its entry: other sites may carry the tag, and an unused entry stays
 // until it is deleted on the manage page.
 func (p *provider) handleRemoveSiteTag(w http.ResponseWriter, r *http.Request) {
-	acc, viewID, ok := p.tagForm(w, r)
+	acc, viewID, admin, ok := p.tagForm(w, r)
 	if !ok {
 		return
 	}
@@ -469,7 +514,7 @@ func (p *provider) handleRemoveSiteTag(w http.ResponseWriter, r *http.Request) {
 	}
 	key := store.TagKey(clean)
 	changed := false
-	err = p.host.Sites().UpdateTags(viewID, func(cur []string) ([]string, error) {
+	remove := func(cur []string) ([]string, error) {
 		out := cur[:0:0]
 		for _, t := range cur {
 			if store.TagKey(t) == key {
@@ -479,7 +524,12 @@ func (p *provider) handleRemoveSiteTag(w http.ResponseWriter, r *http.Request) {
 			out = append(out, t)
 		}
 		return out, nil
-	})
+	}
+	if admin {
+		err = p.adminTagEdit(acc, viewID, remove)
+	} else {
+		err = p.host.Sites().UpdateTags(viewID, remove)
+	}
 	if p.tagFormError(w, r, acc, viewID, err) {
 		return
 	}

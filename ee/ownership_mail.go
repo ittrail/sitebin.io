@@ -224,3 +224,50 @@ func (p *provider) pausedMail(o ownership.Offer, reason, advice string) (subject
 	fmt.Fprintf(&b, " The accept-by date (%s, UTC) still runs while the offer is paused.\n\nYour transfers: %s%s\n", dateText(o.AcceptBy), p.baseURL(), transferPath)
 	return "Your Sitebin transfer is paused", b.String()
 }
+
+// ---- sharing with an admin ----
+
+// inviteSubject is the subject of the invitation mail.
+const inviteSubject = "You are invited to help manage a Sitebin site"
+
+// inviteMail is "you are invited to be an admin", to the invitee: the owner's
+// address, the site (name and address), the end date when there is one and
+// the account link. Never a password: an admin signs in with their own
+// account.
+func (p *provider) inviteMail(inv ownership.Invite, ownerEmail string) (subject, body string) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s invites you to be an admin of this site on Sitebin:\n\n  - %s\n\n", ownerEmail, p.labelOf(inv.Site))
+	b.WriteString("An admin can manage the site like its owner (files, name, tags, domains and settings), but cannot delete it, change its expiry, reset its edit password or hand it over.\n")
+	if inv.Until != nil {
+		fmt.Fprintf(&b, "\nThe access would end on %s (UTC).\n", dateText(*inv.Until))
+	}
+	fmt.Fprintf(&b, "\nYou can accept until %s (UTC). To review it, sign in to your Sitebin account:\n\n%s/account\n\n", dateText(inv.Created.Add(inviteLapse)), p.baseURL())
+	b.WriteString("If you did not expect this, you can ignore this email: nothing changes unless you accept.\n")
+	return inviteSubject, b.String()
+}
+
+// shareAcceptedMail is "your invitation was accepted", to the owner.
+func (p *provider) shareAcceptedMail(inv ownership.Invite, adminEmail string) (subject, body string) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s accepted your invitation and is now an admin of:\n\n  - %s\n", adminEmail, p.labelOf(inv.Site))
+	if inv.Until != nil {
+		fmt.Fprintf(&b, "\nTheir access ends on %s (UTC).\n", dateText(*inv.Until))
+	}
+	fmt.Fprintf(&b, "\nYou can end it at any time on your dashboard: %s/account\n", p.baseURL())
+	return "Your Sitebin invitation was accepted", b.String()
+}
+
+// shareDeclinedMail is "your invitation was declined", to the owner.
+func (p *provider) shareDeclinedMail(inv ownership.Invite) (subject, body string) {
+	return "Your Sitebin invitation was declined",
+		fmt.Sprintf("%s declined your invitation to be an admin of:\n\n  - %s\n\nNothing changed.\n", inv.ToEmail, p.labelOf(inv.Site))
+}
+
+// shareEndedMail is "a share ended", to either side, naming who ended it.
+func (p *provider) shareEndedMail(viewID, ownerEmail, adminEmail, byEmail string) (subject, body string) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s ended the sharing of this site:\n\n  - %s\n\n", byEmail, p.labelOf(viewID))
+	fmt.Fprintf(&b, "%s no longer manages it as an admin. The owner is %s.\n", adminEmail, ownerEmail)
+	fmt.Fprintf(&b, "\nYour account: %s/account\n", p.baseURL())
+	return "A Sitebin share has ended", b.String()
+}
