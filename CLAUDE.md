@@ -21,8 +21,8 @@ docker build --build-arg EDITION=enterprise -t sitebin:latest-ee .   # enterpris
 ```
 
 **`e2e.ps1` is not the full E2E.** It is the core HTTP suite and references no
-other script; there is no aggregate entry point. A full pass is all fifteen run
-by hand: `e2e.ps1`, `spa.ps1`, `paths.ps1`, `ftp.ps1`, `mcp.ps1` (community
+other script; there is no aggregate entry point. A full pass is all sixteen run
+by hand: `e2e.ps1`, `spa.ps1`, `paths.ps1`, `ftp.ps1`, `mcp.ps1`, `git.ps1` (community
 image), `forms.ps1` (community image; pulls `axllent/mailpit` as its SMTP
 server), `caching.ps1` (community image), `accounts.ps1`, `frontdoor.ps1`, `tiers.ps1`,
 `redirects.ps1`, `mounts.ps1`, `containers.ps1`
@@ -31,7 +31,7 @@ drive the host's real Docker Engine and pull images), `license.ps1`, and
 `consent.ps1` -- the last of which is the only one that needs a **running SaaS
 Stack** (the stack's consent gate, the OIDC issuer/discovery split, and the
 `consents` declaration; see `docs/superpowers/specs/2026-09-01-consent-gate-through-the-stack-design.md`).
-`e2e/stack/verify.ps1` is the sixteenth, run against the compose container in
+`e2e/stack/verify.ps1` is the seventeenth, run against the compose container in
 `e2e/stack/` rather than one it starts itself: the registration the stack
 holds, the stack-hosted self-service links, and a signed GDPR export and
 deletion.

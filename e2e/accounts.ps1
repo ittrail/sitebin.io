@@ -121,6 +121,76 @@ if ($site) {
     Assert "a pending claim can be removed (200)" ($r.code -eq 200) "got $($r.code): $($r.body)"
 }
 
+# ---- git helpers (hermetic git; the secret goes through GIT_ASKPASS, never a URL)
+$gitTmp = Join-Path ([IO.Path]::GetTempPath()) ("sitebin-e2e-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
+New-Item -ItemType Directory -Force $gitTmp | Out-Null
+$gitEmptyCfg = Join-Path $gitTmp "empty.gitconfig"; [IO.File]::WriteAllText($gitEmptyCfg, "")
+$gitAskpass = (Join-Path $gitTmp "askpass.sh") -replace '\\', '/'
+[IO.File]::WriteAllText($gitAskpass, "#!/bin/sh`ncase `"`$1`" in`n  Username*) echo e2e ;;`n  *) echo `"`$SB_GIT_PASS`" ;;`nesac`n")
+function Git([string]$dir, [string]$pass, [string[]]$gargs) {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "git"; $psi.WorkingDirectory = $dir; $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.CreateNoWindow = $true
+    $psi.EnvironmentVariables["GIT_CONFIG_NOSYSTEM"] = "1"
+    $psi.EnvironmentVariables["GIT_CONFIG_GLOBAL"] = $gitEmptyCfg
+    $psi.EnvironmentVariables["GIT_ASKPASS"] = $gitAskpass
+    $psi.EnvironmentVariables["GIT_TERMINAL_PROMPT"] = "0"
+    $psi.EnvironmentVariables["SB_GIT_PASS"] = $pass
+    $all = @("-c", "credential.helper=", "-c", "user.name=E2E", "-c", "user.email=e2e@example.com", "-c", "init.defaultBranch=main", "-c", "core.autocrlf=false") + $gargs
+    $psi.Arguments = (($all | ForEach-Object { '"' + ($_ -replace '"', '\"') + '"' }) -join " ")
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $so = $p.StandardOutput.ReadToEndAsync(); $se = $p.StandardError.ReadToEndAsync()
+    $p.WaitForExit()
+    return @{ code = $p.ExitCode; out = ($so.Result + $se.Result) }
+}
+# a one-commit working copy; returns its path
+function New-GitWork([string]$leaf) {
+    $d = Join-Path $gitTmp $leaf
+    New-Item -ItemType Directory -Force $d | Out-Null
+    Git $d "x" @("init", "-q") | Out-Null
+    [IO.File]::WriteAllText((Join-Path $d "a.txt"), "hello`n")
+    Git $d "x" @("add", "-A") | Out-Null
+    Git $d "x" @("commit", "-q", "-m", "first") | Out-Null
+    return $d
+}
+
+# git: an account API token (sbp_) pushes to a site its account owns; a token
+# of another account is refused. The token goes through GIT_ASKPASS.
+if ($site) {
+    $editG = ($site.edit_url -split "/e/")[1]
+    $remoteG = "$origin/git/$editG.git"
+    $r = Req "GET" "$origin/account" @("-b", $jar)
+    $csrfG = ""; if ($r.body -match 'name="csrf" value="([^"]+)"') { $csrfG = $Matches[1] }
+    $r = Req "POST" "$origin/account/tokens" @("-b", $jar, "--data-urlencode", "csrf=$csrfG", "--data-urlencode", "name=git-e2e")
+    $tokOwner = ""; if ($r.body -match '(sbp_[A-Za-z0-9_\-]+)') { $tokOwner = $Matches[1] }
+    Assert "the owner mints an API token" ($tokOwner.Length -gt 10) "got $($r.code)"
+
+    $jarO = Join-Path $work "acct-other.txt"; Remove-Item $jarO -ErrorAction SilentlyContinue
+    Req "POST" "$origin/account/signup" @("-c", $jarO, "--data-urlencode", "email=gitother@example.com", "--data-urlencode", "password=password12345") | Out-Null
+    $r = Req "GET" "$origin/account" @("-b", $jarO)
+    $csrfO = ""; if ($r.body -match 'name="csrf" value="([^"]+)"') { $csrfO = $Matches[1] }
+    $r = Req "POST" "$origin/account/tokens" @("-b", $jarO, "--data-urlencode", "csrf=$csrfO", "--data-urlencode", "name=git-other")
+    $tokOther = ""; if ($r.body -match '(sbp_[A-Za-z0-9_\-]+)') { $tokOther = $Matches[1] }
+    Assert "another account mints an API token" ($tokOther.Length -gt 10 -and $tokOther -ne $tokOwner)
+
+    $wcT = New-GitWork "wcT"
+    $g = Git $wcT $tokOther @("push", $remoteG, "main")
+    Assert "a token of another account is refused" ($g.code -ne 0 -and $g.out -match "(?i)authentication failed|could not read|401|403") "code $($g.code) $($g.out)"
+    $r = Req "GET" "$origin/api/sites/$editG/git" @("-H", "X-Edit-Password: $($site.edit_password)")
+    Assert "the refused push created no repository" ($r.code -eq 200 -and ($r.body | ConvertFrom-Json).exists -eq $false) "$($r.body)"
+
+    $g = Git $wcT $tokOwner @("push", $remoteG, "main")
+    Assert "the owner's token pushes to an owned site" ($g.code -eq 0) "code $($g.code) $($g.out)"
+    Assert "the token never appears in git's output" (-not $g.out.Contains($tokOwner))
+    $wcT2 = Join-Path $gitTmp "wcT2"
+    $g = Git $gitTmp $tokOwner @("clone", "-q", $remoteG, $wcT2)
+    Assert "the owner's token clones it back" ($g.code -eq 0 -and (Test-Path (Join-Path $wcT2 "a.txt"))) "code $($g.code) $($g.out)"
+    $g = Git $gitTmp $tokOther @("clone", "-q", $remoteG, (Join-Path $gitTmp "wcT3"))
+    Assert "a token of another account cannot clone it" ($g.code -ne 0) "code $($g.code) $($g.out)"
+    $r = Req "GET" "$origin/api/sites/$editG/git" @("-H", "Authorization: Bearer $tokOwner")
+    Assert "git info shows the repository to the token" ($r.code -eq 200 -and ($r.body | ConvertFrom-Json).exists -eq $true -and ($r.body | ConvertFrom-Json).credentials.token -eq $true) "$($r.code) $($r.body)"
+}
+
 # tags: add one through the dashboard form, filter by it, open the tags page
 if ($site) {
     $idx2 = Join-Path $work "acct-index2.html"
@@ -177,6 +247,7 @@ $r = Req "GET" "$origin/index.html"
 Assert "main domain still not serving user files" ($r.code -ne 200 -or $r.body -notmatch "owned-site-ok")
 
 # cleanup
+Remove-Item -Recurse -Force $gitTmp -ErrorAction SilentlyContinue
 docker rm -f $name 2>$null | Out-Null
 docker volume rm $vol 2>$null | Out-Null
 
