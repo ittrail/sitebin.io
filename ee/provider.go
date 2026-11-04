@@ -535,9 +535,14 @@ func (p *provider) AccountSiteIDs(accountID string) ([]string, bool) {
 	if err != nil {
 		return nil, false
 	}
+	// A listing is not destructive: the sites that resolved are returned
+	// even when one site's owner could not be read.
 	ids, err := p.ownedSiteIDs(acc)
 	if err != nil {
-		return nil, false
+		if ids == nil {
+			return nil, false
+		}
+		slog.Error("list sites: some sites left out", "account", accountID, "err", err)
 	}
 	return ids, true
 }
@@ -682,13 +687,19 @@ func (p *provider) syncTier(acc *account.Account) {
 // and every site creation for good. The marker is dropped instead, so the
 // account heals itself on the pass that discovers it.
 func (p *provider) restampSites(acc *account.Account, t eeconfig.Tier) error {
+	// The sites that resolved are restamped even when one site's owner could
+	// not be read; that one is a failure, which keeps the tier unpersisted so
+	// the next pass retries it.
 	ids, err := p.ownedSiteIDs(acc)
+	var failed []error
 	if err != nil {
-		slog.Error("restamp sites: could not list sites", "account", acc.ID, "tier", t.ID, "err", err)
-		return fmt.Errorf("list sites of %s: %w", acc.ID, err)
+		slog.Error("restamp sites: could not resolve every site", "account", acc.ID, "tier", t.ID, "err", err)
+		if ids == nil {
+			return fmt.Errorf("list sites of %s: %w", acc.ID, err)
+		}
+		failed = append(failed, err)
 	}
 	grant := grantFromTier(acc.ID, t)
-	var failed []error
 	stamped := 0
 	for _, id := range ids {
 		err := p.host.Sites().ApplyQuota(id, grant)

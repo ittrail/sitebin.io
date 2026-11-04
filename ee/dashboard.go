@@ -394,12 +394,17 @@ func (p *provider) handleDeleteSite(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	if err := p.host.Sites().Delete(viewID); err != nil {
-		if errors.Is(err, ext.ErrSiteLocked) {
+	// The core re-checks the owner under the site lock, so a transfer that
+	// committed after owns() cannot cost the new owner their site.
+	if _, err := p.deleteOwnedSiteStrict(viewID, acc.ID); err != nil {
+		switch {
+		case errors.Is(err, ext.ErrNotOwner):
+			http.Error(w, "forbidden", http.StatusForbidden)
+		case errors.Is(err, ext.ErrSiteLocked):
 			p.renderLocked(w)
-			return
+		default:
+			http.Error(w, "could not delete the site", http.StatusInternalServerError)
 		}
-		http.Error(w, "could not delete the site", http.StatusInternalServerError)
 		return
 	}
 	p.accounts.UnlinkSite(acc, viewID)
@@ -747,24 +752,22 @@ func (p *provider) renderDashboard(w http.ResponseWriter, r *http.Request, acc *
 	infos, _ := p.ownedSiteInfos(acc)
 	rows := make([]siteRow, 0, len(infos))
 	for _, info := range infos {
-		{
-			row := siteRow{
-				SiteInfo:   info,
-				SizeText:   humanBytes(info.Bytes + info.GitBytes),
-				ExpiryText: expiryText(info.ExpiresAt),
-				CSRF:       token,
-			}
-			if info.GitBytes > 0 {
-				row.GitText = humanBytes(info.GitBytes)
-			}
-			if info.Locked != nil {
-				row.LockedText = info.Locked.At.Local().Format("2006-01-02")
-				// A lock outlives the expiry; saying the date would promise
-				// a deletion that is not coming.
-				row.ExpiryText = "kept while locked"
-			}
-			rows = append(rows, row)
+		row := siteRow{
+			SiteInfo:   info,
+			SizeText:   humanBytes(info.Bytes + info.GitBytes),
+			ExpiryText: expiryText(info.ExpiresAt),
+			CSRF:       token,
 		}
+		if info.GitBytes > 0 {
+			row.GitText = humanBytes(info.GitBytes)
+		}
+		if info.Locked != nil {
+			row.LockedText = info.Locked.At.Local().Format("2006-01-02")
+			// A lock outlives the expiry; saying the date would promise
+			// a deletion that is not coming.
+			row.ExpiryText = "kept while locked"
+		}
+		rows = append(rows, row)
 	}
 	tags := p.applyTags(r, acc, rows)
 	current := p.effectiveTierFresh(acc)

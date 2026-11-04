@@ -81,11 +81,11 @@ type ownerGuardedDeleter interface {
 // ext.OwnershipSites. It reads meta only. A SiteService without it cannot
 // vouch for any owner, which every caller treats as "not yours".
 func (p *provider) siteOwner(viewID string) (string, error) {
-	os, ok := p.host.Sites().(siteOwnerReader)
+	r, ok := p.host.Sites().(siteOwnerReader)
 	if !ok {
 		return "", errors.New("the site service cannot report a site's owner")
 	}
-	return os.SiteOwner(viewID)
+	return r.SiteOwner(viewID)
 }
 
 // ownedSiteIDs lists the view ids the account owns, by the truth: the site's
@@ -142,17 +142,30 @@ func (p *provider) ownedSiteInfos(acc *account.Account) ([]ext.SiteInfo, error) 
 	return out, nil
 }
 
+// deleteOwnedSiteStrict is the owner-checked delete for a single site (the
+// dashboard's delete): every refusal is returned as the core gave it.
+func (p *provider) deleteOwnedSiteStrict(viewID, owner string) (bool, error) {
+	d, ok := p.host.Sites().(ownerGuardedDeleter)
+	if !ok {
+		return false, errors.New("the site service cannot delete a site by owner")
+	}
+	if err := d.DeleteSiteIfOwner(viewID, owner); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // deleteOwnedSite is the account-deletion callback's delete. The core deletes
 // the site only if, under the site lock, meta.json still names the account:
 // a stale marker must not cost another account its site. Not the owner is a
 // skip (the marker goes with the account directory); a site that is already
 // gone is not a failure; every other error stops the deletion.
 func (p *provider) deleteOwnedSite(acc *account.Account, viewID string) (deleted bool, err error) {
-	os, ok := p.host.Sites().(ownerGuardedDeleter)
+	d, ok := p.host.Sites().(ownerGuardedDeleter)
 	if !ok {
 		return false, errors.New("the site service cannot delete a site by owner")
 	}
-	err = os.DeleteSiteIfOwner(viewID, acc.ID)
+	err = d.DeleteSiteIfOwner(viewID, acc.ID)
 	switch {
 	case err == nil:
 		return true, nil

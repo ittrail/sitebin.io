@@ -127,10 +127,25 @@ func (s siteService) DeleteSiteIfOwner(viewID, owner string) error {
 	if site.Meta.IsLocked() {
 		return fmt.Errorf("%w: %s", ext.ErrSiteLocked, viewID)
 	}
-	s.a.verifyCache.Drop(site.EditID + ":")
-	s.a.uploads.revokeSite(site.ViewID)
-	s.a.stopContainersBeforeDelete(site)
-	return mapOwnershipErr(s.a.st.DeleteIfOwner(site, owner), viewID)
+	s.teardownBeforeDelete(site)
+	err = s.a.st.DeleteIfOwner(site, owner)
+	if errors.Is(err, store.ErrNotOwner) {
+		// A transfer landed after the pre-check: the new owner's app was
+		// stopped for nothing. The runtime keeps what it applied, so only a
+		// moved restart_seq brings it back.
+		s.a.log.Warn("delete refused after teardown; restarting the containers", "id", viewID)
+		if rerr := s.a.st.Update(site, func(m *store.Meta) error {
+			if m.Mode == store.ModeContainer && m.Container != nil && m.Container.Enabled {
+				m.Container.RestartSeq++
+				m.Container.Status = store.ContainerStarting
+				m.Container.Message = ""
+			}
+			return nil
+		}); rerr != nil {
+			s.a.log.Error("could not bump restart_seq after a refused delete", "id", viewID, "err", rerr)
+		}
+	}
+	return mapOwnershipErr(err, viewID)
 }
 
 // extAdmins maps the store's admins onto the seam's; nil stays nil.

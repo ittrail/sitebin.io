@@ -150,10 +150,13 @@ func (p *provider) unsuspend(w http.ResponseWriter, acc *account.Account) {
 // dropped and is no failure; every other failure is logged and counted, and
 // the other sites are still tried.
 func (p *provider) eachSite(acc *account.Account, fn func(viewID string) (changed bool, err error)) (changed, failed int) {
+	// ids holds every site that resolved, even when err says another one's
+	// owner could not be read: one corrupt meta.json must not stop the lock
+	// on the rest. The unreadable site counts as one failure.
 	ids, err := p.ownedSiteIDs(acc)
 	if err != nil {
-		slog.Error("suspension: could not list the account's sites", "account", acc.ID, "err", err)
-		return 0, 1
+		slog.Error("suspension: could not resolve every site of the account", "account", acc.ID, "err", err)
+		failed++
 	}
 	for _, id := range ids {
 		ok, err := fn(id)

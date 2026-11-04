@@ -223,15 +223,23 @@ func (s siteService) delete(viewID string, force bool) error {
 	if site.Meta.IsLocked() && !force {
 		return fmt.Errorf("%w: %s", ext.ErrSiteLocked, viewID)
 	}
-	s.a.verifyCache.Drop(site.EditID + ":")
-	s.a.uploads.revokeSite(site.ViewID)
-	s.a.stopContainersBeforeDelete(site)
+	s.teardownBeforeDelete(site)
 	if force {
 		err = s.a.st.ForceDelete(site)
 	} else {
 		err = s.a.st.Delete(site)
 	}
 	return mapSiteErr(err, viewID)
+}
+
+// teardownBeforeDelete is everything a delete does to a site's live state
+// before the store removes it: the cached edit verification, the upload
+// tokens and the containers. One helper for every delete path, so they cannot
+// drift.
+func (s siteService) teardownBeforeDelete(site *store.Site) {
+	s.a.verifyCache.Drop(site.EditID + ":")
+	s.a.uploads.revokeSite(site.ViewID)
+	s.a.stopContainersBeforeDelete(site)
 }
 
 func (s siteService) SetLock(viewID string, lock *ext.SiteLock) error {

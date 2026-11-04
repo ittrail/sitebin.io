@@ -286,3 +286,23 @@ func TestLiveAdmin(t *testing.T) {
 		t.Error("an anonymous site has an admin")
 	}
 }
+
+func TestDeleteIfOwnerSaysWhyItCannotRead(t *testing.T) {
+	s := newTestStore(t)
+	site := ownSite(t, s, "acct-1")
+	// Damaged meta: the read error itself, and nothing deleted.
+	if err := os.WriteFile(metaPath(site.dir), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteIfOwner(site, "acct-1"); err == nil || errors.Is(err, ErrNotOwner) || errors.Is(err, ErrNotFound) {
+		t.Errorf("unreadable meta = %v, want the parse error", err)
+	}
+	if _, err := os.Stat(site.dir); err != nil {
+		t.Errorf("the site was deleted: %v", err)
+	}
+	// Vanished meta: not found.
+	os.Remove(metaPath(site.dir))
+	if err := s.DeleteIfOwner(site, "acct-1"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("missing meta = %v, want ErrNotFound", err)
+	}
+}

@@ -426,11 +426,23 @@ func (s *Store) delete(site *Site, force bool) error {
 
 // DeleteIfOwner is Delete that first checks, under the site lock, that
 // meta.json names owner (never empty) as the site's owner: ErrNotOwner
-// otherwise, and for a meta.json that cannot be read, because then nothing
-// proves the caller owns it. A locked site is ErrLocked.
+// otherwise. A site that vanished is ErrNotFound and a meta.json that cannot
+// be read is that read error: nothing is deleted on either. A locked site is
+// ErrLocked.
 func (s *Store) DeleteIfOwner(site *Site, owner string) error {
 	return s.deleteChecked(site, func(m *Meta) error {
-		if owner == "" || m == nil || m.OwnerAccountID != owner {
+		if m == nil {
+			// The meta could not be read under the lock: say why. A site
+			// that vanished is ErrNotFound; any other read error is itself.
+			if _, err := readMeta(site.dir); err != nil {
+				if os.IsNotExist(err) {
+					return ErrNotFound
+				}
+				return err
+			}
+			return ErrNotOwner
+		}
+		if owner == "" || m.OwnerAccountID != owner {
 			return ErrNotOwner
 		}
 		if m.Locked != nil {

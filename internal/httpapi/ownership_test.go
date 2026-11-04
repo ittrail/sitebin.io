@@ -491,3 +491,29 @@ func TestDeleteSiteIfOwner(t *testing.T) {
 		t.Errorf("second delete = %v, want ErrSiteGone", err)
 	}
 }
+
+// A refused DeleteSiteIfOwner returns before any teardown: the site's upload
+// tokens, cached edit verification and containers are as they were.
+func TestDeleteSiteIfOwnerRefusalLeavesTheLiveStateAlone(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1"})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+	upload, _, err := e.api.uploads.issue(c.ID, edit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := e.siteStatus(t, edit, "X-Edit-Password", c.EditPassword); code != 200 {
+		t.Fatalf("password before: %d", code)
+	}
+	if err := e.own(t).DeleteSiteIfOwner(c.ID, "acct-2"); !errors.Is(err, ext.ErrNotOwner) {
+		t.Fatalf("DeleteSiteIfOwner = %v, want ErrNotOwner", err)
+	}
+	if _, ok := e.api.uploads.begin(upload, edit); !ok {
+		t.Error("a refused delete revoked the site's upload token")
+	}
+	if code := e.siteStatus(t, edit, "X-Edit-Password", c.EditPassword); code != 200 {
+		t.Errorf("password after a refused delete: %d", code)
+	}
+}

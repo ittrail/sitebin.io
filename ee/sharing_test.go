@@ -3,9 +3,11 @@
 package ee
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -226,6 +228,7 @@ func TestLockedSiteOfAnotherOwnerDoesNotBlockDeletion(t *testing.T) {
 	info.Locked = &ext.SiteLock{At: time.Now(), By: ext.LockByAdmin, Hold: &ext.LockHold{}}
 	sites.infos[staleSite] = info
 
+	defer func() { assertSiteIntact(t, sites, "locked site of another owner") }()
 	if locked, err := p.lockedSites(old); err != nil || len(locked) != 0 {
 		t.Errorf("lockedSites = %v, %v; want none", locked, err)
 	}
@@ -243,4 +246,104 @@ func TestSharingAllowedFalseInOpenMode(t *testing.T) {
 	if ok, err := p.SharingAllowed("anyone"); ok || err != nil {
 		t.Errorf("SharingAllowed in open mode = %v, %v; want false, nil", ok, err)
 	}
+}
+
+func TestOneUnreadableOwnerDoesNotStopTheSuspensionOfTheRest(t *testing.T) {
+	p, host, mux := setupStackInstance(t, testGDPRSecret)
+	acc, _ := stackUser(t, p, host, suspendSubject, "subject@example.com")
+	const bad, good = "aaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbb"
+	host.sites.ownerErrs = map[string]error{bad: errors.New("meta.json is damaged")}
+
+	w := orderSuspend(mux, suspendOrderBody(suspendSubject, true, "phishing"))
+	if w.Code == 200 {
+		t.Errorf("the order reported success although a site could not be resolved: %s", w.Body)
+	}
+	if host.sites.infos[good].Locked == nil {
+		t.Error("the readable site was not locked because another site's owner could not be read")
+	}
+	if host.sites.infos[bad].Locked != nil {
+		t.Error("a site whose owner is unknown was locked")
+	}
+
+	gi := host.sites.infos[good]
+	gi.Locked = nil // a locked site is frozen against restamps
+	host.sites.infos[good] = gi
+	// A restamp does the same: the readable site is restamped, the failure is reported.
+	if err := p.restampSites(acc, eeconfig.Tier{ID: "free"}); err == nil {
+		t.Error("restampSites reported success with an unresolved site")
+	}
+	if _, ok := host.sites.quotas[good]; !ok {
+		t.Error("the readable site was not restamped")
+	}
+	if _, ok := host.sites.quotas[bad]; ok {
+		t.Error("a site whose owner is unknown was restamped")
+	}
+}
+
+func TestUnknownOwnerExcludesTheSiteAndNothingIsDeleted(t *testing.T) {
+	p, host, mux := setupStackInstance(t, testGDPRSecret)
+	acc, _ := stackUser(t, p, host, suspendSubject, "subject@example.com")
+	const bad = "aaaaaaaaaaaaaaaaaaaaaaaaaa"
+	host.sites.ownerErrs = map[string]error{bad: errors.New("meta.json is damaged")}
+
+	if ids, _ := p.ownedSiteIDs(acc); slices.Contains(ids, bad) {
+		t.Error("a site with an unreadable owner is listed")
+	}
+	// The core refuses the delete of an unknown owner; the fake mirrors that
+	// by failing the same read.
+	host.sites.deleteErrs = map[string]error{bad: errors.New("meta.json is damaged")}
+	body := `{"userId":"` + acc.OAuthSubject + `","email":"subject@example.com"}`
+	w := serve(mux, stackOrder(gdprDeletePath, testGDPRSecret, time.Now(), body))
+	if w.Code == 200 {
+		t.Errorf("the account was deleted while a site's owner is unknown: %s", w.Body)
+	}
+	if _, err := p.accounts.ByID(acc.ID); err != nil {
+		t.Errorf("the account is gone: %v", err)
+	}
+	if slices.Contains(host.sites.deleted, bad) {
+		t.Error("the site was deleted")
+	}
+}
+
+// racySites lets a transfer commit between the dashboard's owns() check and
+// the delete: the owner changes just before DeleteSiteIfOwner runs.
+type racySites struct {
+	*fakeSites
+	newOwner string
+}
+
+func (r *racySites) DeleteSiteIfOwner(id, owner string) error {
+	i := r.infos[id]
+	i.Owner = r.newOwner
+	r.infos[id] = i
+	return r.fakeSites.DeleteSiteIfOwner(id, owner)
+}
+
+type racyHost struct {
+	*fakeHost
+	s *racySites
+}
+
+func (h *racyHost) Sites() ext.SiteService { return h.s }
+
+func TestDashboardDeleteRefusesWhenTheOwnerChangedAfterTheCheck(t *testing.T) {
+	t.Setenv("SITEBIN_ACCOUNT_MODE", "accounts")
+	p := newProvider()
+	fs := &fakeSites{infos: map[string]ext.SiteInfo{}}
+	host := &racyHost{fakeHost: &fakeHost{dir: t.TempDir(), sites: fs}, s: &racySites{fakeSites: fs, newOwner: "someone-else"}}
+	if err := p.Init(host); err != nil {
+		t.Fatal(err)
+	}
+	mux := serveMux(p)
+	cookie, id := adminUser(t, p, mux, "old@example.com", "free")
+	acc, _ := p.accounts.ByID(id)
+	fs.site(staleSite)
+	if err := linkOwned(p, acc, staleSite); err != nil {
+		t.Fatal(err)
+	}
+	w := postAs(mux, "/account/sites/"+staleSite+"/delete", cookie, url.Values{"csrf": {p.csrf(acc)}})
+	if w.Code != http.StatusForbidden {
+		t.Errorf("delete after a transfer = %d, want 403", w.Code)
+	}
+	assertSiteIntact(t, fs, "dashboard delete")
 }
