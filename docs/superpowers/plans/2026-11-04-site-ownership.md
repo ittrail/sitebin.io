@@ -766,3 +766,25 @@ check.
 6. Website push after the operator's approval; verify.
 7. Tell `sitebin-project-c6` (and `b9` if the edit page structure changed).
    Update memory.
+
+## Git integration names (binding, from `sitebin-project-c6`, 2026-11-04)
+
+- **Bytes:** `func (s *Store) SiteUsage(site *Site) (store.Usage, error)`,
+  with `type Usage struct{ FileBytes, GitBytes int64; Files int }` and
+  `func (u Usage) Bytes() int64` (files plus repo).
+  - `ext.OwnershipSites.SiteBytes(viewID)` uses `SiteUsage(...).Bytes()`
+    and `.Files`.
+  - The old `Store.Usage` stays files-only, for the container stop.
+  - `ext.SiteInfo` gains `GitBytes`.
+- **Gate:** git extracts `func (a *API) accountStands(site *store.Site, accountID string) bool`,
+  today only the owner comparison. It is used by `tokenOwns`, `sessionOwns`
+  and `gitAuth` (`internal/httpapi/gitauth.go`). Task 3 replaces it with
+  the standing logic (owner or admin) and sets `role` on git's actor too
+  (surface `git`).
+- **Owner-only:** `DELETE /api/sites/{id}/git` carries
+  `// TODO(ownership): refuseUnlessOwner`. Task 3 wires it.
+- **Stamping:** `m.QuotaGit = grant.Git` sits in `createSiteWith`'s stamp
+  block beside `QuotaWebDAV`; Task 1's `stampGrant` takes it over. Also
+  `store.Quota.Git` (in `ApplyQuota`) and `ext.CreateGrant.Git *bool`.
+- **Sweep:** `reconcileGit` writes only `quota_git` back, through
+  `Store.SetQuotaGit`, like `reconcileTrust`.
