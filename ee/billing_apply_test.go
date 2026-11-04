@@ -30,7 +30,7 @@ func setupBilling(t *testing.T) *provider {
 func TestApplyBillingUpgradeAndCancel(t *testing.T) {
 	p := setupBilling(t)
 	acc, _ := p.local.Signup("pay@example.com", "password123", "free")
-	if err := p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
+	if err := linkOwned(p, acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
 		t.Fatal(err)
 	}
 	p.host.Sites().(*fakeSites).site("abcdefghijklmnopqrstuvwxyz")

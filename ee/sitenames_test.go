@@ -41,7 +41,7 @@ func TestDashboardListsNamesAndCustomDomains(t *testing.T) {
 	p, host, mux, acc, cookie := namedAccount(t)
 	const unnamed = "bbcdefghijklmnopqrstuvwxyz"
 	for _, id := range []string{ownedSite, unnamed} {
-		if err := p.accounts.LinkSite(acc, id); err != nil {
+		if err := linkOwned(p, acc, id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -83,7 +83,7 @@ func TestDashboardListsNamesAndCustomDomains(t *testing.T) {
 
 func TestDashboardRenamesAnOwnedSite(t *testing.T) {
 	p, host, mux, acc, cookie := namedAccount(t)
-	if err := p.accounts.LinkSite(acc, ownedSite); err != nil {
+	if err := linkOwned(p, acc, ownedSite); err != nil {
 		t.Fatal(err)
 	}
 	host.sites.site(ownedSite)
@@ -163,7 +163,7 @@ func TestDashboardDeleteConfirmNamesRepository(t *testing.T) {
 	p, host, mux, acc, cookie := namedAccount(t)
 	const plain = "bbcdefghijklmnopqrstuvwxyz"
 	for _, id := range []string{ownedSite, plain} {
-		if err := p.accounts.LinkSite(acc, id); err != nil {
+		if err := linkOwned(p, acc, id); err != nil {
 			t.Fatal(err)
 		}
 	}

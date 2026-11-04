@@ -78,7 +78,7 @@ func taggedAccount(t *testing.T) tagFixture {
 	}
 	for i, s := range tagFixtureSites {
 		id := strings.Repeat(string(rune('a'+i)), 26)
-		if err := p.accounts.LinkSite(acc, id); err != nil {
+		if err := linkOwned(p, acc, id); err != nil {
 			t.Fatal(err)
 		}
 		tags, err := store.CleanTags(s.tags)
@@ -528,7 +528,7 @@ func TestDashboardPublishLinkFollowsFrontDoor(t *testing.T) {
 // when the front door is on.
 func TestDashboardWithSitesLinksToPublish(t *testing.T) {
 	p, host, mux, acc, cookie := namedAccount(t)
-	if err := p.accounts.LinkSite(acc, ownedSite); err != nil {
+	if err := linkOwned(p, acc, ownedSite); err != nil {
 		t.Fatal(err)
 	}
 	host.sites.infos[ownedSite] = ext.SiteInfo{ViewID: ownedSite, Mode: "webserver",

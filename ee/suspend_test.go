@@ -106,7 +106,7 @@ func TestSuspendLocksEveryAccountSiteAndUnsuspendLiftsOnlyThose(t *testing.T) {
 	// The operator locked site B by hand before the suspension.
 	host.sites.SetLock(siteB, &ext.SiteLock{At: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), Reason: "evidence", By: ext.LockByAdmin})
 	// And a stale ownership marker, for a site that no longer exists.
-	p.accounts.LinkSite(acc, "zzzzzzzzzzzzzzzzzzzzzzzzzz")
+	linkOwned(p, acc, "zzzzzzzzzzzzzzzzzzzzzzzzzz")
 	before := acc.TokenVersion
 
 	w := orderSuspend(mux, suspendOrderBody(suspendSubject, true, "phishing"))

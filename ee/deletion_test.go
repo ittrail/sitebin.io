@@ -73,7 +73,7 @@ func TestDashboardHasNoInlineEventHandlers(t *testing.T) {
 	p, host, mux := setupAccounts(t)
 	acc, cookie := localUser(t, p, "local@example.com")
 	host.sites.site("aaaaaaaaaaaaaaaaaaaaaaaaaa")
-	p.accounts.LinkSite(acc, "aaaaaaaaaaaaaaaaaaaaaaaaaa")
+	linkOwned(p, acc, "aaaaaaaaaaaaaaaaaaaaaaaaaa")
 	for _, path := range []string{"/account", "/account/login"} {
 		body := getAs(mux, path, cookie).Body.String()
 		if m := inlineHandler.FindString(body); m != "" {
@@ -91,7 +91,7 @@ func TestLocalDeletionIsATwoStepConfirmation(t *testing.T) {
 	p, host, mux := setupAccounts(t)
 	acc, cookie := localUser(t, p, "local@example.com")
 	host.sites.site("aaaaaaaaaaaaaaaaaaaaaaaaaa")
-	p.accounts.LinkSite(acc, "aaaaaaaaaaaaaaaaaaaaaaaaaa")
+	linkOwned(p, acc, "aaaaaaaaaaaaaaaaaaaaaaaaaa")
 
 	// Step one: the form on the dashboard posts to /account/delete, which
 	// renders a confirmation and deletes NOTHING.
@@ -137,7 +137,7 @@ func TestLocalDeletionCancelsTheSubscriptionFirst(t *testing.T) {
 	acc, cookie := localUser(t, p, "payer@example.com")
 	subscribed(t, p, acc, "fake")
 	host.sites.site("aaaaaaaaaaaaaaaaaaaaaaaaaa")
-	p.accounts.LinkSite(acc, "aaaaaaaaaaaaaaaaaaaaaaaaaa")
+	linkOwned(p, acc, "aaaaaaaaaaaaaaaaaaaaaaaaaa")
 
 	// The confirmation says the subscription goes too.
 	w := postAs(mux, "/account/delete", cookie, url.Values{"csrf": {p.csrf(acc)}})
@@ -166,7 +166,7 @@ func TestLocalDeletionKeepsTheAccountWhenCancellationFails(t *testing.T) {
 	acc, cookie := localUser(t, p, "payer@example.com")
 	subscribed(t, p, acc, "fake")
 	host.sites.site("aaaaaaaaaaaaaaaaaaaaaaaaaa")
-	p.accounts.LinkSite(acc, "aaaaaaaaaaaaaaaaaaaaaaaaaa")
+	linkOwned(p, acc, "aaaaaaaaaaaaaaaaaaaaaaaaaa")
 
 	w := postAs(mux, "/account/delete/confirm", cookie, url.Values{"csrf": {p.csrf(acc)}})
 	if w.Code == http.StatusOK && strings.Contains(w.Body.String(), "Account deleted") {
@@ -191,7 +191,7 @@ func TestLocalDeletionRefusesWhenNoBackendCanCancel(t *testing.T) {
 	acc, cookie := localUser(t, p, "payer@example.com")
 	subscribed(t, p, acc, "stripe")
 	host.sites.site("aaaaaaaaaaaaaaaaaaaaaaaaaa")
-	p.accounts.LinkSite(acc, "aaaaaaaaaaaaaaaaaaaaaaaaaa")
+	linkOwned(p, acc, "aaaaaaaaaaaaaaaaaaaaaaaaaa")
 
 	w := postAs(mux, "/account/delete/confirm", cookie, url.Values{"csrf": {p.csrf(acc)}})
 	if strings.Contains(w.Body.String(), "Account deleted") {

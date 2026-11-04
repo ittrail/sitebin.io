@@ -4,6 +4,7 @@ package ee
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -82,8 +83,8 @@ func assertSiteIntact(t *testing.T, sites *fakeSites, what string) {
 	if len(sites.deleted) != 0 {
 		t.Errorf("%s: deleted %v", what, sites.deleted)
 	}
-	if info, ok := sites.infos[staleSite]; !ok || info.Owner == "" {
-		t.Errorf("%s: the site or its meta owner is gone", what)
+	if _, ok := sites.infos[staleSite]; !ok {
+		t.Errorf("%s: the site is gone", what)
 	}
 }
 
@@ -153,3 +154,93 @@ func TestStaleMarkerGrantsNothing(t *testing.T) {
 	})
 }
 
+// A marker on a site meta.json gives to nobody (an anonymous drop) grants
+// nothing either: ownerless is not "mine".
+func TestOwnerlessSiteGrantsNothingToAMarker(t *testing.T) {
+	p, sites, mux := setupZones(t)
+	cookie, id := adminUser(t, p, mux, "marker@example.com", "pro")
+	acc, _ := p.accounts.ByID(id)
+	staleMarker(t, p, sites, acc, "")
+
+	if body := getAs(mux, "/account", cookie).Body.String(); strings.Contains(body, staleSite) {
+		t.Error("the dashboard lists an anonymous drop")
+	}
+	for _, action := range []string{"rotate", "delete"} {
+		if w := postAs(mux, "/account/sites/"+staleSite+"/"+action, cookie, url.Values{"csrf": {p.csrf(acc)}}); w.Code != http.StatusForbidden {
+			t.Errorf("%s on an anonymous drop = %d, want 403", action, w.Code)
+		}
+	}
+	if err := p.restampSites(acc, eeconfig.Tier{ID: "pro", Trusted: true}); err != nil {
+		t.Fatalf("restamp: %v", err)
+	}
+	if _, stamped := sites.quotas[staleSite]; stamped {
+		t.Error("a restamp stamped (and could trust) an anonymous drop")
+	}
+	if ids, ok := p.AccountSiteIDs(id); !ok || len(ids) != 0 {
+		t.Errorf("AccountSiteIDs = %v, %v; want none", ids, ok)
+	}
+	if w := postAs(mux, "/account/delete/confirm", cookie, url.Values{"csrf": {p.csrf(acc)}}); w.Code != http.StatusOK {
+		t.Fatalf("account deletion = %d", w.Code)
+	}
+	assertSiteIntact(t, sites, "account deletion")
+}
+
+func TestSuspendingTheOldOwnerLeavesTheNewOwnersSiteUnlocked(t *testing.T) {
+	p, host, mux := setupStackInstance(t, testGDPRSecret)
+	old, _ := stackUser(t, p, host, suspendSubject, "subject@example.com")
+	cur, err := p.accounts.CreateOAuth(account.OIDCProv, "22222222-2222-4222-8222-222222222222", "new@example.com", true, "free")
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleMarker(t, p, host.sites, old, cur.ID)
+
+	if w := orderSuspend(mux, suspendOrderBody(suspendSubject, true, "phishing")); w.Code != 200 {
+		t.Fatalf("suspend = %d (%s)", w.Code, w.Body)
+	}
+	if host.sites.infos[staleSite].Locked != nil {
+		t.Error("suspending the old owner locked the new owner's site")
+	}
+	if host.sites.infos["aaaaaaaaaaaaaaaaaaaaaaaaaa"].Locked == nil {
+		t.Error("the old owner's own site was not locked (the test proves nothing)")
+	}
+}
+
+func TestAccountSiteIDsLeavesOutAStaleMarkerSite(t *testing.T) {
+	p, sites, mux := setupZones(t)
+	_, oldID := adminUser(t, p, mux, "old@example.com", "pro")
+	_, newID := adminUser(t, p, mux, "new@example.com", "pro")
+	old, _ := p.accounts.ByID(oldID)
+	staleMarker(t, p, sites, old, newID)
+	if ids, ok := p.AccountSiteIDs(oldID); !ok || len(ids) != 0 {
+		t.Errorf("AccountSiteIDs(old) = %v, %v; want none", ids, ok)
+	}
+}
+
+func TestLockedSiteOfAnotherOwnerDoesNotBlockDeletion(t *testing.T) {
+	p, sites, mux := setupZones(t)
+	cookie, oldID := adminUser(t, p, mux, "old@example.com", "pro")
+	_, newID := adminUser(t, p, mux, "new@example.com", "pro")
+	old, _ := p.accounts.ByID(oldID)
+	staleMarker(t, p, sites, old, newID)
+	info := sites.infos[staleSite]
+	info.Locked = &ext.SiteLock{At: time.Now(), By: ext.LockByAdmin, Hold: &ext.LockHold{}}
+	sites.infos[staleSite] = info
+
+	if locked, err := p.lockedSites(old); err != nil || len(locked) != 0 {
+		t.Errorf("lockedSites = %v, %v; want none", locked, err)
+	}
+	if p.refuseLockedDeletion(httptest.NewRecorder(), old) {
+		t.Error("a lock on another owner's site blocked the old owner's deletion")
+	}
+	if w := postAs(mux, "/account/delete/confirm", cookie, url.Values{"csrf": {p.csrf(old)}}); w.Code != http.StatusOK {
+		t.Errorf("deletion = %d", w.Code)
+	}
+}
+
+func TestSharingAllowedFalseInOpenMode(t *testing.T) {
+	t.Setenv("SITEBIN_ACCOUNT_MODE", "open")
+	p := newProvider()
+	if ok, err := p.SharingAllowed("anyone"); ok || err != nil {
+		t.Errorf("SharingAllowed in open mode = %v, %v; want false, nil", ok, err)
+	}
+}

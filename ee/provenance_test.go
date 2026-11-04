@@ -150,7 +150,7 @@ func TestDashboardWritesAreRecorded(t *testing.T) {
 	cookie := signedUpUser(t, mux)
 	acc, _ := p.accounts.ByEmail("user@example.com")
 	host.sites.site("siteaaaaaaaaaaaaaaaaaaaaaa")
-	p.accounts.LinkSite(acc, "siteaaaaaaaaaaaaaaaaaaaaaa")
+	linkOwned(p, acc, "siteaaaaaaaaaaaaaaaaaaaaaa")
 
 	post := func(path string, v url.Values) {
 		t.Helper()
@@ -214,7 +214,7 @@ func TestAccountPurgeKeepsEvidenceHolds(t *testing.T) {
 			l.Hold = &ext.LockHold{At: now, By: "acct-admin"}
 		}
 		host.sites.infos[id] = ext.SiteInfo{ViewID: id, Locked: l}
-		p.accounts.LinkSite(acc, id)
+		linkOwned(p, acc, id)
 	}
 	suspend := func(acc *account.Account) {
 		p.accounts.Update(acc, func(a *account.Account) error { a.SuspendedAt = &now; return nil })

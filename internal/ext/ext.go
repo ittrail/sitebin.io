@@ -906,6 +906,18 @@ type OwnershipSites interface {
 	// SiteBytes is the site's central byte count (files plus its Git
 	// repository) and its file count.
 	SiteBytes(viewID string) (bytes int64, files int, err error)
+	// SiteOwner is the owner account id in the site's meta.json ("" for an
+	// anonymous site). It reads meta only, never the content or the git
+	// repository, so it is cheap enough for a walk over an account's
+	// sites. A site that no longer exists is ErrSiteGone, distinct from
+	// any other read error.
+	SiteOwner(viewID string) (owner string, err error)
+	// DeleteSiteIfOwner deletes the site only if, under the site lock, its
+	// meta.json owner is owner (never empty); otherwise it deletes nothing
+	// and returns ErrNotOwner. Every rule of SiteService.Delete holds: a
+	// locked site is ErrSiteLocked, a running push is stopped, a missing
+	// site is ErrSiteGone. An unreadable meta.json is ErrNotOwner.
+	DeleteSiteIfOwner(viewID, owner string) error
 }
 
 // DomainLink is one custom domain of a site as the dashboard shows it. A

@@ -13,7 +13,7 @@ import (
 // address that does not serve the site without a link.
 func TestDashboardShowsRedirectsAndTheGeneratedAddress(t *testing.T) {
 	p, host, mux, acc, cookie := namedAccount(t)
-	if err := p.accounts.LinkSite(acc, ownedSite); err != nil {
+	if err := linkOwned(p, acc, ownedSite); err != nil {
 		t.Fatal(err)
 	}
 	viewURL := "http://" + ownedSite + ".sitebin.example"

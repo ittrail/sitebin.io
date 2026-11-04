@@ -59,7 +59,7 @@ func stackUser(t *testing.T, p *provider, host *fakeHost, subject, email string)
 		info.ViewURL = "http://" + id + ".sitebin.example"
 		info.Domains = []string{id[:3] + ".example.org"}
 		host.sites.infos[id] = info
-		if err := p.accounts.LinkSite(acc, id); err != nil {
+		if err := linkOwned(p, acc, id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -328,7 +328,7 @@ func TestGDPRDeleteErasesEverythingAndIsIdempotent(t *testing.T) {
 	acc, tokenSecret := stackUser(t, p, host, "11111111-1111-4111-8111-111111111111", "subject@example.com")
 	// A dangling ownership marker for a site that was deleted elsewhere: the
 	// erasure must step over it, not stop on it.
-	if err := p.accounts.LinkSite(acc, "cccccccccccccccccccccccccc"); err != nil {
+	if err := linkOwned(p, acc, "cccccccccccccccccccccccccc"); err != nil {
 		t.Fatal(err)
 	}
 	// Somebody else's account must be untouched by all of it.
@@ -337,7 +337,7 @@ func TestGDPRDeleteErasesEverythingAndIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	host.sites.site("dddddddddddddddddddddddddd")
-	p.accounts.LinkSite(other, "dddddddddddddddddddddddddd")
+	linkOwned(p, other, "dddddddddddddddddddddddddd")
 
 	// A live session, to prove it dies with the account.
 	cookie := p.sessions.Cookie(acc.ID, acc.TokenVersion)

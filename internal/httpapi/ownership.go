@@ -105,6 +105,34 @@ func (s siteService) SetAdmins(viewID string, by ext.ChangeBy, edit func([]ext.S
 	return nil
 }
 
+func (s siteService) SiteOwner(viewID string) (string, error) {
+	site, err := s.a.st.ByViewID(viewID)
+	if err != nil {
+		return "", mapSiteGone(err, viewID)
+	}
+	return site.Meta.OwnerAccountID, nil
+}
+
+func (s siteService) DeleteSiteIfOwner(viewID, owner string) error {
+	site, err := s.a.st.ByViewID(viewID)
+	if err != nil {
+		return mapSiteGone(err, viewID)
+	}
+	// Refused before anything is torn down, as in delete: the containers,
+	// tokens and cache of a site that is not the caller's, or is locked,
+	// must stay as they are. The store re-checks under the site lock.
+	if owner == "" || site.Meta.OwnerAccountID != owner {
+		return fmt.Errorf("%w: %s", ext.ErrNotOwner, viewID)
+	}
+	if site.Meta.IsLocked() {
+		return fmt.Errorf("%w: %s", ext.ErrSiteLocked, viewID)
+	}
+	s.a.verifyCache.Drop(site.EditID + ":")
+	s.a.uploads.revokeSite(site.ViewID)
+	s.a.stopContainersBeforeDelete(site)
+	return mapOwnershipErr(s.a.st.DeleteIfOwner(site, owner), viewID)
+}
+
 // extAdmins maps the store's admins onto the seam's; nil stays nil.
 func extAdmins(in []store.SiteAdmin) []ext.SiteAdmin {
 	if len(in) == 0 {

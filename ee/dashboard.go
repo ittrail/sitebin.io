@@ -425,14 +425,14 @@ func (p *provider) renderLocked(w http.ResponseWriter) {
 // erasure order — because deleting it would end the hold: see
 // docs/superpowers/specs/2026-09-28-site-lock-and-account-suspension.md.
 func (p *provider) lockedSites(acc *account.Account) ([]string, error) {
-	ids, err := p.ownedSiteIDs(acc)
+	infos, err := p.ownedSiteInfos(acc)
 	if err != nil {
 		return nil, err
 	}
 	var locked []string
-	for _, id := range ids {
-		if info, ok := p.host.Sites().Info(id); ok && info.Locked != nil {
-			locked = append(locked, id)
+	for _, info := range infos {
+		if info.Locked != nil {
+			locked = append(locked, info.ViewID)
 		}
 	}
 	return locked, nil
@@ -549,7 +549,8 @@ func (p *provider) handleDeleteAccountConfirm(w http.ResponseWriter, r *http.Req
 		}
 	}
 	err := p.accounts.Delete(acc, func(viewID string) error {
-		return p.deleteOwnedSite(acc, viewID)
+		_, err := p.deleteOwnedSite(acc, viewID)
+		return err
 	})
 	if err != nil {
 		slog.Error("account deletion failed", "account", acc.ID, "err", err)
@@ -743,10 +744,10 @@ func (p *provider) renderDashboard(w http.ResponseWriter, r *http.Request, acc *
 	// visible, and it restamps every site's expiry. Reading the rows before it
 	// would show the owner the pre-change dates on the one render that matters.
 	p.syncTier(acc)
-	ids, _ := p.ownedSiteIDs(acc)
-	rows := make([]siteRow, 0, len(ids))
-	for _, id := range ids {
-		if info, ok := p.host.Sites().Info(id); ok {
+	infos, _ := p.ownedSiteInfos(acc)
+	rows := make([]siteRow, 0, len(infos))
+	for _, info := range infos {
+		{
 			row := siteRow{
 				SiteInfo:   info,
 				SizeText:   humanBytes(info.Bytes + info.GitBytes),

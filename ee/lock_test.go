@@ -156,7 +156,7 @@ func TestDashboardShowsALockAndOffersNothingItRefuses(t *testing.T) {
 	for _, id := range []string{siteA, siteC} {
 		// tagged, so that an unlocked site offers a chip's remove form
 		host.sites.infos[id] = ext.SiteInfo{ViewID: id, Mode: "webserver", Tags: []string{"kept"}}
-		p.accounts.LinkSite(acc, id)
+		linkOwned(p, acc, id)
 	}
 	host.sites.SetLock(siteC, &ext.SiteLock{At: time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC), Reason: "phishing", By: ext.LockByAdmin})
 
@@ -202,7 +202,7 @@ func TestLocalDeletionRefusedWhileASiteIsLocked(t *testing.T) {
 	subscribed(t, p, acc, "fake")
 	for _, id := range []string{siteA, siteC} {
 		host.sites.site(id)
-		p.accounts.LinkSite(acc, id)
+		linkOwned(p, acc, id)
 	}
 	host.sites.SetLock(siteC, &ext.SiteLock{By: ext.LockByAdmin})
 
@@ -260,7 +260,7 @@ func TestRestampSkipsALockedSite(t *testing.T) {
 		t.Fatal(err)
 	}
 	host.sites.site(siteC)
-	p.accounts.LinkSite(acc, siteC)
+	linkOwned(p, acc, siteC)
 	host.sites.SetLock(siteC, &ext.SiteLock{By: ext.LockByAdmin})
 	tier, _ := p.cfg.Tier("unlimited")
 	if err := p.restampSites(acc, tier); err != nil {

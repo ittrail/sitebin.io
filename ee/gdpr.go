@@ -263,17 +263,15 @@ func (p *provider) handleGDPRExport(w http.ResponseWriter, r *http.Request) {
 			Billing: acc.Billing, SuspendedAt: acc.SuspendedAt, SuspendedReason: acc.SuspendedReason,
 			CreatedAt: acc.CreatedAt, UpdatedAt: acc.UpdatedAt,
 		}
-		ids, err := p.ownedSiteIDs(acc)
+		infos, err := p.ownedSiteInfos(acc)
 		if err != nil {
 			slog.Error("gdpr: could not list the account's sites for an export", "account", acc.ID, "err", err)
 			http.Error(w, "could not list the account's sites", http.StatusInternalServerError)
 			return
 		}
-		for _, id := range ids {
-			info, ok := p.host.Sites().Info(id)
-			if !ok {
-				continue // a dangling ownership marker names nothing that exists
-			}
+		ids := make([]string, 0, len(infos))
+		for _, info := range infos {
+			ids = append(ids, info.ViewID)
 			out.Sites = append(out.Sites, gdprSite{
 				ID: info.ViewID, ViewURL: info.ViewURL, Mode: info.Mode, Domains: info.Domains,
 				Tags: info.Tags, Origin: info.Origin, Bytes: info.Bytes + info.GitBytes, Files: info.Files,
@@ -362,14 +360,8 @@ func (p *provider) handleGDPRDelete(w http.ResponseWriter, r *http.Request) {
 
 	sites := 0
 	err = p.accounts.Delete(acc, func(viewID string) error {
-		if !p.ownsByMeta(acc, viewID) {
-			return p.deleteOwnedSite(acc, viewID) // skips, and logs why
-		}
-		err := p.host.Sites().Delete(viewID)
-		if errors.Is(err, ext.ErrSiteGone) {
-			return nil // a marker for a site that is already gone
-		}
-		if err == nil {
+		deleted, err := p.deleteOwnedSite(acc, viewID)
+		if deleted {
 			sites++
 		}
 		return err

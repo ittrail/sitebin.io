@@ -424,6 +424,22 @@ func (s *Store) delete(site *Site, force bool) error {
 	})
 }
 
+// DeleteIfOwner is Delete that first checks, under the site lock, that
+// meta.json names owner (never empty) as the site's owner: ErrNotOwner
+// otherwise, and for a meta.json that cannot be read, because then nothing
+// proves the caller owns it. A locked site is ErrLocked.
+func (s *Store) DeleteIfOwner(site *Site, owner string) error {
+	return s.deleteChecked(site, func(m *Meta) error {
+		if owner == "" || m == nil || m.OwnerAccountID != owner {
+			return ErrNotOwner
+		}
+		if m.Locked != nil {
+			return ErrLocked
+		}
+		return nil
+	})
+}
+
 // deleteChecked removes the site once check, handed the meta.json read
 // under the site lock (nil when it cannot be read), allows it.
 func (s *Store) deleteChecked(site *Site, check func(*Meta) error) error {

@@ -189,7 +189,7 @@ func TestStackAccountIsDeletedAtTheConsole(t *testing.T) {
 	p, host, mux := setupSelfService(t, testGDPRSecret)
 	acc, cookie := oidcUser(t, p, "11111111-1111-4111-8111-111111111111", "stack@example.com")
 	host.sites.site("aaaaaaaaaaaaaaaaaaaaaaaaaa")
-	p.accounts.LinkSite(acc, "aaaaaaaaaaaaaaaaaaaaaaaaaa")
+	linkOwned(p, acc, "aaaaaaaaaaaaaaaaaaaaaaaaaa")
 
 	body := getAs(mux, "/account", cookie).Body.String()
 	// The stack's own deletion page, which opens the deletion itself — not
@@ -221,7 +221,7 @@ func TestStackAccountDeletesLocallyWhenTheStackCannotOrderIt(t *testing.T) {
 	p, host, mux := setupSelfService(t, "")
 	acc, cookie := oidcUser(t, p, "11111111-1111-4111-8111-111111111111", "stack@example.com")
 	host.sites.site("aaaaaaaaaaaaaaaaaaaaaaaaaa")
-	p.accounts.LinkSite(acc, "aaaaaaaaaaaaaaaaaaaaaaaaaa")
+	linkOwned(p, acc, "aaaaaaaaaaaaaaaaaaaaaaaaaa")
 
 	body := getAs(mux, "/account", cookie).Body.String()
 	if !strings.Contains(body, `action="/account/delete"`) {
@@ -249,9 +249,9 @@ func TestLocalAccountDeletesLocallyOnAStackInstance(t *testing.T) {
 	p, host, mux := setupSelfService(t, testGDPRSecret)
 	acc, cookie := localUser(t, p, "local@example.com")
 	host.sites.site("aaaaaaaaaaaaaaaaaaaaaaaaaa")
-	p.accounts.LinkSite(acc, "aaaaaaaaaaaaaaaaaaaaaaaaaa")
+	linkOwned(p, acc, "aaaaaaaaaaaaaaaaaaaaaaaaaa")
 	// And a marker for a site that is already gone must not block it.
-	p.accounts.LinkSite(acc, "bbbbbbbbbbbbbbbbbbbbbbbbbb")
+	linkOwned(p, acc, "bbbbbbbbbbbbbbbbbbbbbbbbbb")
 
 	w := postAs(mux, "/account/delete/confirm", cookie, url.Values{"csrf": {p.csrf(acc)}})
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "Account deleted") {

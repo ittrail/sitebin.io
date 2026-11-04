@@ -47,7 +47,7 @@ func abuseScene(t *testing.T, p *provider, host *provHost) (abuser *account.Acco
 	for id, owner := range map[string]string{"phishaaaaaaaaaaaaaaaaaaaaa": abuser.ID, "dropaaaaaaaaaaaaaaaaaaaaaa": "", "fineaaaaaaaaaaaaaaaaaaaaaa": ""} {
 		host.sites.infos[id] = ext.SiteInfo{ViewID: id, Owner: owner, Mode: "webserver", CreatedAt: t0}
 	}
-	p.accounts.LinkSite(abuser, "phishaaaaaaaaaaaaaaaaaaaaa")
+	linkOwned(p, abuser, "phishaaaaaaaaaaaaaaaaaaaaa")
 	host.sites.RecordSiteProvenance("phishaaaaaaaaaaaaaaaaaaaaa", provenance.Entry{Time: t0.Add(time.Minute), Action: provenance.ActionCreate, Surface: provenance.SurfaceAPI, Auth: provenance.AuthToken, Account: abuser.ID, IP: "198.51.100.23", UA: "python-requests/2.32", Files: 1, Detail: "bug.html"})
 	host.sites.RecordSiteProvenance("dropaaaaaaaaaaaaaaaaaaaaaa", provenance.Entry{Time: t0.Add(2 * time.Minute), Action: provenance.ActionCreate, Surface: provenance.SurfaceUI, Auth: provenance.AuthNone, IP: "198.51.100.23", UA: "Mozilla/5.0"})
 	host.sites.RecordSiteProvenance("fineaaaaaaaaaaaaaaaaaaaaaa", provenance.Entry{Time: t0.Add(3 * time.Minute), Action: provenance.ActionCreate, Surface: provenance.SurfaceUI, IP: "192.0.2.1"})

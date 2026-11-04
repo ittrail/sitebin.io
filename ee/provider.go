@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/ittrail/sitebin.io/ee/account"
@@ -579,16 +580,15 @@ var _ ext.SessionAccounts = (*provider)(nil)
 // owns reports whether the account owns the given site, by meta.json (see
 // ownedSiteIDs). It is owner-only: an admin's access is not decided here.
 func (p *provider) owns(acc *account.Account, viewID string) bool {
-	ids, err := p.ownedSiteIDs(acc)
+	ids, err := p.accounts.ListSiteIDs(acc)
 	if err != nil {
 		return false
 	}
-	for _, id := range ids {
-		if id == viewID {
-			return true
-		}
+	if !slices.Contains(ids, viewID) {
+		return false
 	}
-	return false
+	owner, err := p.siteOwner(viewID)
+	return err == nil && owner == acc.ID
 }
 
 // baseURL returns the main-domain URL for building links.

@@ -59,7 +59,7 @@ func manageAccount(t *testing.T, sites ...[]string) *manageFixture {
 	f := &manageFixture{t: t, p: p, host: host, mux: mux, acc: acc, cookie: cookie}
 	for i, tags := range sites {
 		id := strings.Repeat(string(rune('a'+i)), 26)
-		if err := p.accounts.LinkSite(acc, id); err != nil {
+		if err := linkOwned(p, acc, id); err != nil {
 			t.Fatal(err)
 		}
 		clean, err := store.CleanTags(tags)

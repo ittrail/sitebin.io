@@ -91,11 +91,9 @@ func (p *provider) tagRegistry(acc *account.Account) account.TagRegistry {
 // spelling found.
 func (p *provider) tagsInUse(acc *account.Account) map[string]string {
 	inUse := map[string]string{}
-	ids, _ := p.ownedSiteIDs(acc)
-	for _, id := range ids {
-		if info, ok := p.host.Sites().Info(id); ok {
-			addInUse(inUse, info.Tags)
-		}
+	infos, _ := p.ownedSiteInfos(acc)
+	for _, info := range infos {
+		addInUse(inUse, info.Tags)
 	}
 	return inUse
 }

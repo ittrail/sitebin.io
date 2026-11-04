@@ -427,3 +427,67 @@ func TestVerifyCacheIsBoundToThePasswordHash(t *testing.T) {
 		t.Fatal("the new password was refused")
 	}
 }
+
+func TestSiteOwnerReadsMetaOnly(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1"})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	o := e.own(t)
+	if got, err := o.SiteOwner(c.ID); err != nil || got != "acct-1" {
+		t.Errorf("SiteOwner = %q, %v; want acct-1", got, err)
+	}
+	if _, err := o.SiteOwner(noSuchSite); !errors.Is(err, ext.ErrSiteGone) {
+		t.Errorf("SiteOwner of a missing site = %v, want ErrSiteGone", err)
+	}
+}
+
+func TestDeleteSiteIfOwner(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1"})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	o := e.own(t)
+
+	for _, who := range []string{"acct-2", ""} {
+		if err := o.DeleteSiteIfOwner(c.ID, who); !errors.Is(err, ext.ErrNotOwner) {
+			t.Errorf("DeleteSiteIfOwner(%q) = %v, want ErrNotOwner", who, err)
+		}
+	}
+	if _, err := e.st.ByViewID(c.ID); err != nil {
+		t.Fatalf("a refused delete removed the site: %v", err)
+	}
+
+	// The store re-checks under the lock: a stale *Site that still names
+	// acct-1 must not delete a site meta.json has given to acct-2.
+	stale := e.siteOf(t, c.ID)
+	if _, err := e.st.TransferOwner(e.siteOf(t, c.ID), "acct-1", "acct-2", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.DeleteIfOwner(stale, "acct-1"); !errors.Is(err, store.ErrNotOwner) {
+		t.Errorf("store.DeleteIfOwner on a stale handle = %v, want ErrNotOwner", err)
+	}
+	if _, err := e.st.ByViewID(c.ID); err != nil {
+		t.Fatalf("the site is gone after a refused delete: %v", err)
+	}
+
+	// A locked site is refused.
+	if err := e.api.SiteService().SetLock(c.ID, &ext.SiteLock{At: time.Now(), By: ext.LockByAdmin, Reason: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.DeleteSiteIfOwner(c.ID, "acct-2"); !errors.Is(err, ext.ErrSiteLocked) {
+		t.Errorf("locked site = %v, want ErrSiteLocked", err)
+	}
+	if _, err := e.st.ByViewID(c.ID); err != nil {
+		t.Errorf("a locked site was deleted: %v", err)
+	}
+	if _, err := e.api.SiteService().ReleaseLock(c.ID, ext.LockByAdmin); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.DeleteSiteIfOwner(c.ID, "acct-2"); err != nil {
+		t.Errorf("owner delete = %v", err)
+	}
+	if err := o.DeleteSiteIfOwner(c.ID, "acct-2"); !errors.Is(err, ext.ErrSiteGone) {
+		t.Errorf("second delete = %v, want ErrSiteGone", err)
+	}
+}

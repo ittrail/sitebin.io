@@ -21,10 +21,13 @@ import (
 // --- fakes ---
 
 type fakeSites struct {
-	infos   map[string]ext.SiteInfo
-	deleted []string
-	rotated []string
-	quotas  map[string]ext.CreateGrant
+	infos     map[string]ext.SiteInfo
+	linkOwner map[string]string
+	// ownerErrs fails SiteOwner for the listed site ids.
+	ownerErrs map[string]error
+	deleted   []string
+	rotated   []string
+	quotas    map[string]ext.CreateGrant
 	// applyErrs fails ApplyQuota for the listed site ids, so a test can make a
 	// restamp succeed for some of an account's sites and fail for others.
 	applyErrs map[string]error
@@ -56,7 +59,53 @@ type fakeSites struct {
 	containers []ext.ContainerSite
 }
 
-func (s *fakeSites) Info(id string) (ext.SiteInfo, bool) { i, ok := s.infos[id]; return i, ok }
+func (s *fakeSites) Info(id string) (ext.SiteInfo, bool) {
+	i, ok := s.infos[id]
+	if ok && i.Owner == "" {
+		i.Owner = s.linkOwner[id]
+	}
+	return i, ok
+}
+
+// SiteOwner and DeleteSiteIfOwner are the core's ext.OwnershipSites methods
+// the account pages use; the rest of that interface is not faked here.
+func (s *fakeSites) SiteOwner(id string) (string, error) {
+	if s.ownerErrs[id] != nil {
+		return "", s.ownerErrs[id]
+	}
+	i, ok := s.Info(id)
+	if !ok {
+		return "", fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
+	}
+	return i.Owner, nil
+}
+
+func (s *fakeSites) DeleteSiteIfOwner(id, owner string) error {
+	i, ok := s.Info(id)
+	if !ok {
+		return fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
+	}
+	if owner == "" || i.Owner != owner {
+		return fmt.Errorf("%w: %s", ext.ErrNotOwner, id)
+	}
+	return s.Delete(id)
+}
+
+// linkOwned links the ownership marker AND makes the account the site's meta
+// owner, as a site created by that account has both.
+func linkOwned(p *provider, acc *account.Account, id string) error {
+	if o, ok := p.host.Sites().(interface{ setOwner(id, owner string) }); ok {
+		o.setOwner(id, acc.ID)
+	}
+	return p.accounts.LinkSite(acc, id)
+}
+
+func (s *fakeSites) setOwner(id, owner string) {
+	if s.linkOwner == nil {
+		s.linkOwner = map[string]string{}
+	}
+	s.linkOwner[id] = owner
+}
 
 // The runtime's half of the container seam is exercised against its own
 // fake in ee/containers; the provider tests reach only what the admin
@@ -480,7 +529,7 @@ func TestSignupLoginDashboardFlow(t *testing.T) {
 
 	// give the account a site and confirm the dashboard shows it
 	viewID := "abcdefghijklmnopqrstuvwxyz"
-	p.accounts.LinkSite(acc, viewID)
+	linkOwned(p, acc, viewID)
 	host.sites.infos[viewID] = ext.SiteInfo{ViewID: viewID, Mode: "webserver", ViewURL: "http://" + viewID + ".sitebin.example", EditURL: "http://sitebin.example/e/x"}
 
 	dash := httptest.NewRequest("GET", "/account", nil)

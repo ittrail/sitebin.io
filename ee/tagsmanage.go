@@ -85,17 +85,7 @@ type tagsPageView struct {
 // accountSites is every site of the account the core still knows, with its
 // tags.
 func (p *provider) accountSites(acc *account.Account) ([]ext.SiteInfo, error) {
-	ids, err := p.ownedSiteIDs(acc)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]ext.SiteInfo, 0, len(ids))
-	for _, id := range ids {
-		if info, ok := p.host.Sites().Info(id); ok {
-			out = append(out, info)
-		}
-	}
-	return out, nil
+	return p.ownedSiteInfos(acc)
 }
 
 // tagUse maps each tag key the sites carry to its first spelling and to the

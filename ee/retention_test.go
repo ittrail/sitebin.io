@@ -166,7 +166,7 @@ func TestAccountDeletionWorksOnceTheLockedSiteIsPurged(t *testing.T) {
 		t.Fatal(err)
 	}
 	site := paidSite(t, st, acc.ID)
-	if err := p.accounts.LinkSite(acc, site.ViewID); err != nil {
+	if err := linkOwned(p, acc, site.ViewID); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()

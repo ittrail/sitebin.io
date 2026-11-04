@@ -112,12 +112,12 @@ func (p *provider) PurgeProvenance(before, heldBefore time.Time) {
 // lockHolds reports whether one of the account's sites is locked, and
 // whether one of those locks carries an evidence hold.
 func (p *provider) lockHolds(acc *account.Account) (locked, caseOpen bool, err error) {
-	ids, err := p.ownedSiteIDs(acc)
+	infos, err := p.ownedSiteInfos(acc)
 	if err != nil {
 		return false, false, err
 	}
-	for _, id := range ids {
-		if info, ok := p.host.Sites().Info(id); ok && info.Locked != nil {
+	for _, info := range infos {
+		if info.Locked != nil {
 			locked = true
 			if info.Locked.Hold != nil {
 				return true, true, nil

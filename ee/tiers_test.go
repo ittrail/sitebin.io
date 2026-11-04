@@ -69,7 +69,7 @@ func TestTierMaxSitesEnforced(t *testing.T) {
 		t.Fatalf("first grant: %v", err)
 	}
 	// simulate owning one site (free tier max_sites=1)
-	p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz")
+	linkOwned(p, acc, "abcdefghijklmnopqrstuvwxyz")
 	p.host.Sites().(*fakeSites).site("abcdefghijklmnopqrstuvwxyz")
 
 	_, err := p.grantForAccount(acc)
@@ -139,7 +139,7 @@ func TestSelfSelectTier(t *testing.T) {
 
 	// a self-select that goes through restamps the account's sites directly
 	// (handleSelectTier just wrote acc.Tier, so syncTier would be a no-op)
-	if err := p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
+	if err := linkOwned(p, acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
 		t.Fatal(err)
 	}
 	p.host.Sites().(*fakeSites).site("abcdefghijklmnopqrstuvwxyz")
@@ -326,7 +326,7 @@ func TestDashboardShowsSiteExpiry(t *testing.T) {
 	}
 	const expiring, permanent = "abcdefghijklmnopqrstuvwxyz", "bbcdefghijklmnopqrstuvwxyz"
 	for _, id := range []string{expiring, permanent} {
-		if err := p.accounts.LinkSite(acc, id); err != nil {
+		if err := linkOwned(p, acc, id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -364,7 +364,7 @@ func TestDashboardRendersSitesAfterTheTierSync(t *testing.T) {
 		t.Fatal(err)
 	}
 	const viewID = "abcdefghijklmnopqrstuvwxyz"
-	if err := p.accounts.LinkSite(acc, viewID); err != nil {
+	if err := linkOwned(p, acc, viewID); err != nil {
 		t.Fatal(err)
 	}
 	stale := time.Now().Add(3 * 24 * time.Hour) // the date the old Free cap left behind
@@ -394,7 +394,7 @@ func TestSyncTierRestampsOwnedSitesFromPayGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
+	if err := linkOwned(p, acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
 		t.Fatal(err)
 	}
 	p.host.Sites().(*fakeSites).site("abcdefghijklmnopqrstuvwxyz")
@@ -427,7 +427,7 @@ func TestCreateSyncsStaleTierBeforeGranting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
+	if err := linkOwned(p, acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
 		t.Fatal(err)
 	}
 	p.host.Sites().(*fakeSites).site("abcdefghijklmnopqrstuvwxyz")
@@ -460,7 +460,7 @@ func TestSyncTierIsANoOpWhenNothingChanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
+	if err := linkOwned(p, acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
 		t.Fatal(err)
 	}
 	p.host.Sites().(*fakeSites).site("abcdefghijklmnopqrstuvwxyz")
@@ -497,7 +497,7 @@ func unknownTierAccount(t *testing.T, p *provider, email string) *account.Accoun
 func TestSyncTierRefusesToActOnAnUnconfiguredTier(t *testing.T) {
 	p := setupTiers(t)
 	acc := unknownTierAccount(t, p, "renamed@example.com")
-	if err := p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
+	if err := linkOwned(p, acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
 		t.Fatal(err)
 	}
 	p.host.Sites().(*fakeSites).site("abcdefghijklmnopqrstuvwxyz")
@@ -589,7 +589,7 @@ func TestSyncTierRetriesAfterAPartialRestamp(t *testing.T) {
 	const good, bad = "abcdefghijklmnopqrstuvwxyz", "bbcdefghijklmnopqrstuvwxyz"
 	sites := p.host.Sites().(*fakeSites)
 	for _, id := range []string{good, bad} {
-		if err := p.accounts.LinkSite(acc, id); err != nil {
+		if err := linkOwned(p, acc, id); err != nil {
 			t.Fatal(err)
 		}
 		sites.site(id) // both sites exist; only the write to one of them fails
@@ -715,7 +715,7 @@ func TestSyncTierHealsADanglingMarkerAndKeepsTheGrace(t *testing.T) {
 	live := paidSite(t, st, acc.ID)
 	const gone = "zzzzzzzzzzzzzzzzzzzzzzzzzz" // deleted from the edit page; the marker stayed
 	for _, id := range []string{live.ViewID, gone} {
-		if err := p.accounts.LinkSite(acc, id); err != nil {
+		if err := linkOwned(p, acc, id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -775,7 +775,7 @@ func TestRestampSitesTwiceKeepsTheDowngradeGrace(t *testing.T) {
 		t.Fatal(err)
 	}
 	site := paidSite(t, st, acc.ID)
-	if err := p.accounts.LinkSite(acc, site.ViewID); err != nil {
+	if err := linkOwned(p, acc, site.ViewID); err != nil {
 		t.Fatal(err)
 	}
 	free, ok := p.cfg.Tier("free")
@@ -822,7 +822,7 @@ func TestRestampSitesUnlinksOnlyTheVanishedSite(t *testing.T) {
 	const broken, gone = "abcdefghijklmnopqrstuvwxyz", "bbcdefghijklmnopqrstuvwxyz"
 	sites := p.host.Sites().(*fakeSites)
 	for _, id := range []string{broken, gone} {
-		if err := p.accounts.LinkSite(acc, id); err != nil {
+		if err := linkOwned(p, acc, id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -849,7 +849,7 @@ func TestSyncTierLeavesEverythingAloneOnLookupFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.accounts.LinkSite(acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
+	if err := linkOwned(p, acc, "abcdefghijklmnopqrstuvwxyz"); err != nil {
 		t.Fatal(err)
 	}
 	p.host.Sites().(*fakeSites).site("abcdefghijklmnopqrstuvwxyz")
