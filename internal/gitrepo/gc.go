@@ -17,9 +17,9 @@ const (
 	gcMarker     = "sitebin-gc"
 )
 
-// touch creates path if needed and sets its mtime to now.
-func touch(path string) error {
-	now := time.Now()
+// touchAt creates path if needed and sets its mtime to t.
+func touchAt(path string, t time.Time) error {
+	now := t
 	err := os.Chtimes(path, now, now)
 	if err == nil || !errors.Is(err, fs.ErrNotExist) {
 		return err
@@ -37,7 +37,7 @@ func touch(path string) error {
 // MarkPushed records that dir received a push. The marker lives inside the
 // bare repository, where git ignores it.
 func MarkPushed(dir string) error {
-	return touch(filepath.Join(dir, pushedMarker))
+	return touchAt(filepath.Join(dir, pushedMarker), time.Now())
 }
 
 // LastPush is when dir last received a push; false when it never has.
@@ -60,8 +60,15 @@ func (r *Runner) Collect(ctx context.Context, dir string) (ran bool, err error) 
 	if fi, err := os.Stat(filepath.Join(dir, gcMarker)); err == nil && !pushed.After(fi.ModTime()) {
 		return false, nil
 	}
-	if _, _, err := r.runFor(ctx, GCTimeout, dir, 1<<20, "gc", "--prune=1.day.ago", "--quiet"); err != nil {
+	// The marker carries the START of the collection: a push that lands while
+	// gc runs is newer than it and is collected next time.
+	start := time.Now()
+	_, over, err := r.runFor(ctx, GCTimeout, dir, 1<<20, "gc", "--prune=1.day.ago", "--quiet")
+	if err != nil {
 		return false, err
 	}
-	return true, touch(filepath.Join(dir, gcMarker))
+	if over {
+		return false, errors.New("gitrepo: gc printed too much output")
+	}
+	return true, touchAt(filepath.Join(dir, gcMarker), start)
 }

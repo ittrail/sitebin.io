@@ -32,8 +32,13 @@ func TestCollectSkipsUnchanged(t *testing.T) {
 	if ran, err := r.Collect(ctx, dir); err != nil || ran {
 		t.Fatalf("second: ran=%v err=%v", ran, err)
 	}
-	time.Sleep(20 * time.Millisecond)
-	if err := MarkPushed(dir); err != nil {
+	gcFi, err := os.Stat(filepath.Join(dir, "sitebin-gc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A push that landed while gc ran: later than the collection began.
+	pushedAt := gcFi.ModTime().Add(time.Millisecond)
+	if err := os.Chtimes(filepath.Join(dir, "sitebin-pushed"), pushedAt, pushedAt); err != nil {
 		t.Fatal(err)
 	}
 	if ran, err := r.Collect(ctx, dir); err != nil || !ran {
@@ -85,5 +90,28 @@ func TestCollectShrinksAfterForcePush(t *testing.T) {
 	}
 	if after, names := dirSize(t, dir); after >= 512<<10 {
 		t.Fatalf("repo still %d bytes after gc: %v", after, names)
+	}
+}
+
+func TestCollectMarkerIsStampedAtStart(t *testing.T) {
+	NeedGit(t)
+	r, dir := newBare(t)
+	if err := MarkPushed(dir); err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now()
+	if ran, err := r.Collect(context.Background(), dir); err != nil || !ran {
+		t.Fatalf("Collect: ran=%v err=%v", ran, err)
+	}
+	after := time.Now()
+	fi, err := os.Stat(filepath.Join(dir, "sitebin-gc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.ModTime().Before(before.Add(-time.Second)) || !fi.ModTime().Before(after) {
+		t.Fatalf("gc marker %v not within [%v, %v)", fi.ModTime(), before, after)
+	}
+	if mid := before.Add(after.Sub(before) / 2); fi.ModTime().After(mid) {
+		t.Fatalf("gc marker %v is stamped after gc finished, not at its start (%v..%v)", fi.ModTime(), before, after)
 	}
 }
