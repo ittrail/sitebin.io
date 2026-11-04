@@ -119,6 +119,9 @@ type Tier struct {
 	// SITEBIN_ADMIN_ACCOUNTS. A tier source (PayGate, a stored tier) can
 	// nominate an account; only the operator of the container can confirm it.
 	Admin bool `json:"admin,omitempty"`
+	// Sharing lets the tier's accounts transfer a site and share it with
+	// admins. Absent means false.
+	Sharing bool `json:"sharing,omitempty"`
 	// Trusted exempts the tier's sites from the strict content-security headers
 	// that untrusted uploads get. Grant it to tiers whose holders you can hold
 	// accountable; anonymous sites never qualify.

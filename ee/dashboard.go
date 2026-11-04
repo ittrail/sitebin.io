@@ -425,7 +425,7 @@ func (p *provider) renderLocked(w http.ResponseWriter) {
 // erasure order — because deleting it would end the hold: see
 // docs/superpowers/specs/2026-09-28-site-lock-and-account-suspension.md.
 func (p *provider) lockedSites(acc *account.Account) ([]string, error) {
-	ids, err := p.accounts.ListSiteIDs(acc)
+	ids, err := p.ownedSiteIDs(acc)
 	if err != nil {
 		return nil, err
 	}
@@ -505,7 +505,7 @@ func (p *provider) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	if p.refuseLockedDeletion(w, acc) {
 		return
 	}
-	ids, _ := p.accounts.ListSiteIDs(acc)
+	ids, _ := p.ownedSiteIDs(acc)
 	toks, _ := p.accounts.ListTokens(acc)
 	v := deleteConfirmView{Email: acc.Email, CSRF: p.csrf(acc), Sites: len(ids), Tokens: len(toks)}
 	if liveSubscription(acc) {
@@ -549,11 +549,7 @@ func (p *provider) handleDeleteAccountConfirm(w http.ResponseWriter, r *http.Req
 		}
 	}
 	err := p.accounts.Delete(acc, func(viewID string) error {
-		err := p.host.Sites().Delete(viewID)
-		if errors.Is(err, ext.ErrSiteGone) {
-			return nil // a stale ownership marker is not a reason to keep the account
-		}
-		return err
+		return p.deleteOwnedSite(acc, viewID)
 	})
 	if err != nil {
 		slog.Error("account deletion failed", "account", acc.ID, "err", err)
@@ -747,7 +743,7 @@ func (p *provider) renderDashboard(w http.ResponseWriter, r *http.Request, acc *
 	// visible, and it restamps every site's expiry. Reading the rows before it
 	// would show the owner the pre-change dates on the one render that matters.
 	p.syncTier(acc)
-	ids, _ := p.accounts.ListSiteIDs(acc)
+	ids, _ := p.ownedSiteIDs(acc)
 	rows := make([]siteRow, 0, len(ids))
 	for _, id := range ids {
 		if info, ok := p.host.Sites().Info(id); ok {

@@ -263,7 +263,7 @@ func (p *provider) handleGDPRExport(w http.ResponseWriter, r *http.Request) {
 			Billing: acc.Billing, SuspendedAt: acc.SuspendedAt, SuspendedReason: acc.SuspendedReason,
 			CreatedAt: acc.CreatedAt, UpdatedAt: acc.UpdatedAt,
 		}
-		ids, err := p.accounts.ListSiteIDs(acc)
+		ids, err := p.ownedSiteIDs(acc)
 		if err != nil {
 			slog.Error("gdpr: could not list the account's sites for an export", "account", acc.ID, "err", err)
 			http.Error(w, "could not list the account's sites", http.StatusInternalServerError)
@@ -362,6 +362,9 @@ func (p *provider) handleGDPRDelete(w http.ResponseWriter, r *http.Request) {
 
 	sites := 0
 	err = p.accounts.Delete(acc, func(viewID string) error {
+		if !p.ownsByMeta(acc, viewID) {
+			return p.deleteOwnedSite(acc, viewID) // skips, and logs why
+		}
 		err := p.host.Sites().Delete(viewID)
 		if errors.Is(err, ext.ErrSiteGone) {
 			return nil // a marker for a site that is already gone

@@ -150,7 +150,7 @@ func (p *provider) unsuspend(w http.ResponseWriter, acc *account.Account) {
 // dropped and is no failure; every other failure is logged and counted, and
 // the other sites are still tried.
 func (p *provider) eachSite(acc *account.Account, fn func(viewID string) (changed bool, err error)) (changed, failed int) {
-	ids, err := p.accounts.ListSiteIDs(acc)
+	ids, err := p.ownedSiteIDs(acc)
 	if err != nil {
 		slog.Error("suspension: could not list the account's sites", "account", acc.ID, "err", err)
 		return 0, 1

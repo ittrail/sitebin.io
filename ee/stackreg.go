@@ -349,6 +349,9 @@ func tierFeatures(t eeconfig.Tier) []map[string]string {
 	if t.WebDAV {
 		add("WebDAV")
 	}
+	if t.Sharing {
+		add("Transfer and share sites")
+	}
 	return out
 }
 

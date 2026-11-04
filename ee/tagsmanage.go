@@ -85,7 +85,7 @@ type tagsPageView struct {
 // accountSites is every site of the account the core still knows, with its
 // tags.
 func (p *provider) accountSites(acc *account.Account) ([]ext.SiteInfo, error) {
-	ids, err := p.accounts.ListSiteIDs(acc)
+	ids, err := p.ownedSiteIDs(acc)
 	if err != nil {
 		return nil, err
 	}

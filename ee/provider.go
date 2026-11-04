@@ -394,7 +394,7 @@ func (p *provider) grantForAccount(acc *account.Account) (ext.CreateGrant, error
 	p.syncTier(acc)
 	tier := p.effectiveTier(acc)
 	if tier.MaxSites > 0 {
-		owned, _ := p.accounts.ListSiteIDs(acc)
+		owned, _ := p.ownedSiteIDs(acc)
 		if len(owned) >= tier.MaxSites {
 			label := tier.Label
 			if label == "" {
@@ -534,7 +534,7 @@ func (p *provider) AccountSiteIDs(accountID string) ([]string, bool) {
 	if err != nil {
 		return nil, false
 	}
-	ids, err := p.accounts.ListSiteIDs(acc)
+	ids, err := p.ownedSiteIDs(acc)
 	if err != nil {
 		return nil, false
 	}
@@ -576,9 +576,10 @@ func (p *provider) SessionAccount(r *http.Request) (string, bool) {
 
 var _ ext.SessionAccounts = (*provider)(nil)
 
-// owns reports whether the account owns the given site.
+// owns reports whether the account owns the given site, by meta.json (see
+// ownedSiteIDs). It is owner-only: an admin's access is not decided here.
 func (p *provider) owns(acc *account.Account, viewID string) bool {
-	ids, err := p.accounts.ListSiteIDs(acc)
+	ids, err := p.ownedSiteIDs(acc)
 	if err != nil {
 		return false
 	}
@@ -681,7 +682,7 @@ func (p *provider) syncTier(acc *account.Account) {
 // and every site creation for good. The marker is dropped instead, so the
 // account heals itself on the pass that discovers it.
 func (p *provider) restampSites(acc *account.Account, t eeconfig.Tier) error {
-	ids, err := p.accounts.ListSiteIDs(acc)
+	ids, err := p.ownedSiteIDs(acc)
 	if err != nil {
 		slog.Error("restamp sites: could not list sites", "account", acc.ID, "tier", t.ID, "err", err)
 		return fmt.Errorf("list sites of %s: %w", acc.ID, err)
