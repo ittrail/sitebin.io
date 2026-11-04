@@ -128,6 +128,9 @@ func TestCommandArgsCarryServerConfig(t *testing.T) {
 	for _, w := range []string{
 		"core.hooksPath=" + filepath.Join(state, "empty-hooks"),
 		"receive.fsckObjects=true",
+		"receive.fsck.zeroPaddedFilemode=ignore",
+		"receive.fsck.badTimezone=ignore",
+		"receive.fsck.missingSpaceBeforeDate=ignore",
 		"core.bigFileThreshold=64m",
 		"transfer.unpackLimit=1",
 		"receive.unpackLimit=1",

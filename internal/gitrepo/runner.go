@@ -90,6 +90,11 @@ func (r *Runner) commandWith(ctx context.Context, dir string, extraC, extraEnv [
 		"-c", "core.logAllRefUpdates=false",
 		"-c", "receive.fsckObjects=true",
 		"-c", "transfer.fsckObjects=true",
+		// Benign oddities of old or foreign tools (GitHub accepts them):
+		// a pushed history carrying one must not be refused for it.
+		"-c", "receive.fsck.zeroPaddedFilemode=ignore",
+		"-c", "receive.fsck.badTimezone=ignore",
+		"-c", "receive.fsck.missingSpaceBeforeDate=ignore",
 		"-c", "receive.autogc=false",
 		"-c", "uploadpack.allowAnySHA1InWant=false",
 		"-c", "pack.threads=1",
