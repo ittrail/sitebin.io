@@ -89,6 +89,16 @@ func (s *Store) BeginGitWrite(site *Site, cancel context.CancelFunc) (end func()
 	return end, nil
 }
 
+// GitWriteRunning reports whether a push to site is registered right now. It
+// only looks — it never registers, so asking cannot make a push that begins
+// at the same moment fail — and the answer can be stale at once: it serves a
+// readable early refusal, while BeginGitWrite stays the guarantee.
+func (s *Store) GitWriteRunning(site *Site) bool {
+	s.gitMu.Lock()
+	defer s.gitMu.Unlock()
+	return s.gitRunning[site.ViewID] != nil
+}
+
 // stopGitWrite cancels the push running on viewID, if any, and waits for it
 // to end — at most gitStopWait. Delete, DeleteGitRepo and the abuse guard's
 // hold call it holding the site lock; SetLock and ReleaseLock right after

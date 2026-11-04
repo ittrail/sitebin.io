@@ -99,6 +99,11 @@ func TestServeRPCPreResponseErrorsLeaveTheWriterUntouched(t *testing.T) {
 			if err == nil {
 				t.Fatal("no error")
 			}
+			// What the client sent is a bad request; an unknown service is
+			// the caller's mistake.
+			if bad := errors.Is(err, ErrBadRequest); bad != (c.svc != Service("git-nope")) {
+				t.Errorf("errors.Is(%v, ErrBadRequest) = %v", err, bad)
+			}
 			untouched(t, rec)
 		})
 	}

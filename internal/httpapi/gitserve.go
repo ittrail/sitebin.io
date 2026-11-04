@@ -1,0 +1,546 @@
+package httpapi
+
+import (
+	"compress/gzip"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"math"
+	"net/http"
+	"path"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"github.com/ittrail/sitebin.io/internal/gitrepo"
+	"github.com/ittrail/sitebin.io/internal/store"
+)
+
+// The Git endpoint: every site answers as a Git remote at
+// https://<base-domain>/git/<edit-id>.git, smart HTTP only — GET
+// info/refs?service=…, POST git-upload-pack, POST git-receive-pack. Sitebin
+// keeps authentication, quota, the push registry and provenance; git only
+// speaks the protocol (internal/gitrepo). See
+// docs/superpowers/specs/2026-11-03-site-git-design.md.
+//
+// Git prints nothing useful for a bare 4xx on a POST, and reads an ERR line
+// only from an advertisement. So a refusal after authentication is answered
+// on info/refs — the first request of every clone, fetch and push — as a
+// readable refusal (gitrepo.WriteRefusal), which Git prints as
+// "fatal: remote error: <message>". The RPCs repeat every check, because the
+// site may have changed in between, and answer a refusal there with a plain
+// status: they have no other way to.
+
+// Request body bounds. A fetch's body is its want and have lines — kilobytes
+// in practice — and is bounded on the wire and again once decompressed, so a
+// small gzip body cannot unfold into gigabytes of have lines. A push's body
+// is bounded at its allowance plus room for the command section, which
+// gitrepo caps at 1 MiB; git itself refuses a pack over the allowance
+// (receive.maxInputSize) first.
+const (
+	gitFetchBodyMax = 10 << 20
+	gitPushSlack    = 2 << 20
+)
+
+// Refusals. The placeholders are the instance's account page
+// (apiAccountHint), where a plan is changed.
+const (
+	msgGitDisabled        = "Git is turned off on this instance"
+	msgGitUnavailableHere = "Git is not available on this instance"
+	msgGitBusy            = "instance busy, try again in a minute"
+	msgGitAnonymous       = "this site was created without an account, so it has no Git repository; create it while signed in at %s to use Git"
+	msgGitPlan            = "this site's plan does not include Git; upgrade at %s to use it"
+	msgGitReadOnly        = "this site's plan does not include Git, so its repository is read-only; upgrade at %s to push again"
+	msgGitStopped         = "the push was stopped: the site was locked or deleted"
+	msgGitTooLarge        = "request too large"
+	msgGitBadRequest      = "bad git request"
+)
+
+// errGitNoRepo: a read of a site whose repository does not exist and may not
+// be created. The state check refuses it first; this is the backstop.
+var errGitNoRepo = errors.New("this site has no Git repository")
+
+// serveGit answers every Git request, in this order: the host, the site, the
+// service, the credential (gitAuth), the site's state (gitStateOf), then the
+// request itself.
+func (a *API) serveGit(w http.ResponseWriter, r *http.Request) {
+	// The base domain only. A site's own address, a custom domain, the view
+	// domain: those are user-content origins, never the place for this.
+	if !strings.EqualFold(hostWithoutPort(r.Host), hostWithoutPort(a.cfg.BaseDomain)) {
+		http.NotFound(w, r)
+		return
+	}
+	editID, ok := strings.CutSuffix(r.PathValue("repo"), ".git")
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	site, err := a.st.ByEditID(editID)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			a.log.Error("git: load site", "err", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		http.NotFound(w, r)
+		return
+	}
+
+	info := r.Method == http.MethodGet
+	name := path.Base(r.URL.Path)
+	if info {
+		name = r.URL.Query().Get("service")
+	}
+	svc, ok := gitrepo.ParseService(name)
+	if !ok {
+		http.Error(w, "unknown git service", http.StatusBadRequest)
+		return
+	}
+	write := svc == gitrepo.ReceivePack
+
+	act, d := a.gitAuth(r, site, write)
+	if d != nil {
+		writeGitDenial(w, svc, info, d)
+		return
+	}
+
+	st := a.gitStateOf(site)
+	if msg := a.gitStateRefusal(site, st, write); msg != "" {
+		gitRefuse(w, svc, info, http.StatusForbidden, msg)
+		return
+	}
+
+	switch {
+	case info:
+		a.gitAdvertise(w, r, site, svc, st)
+	case write:
+		a.gitPush(w, r, site, act)
+	default:
+		a.gitFetch(w, r, site, st)
+	}
+}
+
+// writeGitDenial answers what gitAuth refused. A refusal is a 200 carrying
+// an ERR line, so it is told apart before the status is used.
+func writeGitDenial(w http.ResponseWriter, svc gitrepo.Service, info bool, d *gitDenial) {
+	switch {
+	case d.challenge:
+		w.Header().Set("WWW-Authenticate", gitBasicChallenge)
+		http.Error(w, d.msg, http.StatusUnauthorized)
+	case d.refusal:
+		gitRefuse(w, svc, info, http.StatusForbidden, d.msg)
+	default:
+		http.Error(w, d.msg, d.status)
+	}
+}
+
+// gitRefuse answers a refusal: readable on info/refs, a plain status with
+// the message as its body on an RPC.
+func gitRefuse(w http.ResponseWriter, svc gitrepo.Service, info bool, status int, msg string) {
+	if info {
+		gitrepo.WriteRefusal(w, svc, msg)
+		return
+	}
+	http.Error(w, msg, status)
+}
+
+// gitStateRefusal is why st does not allow the request, or "". A plan
+// without Git still reads an existing repository; it never pushes or
+// creates one.
+func (a *API) gitStateRefusal(site *store.Site, st gitState, write bool) string {
+	if st.Writable || (st.Available && !write) {
+		return ""
+	}
+	hint := a.apiAccountHint()
+	switch st.Reason {
+	case gitReasonDisabled:
+		return msgGitDisabled
+	case gitReasonAnonymous:
+		return fmt.Sprintf(msgGitAnonymous, hint)
+	case gitReasonLocked:
+		return store.LockedMessage(site.Meta.Locked)
+	case gitReasonPlan:
+		if st.Available {
+			return fmt.Sprintf(msgGitReadOnly, hint)
+		}
+		return fmt.Sprintf(msgGitPlan, hint)
+	}
+	return msgGitUnavailableHere
+}
+
+// gitAllowance is how many bytes a push to site may bring: what is left of
+// its byte cap (files and repository share it), at most the instance's per
+// push ceiling. refusal is set when nothing is left: git never runs for it.
+func (a *API) gitAllowance(site *store.Site) (allowance int64, refusal string, err error) {
+	u, err := a.st.SiteUsage(site)
+	if err != nil {
+		return 0, "", err
+	}
+	limit := a.st.EffMaxBytes(site)
+	allowance = min(limit-u.Bytes(), a.cfg.GitMaxPushBytes)
+	if allowance <= 0 {
+		return 0, fmt.Sprintf("storage full: %s of %s used", store.HumanBytes(u.Bytes()), store.HumanBytes(limit)), nil
+	}
+	return allowance, "", nil
+}
+
+// gitRepoReady makes sure site's repository exists before a read serves it.
+// A missing one is created only where the site may write, and only inside a
+// push registration (BeginGitWrite), so a delete or a lock that lands at
+// the same moment cancels it or is seen by it — never leaves an orphaned
+// git/ behind. The registration ends with the Init: the read itself is
+// served outside it, beside any push.
+func (a *API) gitRepoReady(site *store.Site, writable bool) error {
+	dir := site.GitDir()
+	if gitrepo.Exists(dir) {
+		return nil
+	}
+	if !writable {
+		return errGitNoRepo
+	}
+	end, err := a.st.BeginGitWrite(site, nil)
+	if err != nil {
+		// A push is running: it created the repository, or is about to.
+		if errors.Is(err, store.ErrGitBusy) && gitrepo.Exists(dir) {
+			return nil
+		}
+		return err
+	}
+	defer end()
+	return a.git.Init(dir)
+}
+
+// gitFail answers err, which ended a request before git wrote anything.
+func (a *API) gitFail(w http.ResponseWriter, r *http.Request, site *store.Site, svc gitrepo.Service, info bool, err error) {
+	switch {
+	case errors.Is(err, gitrepo.ErrBusy):
+		gitRefuse(w, svc, info, http.StatusServiceUnavailable, msgGitBusy)
+	case errors.Is(err, store.ErrGitBusy):
+		gitRefuse(w, svc, info, http.StatusConflict, store.ErrGitBusy.Error())
+	case errors.Is(err, store.ErrLocked):
+		// Locked after this request was let in.
+		gitRefuse(w, svc, info, http.StatusForbidden, store.LockedMessage(nil))
+	case errors.Is(err, errGitNoRepo):
+		gitRefuse(w, svc, info, http.StatusNotFound, errGitNoRepo.Error())
+	case errors.Is(err, store.ErrNotFound):
+		// Deleted after this request was let in.
+		http.NotFound(w, r)
+	case errors.Is(err, gitrepo.ErrBadRequest):
+		http.Error(w, msgGitBadRequest, http.StatusBadRequest)
+	default:
+		a.log.Error("git: request failed", "id", site.ViewID, "service", svc, "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}
+}
+
+// gitAdvertise answers GET info/refs. AdvertiseRefs writes the service line
+// before git starts, so it is called only once the repository exists: a
+// missing one is a refusal, never a truncated 200.
+func (a *API) gitAdvertise(w http.ResponseWriter, r *http.Request, site *store.Site, svc gitrepo.Service, st gitState) {
+	if svc == gitrepo.ReceivePack {
+		// A second push is told so here: on its POST, the 409 that
+		// BeginGitWrite answers is all Git would show. Only a look — the
+		// POST's registration stays the guarantee.
+		if a.st.GitWriteRunning(site) {
+			gitrepo.WriteRefusal(w, svc, store.ErrGitBusy.Error())
+			return
+		}
+		// A full site is told so before the push sends its pack, and
+		// before git runs at all.
+		_, refusal, err := a.gitAllowance(site)
+		if err != nil {
+			a.gitFail(w, r, site, svc, true, err)
+			return
+		}
+		if refusal != "" {
+			gitrepo.WriteRefusal(w, svc, refusal)
+			return
+		}
+	}
+	if err := a.gitRepoReady(site, st.Writable); err != nil {
+		a.gitFail(w, r, site, svc, true, err)
+		return
+	}
+	tw := &gitWriter{ResponseWriter: w}
+	err := a.git.AdvertiseRefs(r.Context(), site.GitDir(), svc, gitrepo.ProtocolFromHeader(r.Header.Get("Git-Protocol")), tw)
+	if err == nil {
+		return
+	}
+	if !tw.wrote.Load() {
+		a.gitFail(w, r, site, svc, true, err)
+		return
+	}
+	if r.Context().Err() == nil {
+		a.log.Warn("git: advertisement failed", "id", site.ViewID, "service", svc, "err", err)
+	}
+}
+
+// gitFetch answers POST git-upload-pack. A fetch only reads: it runs beside
+// a push, outside any registration.
+func (a *API) gitFetch(w http.ResponseWriter, r *http.Request, site *store.Site, st gitState) {
+	svc := gitrepo.UploadPack
+	if err := a.gitRepoReady(site, st.Writable); err != nil {
+		a.gitFail(w, r, site, svc, false, err)
+		return
+	}
+	// The body is decoded here rather than in ServeRPC, so the bound applies
+	// to what git reads, not just to what crossed the wire.
+	var in io.Reader = http.MaxBytesReader(w, r.Body, gitFetchBodyMax)
+	if isGzip(r) {
+		zr, err := gzip.NewReader(in)
+		if err != nil {
+			http.Error(w, msgGitBadRequest, http.StatusBadRequest)
+			return
+		}
+		defer zr.Close()
+		in = zr
+	}
+	body := &boundedBody{r: in, left: gitFetchBodyMax}
+	guard := newGitBody(body)
+	defer guard.stop(w)
+	tw := &gitWriter{ResponseWriter: w}
+	_, err := a.git.ServeRPC(r.Context(), site.GitDir(), svc, guard, tw, gitrepo.RPCOptions{
+		Protocol: gitrepo.ProtocolFromHeader(r.Header.Get("Git-Protocol")),
+	})
+	if err == nil || tw.wrote.Load() || r.Context().Err() != nil {
+		return
+	}
+	switch {
+	case body.over.Load():
+		http.Error(w, msgGitTooLarge, http.StatusRequestEntityTooLarge)
+	case body.failed.Load():
+		http.Error(w, msgGitBadRequest, http.StatusBadRequest)
+	case errors.Is(err, gitrepo.ErrBusy):
+		a.gitFail(w, r, site, svc, false, err)
+	default:
+		// git refused the request and said nothing on stdout: a malformed
+		// or unanswerable want list, as a rule.
+		a.log.Warn("git: fetch failed", "id", site.ViewID, "err", err)
+		http.Error(w, msgGitBadRequest, http.StatusBadRequest)
+	}
+}
+
+// gitPush answers POST git-receive-pack. It holds the site's push
+// registration from before the repository is created (if it must be)
+// through git's run to the bookkeeping that follows, and takes no site lock
+// in between: a delete or a lock waits for the registration's end, and
+// cancels ctx to get it.
+func (a *API) gitPush(w http.ResponseWriter, r *http.Request, site *store.Site, act actor) {
+	svc := gitrepo.ReceivePack
+	allowance, refusal, err := a.gitAllowance(site)
+	if err != nil {
+		a.gitFail(w, r, site, svc, false, err)
+		return
+	}
+	if refusal != "" {
+		http.Error(w, refusal, http.StatusInsufficientStorage)
+		return
+	}
+
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	end, err := a.st.BeginGitWrite(site, cancel)
+	if err != nil {
+		a.gitFail(w, r, site, svc, false, err)
+		return
+	}
+	defer end()
+
+	dir := site.GitDir()
+	if err := a.git.Init(dir); err != nil {
+		a.gitFail(w, r, site, svc, false, err)
+		return
+	}
+	before, err := a.git.RefTargets(ctx, dir)
+	if err != nil {
+		a.gitFail(w, r, site, svc, false, err)
+		return
+	}
+
+	bodyMax := allowance + gitPushSlack
+	if bodyMax < allowance { // an allowance near the int64 limit
+		bodyMax = math.MaxInt64
+	}
+	guard := newGitBody(http.MaxBytesReader(w, r.Body, bodyMax))
+	defer guard.stop(w)
+	tw := &gitWriter{ResponseWriter: w}
+	res, err := a.git.ServeRPC(ctx, dir, svc, guard, tw, gitrepo.RPCOptions{
+		Protocol:     gitrepo.ProtocolFromHeader(r.Header.Get("Git-Protocol")),
+		Gzip:         isGzip(r),
+		MaxInputSize: allowance,
+	})
+	if err != nil && !tw.wrote.Load() && r.Context().Err() == nil {
+		switch {
+		case ctx.Err() != nil:
+			// The registry cancelled it: a delete or a lock.
+			http.Error(w, msgGitStopped, http.StatusConflict)
+		case errors.Is(err, gitrepo.ErrBusy), errors.Is(err, gitrepo.ErrBadRequest):
+			a.gitFail(w, r, site, svc, false, err)
+		default:
+			a.log.Warn("git: push failed", "id", site.ViewID, "err", err)
+			http.Error(w, msgGitBadRequest, http.StatusBadRequest)
+		}
+	}
+	// What the push changed is recorded whatever git's exit status, and
+	// before the registration ends: a delete waits for it.
+	a.recordPush(r, site, act, before, res, err == nil)
+}
+
+func isGzip(r *http.Request) bool {
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get("Content-Encoding")), "gzip")
+}
+
+// gitWriter notes whether anything reached the client: an error from git
+// becomes a status only while nothing has. Atomic, because git's output is
+// copied from its own goroutine.
+type gitWriter struct {
+	http.ResponseWriter
+	wrote atomic.Bool
+}
+
+func (g *gitWriter) WriteHeader(code int) {
+	g.wrote.Store(true)
+	g.ResponseWriter.WriteHeader(code)
+}
+
+func (g *gitWriter) Write(p []byte) (int, error) {
+	g.wrote.Store(true)
+	return g.ResponseWriter.Write(p)
+}
+
+// Unwrap lets http.ResponseController reach the connection beneath: git's
+// output is flushed as it comes, and a push needs full duplex.
+func (g *gitWriter) Unwrap() http.ResponseWriter { return g.ResponseWriter }
+
+// gitBodyStopWait bounds how long stop waits for a read it interrupted.
+const gitBodyStopWait = 5 * time.Second
+
+// errGitBodyClosed ends a read of a request body whose handler is done.
+var errGitBodyClosed = errors.New("git request body read after its handler ended")
+
+// gitBody is a request body as git's stdin copier reads it, and what the
+// handler does about the body when it is done.
+//
+// ServeRPC can return while its copier still reads the body: git exited
+// early (a refusal, the size limit), and the copier is abandoned until its
+// next write to the dead stdin fails — or for as long as a stalled client
+// keeps its read waiting. net/http forbids reading a body once the handler
+// has returned: the server reads the connection's next request by then, and
+// two reads at once panic ("invalid concurrent Body.Read call").
+//
+// A body left part read has a second trap. ServeRPC enables full duplex,
+// and in that mode net/http reads the rest of such a body (up to 256 KiB)
+// only after the handler, once it has stopped watching the connection: a
+// rest that reaches its end there starts a background read nobody stops,
+// and the connection's next request panics the same way (reproduced on
+// go1.25; TestGitCutOffBodyKeepsServing). So a body not read to its end
+// closes its connection after the response, and a read deadline in the past
+// keeps that last read from waiting on a stalled client. The deadline never
+// goes without the close: on a connection kept open, the server would read
+// the rest of the body as the next request.
+type gitBody struct {
+	r      io.Reader
+	sem    chan struct{} // held during a read
+	closed atomic.Bool
+	eof    atomic.Bool
+}
+
+func newGitBody(r io.Reader) *gitBody { return &gitBody{r: r, sem: make(chan struct{}, 1)} }
+
+func (b *gitBody) Read(p []byte) (int, error) {
+	b.sem <- struct{}{}
+	defer func() { <-b.sem }()
+	if b.closed.Load() {
+		return 0, errGitBodyClosed
+	}
+	n, err := b.r.Read(p)
+	if err == io.EOF {
+		b.eof.Store(true)
+	}
+	return n, err
+}
+
+// stop returns once no read of the body runs and none can start. Deferred
+// by the handler that handed the body to ServeRPC.
+func (b *gitBody) stop(w http.ResponseWriter) {
+	b.closed.Store(true)
+	rc := http.NewResponseController(w)
+	select {
+	case b.sem <- struct{}{}:
+	default:
+		// A read is running; if it waits on the client, a deadline in the
+		// past ends it. Unless that read reached the body's end (and left
+		// nothing to misread), the connection is closed below.
+		_ = rc.SetReadDeadline(time.Now())
+		select {
+		case b.sem <- struct{}{}:
+		case <-time.After(gitBodyStopWait):
+			// Only a writer that cannot set deadlines — never a server's
+			// connection — gets here.
+			return
+		}
+	}
+	<-b.sem
+	if !b.eof.Load() {
+		_ = rc.SetReadDeadline(time.Now())
+		closeAfterResponse(w)
+	}
+}
+
+// closeAfterResponse has the server close the connection once this response
+// is written. http.MaxBytesReader does that, as documented, for a body past
+// its limit, through the server's own writer — so it is handed that writer,
+// from beneath every wrapper, and a one-byte reader with a limit of zero.
+// Elsewhere (HTTP/2, a test recorder) it does nothing.
+func closeAfterResponse(w http.ResponseWriter) {
+	for {
+		u, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			break
+		}
+		w = u.Unwrap()
+	}
+	var one [1]byte
+	_, _ = http.MaxBytesReader(w, io.NopCloser(strings.NewReader("x")), 0).Read(one[:])
+}
+
+// errBodyTooLarge ends a fetch body read past gitFetchBodyMax.
+var errBodyTooLarge = errors.New("git request body too large")
+
+// boundedBody reads at most left bytes of r and fails after them, noting
+// why it stopped: over for the bound (here, or the wire's MaxBytesReader),
+// failed for any other read error. Atomic: git's stdin is fed from its own
+// goroutine.
+type boundedBody struct {
+	r      io.Reader
+	left   int64
+	over   atomic.Bool
+	failed atomic.Bool
+}
+
+func (b *boundedBody) Read(p []byte) (int, error) {
+	if b.left < 0 {
+		return 0, errBodyTooLarge
+	}
+	if int64(len(p)) > b.left+1 {
+		p = p[:b.left+1]
+	}
+	n, err := b.r.Read(p)
+	if int64(n) > b.left {
+		n = int(b.left)
+		b.left = -1
+		b.over.Store(true)
+		return n, errBodyTooLarge
+	}
+	b.left -= int64(n)
+	if err != nil && err != io.EOF {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			b.over.Store(true)
+		} else {
+			b.failed.Store(true)
+		}
+	}
+	return n, err
+}

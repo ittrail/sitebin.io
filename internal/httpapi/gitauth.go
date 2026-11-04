@@ -36,6 +36,15 @@ const msgGitConsent = "sign in once at %s and accept the updated terms, then pus
 // now: the consent check failed closed, and the same token may work shortly.
 const msgGitUnavailable = "the sign-in service cannot be reached right now; try again in a minute"
 
+// msgGitNoWrite and msgGitNoRead answer an OAuth grant without the scope the
+// request needs. A readable refusal, not a 403, which Git shows as a bare
+// status: signing in again with the same grant would not help, approving
+// the scope would.
+const (
+	msgGitNoWrite = "this sign-in was not granted write access; sign in again and approve writing"
+	msgGitNoRead  = "this sign-in was not granted read access; sign in again and approve reading"
+)
+
 // gitDenial is how the Git handler answers a refused request:
 //   - challenge: 401 with WWW-Authenticate: gitBasicChallenge — no credential,
 //     or one that failed. Git asks its credential helper again.
@@ -71,7 +80,7 @@ func gitRefusal(msg string) *gitDenial {
 //  4. a compact JWS (three base64url segments): an OAuth access token, asked
 //     about with the Git marker — the only way the extension verifies one
 //     here. Its account must stand on the site and it must hold the scope
-//     (read to fetch, write to push: a 403 otherwise). A refusal the verifier
+//     (read to fetch, write to push: a readable refusal otherwise). A refusal the verifier
 //     notes — consent outstanding, or the stack unavailable — is a readable
 //     refusal; any other is a challenge;
 //  5. anything else: the site's edit password, through verifyEdit (its rate
@@ -112,12 +121,12 @@ func (a *API) gitAuth(r *http.Request, site *store.Site, write bool) (actor, *gi
 		if !cred.OAuth || !a.accountStands(site, cred.AccountID) {
 			return actor{}, gitChallenge()
 		}
-		scope, doing := mcp.ScopeRead, "fetch"
+		scope, missing := mcp.ScopeRead, msgGitNoRead
 		if write {
-			scope, doing = mcp.ScopeWrite, "push"
+			scope, missing = mcp.ScopeWrite, msgGitNoWrite
 		}
 		if !mcp.Allows(cred.Scopes, cred.OAuth, scope) {
-			return actor{}, &gitDenial{status: http.StatusForbidden, msg: "this sign-in was not granted " + scope + ", which a " + doing + " needs"}
+			return actor{}, gitRefusal(missing)
 		}
 		return actor{surface: provenance.SurfaceGit, auth: provenance.AuthOAuth, account: cred.AccountID}, nil
 	}

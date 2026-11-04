@@ -405,8 +405,9 @@ func TestGitAuthBadTokenNeverFallsBack(t *testing.T) {
 }
 
 // An OAuth token is held to what it was granted: read to fetch, write to
-// push. A missing scope is a plain 403, not a challenge — signing in again
-// with the same grant would not help.
+// push. A missing scope is a readable refusal, not a challenge — signing in
+// again with the same grant would not help, and Git prints nothing useful
+// for a bare 403.
 func TestGitAuthOAuthScopes(t *testing.T) {
 	e := newEnv(t, oauthEnv())
 	g := newGitFake(t)
@@ -418,8 +419,8 @@ func TestGitAuthOAuthScopes(t *testing.T) {
 	wantActor(t, act, d, owner, "a read token fetching")
 
 	_, d = e.api.gitAuth(gitReq("OAUTH-USER", jwtRead), site, true)
-	if d == nil || d.status != http.StatusForbidden || d.challenge || d.refusal || !strings.Contains(d.msg, mcp.ScopeWrite) {
-		t.Fatalf("a read token pushing: %+v, want a plain 403 naming %s", d, mcp.ScopeWrite)
+	if d == nil || !d.refusal || d.challenge || d.msg != msgGitNoWrite {
+		t.Fatalf("a read token pushing: %+v, want the refusal %q", d, msgGitNoWrite)
 	}
 
 	for _, write := range []bool{false, true} {
@@ -429,8 +430,8 @@ func TestGitAuthOAuthScopes(t *testing.T) {
 
 	// No scopes at all is no grant at all for an OAuth token.
 	_, d = e.api.gitAuth(gitReq("OAUTH-USER", jwtNone), site, false)
-	if d == nil || d.status != http.StatusForbidden || d.challenge || !strings.Contains(d.msg, mcp.ScopeRead) {
-		t.Fatalf("a token without scopes fetching: %+v, want a plain 403 naming %s", d, mcp.ScopeRead)
+	if d == nil || !d.refusal || d.challenge || d.msg != msgGitNoRead {
+		t.Fatalf("a token without scopes fetching: %+v, want the refusal %q", d, msgGitNoRead)
 	}
 
 	// Another account's token is a failed credential, whatever its scopes.

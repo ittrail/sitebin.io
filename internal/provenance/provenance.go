@@ -75,7 +75,9 @@ const (
 	ActionOpenUpload     = "open-upload"
 	ActionRename         = "rename"
 	ActionRotatePassword = "rotate-password"
-	ActionTags           = "tags" // the account dashboard changed tags: one site's, or an account-wide rename or delete
+	ActionTags           = "tags"       // the account dashboard changed tags: one site's, or an account-wide rename or delete
+	ActionGitPush        = "git-push"   // a push changed refs of the site's repository
+	ActionGitDelete      = "git-delete" // the owner deleted the site's repository
 
 	ActionSignup     = "signup"
 	ActionSignin     = "signin"

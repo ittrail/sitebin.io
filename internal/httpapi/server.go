@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/ittrail/sitebin.io/internal/config"
 	"github.com/ittrail/sitebin.io/internal/ext"
 	"github.com/ittrail/sitebin.io/internal/forms"
+	"github.com/ittrail/sitebin.io/internal/gitrepo"
 	"github.com/ittrail/sitebin.io/internal/ids"
 	"github.com/ittrail/sitebin.io/internal/provenance"
 	"github.com/ittrail/sitebin.io/internal/store"
@@ -57,11 +59,12 @@ type API struct {
 	uploads        *uploadTokens
 	assets         assetCache
 	csp            *cspAggregator
-	forms          *formsState   // nil when the instance has no forms
-	alerts         *alerter      // abuse mail to the operator
-	tripLimiter    *auth.Limiter // CSP tripwire verifications per site
-	tripSlots      chan struct{} // CSP tripwire verifications running at once
-	reportKey      []byte        // signs the report page's form tickets
+	forms          *formsState     // nil when the instance has no forms
+	alerts         *alerter        // abuse mail to the operator
+	tripLimiter    *auth.Limiter   // CSP tripwire verifications per site
+	tripSlots      chan struct{}   // CSP tripwire verifications running at once
+	reportKey      []byte          // signs the report page's form tickets
+	git            *gitrepo.Runner // nil: Git is turned off, or no git binary
 }
 
 // New wires the API. secret signs view-session cookies; webFS provides the
@@ -105,7 +108,26 @@ func New(cfg config.Config, st *store.Store, secret []byte, webFS fs.FS) (*API, 
 	// Every retention purge of a locked site (the cleanup sweep, in this
 	// process) becomes a line in the operator's digest.
 	st.SetPurgeHook(a.onLockPurged)
+	a.git = newGitRunner(cfg, a.log)
 	return a, nil
+}
+
+// newGitRunner finds the git binary for the Git endpoint. Git never stops
+// the instance from starting: without a binary (or a state directory) it is
+// off, logged once here, and every site says "not available".
+func newGitRunner(cfg config.Config, log *slog.Logger) *gitrepo.Runner {
+	if !cfg.GitEnabled {
+		return nil
+	}
+	r, err := gitrepo.New(gitrepo.Options{
+		StateDir:     filepath.Join(cfg.DataDir, "gitstate"),
+		MaxProcesses: cfg.GitMaxProcesses,
+	})
+	if err != nil {
+		log.Warn("git: not available", "err", err)
+		return nil
+	}
+	return r
 }
 
 // Public returns the handler Caddy proxies: main-domain UI + API + WebDAV,
@@ -147,6 +169,12 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("POST /api/sites/{editID}/forms/{key}/confirmation", a.withEditAuth(a.recorded(provenance.ActionFormResend, a.resendFormConfirmation)))
 
 	mux.Handle("/dav/", http.HandlerFunc(a.webdav))
+
+	// Every site's repository, /git/<edit-id>.git, smart HTTP only. The
+	// handler answers on the base domain alone (see serveGit).
+	mux.HandleFunc("GET /git/{repo}/info/refs", a.serveGit)
+	mux.HandleFunc("POST /git/{repo}/git-upload-pack", a.serveGit)
+	mux.HandleFunc("POST /git/{repo}/git-receive-pack", a.serveGit)
 
 	// The Model Context Protocol endpoint. Mounted on the main domain, which
 	// Caddy already proxies wholesale, so it needs no Caddy configuration. Not

@@ -63,12 +63,22 @@ func TestBeginGitWriteOnePerSite(t *testing.T) {
 	s := newTestStore(t)
 	site, _, _ := s.Create()
 	other, _, _ := s.Create()
+	if s.GitWriteRunning(site) {
+		t.Fatal("running before any registration")
+	}
 	end, err := s.BeginGitWrite(site, func() {})
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
+	if !s.GitWriteRunning(site) || s.GitWriteRunning(other) {
+		t.Fatalf("GitWriteRunning = %v (site), %v (other), want true, false", s.GitWriteRunning(site), s.GitWriteRunning(other))
+	}
 	if _, err := s.BeginGitWrite(site, func() {}); !errors.Is(err, ErrGitBusy) {
 		t.Fatalf("second while the first runs: %v, want ErrGitBusy", err)
+	}
+	// Asking registers nothing: the running push is still the one.
+	if !s.GitWriteRunning(site) {
+		t.Fatal("asking twice changed the answer")
 	}
 	endOther, err := s.BeginGitWrite(other, func() {})
 	if err != nil {
@@ -77,6 +87,9 @@ func TestBeginGitWriteOnePerSite(t *testing.T) {
 	endOther()
 	end()
 	end() // harmless twice
+	if s.GitWriteRunning(site) {
+		t.Fatal("running after end")
+	}
 	end2, err := s.BeginGitWrite(site, func() {})
 	if err != nil {
 		t.Fatalf("after end: %v", err)

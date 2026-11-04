@@ -23,6 +23,11 @@ const (
 	ReceivePack Service = "git-receive-pack"
 )
 
+// ErrBadRequest marks a request ServeRPC refused before git started: a body
+// that is not gzip, or a push command section it cannot parse. Nothing was
+// written to the client, so the caller may answer it with a 400.
+var ErrBadRequest = errors.New("gitrepo: bad request")
+
 // maxStderr caps the stderr kept for an error message.
 const maxStderr = 8 << 10
 
@@ -189,7 +194,7 @@ func (r *Runner) ServeRPC(ctx context.Context, dir string, svc Service, body io.
 	if o.Gzip {
 		zr, err := gzip.NewReader(cr)
 		if err != nil {
-			return res, fmt.Errorf("gitrepo: gzip body: %w", err)
+			return res, fmt.Errorf("gitrepo: gzip body: %w: %w", ErrBadRequest, err)
 		}
 		defer zr.Close()
 		in = zr
@@ -204,14 +209,14 @@ func (r *Runner) ServeRPC(ctx context.Context, dir string, svc Service, body io.
 			p, flush, err := readPkt(in, &raw)
 			if err != nil {
 				res.BytesIn = cr.n.Load()
-				return res, fmt.Errorf("gitrepo: push commands: %w", err)
+				return res, fmt.Errorf("gitrepo: push commands: %w: %w", ErrBadRequest, err)
 			}
 			if flush {
 				break
 			}
 			if raw.Len() > maxCommandBytes {
 				res.BytesIn = cr.n.Load()
-				return res, errors.New("gitrepo: push commands too long")
+				return res, fmt.Errorf("gitrepo: push commands too long: %w", ErrBadRequest)
 			}
 			if bytes.HasPrefix(p, []byte("shallow ")) {
 				// A push from a shallow clone lists its shallow boundary
@@ -221,7 +226,7 @@ func (r *Runner) ServeRPC(ctx context.Context, dir string, svc Service, body io.
 			u, err := parseCommand(p)
 			if err != nil {
 				res.BytesIn = cr.n.Load()
-				return res, err
+				return res, fmt.Errorf("%w: %w", ErrBadRequest, err)
 			}
 			res.Updates = append(res.Updates, u)
 		}
