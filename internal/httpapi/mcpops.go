@@ -147,7 +147,13 @@ func (o mcpOps) openSiteEvenLocked(auth mcp.Auth, ref mcp.SiteRef) (*store.Site,
 	if err != nil {
 		return nil, standNone, o.mcpError(err)
 	}
-	if st := o.a.accountStanding(site, auth.AccountID); st != standNone {
+	st, err := o.a.accountStanding(site, auth.AccountID)
+	if err != nil {
+		// A listed admin whose plan could not be asked: this call is
+		// refused, never answered with the edit_password prompt.
+		return nil, standNone, o.mcpError(err)
+	}
+	if st != standNone {
 		return site, st, nil
 	}
 	if ref.EditPassword == "" {
@@ -343,14 +349,20 @@ func (o mcpOps) ListSites(_ context.Context, auth mcp.Auth) ([]mcp.SiteSummary, 
 	// each only where the account's standing on it really is admin
 	// (accountStanding, from meta.json and both plans), so a share that
 	// ended, a stale index entry or a site the account owns is never shown
-	// as shared. An admin's row carries the admin's own tags.
+	// as shared; a plan that could not be asked leaves its row out. Each
+	// plan is asked once per listing (the caller's, each owner's). An
+	// admin's row carries the admin's own tags.
 	if sa, ok := sharingProvider(); ok {
+		plans := planCache{}
 		for _, id := range sa.SharedSiteIDs(auth.AccountID) {
 			if listed[id] {
 				continue
 			}
 			site, err := o.a.st.ByViewID(id)
-			if err != nil || o.a.accountStanding(site, auth.AccountID) != standAdmin {
+			if err != nil {
+				continue
+			}
+			if st, _ := o.a.standingWith(site, auth.AccountID, plans); st != standAdmin {
 				continue
 			}
 			listed[site.ViewID] = true
@@ -398,8 +410,14 @@ func (o mcpOps) UpdateSite(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, s 
 	set := settingsToUpdateSet(s)
 	// The API's own path: an admin is refused expires_at before anything is
 	// written, and an admin's tags are the admin's own.
-	if err := o.a.applySettingsAs(site, set, mcpActor(auth, site, st)); err != nil {
+	changed, err := o.a.applySettingsAs(site, set, mcpActor(auth, site, st))
+	if err != nil {
 		return nil, o.mcpError(err)
+	}
+	if !changed {
+		// Only the admin's own labels changed: nothing of the site to lay
+		// out, or to record.
+		return o.siteResult(site, auth, st), nil
 	}
 	o.a.recordMCP(auth, site, st, provenance.ActionSettings, 0, settingsDetail(set))
 	if err := o.a.syncViewerLayout(site); err != nil {

@@ -75,6 +75,11 @@ func (a *API) webdav(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer end()
+		// An admin's token only while the admin manages the site.
+		if err := a.uploadTokenStands(site, secret); err != nil {
+			respondErr(w, err)
+			return
+		}
 	} else {
 		if !site.Meta.WebDAVEnabled {
 			writeError(w, 404, "not found")

@@ -67,6 +67,7 @@ type API struct {
 	reportKey      []byte          // signs the report page's form tickets
 	git            *gitrepo.Runner // nil: Git is turned off, or no git binary
 	gitInspect     pushInspector   // nil: git; a test's stand-in for the push bookkeeping
+	sharingWarn    *auth.Limiter   // one "plan unknown" log line per account a minute
 }
 
 // New wires the API. secret signs view-session cookies; webFS provides the
@@ -98,6 +99,7 @@ func New(cfg config.Config, st *store.Store, secret []byte, webFS fs.FS) (*API, 
 		tripLimiter:    auth.NewLimiter(tripPerHour, tripBurst),
 		tripSlots:      make(chan struct{}, tripSlots),
 		reportKey:      reportTicketKey(secret),
+		sharingWarn:    auth.NewLimiter(60, 1),
 	}
 	var send forms.Sender
 	if s := cfg.FormsSMTP; s != nil {
@@ -402,8 +404,14 @@ func (s standing) role() string {
 //     (store.Meta.LiveAdmin: no end date, or one still ahead) while the
 //     extension's SharingAllowed is true for BOTH the owner and that
 //     account. Without a provider implementing ext.SharingAccounts there is
-//     no admin standing at all. A SharingAllowed error refuses this one
-//     request and changes nothing stored: the share stays.
+//     no admin standing at all.
+//
+// The error is errSharingUnknown, and only that: a listed admin whose plan
+// (or whose owner's plan) could not be asked. It refuses this one request —
+// every gate answers it as such (503 on the API, a tool error on MCP, a
+// readable refusal on Git, never the password prompt) — and changes nothing
+// stored: the share stays. The standing returned with it is standNone, so a
+// caller that only reads the standing can never let it in.
 //
 // The plan is asked only for an account the meta lists, so an owner, a
 // stranger and every site nobody shares cost no lookup.
@@ -412,32 +420,70 @@ func (s standing) role() string {
 // the actor's role (editAuth, gitAuth, mcpActor from openSiteAs, an upload
 // token's issuer). The enterprise dashboard's provider.owns (ee/provider.go)
 // is the extension's own decision over the account's own site list.
-func (a *API) accountStanding(site *store.Site, accountID string) standing {
+func (a *API) accountStanding(site *store.Site, accountID string) (standing, error) {
+	return a.standingWith(site, accountID, nil)
+}
+
+// standingWith is accountStanding with the plan answers memoized in plans
+// for the length of one request (list_sites asks for many sites of the same
+// owners); nil asks the extension every time.
+func (a *API) standingWith(site *store.Site, accountID string, plans planCache) (standing, error) {
 	m := site.Meta
 	if accountID == "" || m.OwnerAccountID == "" {
-		return standNone
+		return standNone, nil
 	}
 	if accountID == m.OwnerAccountID {
-		return standOwner
+		return standOwner, nil
 	}
 	if !m.LiveAdmin(accountID, time.Now()) {
-		return standNone
+		return standNone, nil
 	}
 	sa, ok := sharingProvider()
 	if !ok {
-		return standNone
+		return standNone, nil
 	}
 	for _, id := range []string{m.OwnerAccountID, accountID} {
-		allowed, err := sa.SharingAllowed(id)
+		allowed, err := plans.sharingAllowed(sa, id)
 		if err != nil {
-			a.log.Warn("sharing: plan unknown, admin standing refused for this request", "id", site.ViewID, "account", id, "err", err)
-			return standNone
+			if a.sharingWarn.Allow(id) {
+				a.log.Warn("sharing: plan unknown, admin standing refused for this request", "id", site.ViewID, "account", id, "err", err)
+			}
+			return standNone, errSharingUnknown
 		}
 		if !allowed {
-			return standNone
+			return standNone, nil
 		}
 	}
-	return standAdmin
+	return standAdmin, nil
+}
+
+// msgSharingUnknown answers a request refused only because a sharing plan
+// could not be asked.
+const msgSharingUnknown = "could not check the sharing plan; try again"
+
+// errSharingUnknown is accountStanding's one error. An apiError, so the API
+// (respondErr: 503) and MCP (mcpError) answer it without restating it.
+var errSharingUnknown = &apiError{http.StatusServiceUnavailable, msgSharingUnknown}
+
+// planCache memoizes SharingAllowed answers, errors included, for one
+// request. A nil planCache memoizes nothing.
+type planCache map[string]planAnswer
+
+type planAnswer struct {
+	ok  bool
+	err error
+}
+
+func (c planCache) sharingAllowed(sa ext.SharingAccounts, id string) (bool, error) {
+	if c == nil {
+		return sa.SharingAllowed(id)
+	}
+	if ans, ok := c[id]; ok {
+		return ans.ok, ans.err
+	}
+	ok, err := sa.SharingAllowed(id)
+	c[id] = planAnswer{ok, err}
+	return ok, err
 }
 
 // sharingProvider returns the extension's sharing answers, when there is a
@@ -453,7 +499,8 @@ func sharingProvider() (ext.SharingAccounts, bool) {
 
 // tokenAccount resolves the request's account API token (Authorization:
 // Bearer) to the account it acts for and that account's standing on site
-// (accountStanding); standNone, with no account, when it has none. The check
+// (accountStanding); standNone, with no account, when it has none, and
+// accountStanding's errSharingUnknown when that could not be decided. The check
 // lives here, in the core, because the core is the side that holds the site's
 // metadata; the extension only says which account the token belongs to.
 //
@@ -462,16 +509,16 @@ func sharingProvider() (ext.SharingAccounts, bool) {
 // it to what it was granted: honoured here, a read-only grant could overwrite
 // and delete sites. MCP reads its OAuth credentials in mcpOps.Authenticate and
 // the Git endpoint in gitAuth's own OAuth branch, never through this.
-func (a *API) tokenAccount(r *http.Request, site *store.Site) (string, standing) {
+func (a *API) tokenAccount(r *http.Request, site *store.Site) (string, standing, error) {
 	cred, ok := bearerCredential(r)
 	if !ok || cred.OAuth {
-		return "", standNone
+		return "", standNone, nil
 	}
-	st := a.accountStanding(site, cred.AccountID)
+	st, err := a.accountStanding(site, cred.AccountID)
 	if st == standNone {
-		return "", standNone
+		return "", standNone, err
 	}
-	return cred.AccountID, st
+	return cred.AccountID, st, nil
 }
 
 // bearerCredential asks the extension what the request's bearer is. Without a
@@ -491,7 +538,8 @@ const sessionHeader = "X-Sitebin-Session"
 // sessionStanding resolves the request's browser session to its account and
 // that account's standing on site (accountStanding) — the standing an account
 // token has, reached from the owner's or an admin's own browser; standNone,
-// with no account, when it has none. See
+// with no account, when it has none, and accountStanding's errSharingUnknown
+// when that could not be decided. See
 // docs/superpowers/specs/2026-09-25-owner-session-edit-design.md.
 //
 // THIS IS A SECURITY BOUNDARY, unlike fromOwnBrowser. A cookie rides along on
@@ -502,26 +550,26 @@ const sessionHeader = "X-Sitebin-Session"
 // would not do — the marketing apex serves uploaded content and is same-site
 // with the app — so a Sec-Fetch-Site the browser did send must also say
 // same-origin. Never relax this into fromOwnBrowser's forgeable heuristics.
-func (a *API) sessionStanding(r *http.Request, site *store.Site) (string, standing) {
+func (a *API) sessionStanding(r *http.Request, site *store.Site) (string, standing, error) {
 	if r.Header.Get(sessionHeader) != "1" {
-		return "", standNone
+		return "", standNone, nil
 	}
 	if s := r.Header.Get("Sec-Fetch-Site"); s != "" && s != "same-origin" {
-		return "", standNone
+		return "", standNone, nil
 	}
 	sa, ok := a.sessionProvider()
 	if !ok {
-		return "", standNone
+		return "", standNone, nil
 	}
 	id, ok := sa.SessionAccount(r)
 	if !ok {
-		return "", standNone
+		return "", standNone, nil
 	}
-	st := a.accountStanding(site, id)
+	st, err := a.accountStanding(site, id)
 	if st == standNone {
-		return "", standNone
+		return "", standNone, err
 	}
-	return id, st
+	return id, st, nil
 }
 
 // sessionProvider returns the extension's session lookup, when there is a
@@ -582,7 +630,14 @@ func (a *API) editAuth(next func(http.ResponseWriter, *http.Request, *store.Site
 		// script should not have to carry one secret per site to manage the
 		// sites it created. The actor carries the standing as its role, which
 		// is what refuseUnlessOwner and payloadFor read.
-		if account, st := a.tokenAccount(r, site); st != standNone {
+		// A plan that could not be asked refuses the request (503), never
+		// falls through to a weaker credential or the password prompt.
+		account, st, err := a.tokenAccount(r, site)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		if st != standNone {
 			next(w, withActor(r, actor{surface: a.apiSurface(r), auth: provenance.AuthToken, account: account, role: st.role()}), site)
 			return
 		}
@@ -590,7 +645,12 @@ func (a *API) editAuth(next func(http.ResponseWriter, *http.Request, *store.Site
 		// same standing, through the browser session. It is asked before the
 		// edit password the page may send beside it, so a signed-in admin who
 		// also holds the password is still an admin (R16).
-		if account, st := a.sessionStanding(r, site); st != standNone {
+		account, st, err = a.sessionStanding(r, site)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		if st != standNone {
 			next(w, withActor(r, actor{surface: a.apiSurface(r), auth: provenance.AuthSession, account: account, role: st.role()}), site)
 			return
 		}

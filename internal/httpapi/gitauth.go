@@ -76,7 +76,8 @@ func gitRefusal(msg string) *gitDenial {
 //     routes, and is never tried as a password;
 //  3. an account token (sbp_): tokenAccount, the JSON API's own rule — its
 //     account must stand on the site (its owner or a live admin), and an
-//     OAuth credential never counts; anything else is a challenge;
+//     OAuth credential never counts; a sharing plan that could not be asked
+//     is a readable refusal; anything else is a challenge;
 //  4. a compact JWS (three base64url segments): an OAuth access token, asked
 //     about with the Git marker — the only way the extension verifies one
 //     here. Its account must stand on the site (accountStanding) and it must
@@ -105,7 +106,11 @@ func (a *API) gitAuth(r *http.Request, site *store.Site, write bool) (actor, *gi
 
 	switch {
 	case strings.HasPrefix(pw, ids.APITokenPrefix):
-		account, st := a.tokenAccount(gitBearerRequest(r.Context(), r, pw), site)
+		account, st, err := a.tokenAccount(gitBearerRequest(r.Context(), r, pw), site)
+		if err != nil {
+			// A listed admin whose plan could not be asked: try again later.
+			return actor{}, gitRefusal(msgSharingUnknown)
+		}
 		if st == standNone {
 			return actor{}, gitChallenge()
 		}
@@ -126,7 +131,10 @@ func (a *API) gitAuth(r *http.Request, site *store.Site, write bool) (actor, *gi
 		if !cred.OAuth {
 			return actor{}, gitChallenge()
 		}
-		st := a.accountStanding(site, cred.AccountID)
+		st, err := a.accountStanding(site, cred.AccountID)
+		if err != nil {
+			return actor{}, gitRefusal(msgSharingUnknown)
+		}
 		if st == standNone {
 			return actor{}, gitChallenge()
 		}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -52,6 +53,8 @@ type sharingFake struct {
 	emails  map[string]string
 	// planCalls counts SharingAllowed lookups.
 	planCalls int
+	// setTagsErr fails SetAdminTags, as an unreachable registry would.
+	setTagsErr error
 	// onAllowed runs once SharingAllowed has answered for an account, and
 	// onBearer once BearerCredential has answered for a request: a test's
 	// hooks into the moment between the gate and what follows it.
@@ -96,6 +99,9 @@ func (f *sharingFake) AdminTags(id, viewID string) []string {
 func (f *sharingFake) SetAdminTags(id, viewID string, tags []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.setTagsErr != nil {
+		return f.setTagsErr
+	}
 	f.tags[id+"|"+viewID] = append([]string(nil), tags...)
 	return nil
 }
@@ -463,18 +469,20 @@ func TestGitInfoCarriesRole(t *testing.T) {
 func TestExpiredOrPausedShareGrantsNothing(t *testing.T) {
 	past := time.Now().Add(-time.Minute)
 	ahead := time.Now().Add(time.Hour)
+	// want is the API's answer: 200 standing, 401 (the password prompt) for
+	// no standing, 503 when the plan could not be asked.
 	for _, c := range []struct {
 		name  string
 		admin store.SiteAdmin
 		plans func(f *sharingFake)
-		stand bool
+		want  int
 	}{
-		{"until ahead", store.SiteAdmin{Account: "acct-2", Until: &ahead}, nil, true},
-		{"until passed", store.SiteAdmin{Account: "acct-2", Until: &past}, nil, false},
-		{"owner's plan without sharing", store.SiteAdmin{Account: "acct-2"}, func(f *sharingFake) { f.setPlan("acct-1", false, nil) }, false},
-		{"admin's plan without sharing", store.SiteAdmin{Account: "acct-2"}, func(f *sharingFake) { f.setPlan("acct-2", false, nil) }, false},
-		{"owner's plan unknown", store.SiteAdmin{Account: "acct-2"}, func(f *sharingFake) { f.setPlan("acct-1", true, errors.New("paygate down")) }, false},
-		{"admin's plan unknown", store.SiteAdmin{Account: "acct-2"}, func(f *sharingFake) { f.setPlan("acct-2", true, errors.New("paygate down")) }, false},
+		{"until ahead", store.SiteAdmin{Account: "acct-2", Until: &ahead}, nil, 200},
+		{"until passed", store.SiteAdmin{Account: "acct-2", Until: &past}, nil, 401},
+		{"owner's plan without sharing", store.SiteAdmin{Account: "acct-2"}, func(f *sharingFake) { f.setPlan("acct-1", false, nil) }, 401},
+		{"admin's plan without sharing", store.SiteAdmin{Account: "acct-2"}, func(f *sharingFake) { f.setPlan("acct-2", false, nil) }, 401},
+		{"owner's plan unknown", store.SiteAdmin{Account: "acct-2"}, func(f *sharingFake) { f.setPlan("acct-1", true, errors.New("paygate down")) }, 503},
+		{"admin's plan unknown", store.SiteAdmin{Account: "acct-2"}, func(f *sharingFake) { f.setPlan("acct-2", true, errors.New("paygate down")) }, 503},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e := newEnv(t, nil)
@@ -486,19 +494,16 @@ func TestExpiredOrPausedShareGrantsNothing(t *testing.T) {
 			}
 			before := siteByEdit(t, e, edit).Meta.Admins
 
-			want := 401
-			if c.stand {
-				want = 200
+			stand := c.want == 200
+			if w := e.public(t, bearer(bodyReq("GET", "/api/sites/"+edit, nil), "sbp_admin")); w.Code != c.want {
+				t.Errorf("token = %d %s, want %d", w.Code, w.Body, c.want)
 			}
-			if w := e.public(t, bearer(bodyReq("GET", "/api/sites/"+edit, nil), "sbp_admin")); w.Code != want {
-				t.Errorf("token = %d %s, want %d", w.Code, w.Body, want)
-			}
-			if w := e.public(t, editPage(bodyReq("GET", "/api/sites/"+edit, nil), "admin-cookie", "")); w.Code != want {
-				t.Errorf("session = %d %s, want %d", w.Code, w.Body, want)
+			if w := e.public(t, editPage(bodyReq("GET", "/api/sites/"+edit, nil), "admin-cookie", "")); w.Code != c.want {
+				t.Errorf("session = %d %s, want %d", w.Code, w.Body, c.want)
 			}
 			cs := mcpClient(t, e, http.Header{"Authorization": {"Bearer sbp_admin"}})
-			if res := mcpCall(t, cs, "get_site", map[string]any{"edit_id": edit}); res.IsError == c.stand {
-				t.Errorf("MCP get_site error = %v (%s), want error %v", res.IsError, mcpText(res), !c.stand)
+			if res := mcpCall(t, cs, "get_site", map[string]any{"edit_id": edit}); res.IsError == stand {
+				t.Errorf("MCP get_site error = %v (%s), want error %v", res.IsError, mcpText(res), !stand)
 			}
 			if after := siteByEdit(t, e, edit).Meta.Admins; !reflect.DeepEqual(after, before) {
 				t.Errorf("Meta.Admins changed: %+v, was %+v", after, before)
@@ -638,5 +643,249 @@ func TestStandingAsksThePlanOnlyForListedAdmins(t *testing.T) {
 		if got := calls() - before; got != c.asks {
 			t.Errorf("%s: SharingAllowed asked %d times, want %d", c.token, got, c.asks)
 		}
+	}
+}
+
+// adminUploadToken opens an upload token through MCP as the admin (acct-2).
+func adminUploadToken(t *testing.T, e *env, edit string) string {
+	t.Helper()
+	cs := mcpClient(t, e, http.Header{"Authorization": {"Bearer sbp_admin"}})
+	res := mcpCall(t, cs, "open_upload", map[string]any{"edit_id": edit})
+	if res.IsError {
+		t.Fatalf("open_upload as the admin: %s", mcpText(res))
+	}
+	tok, _ := res.StructuredContent.(map[string]any)["token"].(string)
+	if e.api.uploads.issuer(tok) != "acct-2" {
+		t.Fatalf("the token is not the admin's: issuer %q", e.api.uploads.issuer(tok))
+	}
+	return tok
+}
+
+// An admin's upload token is the admin's only while the admin manages the
+// site: once the share's end date passes, while a plan does not share, or
+// while a plan cannot be asked, the token is refused on POST /files (replace
+// included) and on WebDAV, and nothing is written.
+func TestAdminUploadTokenEndsWithTheShare(t *testing.T) {
+	past := time.Now().Add(-time.Minute)
+	for _, c := range []struct {
+		name string
+		end  func(t *testing.T, e *env, f *sharingFake, viewID string)
+		code int
+		msg  string
+	}{
+		{"until passed", func(t *testing.T, e *env, f *sharingFake, viewID string) {
+			shareWith(t, e, viewID, store.SiteAdmin{Account: "acct-2", Until: &past})
+		}, 403, msgUploadTokenShareEnded},
+		{"admin's plan without sharing", func(t *testing.T, e *env, f *sharingFake, viewID string) { f.setPlan("acct-2", false, nil) }, 403, msgUploadTokenShareEnded},
+		{"owner's plan without sharing", func(t *testing.T, e *env, f *sharingFake, viewID string) { f.setPlan("acct-1", false, nil) }, 403, msgUploadTokenShareEnded},
+		{"plan unknown", func(t *testing.T, e *env, f *sharingFake, viewID string) {
+			f.setPlan("acct-2", true, errors.New("paygate down"))
+		}, 503, msgSharingUnknown},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := newEnv(t, nil)
+			f := registerSharing(t, ext.CreateGrant{Trusted: true})
+			edit, _, viewID := sharedSite(t, e, f)
+			tok := adminUploadToken(t, e, edit)
+			post := func(name string, replace bool) *httptest.ResponseRecorder {
+				req := uploadReq(t, edit, name, "x")
+				if replace {
+					req.URL.RawQuery = "replace=true"
+				}
+				return e.public(t, bearer(req, tok))
+			}
+			put := func(name string) *httptest.ResponseRecorder {
+				return e.public(t, bearer(httptest.NewRequest("PUT", "/dav/"+edit+"/"+name, strings.NewReader("x")), tok))
+			}
+
+			// While the share is live, the token works on both routes.
+			if w := post("live.txt", false); w.Code != 200 {
+				t.Fatalf("POST while live = %d %s", w.Code, w.Body)
+			}
+			if w := put("live.bin"); w.Code != 201 {
+				t.Fatalf("DAV PUT while live = %d %s", w.Code, w.Body)
+			}
+
+			c.end(t, e, f, viewID)
+			for what, w := range map[string]*httptest.ResponseRecorder{
+				"POST":         post("after.txt", false),
+				"POST replace": post("replaced.txt", true),
+				"DAV PUT":      put("after.bin"),
+			} {
+				if w.Code != c.code || !strings.Contains(w.Body.String(), c.msg) {
+					t.Errorf("%s after the share ended = %d %s, want %d %q", what, w.Code, w.Body, c.code, c.msg)
+				}
+			}
+			site, _ := e.st.ByViewID(viewID)
+			for _, name := range []string{"after.txt", "replaced.txt", "after.bin"} {
+				if _, err := e.st.ReadContentFile(site, name); err == nil {
+					t.Errorf("%s was written with a token whose share ended", name)
+				}
+			}
+			if _, err := e.st.ReadContentFile(site, "live.txt"); err != nil {
+				t.Errorf("a refused replace touched the site: live.txt %v", err)
+			}
+		})
+	}
+}
+
+// An owner's upload token and the edit password's are not re-checked: only
+// an admin's standing can end while its token lives.
+func TestOwnerUploadTokenUnaffectedByPlans(t *testing.T) {
+	e := newEnv(t, nil)
+	f := registerSharing(t, ext.CreateGrant{Trusted: true})
+	edit, _, _ := sharedSite(t, e, f)
+	cs := mcpClient(t, e, http.Header{"Authorization": {"Bearer sbp_owner"}})
+	res := mcpCall(t, cs, "open_upload", map[string]any{"edit_id": edit})
+	if res.IsError {
+		t.Fatalf("open_upload: %s", mcpText(res))
+	}
+	tok, _ := res.StructuredContent.(map[string]any)["token"].(string)
+	f.setPlan("acct-1", true, errors.New("paygate down"))
+	before := f.planCallsNow()
+	if w := e.public(t, bearer(uploadReq(t, edit, "o.txt", "o"), tok)); w.Code != 200 {
+		t.Fatalf("owner's token = %d %s", w.Code, w.Body)
+	}
+	if f.planCallsNow() != before {
+		t.Error("an owner's token asked the plan")
+	}
+}
+
+func (f *sharingFake) planCallsNow() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.planCalls
+}
+
+// siteTrail is the site's provenance log.
+func siteTrail(t *testing.T, e *env, viewID string) []provenance.Entry {
+	t.Helper()
+	site, err := e.st.ByViewID(viewID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	es, err := e.st.Provenance(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return es
+}
+
+// The admin's tags are stored before anything of the site: when that fails,
+// the whole write fails with nothing written and nothing recorded — on the
+// API and over MCP.
+func TestAdminTagsFailureWritesNothing(t *testing.T) {
+	e := newEnv(t, nil)
+	f := registerSharing(t, ext.CreateGrant{Trusted: true})
+	edit, _, viewID := sharedSite(t, e, f)
+	f.mu.Lock()
+	f.setTagsErr = errors.New("registry unreachable")
+	f.mu.Unlock()
+	before := siteByEdit(t, e, edit).Meta
+	trail := len(siteTrail(t, e, viewID))
+
+	w := e.public(t, bearer(bodyReq("PUT", "/api/sites/"+edit, map[string]any{"name": "x", "mode": "viewer", "spa_fallback": true, "tags": []string{"a"}}), "sbp_admin"))
+	if w.Code != 503 || !strings.Contains(w.Body.String(), msgAdminTagsUnavailable) {
+		t.Fatalf("API = %d %s, want 503 %q", w.Code, w.Body, msgAdminTagsUnavailable)
+	}
+	cs := mcpClient(t, e, http.Header{"Authorization": {"Bearer sbp_admin"}})
+	res := mcpCall(t, cs, "update_site", map[string]any{"edit_id": edit, "settings": map[string]any{"name": "y", "tags": []string{"b"}}})
+	if !res.IsError || !strings.Contains(mcpText(res), msgAdminTagsUnavailable) {
+		t.Fatalf("MCP = %s, want a tool error %q", mcpText(res), msgAdminTagsUnavailable)
+	}
+
+	after := siteByEdit(t, e, edit).Meta
+	if after.Name != before.Name || after.Mode != before.Mode || after.SPAFallback != before.SPAFallback || !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("a failed write changed the site: name %q mode %q spa %v updated %v (was %q %q %v %v)",
+			after.Name, after.Mode, after.SPAFallback, after.UpdatedAt, before.Name, before.Mode, before.SPAFallback, before.UpdatedAt)
+	}
+	if n := len(siteTrail(t, e, viewID)); n != trail {
+		t.Errorf("the failed write was recorded: %d entries, was %d", n, trail)
+	}
+	if got := f.adminTagsOf("acct-2", viewID); got != nil {
+		t.Errorf("tags stored: %v", got)
+	}
+}
+
+// A write by an admin that carries nothing but tags changes only the admin's
+// own labels: meta.json is not rewritten and the site's log records nothing.
+// A write with anything else still writes and records it.
+func TestAdminTagsOnlyWriteLeavesTheSite(t *testing.T) {
+	e := newEnv(t, nil)
+	f := registerSharing(t, ext.CreateGrant{Trusted: true})
+	edit, _, viewID := sharedSite(t, e, f)
+	before := siteByEdit(t, e, edit).Meta
+	trail := len(siteTrail(t, e, viewID))
+
+	w := e.public(t, bearer(bodyReq("PUT", "/api/sites/"+edit, map[string]any{"tags": []string{"mine"}}), "sbp_admin"))
+	if w.Code != 200 {
+		t.Fatalf("API tags = %d %s", w.Code, w.Body)
+	}
+	if got := tagsOf(t, payloadOf(t, w)["tags"]); !reflect.DeepEqual(got, []string{"mine"}) {
+		t.Errorf("answer tags = %v", got)
+	}
+	cs := mcpClient(t, e, http.Header{"Authorization": {"Bearer sbp_admin"}})
+	res := mcpCall(t, cs, "update_site", map[string]any{"edit_id": edit, "settings": map[string]any{"tags": []string{"agent"}}})
+	if res.IsError {
+		t.Fatalf("MCP tags: %s", mcpText(res))
+	}
+	if got := f.adminTagsOf("acct-2", viewID); !reflect.DeepEqual(got, []string{"agent"}) {
+		t.Errorf("admin tags = %v", got)
+	}
+	if after := siteByEdit(t, e, edit).Meta; !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("meta.json was rewritten by a tags-only write: updated %v, was %v", after.UpdatedAt, before.UpdatedAt)
+	}
+	if n := len(siteTrail(t, e, viewID)); n != trail {
+		t.Errorf("a tags-only write was recorded: %d entries, was %d", n, trail)
+	}
+
+	w = e.public(t, bearer(bodyReq("PUT", "/api/sites/"+edit, map[string]any{"name": "n", "tags": []string{"x"}}), "sbp_admin"))
+	if w.Code != 200 {
+		t.Fatalf("API name+tags = %d %s", w.Code, w.Body)
+	}
+	if es := siteTrail(t, e, viewID); len(es) != trail+1 || es[len(es)-1].Action != provenance.ActionSettings {
+		t.Errorf("name+tags: trail %+v, want one settings entry more", es)
+	}
+	if after := siteByEdit(t, e, edit).Meta; after.Name != "n" || !reflect.DeepEqual(after.Tags, before.Tags) {
+		t.Errorf("name+tags: name %q tags %v", after.Name, after.Tags)
+	}
+}
+
+// A request refused only because a sharing plan could not be asked says so:
+// 503 on the API (never the password prompt, even with the password beside
+// the session), a tool error on MCP, a readable refusal on Git. The warning
+// is logged once per account a minute, not on every request.
+func TestPlanUnknownIsAnsweredAsSuch(t *testing.T) {
+	e := newEnv(t, nil)
+	logs := &lockedBuffer{}
+	e.api.log = slog.New(slog.NewTextHandler(logs, nil))
+	f := registerSharing(t, ext.CreateGrant{Trusted: true})
+	edit, pw, _ := sharedSite(t, e, f)
+	f.setPlan("acct-2", true, errors.New("paygate down"))
+
+	for i := 0; i < 3; i++ {
+		w := e.public(t, bearer(bodyReq("GET", "/api/sites/"+edit, nil), "sbp_admin"))
+		if w.Code != 503 || !strings.Contains(w.Body.String(), msgSharingUnknown) {
+			t.Fatalf("token = %d %s, want 503 %q", w.Code, w.Body, msgSharingUnknown)
+		}
+	}
+	if w := e.public(t, editPage(bodyReq("GET", "/api/sites/"+edit, nil), "admin-cookie", pw)); w.Code != 503 {
+		t.Errorf("session + password = %d %s, want 503", w.Code, w.Body)
+	}
+	cs := mcpClient(t, e, http.Header{"Authorization": {"Bearer sbp_admin"}})
+	if res := mcpCall(t, cs, "get_site", map[string]any{"edit_id": edit}); !res.IsError || !strings.Contains(mcpText(res), msgSharingUnknown) {
+		t.Errorf("MCP = %s, want a tool error %q", mcpText(res), msgSharingUnknown)
+	}
+	site := siteByEdit(t, e, edit)
+	for _, secret := range []string{"sbp_admin", jwtAdmin} {
+		if _, d := e.api.gitAuth(gitReq("drop", secret), site, false); d == nil || !d.refusal || d.msg != msgSharingUnknown {
+			t.Errorf("git with %s: denial %+v, want a readable refusal %q", secret[:6], d, msgSharingUnknown)
+		}
+	}
+	if n := strings.Count(logs.String(), "sharing: plan unknown"); n != 1 {
+		t.Errorf("the plan warning was logged %d times, want once a minute per account:\n%s", n, logs.String())
+	}
+	if !reflect.DeepEqual(siteByEdit(t, e, edit).Meta.Admins, []store.SiteAdmin{{Account: "acct-2"}}) {
+		t.Error("an unknown plan changed the share")
 	}
 }

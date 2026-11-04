@@ -12,7 +12,38 @@ import (
 const (
 	msgUploadTokenRefused     = "upload token unknown or expired — call open_upload for a new one"
 	msgUploadTokenOnlyUploads = "an upload token can only upload files — use the edit password or an account API token for anything else"
+	// msgUploadTokenShareEnded: an admin's token on a site the admin no
+	// longer manages (the share ended, or a plan no longer shares).
+	msgUploadTokenShareEnded = "this upload token was opened by an admin of the site who no longer manages it"
 )
+
+// errUploadShareEnded is uploadTokenStands' refusal of an ex-admin's token.
+var errUploadShareEnded = &apiError{http.StatusForbidden, msgUploadTokenShareEnded}
+
+// uploadTokenStands re-applies the standing an admin's upload token was
+// opened with, on every request it makes: the token is the admin's only
+// while the admin is (accountStanding == standAdmin). A share that ended, a
+// plan that no longer shares — or one that cannot be asked
+// (errSharingUnknown) — refuses the request, so a token never outlives the
+// standing that opened it. Nothing is changed: the token stays until it
+// expires, and works again if the share is restored. An owner's token and the edit
+// password's are not re-checked here (a transfer revokes the site's
+// tokens). It reads meta.json the request already loaded, takes no lock and
+// is never on the serving path.
+func (a *API) uploadTokenStands(site *store.Site, secret string) error {
+	account, role := a.uploads.issuerRole(secret)
+	if role != roleAdmin {
+		return nil
+	}
+	st, err := a.accountStanding(site, account)
+	if err != nil {
+		return err
+	}
+	if st != standAdmin {
+		return errUploadShareEnded
+	}
+	return nil
+}
 
 // uploadCredential returns the upload token a request presents, or "" when it
 // presents none. A token is recognised by its prefix wherever a password can
@@ -71,6 +102,10 @@ func (a *API) withUploadAuth(next func(http.ResponseWriter, *http.Request, *stor
 		// another process cannot reach this process's memory: the meta the
 		// token's request just read is the check that always holds.
 		if refuseLocked(w, site) {
+			return
+		}
+		if err := a.uploadTokenStands(site, secret); err != nil {
+			respondErr(w, err)
 			return
 		}
 		next(w, withActor(r, a.uploadActor(provenance.SurfaceUploadToken, secret)), site)

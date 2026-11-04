@@ -123,6 +123,9 @@ type provNote struct {
 	// the request fails, but the write happened and is the evidence, so it
 	// is recorded like a success.
 	held bool
+	// skip says the request changed nothing of the site (an admin's own
+	// tags): it succeeds and is not recorded.
+	skip bool
 }
 
 type provNoteKey struct{}
@@ -162,7 +165,7 @@ func (a *API) recorded(action string, next func(http.ResponseWriter, *http.Reque
 		r = r.WithContext(context.WithValue(r.Context(), provNoteKey{}, note))
 		sw := &statusWriter{ResponseWriter: w, code: 200}
 		next(sw, r, site)
-		if sw.code >= 300 && !note.held {
+		if note.skip || sw.code >= 300 && !note.held {
 			return
 		}
 		if note.held {

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"reflect"
 	"strings"
@@ -160,5 +161,48 @@ func TestListSitesIncludesSharedWithRole(t *testing.T) {
 	raw, _ = json.Marshal(mcpCall(t, owner, "list_sites", map[string]any{}).StructuredContent)
 	if strings.Contains(string(raw), `"role"`) {
 		t.Errorf("the owner's listing carries a role: %s", raw)
+	}
+}
+
+// list_sites asks each plan once per listing — the caller's and each
+// owner's — however many sites they share; a plan that cannot be asked
+// leaves its rows out and fails nothing.
+func TestListSitesAsksEachPlanOnce(t *testing.T) {
+	e := newEnv(t, nil)
+	f := registerSharing(t, ext.CreateGrant{Trusted: true})
+	f.owned = map[string][]string{"acct-2": {}} // the admin owns nothing
+	for i := 0; i < 3; i++ {
+		sharedSite(t, e, f)
+	}
+	cs := mcpClient(t, e, http.Header{"Authorization": {"Bearer sbp_admin"}})
+	list := func() []mcp.SiteSummary {
+		t.Helper()
+		res := mcpCall(t, cs, "list_sites", map[string]any{})
+		if res.IsError {
+			t.Fatalf("list_sites: %s", mcpText(res))
+		}
+		var out struct {
+			Sites []mcp.SiteSummary `json:"sites"`
+		}
+		raw, _ := json.Marshal(res.StructuredContent)
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.Sites
+	}
+	before := f.planCallsNow()
+	if got := list(); len(got) != 3 {
+		t.Fatalf("list_sites = %d rows, want 3 shared", len(got))
+	}
+	if n := f.planCallsNow() - before; n != 2 {
+		t.Errorf("SharingAllowed asked %d times for three shares of one owner, want 2", n)
+	}
+	f.setPlan("acct-1", true, errors.New("paygate down"))
+	before = f.planCallsNow()
+	if got := list(); len(got) != 0 {
+		t.Errorf("rows with the owner's plan unknown: %+v", got)
+	}
+	if n := f.planCallsNow() - before; n != 1 {
+		t.Errorf("an unknown owner's plan was asked %d times, want once", n)
 	}
 }

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"reflect"
 
 	"github.com/ittrail/sitebin.io/internal/ext"
 	"github.com/ittrail/sitebin.io/internal/store"
@@ -56,41 +57,55 @@ func ownerOnlySettings(set updateSet) bool {
 }
 
 // applySettingsAs is applySettings for the caller the gate let in as act —
-// the API's PUT and MCP's update_site alike:
+// the API's PUT and MCP's update_site alike. It reports whether the site
+// itself was written:
 //   - an admin is refused an owner-only setting (ownerOnlySettings) before
 //     anything is written;
 //   - an admin's tags are the admin's own (SetAdminTags), validated by
 //     store.CleanTags, and never touch Meta.Tags, which are the owner's.
-//     They are stored after the site's own settings, outside the site lock:
-//     nothing nests a seam call inside it.
-func (a *API) applySettingsAs(site *store.Site, set updateSet, act actor) error {
+//     They are stored FIRST, outside the site lock (nothing nests a seam
+//     call inside it): a failure there writes nothing at all. (A setting
+//     refused after them leaves the admin's own labels saved, never the
+//     site half-changed.)
+//   - an admin's write that carries nothing but tags changes only the
+//     admin's private labels: meta.json is not written, and changed is
+//     false, so the caller records nothing in the site's log and lays out
+//     nothing.
+func (a *API) applySettingsAs(site *store.Site, set updateSet, act actor) (changed bool, err error) {
 	if ownerOnlySettings(set) {
 		if err := ownerOnly(act.role); err != nil {
-			return err
+			return false, err
 		}
 	}
-	var adminTags []string
 	if act.role == roleAdmin && set.Tags != nil {
 		tags, err := store.CleanTags(*set.Tags)
 		if err != nil {
-			return &apiError{http.StatusBadRequest, err.Error()}
+			return false, &apiError{http.StatusBadRequest, err.Error()}
 		}
-		adminTags, set.Tags = tags, nil
+		if err := a.setAdminTags(site, act.account, tags); err != nil {
+			return false, err
+		}
+		set.Tags = nil
+		if reflect.ValueOf(set).IsZero() {
+			return false, nil
+		}
 	}
 	if err := a.applySettings(site, set); err != nil {
-		return err
+		return false, err
 	}
-	if adminTags == nil {
-		return nil
-	}
+	return true, nil
+}
+
+// setAdminTags stores an admin's own tags on site through the extension.
+func (a *API) setAdminTags(site *store.Site, account string, tags []string) error {
 	sa, ok := sharingProvider()
 	if !ok {
 		// An admin standing comes only from this provider; it went away
 		// mid-request.
 		return &apiError{http.StatusServiceUnavailable, msgAdminTagsUnavailable}
 	}
-	if err := sa.SetAdminTags(act.account, site.ViewID, adminTags); err != nil {
-		a.log.Error("sharing: could not store an admin's tags", "id", site.ViewID, "account", act.account, "err", err)
+	if err := sa.SetAdminTags(account, site.ViewID, tags); err != nil {
+		a.log.Error("sharing: could not store an admin's tags", "id", site.ViewID, "account", account, "err", err)
 		return &apiError{http.StatusServiceUnavailable, msgAdminTagsUnavailable}
 	}
 	return nil

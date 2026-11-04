@@ -215,7 +215,7 @@ func TestGitAuthIgnoresSessionCookie(t *testing.T) {
 		return r
 	}
 	// The cookie on its own would pass sessionStanding: the test means something.
-	if _, st := e.api.sessionStanding(withSession(""), site); st != standOwner {
+	if _, st, _ := e.api.sessionStanding(withSession(""), site); st != standOwner {
 		t.Fatal("the fixture session does not own the site")
 	}
 	for _, write := range []bool{false, true} {

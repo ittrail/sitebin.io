@@ -950,8 +950,16 @@ func (a *API) updateSite(w http.ResponseWriter, r *http.Request, site *store.Sit
 	noteOf(r).detail = settingsDetail(set)
 	// An admin is refused an owner-only setting here, before anything is
 	// written, and an admin's tags are their own (applySettingsAs).
-	if err := a.applySettingsAs(site, set, a.actorOf(r)); err != nil {
+	changed, err := a.applySettingsAs(site, set, a.actorOf(r))
+	if err != nil {
 		respondErr(w, err)
+		return
+	}
+	if !changed {
+		// Only an admin's own labels changed: nothing of the site to lay
+		// out, or to record in its log.
+		noteOf(r).skip = true
+		writeJSON(w, 200, a.payloadFor(r, site))
 		return
 	}
 	if err := a.syncViewerLayout(site); err != nil {
