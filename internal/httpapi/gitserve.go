@@ -38,6 +38,13 @@ import (
 // is bounded at its allowance plus room for the command section, which
 // gitrepo caps at 1 MiB; git itself refuses a pack over the allowance
 // (receive.maxInputSize) first.
+//
+// The bounds are boundedBody, never http.MaxBytesReader: the body is read on
+// ServeRPC's stdin goroutine, beside git's output going to the client, and
+// MaxBytesReader past its limit writes to the server's ResponseWriter (its
+// header map, its close flag) from there — a concurrent map write can end
+// the process. Closing the connection is gitBody.stop's, on the handler's
+// goroutine, once every read has stopped.
 const (
 	gitFetchBodyMax = 10 << 20
 	gitPushSlack    = 2 << 20
@@ -53,6 +60,7 @@ const (
 	msgGitPlan            = "this site's plan does not include Git; upgrade at %s to use it"
 	msgGitReadOnly        = "this site's plan does not include Git, so its repository is read-only; upgrade at %s to push again"
 	msgGitStopped         = "the push was stopped: the site was locked or deleted"
+	msgGitRepoBusy        = "the repository is busy, try again in a moment"
 	msgGitTooLarge        = "request too large"
 	msgGitBadRequest      = "bad git request"
 )
@@ -217,7 +225,9 @@ func (a *API) gitFail(w http.ResponseWriter, r *http.Request, site *store.Site, 
 	case errors.Is(err, gitrepo.ErrBusy):
 		gitRefuse(w, svc, info, http.StatusServiceUnavailable, msgGitBusy)
 	case errors.Is(err, store.ErrGitBusy):
-		gitRefuse(w, svc, info, http.StatusConflict, store.ErrGitBusy.Error())
+		// The registration is held — by a push, a first clone creating the
+		// repository or the sweep; this request cannot tell which.
+		gitRefuse(w, svc, info, http.StatusConflict, msgGitRepoBusy)
 	case errors.Is(err, store.ErrLocked):
 		// Locked after this request was let in.
 		gitRefuse(w, svc, info, http.StatusForbidden, store.LockedMessage(nil))
@@ -226,7 +236,8 @@ func (a *API) gitFail(w http.ResponseWriter, r *http.Request, site *store.Site, 
 	case errors.Is(err, store.ErrNotFound):
 		// Deleted after this request was let in.
 		http.NotFound(w, r)
-	case errors.Is(err, gitrepo.ErrBadRequest):
+	case gitClientFault(err):
+		a.log.Warn("git: bad request", "id", site.ViewID, "service", svc, "err", err)
 		http.Error(w, msgGitBadRequest, http.StatusBadRequest)
 	default:
 		a.log.Error("git: request failed", "id", site.ViewID, "service", svc, "err", err)
@@ -234,16 +245,35 @@ func (a *API) gitFail(w http.ResponseWriter, r *http.Request, site *store.Site, 
 	}
 }
 
+// gitClientFault tells a git failure the request caused from one that is the
+// server's (a damaged repository, a full disk): ServeRPC's own refusal of a
+// malformed request, or git's words for input that ended early or broke the
+// protocol. Anything else is the server's — a 500, and an error in the log.
+func gitClientFault(err error) bool {
+	if errors.Is(err, gitrepo.ErrBadRequest) {
+		return true
+	}
+	msg := err.Error()
+	for _, s := range []string{"the remote end hung up unexpectedly", "protocol error"} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // gitAdvertise answers GET info/refs. AdvertiseRefs writes the service line
 // before git starts, so it is called only once the repository exists: a
 // missing one is a refusal, never a truncated 200.
 func (a *API) gitAdvertise(w http.ResponseWriter, r *http.Request, site *store.Site, svc gitrepo.Service, st gitState) {
 	if svc == gitrepo.ReceivePack {
-		// A second push is told so here: on its POST, the 409 that
-		// BeginGitWrite answers is all Git would show. Only a look — the
-		// POST's registration stays the guarantee.
+		// A push beside a registration is told so here: on its POST, the
+		// 409 that BeginGitWrite answers is all Git would show. Only a look —
+		// the POST's registration stays the guarantee. Who holds it (a push,
+		// a first clone creating the repository, the sweep's collection) is
+		// not known, so the message names none of them.
 		if a.st.GitWriteRunning(site) {
-			gitrepo.WriteRefusal(w, svc, store.ErrGitBusy.Error())
+			gitrepo.WriteRefusal(w, svc, msgGitRepoBusy)
 			return
 		}
 		// A full site is told so before the push sends its pack, and
@@ -284,23 +314,15 @@ func (a *API) gitFetch(w http.ResponseWriter, r *http.Request, site *store.Site,
 		a.gitFail(w, r, site, svc, false, err)
 		return
 	}
-	// The body is decoded here rather than in ServeRPC, so the bound applies
-	// to what git reads, not just to what crossed the wire.
-	var in io.Reader = http.MaxBytesReader(w, r.Body, gitFetchBodyMax)
-	if isGzip(r) {
-		zr, err := gzip.NewReader(in)
-		if err != nil {
-			http.Error(w, msgGitBadRequest, http.StatusBadRequest)
-			return
-		}
-		defer zr.Close()
-		in = zr
+	body, err := fetchBody(r)
+	if err != nil {
+		http.Error(w, msgGitBadRequest, http.StatusBadRequest)
+		return
 	}
-	body := &boundedBody{r: in, left: gitFetchBodyMax}
 	guard := newGitBody(body)
 	defer guard.stop(w)
 	tw := &gitWriter{ResponseWriter: w}
-	_, err := a.git.ServeRPC(r.Context(), site.GitDir(), svc, guard, tw, gitrepo.RPCOptions{
+	_, err = a.git.ServeRPC(r.Context(), site.GitDir(), svc, guard, tw, gitrepo.RPCOptions{
 		Protocol: gitrepo.ProtocolFromHeader(r.Header.Get("Git-Protocol")),
 	})
 	if err == nil || tw.wrote.Load() || r.Context().Err() != nil {
@@ -311,14 +333,26 @@ func (a *API) gitFetch(w http.ResponseWriter, r *http.Request, site *store.Site,
 		http.Error(w, msgGitTooLarge, http.StatusRequestEntityTooLarge)
 	case body.failed.Load():
 		http.Error(w, msgGitBadRequest, http.StatusBadRequest)
-	case errors.Is(err, gitrepo.ErrBusy):
-		a.gitFail(w, r, site, svc, false, err)
 	default:
-		// git refused the request and said nothing on stdout: a malformed
-		// or unanswerable want list, as a rule.
-		a.log.Warn("git: fetch failed", "id", site.ViewID, "err", err)
-		http.Error(w, msgGitBadRequest, http.StatusBadRequest)
+		a.gitFail(w, r, site, svc, false, err)
 	}
+}
+
+// fetchBody is a fetch's body as git reads it: bounded on the wire and,
+// when gzip, decoded here and bounded again, so the bound applies to what
+// git reads and not just to what crossed the wire. A bound passed on either
+// side shows as the returned reader's over. It is given no ResponseWriter,
+// and must never be: see the bounds above.
+func fetchBody(r *http.Request) (*boundedBody, error) {
+	wire := &boundedBody{r: r.Body, left: gitFetchBodyMax}
+	if !isGzip(r) {
+		return wire, nil
+	}
+	zr, err := gzip.NewReader(wire)
+	if err != nil {
+		return nil, err
+	}
+	return &boundedBody{r: zr, left: gitFetchBodyMax}, nil
 }
 
 // gitPush answers POST git-receive-pack. It holds the site's push
@@ -340,7 +374,12 @@ func (a *API) gitPush(w http.ResponseWriter, r *http.Request, site *store.Site, 
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	end, err := a.st.BeginGitWrite(site, cancel)
+	// The bookkeeping after git outlives the request — a client may hang up
+	// as soon as it has git's report — but not the registration: a delete
+	// or a lock cancels it with the push.
+	bctx, bcancel := context.WithCancel(gitrepo.WithSlotWait(context.Background(), postPushSlotWait))
+	defer bcancel()
+	end, err := a.st.BeginGitWrite(site, func() { cancel(); bcancel() })
 	if err != nil {
 		a.gitFail(w, r, site, svc, false, err)
 		return
@@ -362,7 +401,8 @@ func (a *API) gitPush(w http.ResponseWriter, r *http.Request, site *store.Site, 
 	if bodyMax < allowance { // an allowance near the int64 limit
 		bodyMax = math.MaxInt64
 	}
-	guard := newGitBody(http.MaxBytesReader(w, r.Body, bodyMax))
+	wire := &boundedBody{r: r.Body, left: bodyMax}
+	guard := newGitBody(wire)
 	defer guard.stop(w)
 	tw := &gitWriter{ResponseWriter: w}
 	res, err := a.git.ServeRPC(ctx, dir, svc, guard, tw, gitrepo.RPCOptions{
@@ -375,16 +415,17 @@ func (a *API) gitPush(w http.ResponseWriter, r *http.Request, site *store.Site, 
 		case ctx.Err() != nil:
 			// The registry cancelled it: a delete or a lock.
 			http.Error(w, msgGitStopped, http.StatusConflict)
-		case errors.Is(err, gitrepo.ErrBusy), errors.Is(err, gitrepo.ErrBadRequest):
-			a.gitFail(w, r, site, svc, false, err)
-		default:
-			a.log.Warn("git: push failed", "id", site.ViewID, "err", err)
+		case wire.over.Load():
+			http.Error(w, msgGitTooLarge, http.StatusRequestEntityTooLarge)
+		case wire.failed.Load():
 			http.Error(w, msgGitBadRequest, http.StatusBadRequest)
+		default:
+			a.gitFail(w, r, site, svc, false, err)
 		}
 	}
 	// What the push changed is recorded whatever git's exit status, and
 	// before the registration ends: a delete waits for it.
-	a.recordPush(r, site, act, before, res, err == nil)
+	a.recordPush(bctx, r, site, act, before, res, err == nil)
 }
 
 func isGzip(r *http.Request) bool {
@@ -509,9 +550,9 @@ func closeAfterResponse(w http.ResponseWriter) {
 var errBodyTooLarge = errors.New("git request body too large")
 
 // boundedBody reads at most left bytes of r and fails after them, noting
-// why it stopped: over for the bound (here, or the wire's MaxBytesReader),
-// failed for any other read error. Atomic: git's stdin is fed from its own
-// goroutine.
+// why it stopped: over for the bound (its own, or one beneath it), failed
+// for any other read error. It touches nothing but r: it runs on ServeRPC's
+// stdin goroutine. Atomic flags: the handler reads them after ServeRPC.
 type boundedBody struct {
 	r      io.Reader
 	left   int64
@@ -535,8 +576,7 @@ func (b *boundedBody) Read(p []byte) (int, error) {
 	}
 	b.left -= int64(n)
 	if err != nil && err != io.EOF {
-		var mbe *http.MaxBytesError
-		if errors.As(err, &mbe) {
+		if errors.Is(err, errBodyTooLarge) {
 			b.over.Store(true)
 		} else {
 			b.failed.Store(true)

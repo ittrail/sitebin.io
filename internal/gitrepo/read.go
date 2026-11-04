@@ -135,15 +135,17 @@ func (r *Runner) run(ctx context.Context, dir string, max int, args ...string) (
 	return r.runFor(ctx, ReadTimeout, dir, max, args...)
 }
 
-// runFor is run with its own timeout.
+// runFor is run with its own timeout, which starts once a slot is taken:
+// the wait for one has its own bound (acquire), and a caller that may wait
+// longer (WithSlotWait) is not cut short by the command's timeout.
 func (r *Runner) runFor(ctx context.Context, timeout time.Duration, dir string, max int, args ...string) (out []byte, over bool, err error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	release, err := r.acquire(ctx)
 	if err != nil {
 		return nil, false, err
 	}
 	defer release()
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	runCtx, stop := context.WithCancel(ctx)
 	defer stop()
 	cb := &capBuf{max: max, cancel: stop}

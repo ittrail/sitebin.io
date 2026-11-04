@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -326,18 +327,35 @@ func TestGitSecondPushBusy(t *testing.T) {
 	wd := cl.work()
 	pushed(t, cl, wd, remote, "a.txt", []byte("a"))
 
-	// Another push holds the site's registration.
+	// Something holds the site's registration: a push, a first clone
+	// creating the repository, the sweep's collection. Which one, the
+	// endpoint cannot tell, so it says so neutrally.
 	end, err := e.st.BeginGitWrite(siteByEdit(t, e, edit), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cl.commit(wd, "b.txt", []byte("b"))
 	out := cl.failGit(wd, "push", remote, "HEAD:main")
-	wantOutput(t, out, store.ErrGitBusy.Error(), "a push beside a running push")
+	wantOutput(t, out, "remote error: "+msgGitRepoBusy, "a push beside a running push")
+	if strings.Contains(out, "another push") {
+		t.Errorf("the refusal names a push it cannot know of:\n%s", out)
+	}
 	// Fetches run beside a push.
 	cl.mustGit(wd, "ls-remote", remote)
 	end()
 	cl.mustGit(wd, "push", "-q", remote, "HEAD:main")
+
+	// A first clone that must create the repository while the site is
+	// registered is told the same — not that a push is running.
+	edit2, pw2 := gitSite(t, e, nil)
+	end2, err := e.st.BeginGitWrite(siteByEdit(t, e, edit2), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer end2()
+	tmp := t.TempDir()
+	out = cl.failGit(tmp, "clone", g.remote(edit2, pw2), filepath.Join(tmp, "c"))
+	wantOutput(t, out, "remote error: "+msgGitRepoBusy, "a first clone beside a registration")
 }
 
 // blockingWriter is a ResponseWriter whose first Write waits for release:
@@ -650,21 +668,7 @@ func TestGitDeleteDuringPush(t *testing.T) {
 		}
 	}()
 
-	// Wait until git is receiving the pack: its quarantine directory
-	// (objects/tmp_objdir-incoming-*) exists.
-	deadline := time.Now().Add(20 * time.Second)
-	for {
-		if m, _ := filepath.Glob(filepath.Join(site.GitDir(), "objects", "tmp_objdir-incoming-*")); len(m) > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the push never started receiving")
-		}
-		select {
-		case body.gate <- struct{}{}: // a trickle keeps the push alive
-		case <-time.After(20 * time.Millisecond):
-		}
-	}
+	waitReceiving(t, site, body)
 
 	req, _ := http.NewRequest("DELETE", g.url("/api/sites/"+edit), nil)
 	req.Header.Set("X-Edit-Password", pw)
@@ -907,12 +911,83 @@ func TestRefsChangedAndPushDetail(t *testing.T) {
 
 	got[0].forced = true
 	got = append(got, pushedRef{ref: "refs/tags/v1", new: a}, pushedRef{ref: "refs/tags/v2", new: b})
-	d := pushDetail(got, 2048, false)
+	d := pushDetail(got, 2048)
 	wantDetail := "refs/heads/main aaaaaaa..bbbbbbb forced, refs/heads/new ccccccc created, refs/heads/gone bbbbbbb deleted, 2 more, 2.0 KB received"
 	if d != wantDetail {
 		t.Errorf("detail = %q, want %q", d, wantDetail)
 	}
-	if d := pushDetail(got[:1], 10, true); d != "refs/heads/main aaaaaaa..bbbbbbb forced, 10 B received, not verified" {
-		t.Errorf("unverified detail = %q", d)
+	if d := pushDetail([]pushedRef{{ref: "refs/heads/main", old: a, new: b, forcedUnknown: true}}, 10); d != "refs/heads/main aaaaaaa..bbbbbbb (forced: unknown), 10 B received" {
+		t.Errorf("forced-unknown detail = %q", d)
+	}
+	d = requestedDetail([]gitrepo.RefUpdate{
+		{Ref: "refs/heads/main", Old: a, New: b},
+		{Ref: "refs/heads/new", Old: zeroSHA, New: c},
+		{Ref: "refs/heads/gone", Old: b, New: zeroSHA},
+		{Ref: "refs/heads/more", Old: a, New: c},
+	}, 10)
+	if d != "requested, not verified: refs/heads/main aaaaaaa to bbbbbbb, refs/heads/new create ccccccc, refs/heads/gone delete bbbbbbb, 1 more, 10 B received" {
+		t.Errorf("requested detail = %q", d)
+	}
+}
+
+// The wire bound is crossed while git is still answering: upload-pack with
+// multi_ack_detailed acknowledges each have as it reads it. The bound's
+// reader runs on ServeRPC's stdin goroutine, beside git's output going to
+// the client, so it must never touch the ResponseWriter (http.MaxBytesReader
+// does, when its limit is passed). Under -race this is a data race; without
+// it, the connection must still be served cleanly and the next request work.
+func TestGitFetchWireBoundWhileGitWrites(t *testing.T) {
+	e := newEnv(t, nil)
+	g := newGitServer(t, e)
+	edit, pw := gitSite(t, e, nil)
+	cl := newGitClient(t)
+	sha := pushed(t, cl, cl.work(), g.remote(edit, pw), "a.txt", []byte("a"))
+
+	var raw strings.Builder
+	raw.WriteString(pktLine("want " + sha + " multi_ack_detailed\n"))
+	raw.WriteString("0000")
+	have := pktLine("have " + sha + "\n")
+	for raw.Len() <= gitFetchBodyMax+len(have) {
+		raw.WriteString(have)
+	}
+	code, out := postRPC(t, g, edit, pw, "git-upload-pack", strings.NewReader(raw.String()), nil)
+	if code != 200 || !strings.Contains(out, "ACK "+sha+" common") {
+		t.Fatalf("fetch over the wire bound = %d, %d bytes, want git's ACKs streaming", code, len(out))
+	}
+	// The connection the body was cut on is closed, cleanly: the next
+	// request goes through.
+	cl.mustGit(t.TempDir(), "ls-remote", g.remote(edit, pw))
+}
+
+// The bounds hold with no ResponseWriter in reach: fetchBody is given only
+// the request, so whatever goroutine reads it can never touch the writer
+// (http.MaxBytesReader would, through the server's own one).
+func TestGitBodyBoundsHoldNoWriter(t *testing.T) {
+	big := strings.Repeat("h", gitFetchBodyMax+1)
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = io.WriteString(zw, big)
+	_ = zw.Close()
+	for name, req := range map[string]*http.Request{
+		"plain": httptest.NewRequest("POST", "/git/x.git/git-upload-pack", strings.NewReader(big)),
+		"gzip":  httptest.NewRequest("POST", "/git/x.git/git-upload-pack", bytes.NewReader(gz.Bytes())),
+	} {
+		if name == "gzip" {
+			req.Header.Set("Content-Encoding", "gzip")
+		}
+		body, err := fetchBody(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n, err := io.Copy(io.Discard, body)
+		if !errors.Is(err, errBodyTooLarge) || n != gitFetchBodyMax || !body.over.Load() || body.failed.Load() {
+			t.Errorf("%s: read %d, %v, over %v, failed %v; want the bound at %d", name, n, err, body.over.Load(), body.failed.Load(), gitFetchBodyMax)
+		}
+	}
+	// A wire bound under a decoder shows as the decoder's own.
+	wire := &boundedBody{r: strings.NewReader(big), left: 10}
+	outer := &boundedBody{r: wire, left: 100}
+	if _, err := io.Copy(io.Discard, outer); !errors.Is(err, errBodyTooLarge) || !outer.over.Load() || outer.failed.Load() {
+		t.Errorf("a bound beneath: %v, over %v, failed %v", err, outer.over.Load(), outer.failed.Load())
 	}
 }

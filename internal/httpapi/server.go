@@ -65,6 +65,7 @@ type API struct {
 	tripSlots      chan struct{}   // CSP tripwire verifications running at once
 	reportKey      []byte          // signs the report page's form tickets
 	git            *gitrepo.Runner // nil: Git is turned off, or no git binary
+	gitInspect     pushInspector   // nil: git; a test's stand-in for the push bookkeeping
 }
 
 // New wires the API. secret signs view-session cookies; webFS provides the

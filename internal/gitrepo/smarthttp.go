@@ -172,6 +172,14 @@ func guardProcess(cmd *exec.Cmd) {
 }
 
 // ServeRPC answers POST <svc>: body is the request, git's answer streams to w.
+//
+// body is read on a goroutine of its own, beside the one copying git's
+// output to w, and that goroutine may still be reading when ServeRPC
+// returns (git exited early; the copier ends at its next write). So body
+// must never touch w — http.MaxBytesReader does, through the server's own
+// writer, once its limit is passed — and the caller must stop body's reads
+// before its handler returns, since net/http forbids reading a request body
+// after that.
 func (r *Runner) ServeRPC(ctx context.Context, dir string, svc Service, body io.Reader, w http.ResponseWriter, o RPCOptions) (RPCResult, error) {
 	var res RPCResult
 	if _, ok := ParseService(string(svc)); !ok {

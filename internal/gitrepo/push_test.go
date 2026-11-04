@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestRefTargetsSnapshotsEveryRef(t *testing.T) {
@@ -76,5 +77,43 @@ func TestIsAncestor(t *testing.T) {
 	// A sha the repository does not hold is an error, never "forced".
 	if _, err := r.IsAncestor(ctx, dir, "1111111111111111111111111111111111111111", two); err == nil {
 		t.Error("an unknown commit answered without an error")
+	}
+}
+
+// Bookkeeping after a push may wait longer for a slot than a request does.
+func TestWithSlotWait(t *testing.T) {
+	NeedGit(t)
+	r, dir := newBareMax(t, 1)
+	ctx := context.Background()
+	hold, err := r.acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A short wait gives up as soon as it says.
+	start := time.Now()
+	if _, err := r.RefTargets(WithSlotWait(ctx, 100*time.Millisecond), dir); !errors.Is(err, ErrBusy) {
+		t.Fatalf("short wait: %v, want ErrBusy", err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("a 100 ms wait took %v", d)
+	}
+
+	// A long one outlasts the default five seconds: the slot comes free
+	// after them, and the call still gets it.
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.RefTargets(WithSlotWait(ctx, 30*time.Second), dir)
+		done <- err
+	}()
+	time.Sleep(acquireWait + 500*time.Millisecond)
+	select {
+	case err := <-done:
+		t.Fatalf("returned before the slot came free: %v", err)
+	default:
+	}
+	hold()
+	if err := <-done; err != nil {
+		t.Fatalf("long wait: %v", err)
 	}
 }

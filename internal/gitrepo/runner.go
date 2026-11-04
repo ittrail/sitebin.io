@@ -100,10 +100,25 @@ func (r *Runner) commandWith(ctx context.Context, dir string, extraC, extraEnv [
 	return cmd
 }
 
-// acquire takes a process slot, waiting at most five seconds (or until ctx
-// ends) before it gives up with ErrBusy.
+// slotWaitKey carries a caller's own slot wait (WithSlotWait).
+type slotWaitKey struct{}
+
+// WithSlotWait lets the git calls made with ctx wait up to d for a process
+// slot, instead of the five seconds a request gets. For bookkeeping that
+// must not give up as easily: what a push changed is read after it, while
+// other requests may hold every slot.
+func WithSlotWait(ctx context.Context, d time.Duration) context.Context {
+	return context.WithValue(ctx, slotWaitKey{}, d)
+}
+
+// acquire takes a process slot, waiting at most five seconds (or what
+// WithSlotWait set, or until ctx ends) before it gives up with ErrBusy.
 func (r *Runner) acquire(ctx context.Context) (release func(), err error) {
-	t := time.NewTimer(acquireWait)
+	wait := acquireWait
+	if d, ok := ctx.Value(slotWaitKey{}).(time.Duration); ok && d > 0 {
+		wait = d
+	}
+	t := time.NewTimer(wait)
 	defer t.Stop()
 	select {
 	case r.slots <- struct{}{}:
