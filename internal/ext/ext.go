@@ -809,6 +809,15 @@ type SiteAdmin struct {
 	Until   *time.Time
 }
 
+// ChangeBy is who asked for an ownership change, for the site's log. IP must
+// be auth.ClientIP(r) of the acting request (the last X-Forwarded-For entry,
+// Caddy's), never an address the client chose.
+type ChangeBy struct {
+	Account   string
+	IP        string
+	UserAgent string
+}
+
 // OwnershipSites is the part of the core's site service that moves a site
 // between accounts, shares it and measures it. It is OPTIONAL: the core's
 // SiteService implements it and the extension asserts it, so a SiteService
@@ -826,21 +835,25 @@ type OwnershipSites interface {
 	// that is running, drops the verify cache and revokes the site's upload
 	// tokens. It does not relink the extension's own account indexes. An
 	// empty to is ErrNotOwner.
-	TransferSite(viewID, from, to string, g CreateGrant, detach []string) (newPassword string, err error)
+	TransferSite(viewID, from, to string, g CreateGrant, detach []string, by ChangeBy) (newPassword string, err error)
 	// AdoptSite gives an anonymous, unlocked, unexpired site to account to
 	// and stamps g onto it as a creation does.
-	AdoptSite(viewID, to string, g CreateGrant) error
+	AdoptSite(viewID, to string, g CreateGrant, by ChangeBy) error
 	// SetAdmins edits the site's admins under the site lock: edit receives
 	// the stored list and returns the one to store (de-duplicated by
 	// account, at most store.MaxAdmins). An error from edit is returned
-	// unchanged, with nothing written.
-	SetAdmins(viewID string, edit func([]SiteAdmin) ([]SiteAdmin, error)) error
+	// unchanged, with nothing written. edit runs under the site lock and
+	// must not call back into the site service.
+	SetAdmins(viewID string, by ChangeBy, edit func([]SiteAdmin) ([]SiteAdmin, error)) error
 	// CheckEditPassword verifies a site's edit password through the same
-	// per-address and per-site limits as every other surface. retryAfter is
+	// per-address and per-site limits as every other surface. ip must be
+	// auth.ClientIP(r) of the request that carries the password: a caller
+	// that passes anything else lets one client spend another's allowance
+	// (or none at all). retryAfter is
 	// set when the call was throttled (ok is then false).
 	CheckEditPassword(viewID, password, ip string) (ok bool, retryAfter time.Duration)
-	// ResolveSite maps a view URL, an edit URL, a view id or an edit id to
-	// the site's view id.
+	// ResolveSite maps a view URL, an edit URL, a view id, an edit id or a
+	// custom domain (host or host/path) to the site's view id.
 	ResolveSite(urlOrID string) (viewID string, ok bool)
 	// WillNotMove lists the site's addresses whose proof depends on the
 	// sender's account (a name in the sender's zone, an operator zone, an

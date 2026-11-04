@@ -600,6 +600,9 @@ func TestServicesOfCountsAcrossProjects(t *testing.T) {
 	if got := r.m.ServicesOf("other"); got != 2 {
 		t.Errorf("ServicesOf(other) = %d, want 2", got)
 	}
+	if n, err := r.m.ServicesOfErr("acct"); err != nil || n != 4 {
+		t.Errorf("ServicesOfErr(acct) = %d, %v", n, err)
+	}
 	if got := r.m.ServicesOf("nobody"); got != 0 {
 		t.Errorf("ServicesOf(nobody) = %d, want 0", got)
 	}

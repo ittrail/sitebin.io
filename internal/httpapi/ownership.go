@@ -38,19 +38,21 @@ func stampWith(g ext.CreateGrant) func(*store.Meta, time.Time) bool {
 }
 
 // ownershipEntry is a site-log line for a change the extension asked for.
-// The seam carries no request, so no address or user agent is known.
-func ownershipEntry(action, account, detail string) provenance.Entry {
+// The extension names the acting account, address and user agent (by).
+func ownershipEntry(action string, by ext.ChangeBy, detail string) provenance.Entry {
 	return provenance.Entry{
 		Time:    time.Now().UTC(),
 		Action:  action,
 		Surface: provenance.SurfaceDashboard,
 		Auth:    provenance.AuthSession,
-		Account: account,
+		Account: by.Account,
+		IP:      by.IP,
+		UA:      by.UserAgent,
 		Detail:  detail,
 	}
 }
 
-func (s siteService) TransferSite(viewID, from, to string, g ext.CreateGrant, detach []string) (string, error) {
+func (s siteService) TransferSite(viewID, from, to string, g ext.CreateGrant, detach []string, by ext.ChangeBy) (string, error) {
 	site, err := s.a.st.ByViewID(viewID)
 	if err != nil {
 		return "", mapSiteGone(err, viewID)
@@ -64,11 +66,11 @@ func (s siteService) TransferSite(viewID, from, to string, g ext.CreateGrant, de
 	// token was issued under the old owner's authority.
 	s.a.verifyCache.Drop(site.EditID + ":")
 	s.a.uploads.revokeSite(site.ViewID)
-	s.a.record(site, ownershipEntry(provenance.ActionTransfer, from, "from "+from+" to "+to))
+	s.a.record(site, ownershipEntry(provenance.ActionTransfer, by, "from "+from+" to "+to))
 	return pw, nil
 }
 
-func (s siteService) AdoptSite(viewID, to string, g ext.CreateGrant) error {
+func (s siteService) AdoptSite(viewID, to string, g ext.CreateGrant, by ext.ChangeBy) error {
 	site, err := s.a.st.ByViewID(viewID)
 	if err != nil {
 		return mapSiteGone(err, viewID)
@@ -76,11 +78,11 @@ func (s siteService) AdoptSite(viewID, to string, g ext.CreateGrant) error {
 	if err := s.a.st.AdoptOwner(site, to, stampWith(g)); err != nil {
 		return mapOwnershipErr(err, viewID)
 	}
-	s.a.record(site, ownershipEntry(provenance.ActionAdopt, to, "adopted by "+to))
+	s.a.record(site, ownershipEntry(provenance.ActionAdopt, by, "adopted by "+to))
 	return nil
 }
 
-func (s siteService) SetAdmins(viewID string, edit func([]ext.SiteAdmin) ([]ext.SiteAdmin, error)) error {
+func (s siteService) SetAdmins(viewID string, by ext.ChangeBy, edit func([]ext.SiteAdmin) ([]ext.SiteAdmin, error)) error {
 	site, err := s.a.st.ByViewID(viewID)
 	if err != nil {
 		return mapSiteGone(err, viewID)
@@ -99,7 +101,7 @@ func (s siteService) SetAdmins(viewID string, edit func([]ext.SiteAdmin) ([]ext.
 	if err != nil {
 		return mapOwnershipErr(err, viewID)
 	}
-	s.a.record(site, ownershipEntry(provenance.ActionAdmins, "", fmt.Sprintf("%d admin(s)", len(site.Meta.Admins))))
+	s.a.record(site, ownershipEntry(provenance.ActionAdmins, by, fmt.Sprintf("%d admin(s)", len(site.Meta.Admins))))
 	return nil
 }
 
@@ -139,9 +141,9 @@ func (a *API) authRetryAfter() time.Duration {
 	return max(5*time.Minute/time.Duration(n), time.Second)
 }
 
-// ResolveSite maps a view URL, an edit URL, a view id or an edit id to the
-// site's view id. The report resolver covers the view forms and a domain;
-// the edit forms are added here.
+// ResolveSite maps a view URL, an edit URL, a view id, an edit id or a custom
+// domain (host or host/path) to the site's view id. The report resolver
+// covers the view forms and a domain; the edit forms are added here.
 func (s siteService) ResolveSite(in string) (string, bool) {
 	in = strings.TrimSpace(in)
 	if in == "" || len(in) > 2048 {
@@ -201,7 +203,7 @@ func (s siteService) HostConflicts(viewIDs []string, sender string) map[string][
 			continue
 		}
 		for _, d := range site.Meta.CustomDomains {
-			host, _, _ := strings.Cut(d, "/")
+			host := store.HostOf(d)
 			for _, ha := range s.a.st.HostAddresses(host) {
 				other := ha.Site
 				if slices.Contains(viewIDs, other.ViewID) || other.Meta.OwnerAccountID != sender {

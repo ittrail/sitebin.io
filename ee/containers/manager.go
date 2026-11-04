@@ -669,12 +669,15 @@ func (m *Manager) usedByOthers(owner, except string) (int, error) {
 	return n, nil
 }
 
-// ServicesOf is how many services owner runs across all of their projects:
-// the figure the plan cap counts. On an error it answers 0 and logs, so a
-// caller that only warns (a limits check before a transfer) never blocks on
-// a Docker or site-listing hiccup.
+// ServicesOfErr is how many services owner runs across all of their
+// projects: the figure the plan cap counts. A caller that ENFORCES a cap
+// uses this one, because an unknown count must not read as zero.
+func (m *Manager) ServicesOfErr(owner string) (int, error) { return m.usedByOthers(owner, "") }
+
+// ServicesOf is ServicesOfErr for a display-only count: on an error it
+// answers 0 and logs. A caller enforcing a cap must not rely on it.
 func (m *Manager) ServicesOf(owner string) int {
-	n, err := m.usedByOthers(owner, "")
+	n, err := m.ServicesOfErr(owner)
 	if err != nil {
 		slog.Warn("containers: could not count an owner's services", "err", err)
 		return 0

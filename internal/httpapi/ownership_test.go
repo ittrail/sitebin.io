@@ -79,7 +79,8 @@ func TestTransferSiteRevokesOldCredentials(t *testing.T) {
 	}
 
 	g := ext.CreateGrant{MaxSiteBytes: 5000, MaxFiles: 9, MaxExpiryDays: 30}
-	pw, err := e.own(t).TransferSite(c.ID, "acct-1", "acct-2", g, nil)
+	by := ext.ChangeBy{Account: "acct-1", IP: "203.0.113.7", UserAgent: "test-agent"}
+	pw, err := e.own(t).TransferSite(c.ID, "acct-1", "acct-2", g, nil, by)
 	if err != nil || pw == "" || pw == c.EditPassword {
 		t.Fatalf("TransferSite = %q, %v", pw, err)
 	}
@@ -93,10 +94,8 @@ func TestTransferSiteRevokesOldCredentials(t *testing.T) {
 	if code := e.siteStatus(t, edit, "X-Edit-Password", pw); code != 200 {
 		t.Errorf("new password after = %d, want 200", code)
 	}
-	// The gate answers 401 to a credential that does not stand on the site
-	// (the brief expected 403); either way the old owner is out.
-	if code := e.siteStatus(t, edit, "Authorization", "sbp_old"); code != 401 && code != 403 {
-		t.Errorf("old owner's account token after = %d, want refused", code)
+	if code := e.siteStatus(t, edit, "Authorization", "sbp_old"); code != 401 {
+		t.Errorf("old owner's account token after = %d, want 401", code)
 	}
 	if code := e.siteStatus(t, edit, "Authorization", "sbp_new"); code != 200 {
 		t.Errorf("new owner's account token = %d, want 200", code)
@@ -109,7 +108,8 @@ func TestTransferSiteRevokesOldCredentials(t *testing.T) {
 	var named bool
 	for _, en := range provLog(t, e, site) {
 		if en.Action == provenance.ActionTransfer {
-			named = strings.Contains(en.Detail, "acct-1") && strings.Contains(en.Detail, "acct-2")
+			named = strings.Contains(en.Detail, "acct-1") && strings.Contains(en.Detail, "acct-2") &&
+				en.Account == "acct-1" && en.IP == "203.0.113.7" && en.UA == "test-agent"
 		}
 	}
 	if !named {
@@ -117,13 +117,13 @@ func TestTransferSiteRevokesOldCredentials(t *testing.T) {
 	}
 
 	// Refusals map onto the seam's sentinels.
-	if _, err := e.own(t).TransferSite(c.ID, "acct-1", "acct-3", g, nil); !errors.Is(err, ext.ErrNotOwner) {
+	if _, err := e.own(t).TransferSite(c.ID, "acct-1", "acct-3", g, nil, by); !errors.Is(err, ext.ErrNotOwner) {
 		t.Errorf("the old owner transferring again: %v", err)
 	}
-	if _, err := e.own(t).TransferSite(c.ID, "acct-2", "", g, nil); !errors.Is(err, ext.ErrNotOwner) {
+	if _, err := e.own(t).TransferSite(c.ID, "acct-2", "", g, nil, by); !errors.Is(err, ext.ErrNotOwner) {
 		t.Errorf("a transfer to nobody: %v", err)
 	}
-	if _, err := e.own(t).TransferSite(noSuchSite, "acct-1", "acct-2", g, nil); !errors.Is(err, ext.ErrSiteGone) {
+	if _, err := e.own(t).TransferSite(noSuchSite, "acct-1", "acct-2", g, nil, by); !errors.Is(err, ext.ErrSiteGone) {
 		t.Errorf("an unknown site: %v", err)
 	}
 }
@@ -132,8 +132,9 @@ func TestAdoptSiteStampsLikeCreate(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
 	two, one := 2, 1
+	by := ext.ChangeBy{Account: "acct-9", IP: "203.0.113.8", UserAgent: "ua"}
 	g := ext.CreateGrant{MaxSiteBytes: 1000, MaxFiles: 5, MaxExpiryDays: 7, MaxCustomDomain: &two, MaxForms: &one, Trusted: true}
-	if err := e.own(t).AdoptSite(c.ID, "acct-9", g); err != nil {
+	if err := e.own(t).AdoptSite(c.ID, "acct-9", g, by); err != nil {
 		t.Fatal(err)
 	}
 	site := e.siteOf(t, c.ID)
@@ -149,19 +150,19 @@ func TestAdoptSiteStampsLikeCreate(t *testing.T) {
 	}
 	var adopted bool
 	for _, en := range provLog(t, e, site) {
-		adopted = adopted || (en.Action == provenance.ActionAdopt && strings.Contains(en.Detail, "acct-9"))
+		adopted = adopted || (en.Action == provenance.ActionAdopt && strings.Contains(en.Detail, "acct-9") && en.IP == "203.0.113.8")
 	}
 	if !adopted {
 		t.Error("no adopt line in the site's log")
 	}
-	if err := e.own(t).AdoptSite(c.ID, "acct-8", g); !errors.Is(err, ext.ErrNotAdoptable) {
+	if err := e.own(t).AdoptSite(c.ID, "acct-8", g, by); !errors.Is(err, ext.ErrNotAdoptable) {
 		t.Errorf("adopting an owned site: %v", err)
 	}
 	anon := e.createSite(t, nil, map[string]string{"index.html": "x"})
-	if err := e.own(t).AdoptSite(anon.ID, "", g); !errors.Is(err, ext.ErrNotAdoptable) {
+	if err := e.own(t).AdoptSite(anon.ID, "", g, by); !errors.Is(err, ext.ErrNotAdoptable) {
 		t.Errorf("adopting for nobody: %v", err)
 	}
-	if err := e.own(t).AdoptSite(noSuchSite, "acct-9", g); !errors.Is(err, ext.ErrSiteGone) {
+	if err := e.own(t).AdoptSite(noSuchSite, "acct-9", g, by); !errors.Is(err, ext.ErrSiteGone) {
 		t.Errorf("an unknown site: %v", err)
 	}
 }
@@ -229,7 +230,7 @@ func TestWillNotMove(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.st.Update(site, func(m *store.Meta) error { m.OwnerAccountID = "acct"; return nil })
-	for _, d := range []string{"shop.kunde.example", "x.ops.example", "self.example", "via.example"} {
+	for _, d := range []string{"shop.kunde.example", "x.ops.example", "self.example", "via.example", "shop.kunde.example/blog"} {
 		if err := e.st.AddDomain(site, d); err != nil {
 			t.Fatalf("AddDomain %s: %v", d, err)
 		}
@@ -250,7 +251,7 @@ func TestWillNotMove(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := e.own(t).WillNotMove(site.ViewID, "acct")
-	want := map[string]bool{"shop.kunde.example": true, "x.ops.example": true, "via.example": true}
+	want := map[string]bool{"shop.kunde.example": true, "x.ops.example": true, "via.example": true, "shop.kunde.example/blog": true}
 	if len(got) != len(want) {
 		t.Fatalf("WillNotMove = %v, want %v", got, want)
 	}
@@ -351,8 +352,9 @@ func TestFormRecipients(t *testing.T) {
 func TestSetAdminsAndInfo(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	by := ext.ChangeBy{Account: "acct-1", IP: "203.0.113.9"}
 	until := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
-	err := e.own(t).SetAdmins(c.ID, func(cur []ext.SiteAdmin) ([]ext.SiteAdmin, error) {
+	err := e.own(t).SetAdmins(c.ID, by, func(cur []ext.SiteAdmin) ([]ext.SiteAdmin, error) {
 		if len(cur) != 0 {
 			t.Errorf("start with %v", cur)
 		}
@@ -366,7 +368,7 @@ func TestSetAdminsAndInfo(t *testing.T) {
 		t.Fatalf("Info.Admins = %+v", info.Admins)
 	}
 	mine := errors.New("mine")
-	if err := e.own(t).SetAdmins(c.ID, func([]ext.SiteAdmin) ([]ext.SiteAdmin, error) { return nil, mine }); err != mine {
+	if err := e.own(t).SetAdmins(c.ID, by, func([]ext.SiteAdmin) ([]ext.SiteAdmin, error) { return nil, mine }); err != mine {
 		t.Errorf("edit's own error came back as %v", err)
 	}
 	many := func([]ext.SiteAdmin) ([]ext.SiteAdmin, error) {
@@ -376,16 +378,16 @@ func TestSetAdminsAndInfo(t *testing.T) {
 		}
 		return out, nil
 	}
-	if err := e.own(t).SetAdmins(c.ID, many); !errors.Is(err, ext.ErrTooManyAdmins) {
+	if err := e.own(t).SetAdmins(c.ID, by, many); !errors.Is(err, ext.ErrTooManyAdmins) {
 		t.Errorf("too many: %v", err)
 	}
-	if err := e.own(t).SetAdmins(noSuchSite, many); !errors.Is(err, ext.ErrSiteGone) {
+	if err := e.own(t).SetAdmins(noSuchSite, by, many); !errors.Is(err, ext.ErrSiteGone) {
 		t.Errorf("unknown site: %v", err)
 	}
 	site := e.siteOf(t, c.ID)
 	var logged bool
 	for _, en := range provLog(t, e, site) {
-		logged = logged || en.Action == provenance.ActionAdmins
+		logged = logged || (en.Action == provenance.ActionAdmins && en.IP == "203.0.113.9" && en.Account == "acct-1")
 	}
 	if !logged {
 		t.Error("no admins line in the site's log")
@@ -393,7 +395,35 @@ func TestSetAdminsAndInfo(t *testing.T) {
 	if _, err := e.st.SetLock(site, &store.SiteLock{At: time.Now(), By: "operator"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.own(t).SetAdmins(c.ID, func(cur []ext.SiteAdmin) ([]ext.SiteAdmin, error) { return nil, nil }); !errors.Is(err, ext.ErrSiteLocked) {
+	if err := e.own(t).SetAdmins(c.ID, by, func(cur []ext.SiteAdmin) ([]ext.SiteAdmin, error) { return nil, nil }); !errors.Is(err, ext.ErrSiteLocked) {
 		t.Errorf("locked: %v", err)
+	}
+}
+
+// A cached verification is bound to the hash it was checked against: after a
+// transfer the old password fails for a fresh reader, even when a request
+// that loaded the old site ran after the cache Drop and re-Put it.
+func TestVerifyCacheIsBoundToThePasswordHash(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	e.st.Update(e.siteOf(t, c.ID), func(m *store.Meta) error { m.OwnerAccountID = "acct-1"; return nil })
+	stale := e.siteOf(t, c.ID) // a request that loaded the meta before the write
+	if e.api.verifyEditIP("203.0.113.1", stale, c.EditPassword) != verifyOK {
+		t.Fatal("the password did not verify before")
+	}
+	pw, err := e.own(t).TransferSite(c.ID, "acct-1", "acct-2", ext.CreateGrant{}, nil, ext.ChangeBy{Account: "acct-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Window B: verification against the stale object after the Drop.
+	if e.api.verifyEditIP("203.0.113.2", stale, c.EditPassword) != verifyOK {
+		t.Fatal("the stale object should still verify its own hash")
+	}
+	fresh := e.siteOf(t, c.ID)
+	if got := e.api.verifyEditIP("203.0.113.3", fresh, c.EditPassword); got == verifyOK {
+		t.Fatal("the old password verifies for a fresh reader (stale cache entry)")
+	}
+	if e.api.verifyEditIP("203.0.113.4", fresh, pw) != verifyOK {
+		t.Fatal("the new password was refused")
 	}
 }
