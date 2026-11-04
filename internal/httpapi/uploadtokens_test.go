@@ -14,6 +14,33 @@ type uploadClock struct{ t time.Time }
 func (c *uploadClock) now() time.Time          { return c.t }
 func (c *uploadClock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
+// issue mints a token opened with an edit password whose hash is
+// "test-hash": enough for the registry's own tests. A request through the
+// API needs the site's real hash (env.uploadToken).
+func (u *uploadTokens) issue(viewID, editID string) (string, time.Time, error) {
+	return u.issueAs(viewID, editID, "", "", "test-hash")
+}
+
+// issueFor mints a token opened by account as the site's owner.
+func (u *uploadTokens) issueFor(viewID, editID, account string) (string, time.Time, error) {
+	return u.issueAs(viewID, editID, account, roleOwner, "")
+}
+
+// uploadToken issues a token for the site the way open_upload does for its
+// edit password: bound to the site's current hash.
+func (e *env) uploadToken(t *testing.T, viewID string) string {
+	t.Helper()
+	site, err := e.st.ByViewID(viewID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, _, err := e.api.uploads.issueAs(site.ViewID, site.EditID, "", "", site.Meta.EditPasswordHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return secret
+}
+
 func newTestUploads() (*uploadTokens, *uploadClock) {
 	c := &uploadClock{t: time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)}
 	return newUploadTokens(c.now), c

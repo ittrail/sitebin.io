@@ -209,7 +209,7 @@ func (s *Store) AdoptOwner(site *Site, to string, stamp func(*Meta, time.Time) b
 // guarded like DeleteIfOwner: under the site lock, meta.json's owner must be
 // expectedOwner (never empty), else ErrNotOwner and nothing is written -- a
 // transfer that landed after the caller looked must not leave an admin on the
-// new owner's site.
+// new owner's site. A running push is cancelled when an admin stops standing.
 func (s *Store) UpdateAdmins(site *Site, expectedOwner string, edit func([]SiteAdmin) ([]SiteAdmin, error)) error {
 	l := s.lockSite(site.ViewID)
 	l.Lock()
@@ -242,12 +242,24 @@ func (s *Store) UpdateAdmins(site *Site, expectedOwner string, edit func([]SiteA
 	if len(admins) > MaxAdmins {
 		return ErrTooManyAdmins
 	}
+	before := m
 	m.Admins = admins
 	m.UpdatedAt = time.Now().UTC()
 	if err := writeMeta(site.dir, m); err != nil {
 		return err
 	}
 	site.Meta = m
+	// A push an admin started re-checks the standing only once, when it is
+	// registered: one running when the admin stops standing (removed, or the
+	// end date moved into the past) is cancelled, as a transfer cancels the
+	// old owner's. The registry does not know whose push runs, so any
+	// running push is; git refuses the admin's next one from meta.
+	for _, a := range before.Admins {
+		if before.LiveAdmin(a.Account, m.UpdatedAt) && !m.LiveAdmin(a.Account, m.UpdatedAt) {
+			s.stopGitWrite(site.ViewID)
+			break
+		}
+	}
 	return nil
 }
 

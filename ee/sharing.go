@@ -43,6 +43,13 @@ func (p *provider) SharingAllowed(accountID string) (bool, error) {
 	if acc.Suspended() {
 		return false, nil
 	}
+	// An operator's sites carry the operator's exemptions; sharing them
+	// would lend those to another account. Checked here, not only when an
+	// invitation is made, so an owner who becomes the operator later pauses
+	// every share they made.
+	if p.isAdmin(acc) {
+		return false, nil
+	}
 	switch p.cfg.Mode {
 	case eeconfig.ModeAccounts:
 		return true, nil

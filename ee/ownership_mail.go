@@ -313,14 +313,16 @@ func (p *provider) mailTransferExpired(o ownership.Offer) {
 // transferExpiredMail is "a transfer expired", for one side. It names the
 // sites and the other party's address (the recipient's for the sender, the
 // sender's for the recipient) and never a password: nothing moved, so there
-// is none.
+// is none. The sender's text is also what the sender hears when the
+// recipient's account is deleted: it is true in both cases and tells them
+// apart by nothing.
 func (p *provider) transferExpiredMail(o ownership.Offer, senderEmail string, toSender bool) (subject, body string) {
 	var b strings.Builder
 	if senderEmail == "" {
 		senderEmail = "the sender"
 	}
 	if toSender {
-		fmt.Fprintf(&b, "Your transfer to %s was not accepted by %s (UTC) and has expired:\n\n", o.ToEmail, dateText(o.AcceptBy))
+		fmt.Fprintf(&b, "Your transfer to %s ended without being accepted (it could be accepted until %s, UTC):\n\n", o.ToEmail, dateText(o.AcceptBy))
 		p.writeSites(&b, o.Sites)
 		fmt.Fprintf(&b, "\nNothing has moved: the sites stay with you. You can make a new offer at any time.\n\nYour transfers: %s%s\n", p.baseURL(), transferPath)
 	} else {

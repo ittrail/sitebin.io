@@ -24,13 +24,47 @@ import (
 //     removes its share-marker folder. Any error it does not know how to
 //     read stops the deletion, so the account is never erased while a share
 //     of it may still grant access.
-//   - deleteOwnedSiteEnding, the per-site callback of accounts.Delete: the
-//     site is deleted as before, and the admins it had lose their marker and
-//     their own tags for it.
+//   - deleteAccountAndSites, the deletion itself: accounts.Delete with
+//     deleteOwnedSiteEnding as its per-site callback, then the admins the
+//     deleted sites had lose their marker and their own tags for them
+//     (after accounts.Delete returned: that takes their account locks).
 //
 // The account's tag registry lives in its account directory and goes with it.
 
 var errSkipRecord = errors.New("not open")
+
+// linkOwnedMarkers links a marker for every site whose meta.json names the
+// account as its owner but which has none (LinkSite failed after an adopt or
+// a transfer, and the hourly reconciliation has not run since). An account's
+// deletion lists its sites by marker: without this, a site that lost its
+// marker would outlive the account, still naming it, and a locked one would
+// not stop the deletion. A walk that could not read every site is an error,
+// because absence from it proves nothing; a site service without the walk
+// (no ext.OwnershipSites) has nothing to link.
+func (p *provider) linkOwnedMarkers(acc *account.Account) error {
+	lister, ok := p.host.Sites().(siteOwnersLister)
+	if !ok {
+		return nil
+	}
+	owners, err := lister.SiteOwners()
+	if err != nil {
+		return fmt.Errorf("read every site's owner: %w", err)
+	}
+	have, err := p.accounts.ListSiteIDs(acc)
+	if err != nil {
+		return fmt.Errorf("list the account's site markers: %w", err)
+	}
+	for site, so := range owners {
+		if so.Owner != acc.ID || slices.Contains(have, site) {
+			continue
+		}
+		if err := p.accounts.LinkSite(acc, site); err != nil {
+			return fmt.Errorf("link the marker of %s: %w", site, err)
+		}
+		slog.Info("account deletion: linked a missing site marker", "account", acc.ID, "site", site)
+	}
+	return nil
+}
 
 // endedShare is a share this deletion ended on someone else's site.
 type endedShare struct {
@@ -97,7 +131,7 @@ func (p *provider) beforeAccountDelete(acc *account.Account, by ext.ChangeBy) er
 
 	// 2. Offers and invitations from the account and to its email. An
 	// accepting offer is completeAccepting's.
-	cancelledOffers, cancelledInvites, err := p.cancelAccountRecords(acc)
+	endedOffers, endedInvites, err := p.cancelAccountRecords(acc)
 	if err != nil {
 		return err
 	}
@@ -139,18 +173,29 @@ func (p *provider) beforeAccountDelete(acc *account.Account, by ext.ChangeBy) er
 	} else if len(locked) > 0 {
 		slog.Warn("account deletion: the site service keeps no site log; entries on locked sites are not recorded", "account", acc.ID)
 	}
-	for _, c := range cancelledOffers {
-		p.mailOfferCancelled(c, acc)
+	for _, o := range endedOffers {
+		if o.From == acc.ID {
+			p.mailOfferCancelled(o, acc)
+		} else {
+			p.mailOfferEnded(o)
+		}
 	}
-	for _, inv := range cancelledInvites {
-		p.mailInviteCancelled(inv, acc)
+	for _, inv := range endedInvites {
+		if inv.From == acc.ID {
+			p.mailInviteCancelled(inv, acc)
+		}
+		// An invitation to the account lapses silently, as every lapse does.
 	}
 	return nil
 }
 
-// cancelAccountRecords cancels the open and paused offers and the open
+// cancelAccountRecords ends the open and paused offers and the open
 // invitations from the account and to its address, and returns what it
-// cancelled. A listing or an update error other than "no longer open" stops.
+// ended. The account's own are cancelled. Those made TO it end as a lapse
+// does (expired): "cancelled" would tell their sender that an account
+// existed for the address, so the sender hears the expiry's words and an
+// invitation lapses silently. A listing or an update error other than "no
+// longer open" stops.
 func (p *provider) cancelAccountRecords(acc *account.Account) ([]ownership.Offer, []ownership.Invite, error) {
 	offers, err := p.owner.OffersBySender(acc.ID)
 	if err != nil {
@@ -183,7 +228,7 @@ func (p *provider) cancelAccountRecords(acc *account.Account) ([]ownership.Offer
 			if x.State != ownership.StateOpen && x.State != ownership.StatePaused {
 				return errSkipRecord
 			}
-			x.State = ownership.StateCancelled
+			x.State = endedState(x.From, acc)
 			return nil
 		})
 		switch {
@@ -205,7 +250,7 @@ func (p *provider) cancelAccountRecords(acc *account.Account) ([]ownership.Offer
 			if x.State != ownership.StateOpen {
 				return errSkipRecord
 			}
-			x.State = ownership.StateCancelled
+			x.State = endedState(x.From, acc)
 			return nil
 		})
 		switch {
@@ -219,68 +264,112 @@ func (p *provider) cancelAccountRecords(acc *account.Account) ([]ownership.Offer
 	return cancelledOffers, cancelledInvites, nil
 }
 
-// mailOfferCancelled tells the other party of a cancelled offer. The
-// recipient is told only if they were ever told of the offer.
+// endedState is the final state an account's deletion gives a record made
+// by from: cancelled for the account's own, expired for one made to it.
+func endedState(from string, deleted *account.Account) string {
+	if from == deleted.ID {
+		return ownership.StateCancelled
+	}
+	return ownership.StateExpired
+}
+
+// mailOfferCancelled tells the recipient of an offer the deleted account
+// made that it was cancelled, if they were ever told of the offer.
 func (p *provider) mailOfferCancelled(o ownership.Offer, deleted *account.Account) {
-	if o.From == deleted.ID {
-		if o.NotifiedAt == nil {
-			return
-		}
-		subject, body := p.transferCancelledMail(o, deleted.Email, false)
-		p.mailVerified(o.ToEmail, subject, body)
+	if o.NotifiedAt == nil {
 		return
 	}
+	subject, body := p.transferCancelledMail(o, deleted.Email, false)
+	p.mailVerified(o.ToEmail, subject, body)
+}
+
+// mailOfferEnded tells the sender of an offer made to the deleted account
+// that it ended unaccepted, in the words of the expiry mail: nothing in it
+// says that an account existed for the address. The deleted account, the
+// recipient, is told nothing.
+func (p *provider) mailOfferEnded(o ownership.Offer) {
 	senderEmail := p.emailOf(o.From)
-	subject, body := p.transferCancelledMail(o, senderEmail, true)
+	subject, body := p.transferExpiredMail(o, senderEmail, true)
 	p.mailVerified(senderEmail, subject, body)
 }
 
+// mailInviteCancelled tells the invitee of an invitation the deleted account
+// made that it was cancelled.
 func (p *provider) mailInviteCancelled(inv ownership.Invite, deleted *account.Account) {
-	if inv.From == deleted.ID {
-		subject, body := p.inviteCancelledMail(inv, deleted.Email, false)
-		p.mailVerified(inv.ToEmail, subject, body)
-		return
+	subject, body := p.inviteCancelledMail(inv, deleted.Email, false)
+	p.mailVerified(inv.ToEmail, subject, body)
+}
+
+// deletedSite is a site an account's deletion removed, with the admins it
+// had, for the cleanup after accounts.Delete.
+type deletedSite struct {
+	site, label string
+	admins      []ext.SiteAdmin
+}
+
+// deleteAccountAndSites deletes the account and every site it owns
+// (accounts.Delete with deleteOwnedSiteEnding), then cleans up after the
+// admins of the sites that went: their share markers, their own tags for
+// the site, a line in their log and a mail. That cleanup takes each admin's
+// account lock, so it runs only once accounts.Delete has returned: its
+// callback holds the deleted account's lock, and two deletions of accounts
+// that administer each other's sites would otherwise wait on each other
+// forever. Sites deleted before an error are cleaned up all the same.
+func (p *provider) deleteAccountAndSites(acc *account.Account) (sites int, err error) {
+	var gone []deletedSite
+	err = p.accounts.Delete(acc, func(viewID string) error {
+		ds, deleted, err := p.deleteOwnedSiteEnding(acc, viewID)
+		if deleted {
+			sites++
+			gone = append(gone, ds)
+		}
+		return err
+	})
+	for _, ds := range gone {
+		p.endAdminsOfDeletedSite(acc, ds)
 	}
-	fromEmail := p.emailOf(inv.From)
-	subject, body := p.inviteCancelledMail(inv, fromEmail, true)
-	p.mailVerified(fromEmail, subject, body)
+	return sites, err
 }
 
 // deleteOwnedSiteEnding is accounts.Delete's per-site callback: the site is
-// deleted as deleteOwnedSite does, and the admins it had lose their marker and
-// their own tags for it and are told. The admins are read before the delete
-// (they go with the site); a read that fails only leaves the markers to the
-// background reconciliation.
-func (p *provider) deleteOwnedSiteEnding(acc *account.Account, viewID string) (bool, error) {
-	var admins []ext.SiteAdmin
-	var label string
+// deleted as deleteOwnedSite does, and the admins it had are returned for
+// endAdminsOfDeletedSite. The admins are read before the delete (they go
+// with the site); a read that fails only leaves the markers to the
+// background reconciliation. It takes no other account's lock.
+func (p *provider) deleteOwnedSiteEnding(acc *account.Account, viewID string) (deletedSite, bool, error) {
+	ds := deletedSite{site: viewID}
 	if p.owner != nil {
 		var err error
-		if admins, err = p.siteAdmins(viewID); err != nil && !errors.Is(err, ext.ErrSiteGone) {
+		if ds.admins, err = p.siteAdmins(viewID); err != nil && !errors.Is(err, ext.ErrSiteGone) {
 			slog.Error("account deletion: could not read a site's admins; the reconciliation will unlink them", "site", viewID, "err", err)
 		}
-		if len(admins) > 0 {
-			label = p.labelOf(viewID)
+		if len(ds.admins) > 0 {
+			ds.label = p.labelOf(viewID)
 		}
 	}
 	deleted, err := p.deleteOwnedSite(acc, viewID)
 	if err != nil || !deleted {
-		return deleted, err
+		return deletedSite{}, deleted, err
 	}
-	for _, a := range admins {
-		if err := p.owner.UnlinkShare(a.Account, viewID); err != nil {
-			slog.Error("account deletion: could not drop a former admin's share marker", "site", viewID, "account", a.Account, "err", err)
+	return ds, true, nil
+}
+
+// endAdminsOfDeletedSite drops the former admins' markers and own tags for a
+// deleted site and tells them. It runs outside every account lock.
+func (p *provider) endAdminsOfDeletedSite(acc *account.Account, ds deletedSite) {
+	for _, a := range ds.admins {
+		if err := p.owner.UnlinkShare(a.Account, ds.site); err != nil {
+			slog.Error("account deletion: could not drop a former admin's share marker", "site", ds.site, "account", a.Account, "err", err)
 		}
-		if err := p.dropAdminTags(a.Account, viewID); err != nil {
-			slog.Error("account deletion: could not drop a former admin's tags", "site", viewID, "account", a.Account, "err", err)
+		if err := p.dropAdminTags(a.Account, ds.site); err != nil {
+			slog.Error("account deletion: could not drop a former admin's tags", "site", ds.site, "account", a.Account, "err", err)
 		}
 		p.RecordAccountProvenance(a.Account, provenance.Entry{
 			Time: time.Now().UTC(), Action: provenance.ActionAdmins, Surface: provenance.SurfaceBackground, Auth: provenance.AuthNone,
-			Account: a.Account, Site: viewID, Detail: "no longer an admin of the site: the site was deleted",
+			Account: a.Account, Site: ds.site, Detail: "no longer an admin of the site: the site was deleted",
 		})
 		adminEmail := p.emailOf(a.Account)
-		subject, body := p.shareGoneMail(label, acc.Email, adminEmail, false)
+		subject, body := p.shareGoneMail(ds.label, acc.Email, adminEmail, false)
 		p.mailVerified(adminEmail, subject, body)
 	}
-	return true, nil
 }

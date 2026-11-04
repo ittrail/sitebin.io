@@ -371,14 +371,7 @@ func (p *provider) handleGDPRDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sites := 0
-	err = p.accounts.Delete(acc, func(viewID string) error {
-		deleted, err := p.deleteOwnedSiteEnding(acc, viewID)
-		if deleted {
-			sites++
-		}
-		return err
-	})
+	sites, err := p.deleteAccountAndSites(acc)
 	if err != nil {
 		slog.Error("gdpr: deletion failed; the account is kept so the stack keeps the identity and the order can be retried",
 			"account", acc.ID, "subject", order.UserID, "err", err)

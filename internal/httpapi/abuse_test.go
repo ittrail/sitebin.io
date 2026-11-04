@@ -191,7 +191,7 @@ func TestEveryWriteSurfaceIsScanned(t *testing.T) {
 		{"api replace zip", apiUpload("?replace=true", nil, map[string]string{"index.html": kitHTML}), "index.html"},
 		{"upload token", func(t *testing.T, e *env, fp *fakeProvider) (string, int, string) {
 			id, edit, _ := cleanSite(t, e, nil)
-			tok, _, _ := e.api.uploads.issue(id, edit)
+			tok := e.uploadToken(t, id)
 			body, ct := filesBody(t, nil, map[string]string{"index.html": kitHTML}, nil)
 			req := httptest.NewRequest("POST", "/api/sites/"+edit+"/files", body)
 			req.Header.Set("Content-Type", ct)
@@ -200,7 +200,7 @@ func TestEveryWriteSurfaceIsScanned(t *testing.T) {
 		}, "index.html"},
 		{"upload token webdav", func(t *testing.T, e *env, fp *fakeProvider) (string, int, string) {
 			id, edit, _ := cleanSite(t, e, nil)
-			tok, _, _ := e.api.uploads.issue(id, edit)
+			tok := e.uploadToken(t, id)
 			req := httptest.NewRequest("PUT", "/dav/"+edit+"/index.html", strings.NewReader(kitHTML))
 			w := e.public(t, bearer(req, tok))
 			return id, w.Code, w.Body.String()

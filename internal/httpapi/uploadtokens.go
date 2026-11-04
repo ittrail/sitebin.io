@@ -40,10 +40,14 @@ const (
 var errTooManyUploads = errors.New("too many open uploads on this instance, try again later")
 
 type uploadToken struct {
-	viewID   string // the revocation handle
-	editID   string // the one site the token opens
-	account  string // the account that opened it, for the provenance record
-	role     string // the standing it opened the site with (roleOwner, roleAdmin), with account
+	viewID  string // the revocation handle
+	editID  string // the one site the token opens
+	account string // the account that opened it, for the provenance record
+	role    string // the standing it opened the site with (roleOwner, roleAdmin), with account
+	// pwHash is the edit-password hash a token opened with the edit password
+	// (no role) was authenticated against: the token holds only while the
+	// site's hash is still this one (uploadTokenStands).
+	pwHash   string
 	issuedAt time.Time
 	lastSeen time.Time
 	inflight int
@@ -81,27 +85,15 @@ func hashUploadToken(secret string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// issue mints a token for one site. It returns the secret — the only moment
-// it exists outside the caller — and the time the token dies however it is
-// used.
-func (u *uploadTokens) issue(viewID, editID string) (string, time.Time, error) {
-	return u.issueFor(viewID, editID, "")
-}
-
-// issueFor is issue for a caller acting as account, the site's owner (empty
-// when it opened the site with its edit password): the uploads the token
-// makes are recorded as that account's.
-func (u *uploadTokens) issueFor(viewID, editID, account string) (string, time.Time, error) {
-	role := ""
-	if account != "" {
-		role = roleOwner
-	}
-	return u.issueAs(viewID, editID, account, role)
-}
-
-// issueAs is issueFor for an account that opened the site in role (roleOwner
-// or roleAdmin): an admin's token records its uploads as the admin's.
-func (u *uploadTokens) issueAs(viewID, editID, account, role string) (string, time.Time, error) {
+// issueAs mints a token for one site, opened by account in role (roleOwner
+// or roleAdmin; its uploads are recorded as that account's), or with the
+// edit password whose hash is pwHash (account and role empty): the hash the
+// caller authenticated against, read with the site, never re-read here. It
+// returns the secret -- the only moment it exists outside the caller -- and
+// the time the token dies however it is used. Every use re-checks what
+// opened it (uploadTokenStands), so a token minted in the moment after a
+// transfer or a rotate revoked the site's tokens is refused all the same.
+func (u *uploadTokens) issueAs(viewID, editID, account, role, pwHash string) (string, time.Time, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	now := u.now()
@@ -125,7 +117,10 @@ func (u *uploadTokens) issueAs(viewID, editID, account, role string) (string, ti
 		return "", time.Time{}, errTooManyUploads
 	}
 	secret := ids.NewUploadToken()
-	u.m[hashUploadToken(secret)] = &uploadToken{viewID: viewID, editID: editID, account: account, role: role, issuedAt: now, lastSeen: now}
+	if role != "" {
+		pwHash = "" // an account's token stands on the account, not a password
+	}
+	u.m[hashUploadToken(secret)] = &uploadToken{viewID: viewID, editID: editID, account: account, role: role, pwHash: pwHash, issuedAt: now, lastSeen: now}
 	return secret, now.Add(uploadTokenMaxAge), nil
 }
 
@@ -175,12 +170,19 @@ func (u *uploadTokens) issuer(secret string) string {
 
 // issuerRole is issuer with the role the account opened the site in.
 func (u *uploadTokens) issuerRole(secret string) (account, role string) {
+	account, role, _ = u.openedBy(secret)
+	return account, role
+}
+
+// openedBy is what opened a live token: the account and its role, or the
+// edit-password hash (no role). All empty for an unknown token.
+func (u *uploadTokens) openedBy(secret string) (account, role, pwHash string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if t, ok := u.m[hashUploadToken(secret)]; ok {
-		return t.account, t.role
+		return t.account, t.role, t.pwHash
 	}
-	return "", ""
+	return "", "", ""
 }
 
 // revokeSite drops every token for the site viewID. A request already running

@@ -474,3 +474,38 @@ func TestSetEditPasswordIfOwner(t *testing.T) {
 		t.Error("a locked site's password changed")
 	}
 }
+
+// Final review M1: a push that was running when an admin stopped standing
+// (removed, or its end date moved into the past) is cancelled, as a
+// transfer cancels the old owner's. Adding an admin, or keeping one, leaves
+// a running push alone.
+func TestUpdateAdminsCancelsAPushWhenAnAdminGoes(t *testing.T) {
+	s := newTestStore(t)
+	site := ownSite(t, s, "owner")
+	set := func(admins ...SiteAdmin) {
+		t.Helper()
+		if err := s.UpdateAdmins(site, "owner", func([]SiteAdmin) ([]SiteAdmin, error) { return admins, nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set(SiteAdmin{Account: "adm-1"})
+
+	p := startFakePush(t, s, site)
+	set(SiteAdmin{Account: "adm-1"}, SiteAdmin{Account: "adm-2"}) // one added, one kept
+	if p.wasCancelled() {
+		t.Fatal("adding an admin cancelled the running push")
+	}
+	set(SiteAdmin{Account: "adm-2"}) // adm-1 removed
+	if !p.wasCancelled() {
+		t.Fatal("removing an admin left the running push alone")
+	}
+	p.wait(t)
+
+	p = startFakePush(t, s, site)
+	past := time.Now().Add(-time.Minute)
+	set(SiteAdmin{Account: "adm-2", Until: &past}) // adm-2's share ends now
+	if !p.wasCancelled() {
+		t.Fatal("ending an admin's share left the running push alone")
+	}
+	p.wait(t)
+}

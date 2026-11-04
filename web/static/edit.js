@@ -47,7 +47,7 @@ async function api(method, path, body, isForm) {
   });
   let data = {};
   try { data = await res.json(); } catch {}
-  if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { status: res.status, accountURL: data.account_url });
+  if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { status: res.status, accountURL: data.account_url, serverError: data.error || "" });
   return data;
 }
 
@@ -201,10 +201,11 @@ $("lockform").addEventListener("submit", async (e) => {
   }
 });
 
-// serverDown is what a 5xx shows: the server's own message, or a generic one.
+// serverDown is what a 5xx shows: the server's own message (the JSON body's
+// error), or a generic one -- never the bare status text of an empty body
+// ("Internal Server Error", "Bad Gateway").
 function serverDown(err) {
-  return err.message && err.message !== "Service Unavailable" ? err.message :
-    "The server could not answer, try again in a minute.";
+  return err.serverError || "The server could not answer, try again in a minute.";
 }
 
 // boot opens the site without asking whenever it can: for its signed-in

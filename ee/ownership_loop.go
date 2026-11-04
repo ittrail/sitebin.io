@@ -518,9 +518,9 @@ func (p *provider) heldByAcceptance(accID, viewID string) bool {
 // a site whose meta names an owner with no marker gets one (LinkSite can fail
 // after an adopt or a transfer). An ownerless site names nobody, so its
 // markers are left alone and none is made. The walk only nominates
-// candidates; a candidate is acted on after the grace, after the accepting
-// offers are ruled out, and after a fresh read of that one site, which
-// unlinks only on "gone" or on another named owner.
+// candidates; a candidate is acted on after the grace, after a fresh read
+// of that one site, which unlinks only on "gone" or on another named owner,
+// and after the accepting offers are ruled out (read last).
 func (p *provider) reconcileIndex(now time.Time, accIDs []string, owners map[string]ext.SiteOwnership) {
 	known := map[string]bool{} // accounts whose markers were listed
 	linked := map[string]map[string]bool{}
@@ -541,11 +541,17 @@ func (p *provider) reconcileIndex(now time.Time, accIDs []string, owners map[str
 			if so, listed := owners[m.Site]; listed && (so.Owner == "" || so.Owner == id) {
 				continue
 			}
-			if now.Sub(m.At) < markerGrace || p.heldByAcceptance(id, m.Site) {
+			if now.Sub(m.At) < markerGrace {
 				continue
 			}
 			cur, err := p.siteOwner(m.Site)
 			if !errors.Is(err, ext.ErrSiteGone) && (err != nil || cur == "" || cur == id) {
+				continue
+			}
+			// Asked after the owner was read: an accept that began before
+			// that read is seen here, and the marker it linked ahead of the
+			// move stays.
+			if p.heldByAcceptance(id, m.Site) {
 				continue
 			}
 			if err := p.accounts.UnlinkSite(acc, m.Site); err != nil {

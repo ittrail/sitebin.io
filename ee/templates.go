@@ -289,7 +289,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
         <div class="u">{{.Mode}} · {{.SizeText}} · {{.Files}} files · {{.ExpiryText}}</div>
         {{if .Shared}}
         <div class="u">shared by {{.SharedBy}}{{if .SharedUntil}} · until {{.SharedUntil}}{{end}}</div>
-        {{if .SharedPaused}}<div class="u">not available right now</div>
+        {{if .SharedPaused}}<div class="u">{{.SharedPausedText}}</div>
         {{else if .Locked}}
         {{if .Tags}}<div class="stags">{{range .Tags}}<span class="tchip tag-{{.Color}}"><span class="tn">{{.Name}}</span></span>{{end}}</div>{{end}}
         <div class="locked">Locked by the operator on {{.LockedText}}. It is not served, and it cannot be changed.</div>
@@ -350,7 +350,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
             <button class="btn small primary" type="submit">Save</button>
           </form>
         </details>
-        {{range .AdminRows}}<div class="u" style="margin-top:6px"><form class="inline" method="post" action="/account/sites/{{$site.ViewID}}/share/{{.Account}}/end">{{.Email}} · Admin{{if .Until}} · until {{.Until}}{{end}} <input type="hidden" name="csrf" value="{{$site.CSRF}}"><button class="btn small" type="submit" title="End this share">End</button></form></div>{{end}}
+        {{range .AdminRows}}<div class="u" style="margin-top:6px"><form class="inline" method="post" action="/account/sites/{{$site.ViewID}}/share/{{.Ref}}/end">{{.Email}} · Admin{{if .Until}} · until {{.Until}}{{end}}{{if .Paused}} · {{.Paused}}{{end}} <input type="hidden" name="csrf" value="{{$site.CSRF}}"><button class="btn small" type="submit" title="End this share">End</button></form></div>{{end}}
         {{range .InviteRows}}<div class="u" style="margin-top:6px"><form class="inline" method="post" action="/account/invites/{{.ID}}/cancel">Invited: {{.Email}}{{if .Until}} · until {{.Until}}{{end}} <input type="hidden" name="csrf" value="{{$site.CSRF}}"><button class="btn small" type="submit" title="Withdraw this invitation">Cancel</button></form></div>{{end}}
         {{if .CanShare}}
         <details class="rename">

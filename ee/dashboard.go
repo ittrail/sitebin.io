@@ -451,7 +451,14 @@ func (p *provider) renderLocked(w http.ResponseWriter) {
 // account with one cannot be deleted — by its owner or by the stack's
 // erasure order — because deleting it would end the hold: see
 // docs/superpowers/specs/2026-09-28-site-lock-and-account-suspension.md.
+// Both deletions ask it first, so it first links any marker the account lost
+// for a site meta.json gives it (linkOwnedMarkers): the check, and the
+// deletion that lists the account's sites by marker after it, then see every
+// site the account owns.
 func (p *provider) lockedSites(acc *account.Account) ([]string, error) {
+	if err := p.linkOwnedMarkers(acc); err != nil {
+		return nil, err
+	}
 	infos, err := p.ownedSiteInfos(acc)
 	if err != nil {
 		return nil, err
@@ -592,11 +599,7 @@ func (p *provider) handleDeleteAccountConfirm(w http.ResponseWriter, r *http.Req
 		})
 		return
 	}
-	err := p.accounts.Delete(acc, func(viewID string) error {
-		_, err := p.deleteOwnedSiteEnding(acc, viewID)
-		return err
-	})
-	if err != nil {
+	if _, err := p.deleteAccountAndSites(acc); err != nil {
 		slog.Error("account deletion failed", "account", acc.ID, "err", err)
 		http.Error(w, "could not delete the account", http.StatusInternalServerError)
 		return
@@ -700,11 +703,13 @@ type siteRow struct {
 	AdminRows  []shareAdminRow
 	InviteRows []shareInviteRow
 	// A shared row: a site another account owns and shares with this one.
-	// SharedPaused says the standing does not hold now (no Manage, no tags).
-	Shared       bool
-	SharedBy     string
-	SharedUntil  string
-	SharedPaused bool
+	// SharedPaused says the standing does not hold now (no Manage, no tags),
+	// and SharedPausedText why, in plain words.
+	Shared           bool
+	SharedBy         string
+	SharedUntil      string
+	SharedPaused     bool
+	SharedPausedText string
 }
 
 // expiryText is the site row's lifetime line. A downgrade puts a 30-day grace
@@ -811,7 +816,7 @@ func (p *provider) renderDashboard(w http.ResponseWriter, r *http.Request, acc *
 	p.syncTier(acc)
 	infos, _ := p.ownedSiteInfos(acc)
 	rows := make([]siteRow, 0, len(infos))
-	canShare, openInvites := p.canShareFrom(acc), p.liveInvitesBySite(acc)
+	canShare, openInvites, plans := p.canShareFrom(acc), p.liveInvitesBySite(acc), sharingMemo{}
 	owned := map[string]bool{}
 	for _, info := range infos {
 		owned[info.ViewID] = true
@@ -830,7 +835,7 @@ func (p *provider) renderDashboard(w http.ResponseWriter, r *http.Request, acc *
 			// a deletion that is not coming.
 			row.ExpiryText = "kept while locked"
 		}
-		p.shareRowsFor(&row, canShare, openInvites)
+		p.shareRowsFor(&row, canShare, openInvites, plans)
 		rows = append(rows, row)
 	}
 	// Sites shared with the account sit among its own.

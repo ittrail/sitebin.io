@@ -661,12 +661,13 @@ func (o mcpOps) OpenUpload(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) (*
 	}
 	// The token carries the connection's account only when that account
 	// opened the site as its owner or an admin: an upload through it is then
-	// that account's, in that role, and otherwise it is the edit password's.
+	// that account's, in that role, and otherwise it is the edit password's,
+	// bound to the hash that password was checked against.
 	issuer, role := "", ""
 	if act := mcpActor(auth, site, st); act.auth != provenance.AuthPassword {
 		issuer, role = act.account, act.role
 	}
-	secret, expires, err := o.a.uploads.issueAs(site.ViewID, site.EditID, issuer, role)
+	secret, expires, err := o.a.uploads.issueAs(site.ViewID, site.EditID, issuer, role, site.Meta.EditPasswordHash)
 	if err != nil {
 		return nil, err // errTooManyUploads says what to do
 	}

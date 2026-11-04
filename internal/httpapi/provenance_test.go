@@ -16,6 +16,7 @@ import (
 
 	"github.com/ittrail/sitebin.io/internal/ext"
 	"github.com/ittrail/sitebin.io/internal/provenance"
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 // provProvider is fakeProvider plus an account log, so the core's mirror of
@@ -301,6 +302,10 @@ func TestProvenanceUploadTokenCarriesItsAccount(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
 	edit := editIDFrom(t, c.EditURL)
+	// An owner's token holds while its account owns the site.
+	if err := e.st.Update(e.siteOf(t, c.ID), func(m *store.Meta) error { m.OwnerAccountID = "acct-9"; return nil }); err != nil {
+		t.Fatal(err)
+	}
 	tok, _, err := e.api.uploads.issueFor(c.ID, edit, "acct-9")
 	if err != nil {
 		t.Fatal(err)

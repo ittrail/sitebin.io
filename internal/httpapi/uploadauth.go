@@ -20,27 +20,45 @@ const (
 // errUploadShareEnded is uploadTokenStands' refusal of an ex-admin's token.
 var errUploadShareEnded = &apiError{http.StatusForbidden, msgUploadTokenShareEnded}
 
-// uploadTokenStands re-applies the standing an admin's upload token was
-// opened with, on every request it makes: the token is the admin's only
-// while the admin is (accountStanding == standAdmin). A share that ended, a
+// errUploadTokenRevoked refuses a token whose owner no longer owns the site,
+// or whose edit password was changed: it is as dead as a revoked one.
+var errUploadTokenRevoked = &apiError{http.StatusUnauthorized, msgUploadTokenRefused}
+
+// uploadTokenStands re-applies, on every request a token makes, what opened
+// it, so a token never outlives it. An admin's token is the admin's only
+// while the admin is (accountStanding == standAdmin): a share that ended, a
 // plan that no longer shares — or one that cannot be asked
-// (errSharingUnknown) — refuses the request, so a token never outlives the
-// standing that opened it. Nothing is changed: the token stays until it
-// expires, and works again if the share is restored. An owner's token and the edit
-// password's are not re-checked here (a transfer revokes the site's
-// tokens). It reads meta.json the request already loaded, takes no lock and
-// is never on the serving path.
+// (errSharingUnknown) — refuses the request, and the token works again if
+// the share is restored. An owner's token holds while the account owns the
+// site (standOwner), and the edit password's while the site's hash is the
+// one it was opened against. A transfer and a rotate revoke the site's
+// tokens, but a token minted in the moment after that revoke was opened on
+// the old authority: this is what refuses it. Nothing is changed. It reads
+// meta.json the request already loaded, takes no lock and is never on the
+// serving path.
 func (a *API) uploadTokenStands(site *store.Site, secret string) error {
-	account, role := a.uploads.issuerRole(secret)
-	if role != roleAdmin {
-		return nil
-	}
-	st, err := a.accountStanding(site, account)
-	if err != nil {
-		return err
-	}
-	if st != standAdmin {
-		return errUploadShareEnded
+	account, role, pwHash := a.uploads.openedBy(secret)
+	switch role {
+	case roleAdmin:
+		st, err := a.accountStanding(site, account)
+		if err != nil {
+			return err
+		}
+		if st != standAdmin {
+			return errUploadShareEnded
+		}
+	case roleOwner:
+		st, err := a.accountStanding(site, account)
+		if err != nil {
+			return err
+		}
+		if st != standOwner {
+			return errUploadTokenRevoked
+		}
+	default:
+		if pwHash == "" || pwHash != site.Meta.EditPasswordHash {
+			return errUploadTokenRevoked
+		}
 	}
 	return nil
 }

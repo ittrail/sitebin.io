@@ -19,11 +19,7 @@ import (
 // the way open_upload does.
 func uploadTokenFor(t *testing.T, e *env, c createResp) string {
 	t.Helper()
-	secret, _, err := e.api.uploads.issue(c.ID, editIDFrom(t, c.EditURL))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return secret
+	return e.uploadToken(t, c.ID)
 }
 
 func bearer(req *http.Request, token string) *http.Request {
@@ -136,7 +132,7 @@ func TestUploadTokenCannotOpenAnAnonymousSiteOnAGatedInstance(t *testing.T) {
 	}
 	ext.Register(&fakeProvider{enabled: true})
 	defer ext.Reset()
-	tok, _, _ := e.api.uploads.issue(site.ViewID, site.EditID)
+	tok := e.uploadToken(t, site.ViewID)
 	req := bearer(httptest.NewRequest("PUT", "/dav/"+site.EditID+"/x.txt", strings.NewReader("x")), tok)
 	if w := e.public(t, req); w.Code != 403 {
 		t.Fatalf("anonymous site on a gated instance: %d %s", w.Code, w.Body)
@@ -405,5 +401,75 @@ func TestUploadTokenForADeletedSiteIsANotFound(t *testing.T) {
 	req.Header.Set("Content-Type", ct)
 	if w := e.public(t, req); w.Code != 404 {
 		t.Errorf("API upload on a deleted site: %d %s", w.Code, w.Body)
+	}
+}
+
+// tokenWrites is the status of an upload through tok on both surfaces that
+// take one: the files POST and a WebDAV PUT.
+func tokenWrites(t *testing.T, e *env, edit, tok string) (post, put int) {
+	t.Helper()
+	body, ct := provBody(t, map[string]string{"t.txt": "x"}, nil)
+	req := bearer(httptest.NewRequest("POST", "/api/sites/"+edit+"/files", body), tok)
+	req.Header.Set("Content-Type", ct)
+	post = e.public(t, req).Code
+	put = e.public(t, bearer(httptest.NewRequest("PUT", "/dav/"+edit+"/u.txt", strings.NewReader("x")), tok)).Code
+	return post, put
+}
+
+// Final review M1: a transfer revokes the site's tokens, but an owner's
+// token minted in the moment after the revoke was opened on the old
+// owner's standing. Every use re-checks it: only the owner's token stands.
+func TestOwnerUploadTokenStandsOnlyWhileTheAccountOwns(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1"})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+	if _, err := e.own(t).TransferSite(c.ID, "acct-1", "acct-2", ext.CreateGrant{}, ext.ChangeBy{Account: "acct-2"}); err != nil {
+		t.Fatal(err)
+	}
+	stale, _, err := e.api.uploads.issueAs(c.ID, edit, "acct-1", roleOwner, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if post, put := tokenWrites(t, e, edit, stale); post != 401 || put != 401 {
+		t.Errorf("the former owner's token = POST %d, PUT %d; want 401", post, put)
+	}
+	fresh, _, err := e.api.uploads.issueAs(c.ID, edit, "acct-2", roleOwner, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if post, put := tokenWrites(t, e, edit, fresh); post != 200 || put != 201 {
+		t.Errorf("the owner's token = POST %d, PUT %d; want 200, 201", post, put)
+	}
+}
+
+// Final review M1: a token opened with the edit password is bound to the
+// hash it was checked against. A rotate revokes the site's tokens, but one
+// minted from the old password just after is refused on every use.
+func TestPasswordUploadTokenIsBoundToTheHash(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+	old := e.siteOf(t, c.ID).Meta.EditPasswordHash
+	if _, err := (siteService{a: e.api}).RotateEditPassword(c.ID); err != nil {
+		t.Fatal(err)
+	}
+	stale, _, err := e.api.uploads.issueAs(c.ID, edit, "", "", old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if post, put := tokenWrites(t, e, edit, stale); post != 401 || put != 401 {
+		t.Errorf("a token on the old password = POST %d, PUT %d; want 401", post, put)
+	}
+	unbound, _, err := e.api.uploads.issueAs(c.ID, edit, "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if post, put := tokenWrites(t, e, edit, unbound); post != 401 || put != 401 {
+		t.Errorf("a token bound to no hash = POST %d, PUT %d; want 401", post, put)
+	}
+	if post, put := tokenWrites(t, e, edit, e.uploadToken(t, c.ID)); post != 200 || put != 201 {
+		t.Errorf("a token on the current password = POST %d, PUT %d; want 200, 201", post, put)
 	}
 }

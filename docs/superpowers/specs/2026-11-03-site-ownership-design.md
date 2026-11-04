@@ -665,3 +665,28 @@ content is in the rows above and below.)
 - Offers have a new final state, `ended`: an accepted offer whose forward
   completion gave up with no site moved. `Offer.AcceptedBy` records who
   accepted, and `Offer.NotifiedAt` whether and when the recipient was told.
+
+**Final review fixes (2026-11-04, P40)**
+
+- **Owner-guarded dashboard writes.** Rotate, rename and the owner's tags go
+  through `RotateEditPasswordIfOwner`, `SetNameIfOwner` and
+  `UpdateTagsIfOwner` (`ext.OwnershipSites`), which decide the owner under the
+  site lock: a transfer that commits between the dashboard's check and the
+  write refuses the write, so the sender never holds a password to the
+  recipient's site. New passwords are hashed before the site lock is taken.
+- **Upload tokens** re-check what opened them on every use: an owner's
+  token needs the account to still own the site, and an edit-password token
+  is bound to the hash it was opened against. A push is cancelled when an
+  admin stops standing.
+- **The recipient is told what travels:** an expiry date the sender chose
+  (card, offer mail, result page) and a view password (result page).
+- **Shares:** the owner's End form names a share by an opaque reference, never
+  the admin's account id. A paused share says why on both sides. The
+  operator account's plan never shares, so an owner who becomes the operator
+  pauses their shares.
+- **Account deletion** links the markers a site lost before its lock check,
+  ends offers and invitations made to the account as a lapse does (never
+  "cancelled"), and cleans up after the deleted sites' admins only after
+  `accounts.Delete` returned.
+- **The loop** recovers a panic outside a step, retries a failed prune at the
+  next tick, and reads the accepting offers after the site's owner.

@@ -4,6 +4,7 @@ package ee
 
 import (
 	"fmt"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -643,7 +644,7 @@ func TestShareOwnerEndsIt(t *testing.T) {
 	e.shared(nil)
 	e.withTags()
 	oc, other := e.other("else@example.com")
-	path := "/account/sites/" + shareSite + "/share/" + e.to.ID + "/end"
+	path := "/account/sites/" + shareSite + "/share/" + e.p.shareRef(shareSite, e.to.ID) + "/end"
 	if w := e.postTo(oc, other, path, nil); w.Code != http.StatusNotFound {
 		t.Errorf("a stranger ending = %d", w.Code)
 	}
@@ -656,8 +657,15 @@ func TestShareOwnerEndsIt(t *testing.T) {
 	if len(e.admins(shareSite)) != 1 {
 		t.Fatal("a refused request ended the share")
 	}
-	if w := e.postTo(e.cookie, e.acc, "/account/sites/"+shareSite+"/share/"+other.ID+"/end", nil); w.Code != http.StatusNotFound {
+	if w := e.postTo(e.cookie, e.acc, "/account/sites/"+shareSite+"/share/"+e.p.shareRef(shareSite, other.ID)+"/end", nil); w.Code != http.StatusNotFound {
 		t.Errorf("ending a share nobody holds = %d", w.Code)
+	}
+	// The share is named by its reference only, never by the account id.
+	if w := e.postTo(e.cookie, e.acc, "/account/sites/"+shareSite+"/share/"+e.to.ID+"/end", nil); w.Code != http.StatusNotFound {
+		t.Errorf("ending a share by the admin's account id = %d", w.Code)
+	}
+	if len(e.admins(shareSite)) != 1 {
+		t.Fatal("a refused request ended the share")
 	}
 	if w := e.postTo(e.cookie, e.acc, path, nil); w.Code != http.StatusSeeOther {
 		t.Fatalf("end = %d (%s)", w.Code, w.Body)
@@ -710,7 +718,7 @@ func TestShareAnAdminCannotEndSomeoneElsesShare(t *testing.T) {
 	info := e.fs.infos[shareSite]
 	info.Admins = append(info.Admins, ext.SiteAdmin{Account: "second-admin"})
 	e.fs.infos[shareSite] = info
-	if w := e.postTo(e.toCookie, e.to, "/account/sites/"+shareSite+"/share/second-admin/end", nil); w.Code != http.StatusNotFound {
+	if w := e.postTo(e.toCookie, e.to, "/account/sites/"+shareSite+"/share/"+e.p.shareRef(shareSite, "second-admin")+"/end", nil); w.Code != http.StatusNotFound {
 		t.Errorf("= %d", w.Code)
 	}
 	if len(e.admins(shareSite)) != 2 {
@@ -724,7 +732,7 @@ func TestShareEndOnALockedSiteIsRefused(t *testing.T) {
 	info := e.fs.infos[shareSite]
 	info.Locked = &ext.SiteLock{At: time.Now(), By: "operator"}
 	e.fs.infos[shareSite] = info
-	if w := e.postTo(e.cookie, e.acc, "/account/sites/"+shareSite+"/share/"+e.to.ID+"/end", nil); w.Code != http.StatusForbidden {
+	if w := e.postTo(e.cookie, e.acc, "/account/sites/"+shareSite+"/share/"+e.p.shareRef(shareSite, e.to.ID)+"/end", nil); w.Code != http.StatusForbidden {
 		t.Errorf("end on a locked site = %d (%s)", w.Code, w.Body)
 	}
 	if len(e.admins(shareSite)) != 1 {
@@ -772,8 +780,13 @@ func TestShareDashboardListsSharedSiteWithTheAdminsOwnTags(t *testing.T) {
 		t.Error("an accepted invitation is still listed")
 	}
 	ob = e.dashboard(e.cookie)
-	if !strings.Contains(ob, "Admin · until "+dateText(*inv.Until)) || !strings.Contains(ob, "/account/sites/"+shareSite+"/share/"+e.to.ID+"/end") {
+	if !strings.Contains(ob, "Admin · until "+dateText(*inv.Until)) || !strings.Contains(ob, "/account/sites/"+shareSite+"/share/"+e.p.shareRef(shareSite, e.to.ID)+"/end") {
 		t.Errorf("the owner's dashboard lacks the admin or End:\n%s", ob)
+	}
+	// Final review M4: the owner's page addresses the share by an opaque
+	// reference and never carries the admin's internal account id.
+	if strings.Contains(ob, e.to.ID) {
+		t.Errorf("the owner's dashboard carries the admin's account id %s", e.to.ID)
 	}
 
 	// The admin's tags are the admin's own.
@@ -830,8 +843,12 @@ func TestShareAPausedShareShowsTheReasonAndNoManage(t *testing.T) {
 	e.shared(nil)
 	e.setTier(e.acc, "free")
 	body := e.dashboard(e.toCookie)
-	if !strings.Contains(body, "shared by pro@example.com") || !strings.Contains(body, "not available right now") {
-		t.Errorf("the paused share is not explained:\n%s", body)
+	// Final review M5: each side reads why, in plain words.
+	if !strings.Contains(body, "shared by pro@example.com") || !strings.Contains(body, html.EscapeString(sharePausedOwnersPlan)) {
+		t.Errorf("the paused share is not explained to the admin:\n%s", body)
+	}
+	if ob := e.dashboard(e.cookie); !strings.Contains(ob, takerEmail+" · Admin · "+sharePausedYourPlan) {
+		t.Errorf("the paused share is not explained to the owner:\n%s", ob)
 	}
 	if strings.Contains(body, "https://edit.example/"+shareSite) {
 		t.Error("a paused share still links Manage")
@@ -842,6 +859,51 @@ func TestShareAPausedShareShowsTheReasonAndNoManage(t *testing.T) {
 	// Rename and tags are refused while the share is paused.
 	if w := e.postTo(e.toCookie, e.to, "/account/sites/"+shareSite+"/name", url.Values{"name": {"x"}}); w.Code != http.StatusForbidden {
 		t.Errorf("rename while paused = %d", w.Code)
+	}
+
+	// The admin's plan: each side reads it the other way round.
+	e.setTier(e.acc, "pro")
+	e.setTier(e.to, "free")
+	if body := e.dashboard(e.toCookie); !strings.Contains(body, sharePausedYourPlan) {
+		t.Errorf("the admin is not told their own plan pauses the share:\n%s", body)
+	}
+	if ob := e.dashboard(e.cookie); !strings.Contains(ob, sharePausedAdminsPlan) {
+		t.Errorf("the owner is not told the admin's plan pauses the share:\n%s", ob)
+	}
+	// A share that holds says nothing.
+	e.setTier(e.to, "pro")
+	if ob := e.dashboard(e.cookie); strings.Contains(ob, "Paused:") {
+		t.Errorf("a share that holds is shown as paused:\n%s", ob)
+	}
+}
+
+// Final review M7: an owner who becomes the operator lends no exemptions.
+// SharingAllowed is false for the operator account, so every share they made
+// pauses -- at the core's gate as on the dashboard -- and resumes if they
+// stop being the operator.
+func TestShareOfAnOwnerWhoBecomesTheOperatorPauses(t *testing.T) {
+	e := newShareEnv(t)
+	e.shared(nil)
+	if _, admin := e.p.manages(e.to, shareSite); !admin {
+		t.Fatal("the share does not hold to begin with")
+	}
+	e.p.cfg.AdminAccounts = []string{"pro@example.com"}
+	e.setTier(e.acc, "admin")
+	if ok, err := e.p.SharingAllowed(e.acc.ID); ok || err != nil {
+		t.Errorf("SharingAllowed(operator) = %v, %v; want false", ok, err)
+	}
+	if _, admin := e.p.manages(e.to, shareSite); admin {
+		t.Error("the operator's share still stands")
+	}
+	if body := e.dashboard(e.toCookie); !strings.Contains(body, sharePausedOperator) {
+		t.Errorf("the admin is not told why the share paused:\n%s", body)
+	}
+	if w := e.postTo(e.toCookie, e.to, "/account/sites/"+shareSite+"/name", url.Values{"name": {"x"}}); w.Code != http.StatusForbidden {
+		t.Errorf("rename through the operator's share = %d", w.Code)
+	}
+	e.p.cfg.AdminAccounts = nil
+	if _, admin := e.p.manages(e.to, shareSite); !admin {
+		t.Error("the share did not resume once the account is no longer the operator")
 	}
 }
 
@@ -912,7 +974,7 @@ func TestShareEndAfterATransferTouchesNothing(t *testing.T) {
 		e.fs.infos[id] = info
 		e.fs.onSetAdmins = nil
 	}
-	if w := e.postTo(e.cookie, e.acc, "/account/sites/"+shareSite+"/share/"+e.to.ID+"/end", nil); w.Code != http.StatusNotFound {
+	if w := e.postTo(e.cookie, e.acc, "/account/sites/"+shareSite+"/share/"+e.p.shareRef(shareSite, e.to.ID)+"/end", nil); w.Code != http.StatusNotFound {
 		t.Errorf("end by the former owner = %d", w.Code)
 	}
 	if len(e.admins(shareSite)) != 1 {

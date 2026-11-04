@@ -55,7 +55,7 @@ func TestWellKnownThroughCreateAndUpload(t *testing.T) {
 	}
 
 	// An upload token's plain upload.
-	tok, _, _ := e.api.uploads.issue(c.ID, edit)
+	tok := e.uploadToken(t, c.ID)
 	body, ct = provBody(t, map[string]string{".well-known/other.txt": "x"}, nil)
 	req = bearer(httptest.NewRequest("POST", "/api/sites/"+edit+"/files", body), tok)
 	req.Header.Set("Content-Type", ct)

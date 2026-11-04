@@ -514,32 +514,50 @@ func TestDeleteCancelsOffersAndInvitationsFromAndToTheAccount(t *testing.T) {
 	if w := e.localDelete(e.toCookie, e.to); w.Code != 200 {
 		t.Fatalf("delete = %d (%s)", w.Code, w.Body)
 	}
-	for name, got := range map[string]string{
-		"offer from the account":   e.offerState(fromMe),
-		"offer to its email":       e.offerState(toMe),
-		"paused offer to its mail": e.offerState(pausedToMe),
+	// The account's own records are cancelled. Those made to it end as a
+	// lapse does (final review M6): "cancelled" would tell their sender that
+	// an account existed for the address.
+	for name, c := range map[string]struct{ got, want string }{
+		"offer from the account":   {e.offerState(fromMe), ownership.StateCancelled},
+		"offer to its email":       {e.offerState(toMe), ownership.StateExpired},
+		"paused offer to its mail": {e.offerState(pausedToMe), ownership.StateExpired},
 	} {
-		if got != ownership.StateCancelled {
-			t.Errorf("%s = %s, want cancelled", name, got)
+		if c.got != c.want {
+			t.Errorf("%s = %s, want %s", name, c.got, c.want)
 		}
 	}
-	for name, inv := range map[string]ownership.Invite{"invitation from": inviteFromMe, "invitation to": inviteToMe} {
-		if cur, _ := e.p.owner.GetInvite(inv.ID); cur.State != ownership.StateCancelled {
-			t.Errorf("%s = %s, want cancelled", name, cur.State)
+	for name, c := range map[string]struct {
+		inv  ownership.Invite
+		want string
+	}{"invitation from": {inviteFromMe, ownership.StateCancelled}, "invitation to": {inviteToMe, ownership.StateExpired}} {
+		if cur, _ := e.p.owner.GetInvite(c.inv.ID); cur.State != c.want {
+			t.Errorf("%s = %s, want %s", name, cur.State, c.want)
 		}
 	}
 	if cur, _ := e.p.owner.GetInvite(acceptedInvite.ID); cur.State != ownership.StateAccepted {
 		t.Errorf("a final invitation was touched: %s", cur.State)
 	}
-	// The sender of the offer made to it is told; the text names no reason.
-	ms := e.mailsTo("pro@example.com", "A Sitebin transfer was cancelled")
-	if len(ms) == 0 {
-		t.Fatal("the sender of a cancelled offer was not told")
+	// The sender of the offers made to it hears the expiry's words, one mail
+	// per offer, and nothing that says an account was there.
+	if n := len(e.mailsTo("pro@example.com", "A Sitebin transfer was cancelled")); n != 0 {
+		t.Errorf("the sender was told %d offer(s) to the account were cancelled", n)
+	}
+	ms := e.mailsTo("pro@example.com", "A Sitebin transfer has expired")
+	if len(ms) != 2 {
+		t.Fatalf("the sender's mails about the offers made to the account = %d, want 2", len(ms))
 	}
 	for _, m := range ms {
-		if strings.Contains(strings.ToLower(m), "delet") {
+		if !strings.Contains(m, "ended without being accepted") {
+			t.Errorf("the mail is not the expiry's words:\n%s", m)
+		}
+		if l := strings.ToLower(m); strings.Contains(l, "delet") || strings.Contains(l, "cancel") || strings.Contains(l, "account was") {
 			t.Errorf("the mail names the reason:\n%s", m)
 		}
+	}
+	// The inviter of the invitation made to it is told nothing: a lapse is
+	// silent.
+	if n := len(e.mailsTo("pro@example.com", "invitation")); n != 0 {
+		t.Errorf("the inviter was mailed %d time(s) about an invitation to the account", n)
 	}
 }
 

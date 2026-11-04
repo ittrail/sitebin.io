@@ -1020,3 +1020,29 @@ func TestLoopTickRecoversAPanicOutsideAStep(t *testing.T) {
 		t.Fatal("the tick after a panic never finished")
 	}
 }
+
+// Final review N2: the accepting offers are asked AFTER the site's owner is
+// read. An accept that begins just before that read has linked its
+// recipient's marker ahead of the move; the reconciliation must see the
+// accept and keep the marker.
+func TestLoopKeepsTheMarkerOfAnAcceptThatBeganBeforeTheOwnerRead(t *testing.T) {
+	e := newLoopEnv(t)
+	site := tid(31) // the sender's
+	if err := e.p.accounts.LinkSite(e.to, site); err != nil {
+		t.Fatal(err)
+	}
+	o := e.offer(site)
+	var once sync.Once
+	e.fs.onOwner = func(id string) {
+		if id != site {
+			return
+		}
+		once.Do(func() {
+			e.change(o, func(x *ownership.Offer) { x.State, x.AcceptedBy = ownership.StateAccepting, e.to.ID })
+		})
+	}
+	e.p.reconcileMarkers(later())
+	if !has(e.markers(e.to), site) {
+		t.Error("the marker of an accept that began before the owner read was unlinked")
+	}
+}

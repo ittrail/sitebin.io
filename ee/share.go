@@ -3,6 +3,9 @@
 package ee
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -54,7 +57,7 @@ const (
 
 func (p *provider) shareRoutes(routes map[string]http.Handler) {
 	routes["POST /account/sites/{id}/share"] = http.HandlerFunc(p.handleShareInvite)
-	routes["POST /account/sites/{id}/share/{account}/end"] = http.HandlerFunc(p.handleShareEnd)
+	routes["POST /account/sites/{id}/share/{ref}/end"] = http.HandlerFunc(p.handleShareEnd)
 	routes["POST /account/sites/{id}/leave"] = http.HandlerFunc(p.handleShareLeave)
 	routes["POST /account/invites/{id}/accept"] = http.HandlerFunc(p.handleInviteAccept)
 	routes["POST /account/invites/{id}/decline"] = http.HandlerFunc(p.handleInviteDecline)
@@ -227,6 +230,12 @@ func (p *provider) handleShareInvite(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// The operator's plan answer is "no" (SharingAllowed) for this reason,
+	// which is said in its own words rather than as a plan to upgrade.
+	if p.IsOperator(acc.ID) {
+		p.renderShareRefusal(w, refuse("Sites owned by the operator account cannot be shared"))
+		return
+	}
 	if ref := p.sharingOK(acc); ref != nil {
 		p.renderShareRefusal(w, ref)
 		return
@@ -268,7 +277,7 @@ func (p *provider) handleShareInvite(w http.ResponseWriter, r *http.Request) {
 }
 
 // canInvite applies the rules about the owner's own data: the site is not
-// locked, not the operator's, and has room for another admin.
+// locked and has room for another admin. (The operator is refused before.)
 func (p *provider) canInvite(acc *account.Account, viewID, email string, now time.Time) *refusal {
 	locked, err := p.siteLocked(viewID)
 	if err != nil {
@@ -277,9 +286,6 @@ func (p *provider) canInvite(acc *account.Account, viewID, email string, now tim
 	}
 	if locked {
 		return refuse("This site is locked by the operator and cannot be shared.")
-	}
-	if p.IsOperator(acc.ID) {
-		return refuse("Sites owned by the operator account cannot be shared")
 	}
 	admins, err := p.siteAdmins(viewID)
 	if err != nil {
@@ -591,25 +597,48 @@ func (p *provider) handleInviteCancel(w http.ResponseWriter, r *http.Request) {
 
 // ---- ending and leaving ----
 
-// handleShareEnd ends one admin's share: the owner only, by meta.json.
+// handleShareEnd ends one admin's share: the owner only, by meta.json. The
+// share is named by its opaque reference (shareRef), resolved against the
+// admins meta.json lists now, so the owner's page never carries another
+// account's internal id.
 func (p *provider) handleShareEnd(w http.ResponseWriter, r *http.Request) {
 	acc, ok := p.transferPost(w, r)
 	if !ok {
 		return
 	}
-	viewID, adminID := r.PathValue("id"), r.PathValue("account")
+	viewID, ref := r.PathValue("id"), r.PathValue("ref")
 	if !p.ownsByMeta(acc, viewID) {
 		http.NotFound(w, r)
 		return
 	}
 	admins, err := p.siteAdmins(viewID)
-	if err != nil || !listsAccount(admins, adminID) {
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	adminID := ""
+	for _, a := range admins {
+		if hmac.Equal([]byte(p.shareRef(viewID, a.Account)), []byte(ref)) {
+			adminID = a.Account
+		}
+	}
+	if adminID == "" {
 		http.NotFound(w, r)
 		return
 	}
 	if p.endShare(w, r, acc, acc.ID, viewID, adminID) {
 		p.redirect(w, r, "/account")
 	}
+}
+
+// shareRef is the opaque reference of one admin's share of a site, for the
+// owner's End form: an HMAC of the site and the admin's account under the
+// instance secret. It names the share without the admin's internal account
+// id, which is never shown to another account.
+func (p *provider) shareRef(viewID, adminID string) string {
+	mac := hmac.New(sha256.New, p.secret)
+	fmt.Fprintf(mac, "share-end|%s|%s", viewID, adminID)
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil)[:16])
 }
 
 // handleShareLeave is the admin leaving a site shared with them.
@@ -694,7 +723,10 @@ func (p *provider) endShare(w http.ResponseWriter, r *http.Request, actor *accou
 
 // ---- the dashboard's parts ----
 
-type shareAdminRow struct{ Account, Email, Until string }
+// shareAdminRow is one admin on the owner's row: Ref names the share for the
+// End form (never the account id); Paused says, in plain words, why the
+// share does not hold now ("" while it does).
+type shareAdminRow struct{ Ref, Email, Until, Paused string }
 
 type shareInviteRow struct{ ID, Email, Until string }
 
@@ -765,14 +797,18 @@ func (p *provider) canShareFrom(acc *account.Account) bool {
 }
 
 // shareRowsFor gives an owned, unlocked row its share form, its admins and
-// its open invitations. open is the owner's live invitations by site.
-func (p *provider) shareRowsFor(row *siteRow, canShare bool, open map[string][]ownership.Invite) {
+// its open invitations. open is the owner's live invitations by site; plans
+// remembers the plan answers for the one render.
+func (p *provider) shareRowsFor(row *siteRow, canShare bool, open map[string][]ownership.Invite, plans sharingMemo) {
 	if row.Locked != nil {
 		return
 	}
 	row.CanShare = canShare
 	for _, a := range row.SiteInfo.Admins {
-		r := shareAdminRow{Account: a.Account, Email: p.emailOf(a.Account)}
+		r := shareAdminRow{
+			Ref: p.shareRef(row.ViewID, a.Account), Email: p.emailOf(a.Account),
+			Paused: p.sharePauseText(plans, row.SiteInfo.Owner, a.Account, a.Until, true),
+		}
 		if r.Email == "" {
 			r.Email = "an account that no longer exists"
 		}
@@ -788,6 +824,72 @@ func (p *provider) shareRowsFor(row *siteRow, canShare bool, open map[string][]o
 		}
 		row.InviteRows = append(row.InviteRows, r)
 	}
+}
+
+// The plain words a paused share is shown with. Each side reads its own:
+// "your" is the reader's plan.
+const (
+	sharePausedEnded       = "Paused: the share's end date has passed."
+	sharePausedOperator    = "Paused: sites owned by the operator account are not shared."
+	sharePausedYourPlan    = "Paused: your plan does not include sharing."
+	sharePausedOwnersPlan  = "Paused: the owner's plan does not include sharing."
+	sharePausedAdminsPlan  = "Paused: their plan does not include sharing."
+	sharePausedPlanUnknown = "Paused: the plan could not be checked. Try again in a minute."
+	sharePausedUnknown     = "Paused: not available right now."
+)
+
+// sharingMemo remembers SharingAllowed per account for one render (nil asks
+// every time).
+type sharingMemo map[string]sharingAnswer
+
+type sharingAnswer struct {
+	ok  bool
+	err error
+}
+
+func (p *provider) sharingAllowedMemo(m sharingMemo, id string) (bool, error) {
+	if a, ok := m[id]; ok {
+		return a.ok, a.err
+	}
+	ok, err := p.SharingAllowed(id)
+	if m != nil {
+		m[id] = sharingAnswer{ok, err}
+	}
+	return ok, err
+}
+
+// sharePauseText says, in plain words, why the share of adminID on a site
+// ownerID owns does not hold now, for the owner's row (forOwner) or the
+// admin's: the end date passed, the owner is the operator, a plan without
+// sharing (whose), or a plan that could not be asked. "" while it holds. It
+// applies the plan half of the core's accountStanding, so the row and the
+// gate agree.
+func (p *provider) sharePauseText(plans sharingMemo, ownerID, adminID string, until *time.Time, forOwner bool) string {
+	if until != nil && !time.Now().Before(*until) {
+		return sharePausedEnded
+	}
+	if p.IsOperator(ownerID) {
+		return sharePausedOperator
+	}
+	for _, side := range []struct {
+		id    string
+		owner bool
+	}{{ownerID, true}, {adminID, false}} {
+		ok, err := p.sharingAllowedMemo(plans, side.id)
+		switch {
+		case err != nil:
+			return sharePausedPlanUnknown
+		case ok:
+			continue
+		case side.owner == forOwner:
+			return sharePausedYourPlan
+		case side.owner:
+			return sharePausedOwnersPlan
+		default:
+			return sharePausedAdminsPlan
+		}
+	}
+	return ""
 }
 
 // liveInvitesBySite are the account's open, unlapsed invitations by site.
@@ -839,9 +941,17 @@ func (p *provider) sharedRows(acc *account.Account, token string, owned map[stri
 		if row.SharedBy == "" {
 			row.SharedBy = "another account"
 		}
+		var until *time.Time
 		for _, a := range info.Admins {
 			if a.Account == acc.ID && a.Until != nil {
 				row.SharedUntil = dateText(*a.Until)
+				until = a.Until
+			}
+		}
+		if !admin {
+			row.SharedPausedText = p.sharePauseText(nil, info.Owner, acc.ID, until, false)
+			if row.SharedPausedText == "" {
+				row.SharedPausedText = sharePausedUnknown
 			}
 		}
 		row.SiteInfo.Admins = nil

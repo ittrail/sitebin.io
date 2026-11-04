@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ittrail/sitebin.io/internal/auth"
 	"github.com/ittrail/sitebin.io/internal/ext"
 	"github.com/ittrail/sitebin.io/internal/provenance"
 	"github.com/ittrail/sitebin.io/internal/store"
@@ -147,6 +148,11 @@ func TestAdoptSiteStampsLikeCreate(t *testing.T) {
 	}
 	if !e.st.Trusted(site) {
 		t.Error("the trust marker was not applied")
+	}
+	// Adopting keeps the edit password: the adopter proved it, and every
+	// deploy that uses it goes on working.
+	if !auth.VerifyPassword(m.EditPasswordHash, c.EditPassword) {
+		t.Error("adopting replaced the edit password")
 	}
 	var adopted bool
 	for _, en := range provLog(t, e, site) {

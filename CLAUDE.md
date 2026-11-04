@@ -100,7 +100,9 @@ the optional `ext.SessionAccounts`); the edit password.
   admin listed in `Meta.Admins` (`Until` nil or ahead) while
   `ext.SharingAccounts.SharingAllowed` says BOTH the owner's and the admin's
   plan share. No provider, no admins. An unknown plan (a lookup error) is a 503
-  for that one request, never a pass and never an ended share.
+  for that one request, never a pass and never an ended share. The operator
+  account's plan never shares (`SharingAllowed` is false for it), so an owner
+  who becomes the operator pauses every share they made.
 - **An admin may do all the owner may** except the owner-only actions. In the
   core, `refuseUnlessOwner` / `ownerOnly` (`internal/httpapi/sharing.go`) refuse
   role `admin` ONLY, for: delete the site, set/clear `expires_at` (checked per
@@ -110,10 +112,14 @@ the optional `ext.SessionAccounts`); the edit password.
   `refuseUnlessOwner`: the dashboard's rotate and delete check `p.owns`, and
   the offer and invitation routes check the owner by meta
   (`ownedSiteIDs`, `ownsByMeta`). An admin reaches them as a stranger.
-- **An admin's upload token** re-checks the standing on every use
-  (`uploadTokenStands`; WebDAV and the files POST). A git push re-checks it from
-  `meta.json` after `BeginGitWrite` (`gitStandingHolds`; `WriteRPCRefusal` prints
-  the refusal on the POST).
+- **Every upload token** re-checks what opened it on every use
+  (`uploadTokenStands`; WebDAV and the files POST): an admin's needs
+  `standAdmin`, an owner's `standOwner`, and the edit password's the hash it
+  was opened against (`issueAs` binds it), so a token minted just after a
+  transfer or rotate revoked the site's tokens is refused all the same. A git
+  push re-checks it from `meta.json` after `BeginGitWrite`
+  (`gitStandingHolds`; `WriteRPCRefusal` prints the refusal on the POST), and
+  `UpdateAdmins` cancels a running push when an admin stops standing.
 - **`tags`** an API or MCP caller sees are the caller's own: the owner's
   `Meta.Tags`, or the admin's private list (`AdminTags`), never the owner's. See
   "Ownership" below.
@@ -190,6 +196,13 @@ the plan flag `sharing`. Read
   stored pause is the host conflict, reopened by the loop when it clears.
 - **Mail** is plain text, best effort, only to verified accounts, and only
   with a mailer (`mailVerified`).
+- **An account's deletion** first links the markers a site lost
+  (`linkOwnedMarkers`, in `lockedSites`, before the lock check; an incomplete
+  walk stops it), ends offers and invitations MADE TO it as a lapse does
+  (expired, the expiry mail's words; never "cancelled", which would tell the
+  sender an account existed), and cleans up after the deleted sites' admins
+  only once `accounts.Delete` returned (`deleteAccountAndSites`): that takes
+  their account locks.
 - **GDPR.** Account logs never name the other party's account (they name the
   offer id); the site's own provenance keeps both for the operator. The stored
   account log keeps its evidence, and the export (`gdprProvenance`) redacts
