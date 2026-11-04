@@ -153,10 +153,11 @@ func (e Entry) Latest() time.Time {
 func origin(action string) bool { return action == ActionCreate || action == ActionSignup }
 
 // standalone actions are never merged: "minted twice" is a different fact
-// from "minted once".
+// from "minted once". A push names the refs it changed: merged, a second
+// push's would be folded into the first's detail.
 func standalone(action string) bool {
 	switch action {
-	case ActionCreate, ActionSignup, ActionTokenMint, ActionSiteCreate, ActionSiteDelete, ActionOpenUpload, ActionRotatePassword:
+	case ActionCreate, ActionSignup, ActionTokenMint, ActionSiteCreate, ActionSiteDelete, ActionOpenUpload, ActionRotatePassword, ActionGitPush:
 		return true
 	}
 	return false
