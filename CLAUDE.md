@@ -593,8 +593,14 @@ deploys or restarts anything. Read
   kilobytes of pack once took a gigabyte of RSS); `bigFileThreshold` keeps a
   single large file streaming whole, so it still pushes (a file over 256 MiB
   sent as a delta of itself is refused; the docs give the client-side
-  `git -c core.bigFileThreshold=64m push`); `unpackLimit=1` keeps a
-  push the pack it came in, never exploded into loose objects. A cancelled
+  `git -c core.bigFileThreshold=64m push`, after a
+  `git -c core.bigFileThreshold=64m repack -adf` when the clone already holds
+  it as a delta: pack-objects reuses a stored delta whatever the threshold);
+  `unpackLimit=1` keeps a push the pack it came in, never exploded into loose
+  objects. The same limit caps the per-object arrays of index-pack and
+  pack-objects, so a repository past roughly two million objects can no
+  longer be cloned or collected; no website repository gets near that, and
+  `AllocLimit` is the one constant to raise if one ever does. A cancelled
   git dies with its whole process group (Linux; `taskkill /T` on Windows test
   hosts), or its index-pack would hold the repository open.
 - **A response cannot hold a slot.** Every write of a smart HTTP answer gets a
@@ -602,7 +608,11 @@ deploys or restarts anything. Read
   `ResponseMax` (30 min from the response's start), which also bounds the git
   command; a failed write cancels git, and the deadline is lifted when the
   answer is done (the connection outlives it). Both are `gitrepo.Options`, so
-  tests use milliseconds. An RPC POST must carry
+  tests use milliseconds. A file or ZIP download (`stream`) gets the same
+  rolling deadline through `gitrepo.WriteDeadliner` (capped at
+  `StreamTimeout`): without it, a killed git's `Wait` blocks on the output
+  copier stuck writing to a client that stopped reading, and the slot stays
+  held for as long as the connection lives. An RPC POST must carry
   `application/x-git-<svc>-request` (else 415, before any credential work),
   and every answer of the endpoint carries `nosniff` and `CSP: sandbox`.
 - **The gate is the password's shape** (`gitAuth`, `internal/httpapi/gitauth.go`):
@@ -646,7 +656,10 @@ deploys or restarts anything. Read
   too young to prune, and without the follow-up those bytes never came back.
   Inside the same registration (no push runs) it first removes what a killed
   push left in the object store (`RemoveLeftovers`: `objects/tmp_objdir-*`,
-  `objects/incoming-*`, `objects/pack/tmp_*`, never through a link); a push
+  `objects/incoming-*`, `objects/pack/tmp_*`, a killed repack's
+  `objects/pack/.tmp-*`, and the `pack-*.keep` a killed receive-pack left,
+  recognised by its `receive-pack ` content, so gc can collect that pack
+  again; never through a link); a push
   whose git started and did not end cleanly marks the repository. The
   bookkeeping after a push has ONE deadline (slot wait + one read), and stops
   force checks after the first busy answer.

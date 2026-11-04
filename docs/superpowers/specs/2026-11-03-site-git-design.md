@@ -687,7 +687,19 @@ left as designed.
   when Git sends it as a delta against an older version of itself (checked in
   the Alpine image: 100 MiB pushes, clones, collects and zips; 300 MiB pushes
   whole, its changed version is refused, and
-  `git -c core.bigFileThreshold=64m push` sends it whole and passes).
+  `git -c core.bigFileThreshold=64m push` sends it whole and passes; a clone
+  that already stores the file as a delta needs
+  `git -c core.bigFileThreshold=64m repack -adf` first, because pack-objects
+  reuses a stored delta whatever the threshold). The limit also caps
+  index-pack's and pack-objects' per-object arrays: a repository past roughly
+  two million objects can no longer be cloned or collected (accepted; no
+  website repository gets near it).
+- **Downloads have the same write bound** (re-review): a file or ZIP download
+  gets the 2-minute rolling write deadline, capped at `StreamTimeout`, so a
+  client that stops reading frees its process slot.
+- **The sweep also releases what a killed receive-pack kept**
+  (`pack-*.keep` starting `receive-pack `) and removes a killed repack's
+  `pack/.tmp-*`.
 - **`GIT_DIR`** names the repository in every git process's environment.
 - **Benign fsck messages** are ignored on push: `zeroPaddedFilemode`,
   `badTimezone`, `missingSpaceBeforeDate`.

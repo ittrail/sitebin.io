@@ -756,7 +756,9 @@ on the server makes no single allocation above 256 MiB: a file above 64 MiB is
 stored and streamed whole, so a single large file pushes and clones, but a file
 over 256 MiB that Git sends as a change against an older version of itself is
 refused (`remote unpack failed`); push that change with
-`git -c core.bigFileThreshold=64m push`, which sends the file whole. A push is
+`git -c core.bigFileThreshold=64m push`, which sends the file whole. If your
+clone already stores the file as a change (after a local `git gc`, say), run
+`git -c core.bigFileThreshold=64m repack -adf` once before that push. A push is
 kept as the pack it came in, and an RPC must carry Git's
 own content type. Force pushes and branch deletion are allowed. Git LFS
 objects are not stored (pointer files push like any file). The server runs no
