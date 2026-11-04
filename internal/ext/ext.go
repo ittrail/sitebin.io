@@ -857,6 +857,11 @@ type ChangeBy struct {
 	Account   string
 	IP        string
 	UserAgent string
+	// Surface is where the change came in, a provenance surface; empty is
+	// the dashboard. The extension's background loop, finishing a transfer
+	// its recipient accepted earlier, passes provenance.SurfaceBackground
+	// with no address and no user agent.
+	Surface string
 }
 
 // OwnershipSites is the part of the core's site service that moves a site

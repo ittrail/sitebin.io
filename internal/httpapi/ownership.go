@@ -38,12 +38,17 @@ func stampWith(g ext.CreateGrant) func(*store.Meta, time.Time) bool {
 }
 
 // ownershipEntry is a site-log line for a change the extension asked for.
-// The extension names the acting account, address and user agent (by).
+// The extension names the acting account, address, user agent and surface
+// (by); no surface is the dashboard.
 func ownershipEntry(action string, by ext.ChangeBy, detail string) provenance.Entry {
+	surface := by.Surface
+	if surface == "" {
+		surface = provenance.SurfaceDashboard
+	}
 	return provenance.Entry{
 		Time:    time.Now().UTC(),
 		Action:  action,
-		Surface: provenance.SurfaceDashboard,
+		Surface: surface,
 		Auth:    provenance.AuthSession,
 		Account: by.Account,
 		IP:      by.IP,

@@ -101,6 +101,10 @@ const (
 	SurfaceDashboard   = "dashboard"
 	SurfaceOIDC        = "oidc"  // sign-in through the configured identity provider
 	SurfaceLocal       = "local" // email + password sign-in
+	// SurfaceBackground is the extension's background loop finishing what an
+	// account asked for earlier (a transfer its recipient accepted): no
+	// request, so no address and no user agent.
+	SurfaceBackground = "background"
 )
 
 // Credentials: what authorised a change.

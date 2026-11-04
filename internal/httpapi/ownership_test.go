@@ -428,6 +428,35 @@ func TestVerifyCacheIsBoundToThePasswordHash(t *testing.T) {
 	}
 }
 
+// A transfer the extension's background loop finishes (no request, so no
+// address and no user agent) is logged as the background surface, not as the
+// dashboard.
+func TestTransferSiteRecordsTheSurfaceItCameThrough(t *testing.T) {
+	e := newEnv(t, nil)
+	for _, tc := range []struct {
+		by   ext.ChangeBy
+		want string
+	}{
+		{ext.ChangeBy{Account: "acct-2", IP: "203.0.113.9", UserAgent: "ua"}, provenance.SurfaceDashboard},
+		{ext.ChangeBy{Account: "acct-2", Surface: provenance.SurfaceBackground}, provenance.SurfaceBackground},
+	} {
+		c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+		e.st.Update(e.siteOf(t, c.ID), func(m *store.Meta) error { m.OwnerAccountID = "acct-1"; return nil })
+		if _, err := e.own(t).TransferSite(c.ID, "acct-1", "acct-2", ext.CreateGrant{}, nil, tc.by); err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, en := range provLog(t, e, e.siteOf(t, c.ID)) {
+			if en.Action == provenance.ActionTransfer {
+				got = append(got, en.Surface+"/"+en.Account+"/"+en.IP)
+			}
+		}
+		if want := tc.want + "/acct-2/" + tc.by.IP; len(got) != 1 || got[0] != want {
+			t.Errorf("transfer lines = %v, want [%s]", got, want)
+		}
+	}
+}
+
 func TestSiteOwnerReadsMetaOnly(t *testing.T) {
 	ext.Register(&fakeProvider{enabled: true, owner: "acct-1"})
 	defer ext.Reset()
