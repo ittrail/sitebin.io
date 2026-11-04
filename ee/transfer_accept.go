@@ -362,9 +362,12 @@ func (p *provider) runAccepting(id string, to *account.Account, by ext.ChangeBy,
 	// The caps and the plan are the recipient's as they are now. An account
 	// that is gone keeps the caller's copy: the re-check then refuses it (its
 	// plan shares nothing) and the sites stay with the sender.
+	recipientGone := false
 	if fresh, err := p.accounts.ByID(to.ID); err == nil {
 		to = fresh
-	} else if !errors.Is(err, account.ErrNotFound) {
+	} else if errors.Is(err, account.ErrNotFound) {
+		recipientGone = true
+	} else {
 		return run, fmt.Errorf("read the recipient's account: %w", err)
 	}
 	ts, ok := p.host.Sites().(siteTransferrer)
@@ -380,6 +383,11 @@ func (p *provider) runAccepting(id string, to *account.Account, by ext.ChangeBy,
 		}
 		if len(todo) == 0 || !recheck {
 			break
+		}
+		// An account deleted after it accepted receives nothing: the sites
+		// stay with the sender.
+		if recipientGone {
+			return p.endAccepting(run, todo, "the recipient's account no longer exists")
 		}
 		rest := run.Offer
 		rest.Sites = todo

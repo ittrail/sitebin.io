@@ -283,6 +283,8 @@ type trailView struct {
 	Lock    string
 	Rows    []provRow
 	Account *accountProv
+	// Share is the site's admins and open offers, one line each.
+	Share []string
 }
 
 func (p *provider) handleAdminTrail(w http.ResponseWriter, r *http.Request) {
@@ -298,6 +300,7 @@ func (p *provider) handleAdminTrail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := trailView{Site: info}
+	v.Share = p.shareLines(info.Admins, p.openOffersBySite()[viewID])
 	if sp, ok := p.siteProvenance(); ok {
 		es, err := sp.SiteProvenance(viewID)
 		if err != nil {
@@ -393,6 +396,7 @@ var trailTmpl = template.Must(template.New("trail").Funcs(provFuncs).Parse(pageH
     <span>created {{.Site.CreatedAt.Local.Format "2006-01-02 15:04:05"}}</span>
     {{range .Site.Domains}}<span>{{.}}</span>{{end}}
     {{if .Lock}}<span class="lockt">{{.Lock}}</span>{{end}}
+    {{range .Share}}<span>{{.}}</span>{{end}}
   </div>
   <p class="lede">Every creation and write of this site, newest first: the address it came from (the one Caddy saw), the client, the surface and the credential. Kept 90 days; a locked site's trail is kept with the lock.</p>
   {{template "log" .Rows}}

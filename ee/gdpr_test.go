@@ -470,3 +470,19 @@ func TestGDPROrdersNeverReachLocalAccounts(t *testing.T) {
 		t.Error("a local account was erased on a stack order that could only have meant an OIDC subject")
 	}
 }
+
+// The ownership part of the export is always there for a known user, with
+// every list present (never null), so a consumer can rely on the shape.
+func TestGDPRExportCarriesTheOwnershipPart(t *testing.T) {
+	p, host, mux := setupStackInstance(t, testGDPRSecret)
+	acc, _ := stackUser(t, p, host, "11111111-1111-4111-8111-111111111111", "subject@example.com")
+	w := serve(mux, stackOrder(gdprExportPath, testGDPRSecret, time.Now(), `{"userId":"`+acc.OAuthSubject+`"}`))
+	if w.Code != 200 {
+		t.Fatalf("export = %d (%s)", w.Code, w.Body)
+	}
+	for _, key := range []string{`"offers_sent":[]`, `"offers_received":[]`, `"invitations_sent":[]`, `"invitations_received":[]`, `"shared_with_me":[]`, `"admins_of_my_sites":[]`} {
+		if !strings.Contains(w.Body.String(), key) {
+			t.Errorf("the export lacks %s: %s", key, w.Body)
+		}
+	}
+}

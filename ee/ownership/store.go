@@ -661,3 +661,18 @@ func (s *Store) SharingAccounts() ([]string, error) {
 	sort.Strings(out)
 	return out, nil
 }
+
+// RemoveShares removes the account's whole share-marker folder: the account
+// is being erased, and the folder is its data. A folder that is not there is
+// no error.
+func (s *Store) RemoveShares(accountID string) error {
+	if !ids.ValidID(accountID) {
+		return errors.New("invalid account id")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := os.RemoveAll(s.shareDir(accountID)); err != nil {
+		return err
+	}
+	return nil
+}

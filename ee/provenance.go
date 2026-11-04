@@ -109,8 +109,11 @@ func (p *provider) PurgeProvenance(before, heldBefore time.Time) {
 	}
 }
 
-// lockHolds reports whether one of the account's sites is locked, and
-// whether one of those locks carries an evidence hold.
+// lockHolds reports whether a site the account is involved with is locked,
+// and whether one of those locks carries an evidence hold. An account is
+// involved with a site it OWNS or is an ADMIN of (listed in the site's
+// meta.json, found through its share markers): the lock is evidence about
+// what the account did there.
 func (p *provider) lockHolds(acc *account.Account) (locked, caseOpen bool, err error) {
 	infos, err := p.ownedSiteInfos(acc)
 	if err != nil {
@@ -118,6 +121,30 @@ func (p *provider) lockHolds(acc *account.Account) (locked, caseOpen bool, err e
 	}
 	for _, info := range infos {
 		if info.Locked != nil {
+			locked = true
+			if info.Locked.Hold != nil {
+				return true, true, nil
+			}
+		}
+	}
+	if p.owner == nil {
+		return locked, false, nil
+	}
+	marked, err := p.owner.SharedSites(acc.ID)
+	if err != nil {
+		return false, false, err
+	}
+	for _, id := range marked {
+		admins, err := p.siteAdmins(id)
+		switch {
+		case errors.Is(err, ext.ErrSiteGone):
+			continue
+		case err != nil:
+			return false, false, err
+		case !listsAccount(admins, acc.ID):
+			continue
+		}
+		if info, ok := p.host.Sites().Info(id); ok && info.Locked != nil {
 			locked = true
 			if info.Locked.Hold != nil {
 				return true, true, nil

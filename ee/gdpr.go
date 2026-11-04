@@ -235,6 +235,7 @@ type gdprExport struct {
 	Sessions   *gdprSessions        `json:"sessions"`
 	Provenance *gdprProvenance      `json:"provenance,omitempty"`
 	Tags       *account.TagRegistry `json:"tags,omitempty"`
+	Ownership  *gdprOwnership        `json:"ownership,omitempty"`
 }
 
 // handleGDPRExport answers with everything this instance holds about the
@@ -288,6 +289,7 @@ func (p *provider) handleGDPRExport(w http.ResponseWriter, r *http.Request) {
 			out.APITokens = append(out.APITokens, gdprToken{ID: t.ID, Name: t.Name, Prefix: t.Prefix, CreatedAt: t.CreatedAt})
 		}
 		out.Provenance = p.gdprProvenance(acc, ids)
+		out.Ownership = p.gdprOwnership(acc, ids)
 		if reg, err := p.accounts.Tags(acc.ID); err != nil {
 			slog.Error("gdpr: could not read the account's tag registry for an export", "account", acc.ID, "err", err)
 		} else {
@@ -358,9 +360,20 @@ func (p *provider) handleGDPRDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The account's shares on other people's sites and its offers and
+	// invitations end before the account does. A failure stops the order
+	// (5xx, the stack keeps the identity and retries): the account is never
+	// erased while a share of it may still grant access.
+	if err := p.beforeAccountDelete(acc, ext.ChangeBy{Account: acc.ID, Surface: provenance.SurfaceBackground}); err != nil {
+		slog.Error("gdpr: could not end the account's shares and offers; the account is kept so the order can be retried",
+			"account", acc.ID, "subject", order.UserID, "err", err)
+		http.Error(w, `{"error":"could not end the account's shares and offers"}`, http.StatusInternalServerError)
+		return
+	}
+
 	sites := 0
 	err = p.accounts.Delete(acc, func(viewID string) error {
-		deleted, err := p.deleteOwnedSite(acc, viewID)
+		deleted, err := p.deleteOwnedSiteEnding(acc, viewID)
 		if deleted {
 			sites++
 		}

@@ -339,3 +339,60 @@ func (p *provider) shareExpiredMail(viewID, ownerEmail, adminEmail string) (subj
 	fmt.Fprintf(&b, "\nYour account: %s/account\n", p.baseURL())
 	return "A Sitebin share has expired", b.String()
 }
+
+// ---- an account's deletion ----
+//
+// These mails never say why: the other party learns that a share, a
+// transfer or an invitation ended, and by whom it was made, nothing more.
+
+// shareGoneMail is "a share ended", to the owner (toOwner) or to the admin.
+func (p *provider) shareGoneMail(label, ownerEmail, adminEmail string, toOwner bool) (subject, body string) {
+	if ownerEmail == "" {
+		ownerEmail = "the owner"
+	}
+	if adminEmail == "" {
+		adminEmail = "the admin"
+	}
+	var b strings.Builder
+	if toOwner {
+		fmt.Fprintf(&b, "The sharing of this site has ended:\n\n  - %s\n\n%s no longer manages it as an admin.\n", label, adminEmail)
+	} else {
+		fmt.Fprintf(&b, "The sharing of this site has ended:\n\n  - %s\n\nYou no longer manage it as an admin. The owner was %s.\n", label, ownerEmail)
+	}
+	fmt.Fprintf(&b, "\nYour account: %s/account\n", p.baseURL())
+	return "A Sitebin share has ended", b.String()
+}
+
+// transferCancelledMail is "a transfer was cancelled", for one side: the
+// sender (toSender) or the recipient.
+func (p *provider) transferCancelledMail(o ownership.Offer, otherEmail string, toSender bool) (subject, body string) {
+	var b strings.Builder
+	if otherEmail == "" {
+		otherEmail = "the other party"
+	}
+	if toSender {
+		fmt.Fprintf(&b, "Your transfer to %s was cancelled:\n\n", o.ToEmail)
+		p.writeSites(&b, o.Sites)
+		fmt.Fprintf(&b, "\nNothing has moved: the sites stay with you.\n\nYour transfers: %s%s\n", p.baseURL(), transferPath)
+	} else {
+		fmt.Fprintf(&b, "The transfer %s offered you was cancelled:\n\n", otherEmail)
+		p.writeSites(&b, o.Sites)
+		fmt.Fprintf(&b, "\nNothing has moved.\n\nYour account: %s/account\n", p.baseURL())
+	}
+	return "A Sitebin transfer was cancelled", b.String()
+}
+
+// inviteCancelledMail is "an invitation was cancelled", for one side.
+func (p *provider) inviteCancelledMail(inv ownership.Invite, otherEmail string, toSender bool) (subject, body string) {
+	var b strings.Builder
+	if otherEmail == "" {
+		otherEmail = "the other party"
+	}
+	if toSender {
+		fmt.Fprintf(&b, "Your invitation to %s was cancelled:\n\n  - %s\n\nNothing changed on the site.\n", inv.ToEmail, p.labelOf(inv.Site))
+	} else {
+		fmt.Fprintf(&b, "The invitation from %s to be an admin of this site was cancelled:\n\n  - %s\n\nNothing changed.\n", otherEmail, p.labelOf(inv.Site))
+	}
+	fmt.Fprintf(&b, "\nYour account: %s/account\n", p.baseURL())
+	return "A Sitebin invitation was cancelled", b.String()
+}

@@ -563,8 +563,21 @@ func (p *provider) handleDeleteAccountConfirm(w http.ResponseWriter, r *http.Req
 			return
 		}
 	}
+	// Shares, offers and invitations end first; the account is never deleted
+	// while a share of it may still grant access.
+	if err := p.beforeAccountDelete(acc, changeBy(r, acc)); err != nil {
+		slog.Error("account deletion: could not end the account's shares and offers; keeping the account", "account", acc.ID, "err", err)
+		p.securityHeaders(w)
+		w.WriteHeader(http.StatusInternalServerError)
+		msgTmpl.Execute(w, msgView{
+			Title: "Account not deleted",
+			Body:  "Your shares and transfers could not be ended just now, so your account was kept. Nothing else was deleted. Please try again in a few minutes.",
+			Back:  "/account",
+		})
+		return
+	}
 	err := p.accounts.Delete(acc, func(viewID string) error {
-		_, err := p.deleteOwnedSite(acc, viewID)
+		_, err := p.deleteOwnedSiteEnding(acc, viewID)
 		return err
 	})
 	if err != nil {

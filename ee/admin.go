@@ -184,6 +184,9 @@ type adminRow struct {
 	// OwnerSuspended is the owner's suspension on the stack, with its date
 	// and reason; empty for an active or anonymous owner.
 	OwnerSuspended string
+	// ShareLines are the site's admins and its open, paused or accepting
+	// offers, one line each.
+	ShareLines []string
 }
 
 type adminView struct {
@@ -281,6 +284,7 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	offersBySite := p.openOffersBySite()
 	rows := make([]adminRow, 0, len(sites))
 	for _, s := range sites {
 		row := adminRow{
@@ -295,6 +299,7 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 			Locking:        s.ViewID == locking,
 			Unlocking:      s.ViewID == unlocking && s.Locked != nil,
 			OwnerSuspended: suspended[s.Owner],
+			ShareLines:     p.shareLines(s.Admins, offersBySite[s.ViewID]),
 		}
 		if l := s.Locked; l != nil {
 			row.LockText = lockText(l)
