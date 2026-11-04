@@ -360,15 +360,14 @@ func TestDeleteOfAnAdminOfALockedSiteKeepsTheEntryAndRecordsIt(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			e := newGDPREnv(t)
 			var adm *account.Account
-			var ownerAcc *account.Account
 			var cookie *http.Cookie
 			if mode == "gdpr" {
-				ownerAcc = e.oidc("sub-owner", "owner@example.com")
+				ownerAcc := e.oidc("sub-owner", "owner@example.com")
 				adm = e.oidc("sub-adm", "adm@example.com")
 				e.own(ownerAcc, "aaaaaaaaaaaaaaaaaaaaaaaaba")
 				e.makeAdmin(ownerAcc, adm, "aaaaaaaaaaaaaaaaaaaaaaaaba", nil)
 			} else {
-				ownerAcc, adm, cookie = e.acc, e.to, e.toCookie
+				adm, cookie = e.to, e.toCookie
 				e.shared(nil)
 			}
 			site := "aaaaaaaaaaaaaaaaaaaaaaaaba"
@@ -408,7 +407,6 @@ func TestDeleteOfAnAdminOfALockedSiteKeepsTheEntryAndRecordsIt(t *testing.T) {
 			if !strings.Contains(lines[0].Detail, adm.ID) || !strings.Contains(lines[0].Detail, adm.Email) {
 				t.Errorf("the line must carry the id and the email: %q", lines[0].Detail)
 			}
-			_ = ownerAcc
 		})
 	}
 }
@@ -689,4 +687,50 @@ func contains(l []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// ---- no account log names another account ----
+
+func TestExportsNeverNameTheOtherPartysAccount(t *testing.T) {
+	e := newGDPREnv(t)
+	sender := e.oidc("sub-sender", "sender@example.com")
+	rcpt := e.oidc("sub-rcpt", "rcpt@example.com")
+	const moving = "aaaaaaaaaaaaaaaaaaaaaaaabm"
+	e.own(sender, moving)
+	o := e.offerFrom(sender, "rcpt@example.com", true, moving)
+	o = e.change(o, func(x *ownership.Offer) { x.State, x.AcceptedBy = ownership.StateAccepting, rcpt.ID })
+	by := ext.ChangeBy{Account: rcpt.ID, IP: "203.0.113.9", UserAgent: "recipient-browser"}
+	if _, err := e.p.completeAccepting(o, rcpt, by); err != nil {
+		t.Fatal(err)
+	}
+	if owner, _ := e.fs.SiteOwner(moving); owner != rcpt.ID {
+		t.Fatalf("the transfer did not complete: owner %q", owner)
+	}
+	senderRaw, _ := e.gdprExport(sender)
+	rcptRaw, _ := e.gdprExport(rcpt)
+	if strings.Contains(senderRaw, rcpt.ID) || strings.Contains(senderRaw, "203.0.113.9") {
+		t.Errorf("the sender's export carries the recipient's account id or address:\n%s", senderRaw)
+	}
+	if strings.Contains(rcptRaw, sender.ID) {
+		t.Errorf("the recipient's export carries the sender's account id:\n%s", rcptRaw)
+	}
+	if !strings.Contains(senderRaw, o.ID) {
+		t.Error("the sender's log should reference the offer id")
+	}
+}
+
+func TestShareLogLinesNameNoOtherAccount(t *testing.T) {
+	e := newGDPREnv(t)
+	owner := e.oidc("sub-owner", "owner@example.com")
+	adm := e.oidc("sub-adm", "adm@example.com")
+	const s1 = "aaaaaaaaaaaaaaaaaaaaaaaaba"
+	e.own(owner, s1)
+	e.makeAdmin(owner, adm, s1, nil)
+	if w := e.gdprDelete(adm); w.Code != 200 {
+		t.Fatalf("delete = %d", w.Code)
+	}
+	raw, _ := e.gdprExport(owner)
+	if strings.Contains(raw, adm.ID) {
+		t.Errorf("the owner's export names the deleted admin's account id:\n%s", raw)
+	}
 }

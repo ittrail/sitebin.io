@@ -43,6 +43,12 @@ func (p *provider) RecordAccountProvenance(accountID string, e provenance.Entry)
 	if p.accounts == nil || accountID == "" {
 		return
 	}
+	// A log line never names another account, nor carries that account's
+	// address or client: the account's export would hand them to its owner.
+	// A transfer or share names the offer or invitation instead.
+	if e.Account != "" && e.Account != accountID {
+		e.Account, e.IP, e.UA = "", "", ""
+	}
 	if err := p.accounts.RecordProvenance(accountID, e); err != nil && !errors.Is(err, account.ErrNotFound) {
 		slog.Warn("provenance: could not record for an account", "account", accountID, "action", e.Action, "err", err)
 	}

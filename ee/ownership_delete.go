@@ -110,18 +110,18 @@ func (p *provider) beforeAccountDelete(acc *account.Account, by ext.ChangeBy) er
 
 	// Past this point nothing can fail the order: it is the record of what
 	// happened, and the mails.
-	surface := by.Surface
+	surface, credential := by.Surface, provenance.AuthNone
 	if surface == "" {
-		surface = provenance.SurfaceDashboard
+		surface, credential = provenance.SurfaceDashboard, provenance.AuthSession
 	}
 	for _, s := range ended {
 		if err := p.dropAdminTags(acc.ID, s.site); err != nil {
 			slog.Error("account deletion: could not drop an admin's tags", "site", s.site, "account", acc.ID, "err", err)
 		}
 		e := provenance.Entry{
-			Time: time.Now().UTC(), Action: provenance.ActionAdmins, Surface: surface, Auth: provenance.AuthNone,
+			Time: time.Now().UTC(), Action: provenance.ActionAdmins, Surface: surface, Auth: credential,
 			Account: acc.ID, IP: by.IP, UA: by.UserAgent, Site: s.site,
-			Detail: "the share with account " + acc.ID + " ended: the account was deleted",
+			Detail: "a share on the site ended",
 		}
 		p.RecordAccountProvenance(s.ownerID, e)
 		ownerEmail := p.emailOf(s.ownerID)
@@ -131,7 +131,7 @@ func (p *provider) beforeAccountDelete(acc *account.Account, by ext.ChangeBy) er
 	if sp, ok := p.host.Sites().(ext.SiteProvenance); ok {
 		for _, s := range locked {
 			sp.RecordSiteProvenance(s.site, provenance.Entry{
-				Time: time.Now().UTC(), Action: provenance.ActionAdmins, Surface: surface, Auth: provenance.AuthNone,
+				Time: time.Now().UTC(), Action: provenance.ActionAdmins, Surface: surface, Auth: credential,
 				Account: acc.ID, IP: by.IP, UA: by.UserAgent, Site: s.site,
 				Detail: "account " + acc.ID + " (" + acc.Email + ") was an admin of this locked site; the account was deleted and the entry is kept as evidence",
 			})
@@ -276,7 +276,7 @@ func (p *provider) deleteOwnedSiteEnding(acc *account.Account, viewID string) (b
 		}
 		p.RecordAccountProvenance(a.Account, provenance.Entry{
 			Time: time.Now().UTC(), Action: provenance.ActionAdmins, Surface: provenance.SurfaceBackground, Auth: provenance.AuthNone,
-			Account: a.Account, Site: viewID, Detail: "no longer an admin of the site: it was deleted with its owner's account",
+			Account: a.Account, Site: viewID, Detail: "no longer an admin of the site: the site was deleted",
 		})
 		adminEmail := p.emailOf(a.Account)
 		subject, body := p.shareGoneMail(label, acc.Email, adminEmail, false)

@@ -432,7 +432,7 @@ func (p *provider) expireAdmin(now time.Time, accID, viewID string) {
 		Surface: provenance.SurfaceBackground, Auth: provenance.AuthNone, Site: viewID,
 	}
 	ownerLog, adminLog := e, e
-	ownerLog.Detail = "the share with account " + accID + " ended on its end date"
+	ownerLog.Detail = "a share on the site ended on its end date"
 	adminLog.Detail = "no longer an admin of the site (its end date passed)"
 	p.RecordAccountProvenance(owner, ownerLog)
 	if accID != owner {

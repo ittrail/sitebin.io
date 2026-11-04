@@ -551,6 +551,10 @@ func (p *provider) handleDeleteAccountConfirm(w http.ResponseWriter, r *http.Req
 	if p.refuseLockedDeletion(w, acc) {
 		return
 	}
+	cancelledNote := ""
+	if liveSubscription(acc) {
+		cancelledNote = " Your subscription has already been cancelled."
+	}
 	if liveSubscription(acc) {
 		if err := p.cancelSubscription(r, acc); err != nil {
 			slog.Error("account deletion: subscription could not be cancelled; keeping the account",
@@ -571,7 +575,7 @@ func (p *provider) handleDeleteAccountConfirm(w http.ResponseWriter, r *http.Req
 		w.WriteHeader(http.StatusInternalServerError)
 		msgTmpl.Execute(w, msgView{
 			Title: "Account not deleted",
-			Body:  "Your shares and transfers could not be ended just now, so your account was kept. Nothing else was deleted. Please try again in a few minutes.",
+			Body:  "Your shares and transfers could not be ended just now, so your account was kept. Nothing else was deleted." + cancelledNote + " Please try again in a few minutes.",
 			Back:  "/account",
 		})
 		return

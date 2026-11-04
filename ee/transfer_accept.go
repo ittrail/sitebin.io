@@ -381,13 +381,15 @@ func (p *provider) runAccepting(id string, to *account.Account, by ext.ChangeBy,
 		if todo, err = p.recordMoved(&run, from, to, by); err != nil {
 			return run, err
 		}
+		// An account deleted after it accepted receives nothing: the sites
+		// stay with the sender. Known limit: ByID above and TransferSite below
+		// are not one atomic step, so an account deleted in between can still
+		// receive the site being moved; the window is the length of one move.
+		if len(todo) > 0 && recipientGone {
+			return p.endAccepting(run, todo, "the offer could not be completed")
+		}
 		if len(todo) == 0 || !recheck {
 			break
-		}
-		// An account deleted after it accepted receives nothing: the sites
-		// stay with the sender.
-		if recipientGone {
-			return p.endAccepting(run, todo, "the recipient's account no longer exists")
 		}
 		rest := run.Offer
 		rest.Sites = todo
@@ -449,7 +451,7 @@ func (p *provider) recordMoved(run *acceptRun, from, to *account.Account, by ext
 		if err := p.accounts.LinkSite(to, vid); err != nil {
 			slog.Error("transfer: could not link a moved site to its new owner; meta.json decides", "site", vid, "account", to.ID, "err", err)
 		}
-		p.afterMove(vid, from, to, nil, by)
+		p.afterMove(run.Offer.ID, vid, from, to, nil, by)
 		cur, err := p.markDone(run.Offer.ID, vid)
 		if err != nil {
 			return nil, fmt.Errorf("record %s as moved: %w", vid, err)
@@ -536,7 +538,7 @@ func (p *provider) moveSite(run *acceptRun, viewID string, from, to *account.Acc
 		return fmt.Errorf("transfer %s: %w", viewID, err)
 	}
 	run.Moved = append(run.Moved, movedSite{viewID, pw})
-	p.afterMove(viewID, from, to, admins, by)
+	p.afterMove(run.Offer.ID, viewID, from, to, admins, by)
 	cur, err := p.markDone(run.Offer.ID, viewID)
 	if err != nil {
 		if !slices.Contains(run.Offer.Done, viewID) {
@@ -552,7 +554,7 @@ func (p *provider) moveSite(run *acceptRun, viewID string, from, to *account.Acc
 // marker, the former admins' share markers and own tags, and both account
 // logs. Each step is idempotent and logs its own failure: meta.json already
 // says who owns the site, and a stray marker or tag grants nothing.
-func (p *provider) afterMove(viewID string, from, to *account.Account, admins []ext.SiteAdmin, by ext.ChangeBy) {
+func (p *provider) afterMove(offerID, viewID string, from, to *account.Account, admins []ext.SiteAdmin, by ext.ChangeBy) {
 	if err := p.accounts.UnlinkSite(from, viewID); err != nil {
 		slog.Error("transfer: could not drop the sender's marker; meta.json decides", "site", viewID, "account", from.ID, "err", err)
 	}
@@ -578,10 +580,10 @@ func (p *provider) afterMove(viewID string, from, to *account.Account, admins []
 		Account: by.Account, IP: by.IP, UA: by.UserAgent, Site: viewID,
 	}
 	sent := e
-	sent.Detail = "handed over to account " + to.ID
+	sent.Detail = "handed over in offer " + offerID
 	p.RecordAccountProvenance(from.ID, sent)
 	taken := e
-	taken.Detail = "taken over from account " + from.ID
+	taken.Detail = "taken over in offer " + offerID
 	p.RecordAccountProvenance(to.ID, taken)
 }
 

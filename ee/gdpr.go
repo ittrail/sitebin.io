@@ -235,7 +235,7 @@ type gdprExport struct {
 	Sessions   *gdprSessions        `json:"sessions"`
 	Provenance *gdprProvenance      `json:"provenance,omitempty"`
 	Tags       *account.TagRegistry `json:"tags,omitempty"`
-	Ownership  *gdprOwnership        `json:"ownership,omitempty"`
+	Ownership  *gdprOwnership       `json:"ownership,omitempty"`
 }
 
 // handleGDPRExport answers with everything this instance holds about the

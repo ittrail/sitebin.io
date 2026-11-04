@@ -499,7 +499,7 @@ func (p *provider) handleInviteAccept(w http.ResponseWriter, r *http.Request) {
 		p.renderShareRetry(w)
 		return
 	}
-	p.recordShare(r, acc, inv.From, inv.Site, "became an admin; invited by account "+inv.From, "account "+acc.ID+" accepted an invitation and became an admin")
+	p.recordShare(r, acc, inv.From, inv.Site, "became an admin through invitation "+inv.ID, "invitation "+inv.ID+" was accepted and an admin was added")
 	subject, body := p.shareAcceptedMail(cur, acc.Email)
 	p.mailVerified(p.emailOf(inv.From), subject, body)
 	p.redirect(w, r, "/account")
@@ -663,7 +663,7 @@ func (p *provider) endShare(w http.ResponseWriter, r *http.Request, actor *accou
 	e.Account = actor.ID
 	e.Site = viewID
 	ownerLog, adminLog := e, e
-	ownerLog.Detail = "ended the share with account " + adminID + " (" + who + " ended it)"
+	ownerLog.Detail = "ended a share on the site (" + who + " ended it)"
 	adminLog.Detail = "no longer an admin of the site (" + who + " ended it)"
 	p.RecordAccountProvenance(ownerID, ownerLog)
 	if adminID != ownerID {

@@ -253,3 +253,22 @@ func (p *provider) shareLines(admins []ext.SiteAdmin, offers []ownership.Offer) 
 	}
 	return lines
 }
+
+// registerOffersOf is the offers of one site that are not final.
+func (p *provider) registerOffersOf(viewID string) []ownership.Offer {
+	if p.owner == nil {
+		return nil
+	}
+	all, err := p.owner.OffersBySite(viewID)
+	if err != nil {
+		slog.Error("admin: could not read a site's offers", "site", viewID, "err", err)
+		return nil
+	}
+	var out []ownership.Offer
+	for _, o := range all {
+		if !ownership.IsFinal(o.State) {
+			out = append(out, o)
+		}
+	}
+	return out
+}

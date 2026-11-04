@@ -300,7 +300,7 @@ func (p *provider) handleAdminTrail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := trailView{Site: info}
-	v.Share = p.shareLines(info.Admins, p.openOffersBySite()[viewID])
+	v.Share = p.shareLines(info.Admins, p.registerOffersOf(viewID))
 	if sp, ok := p.siteProvenance(); ok {
 		es, err := sp.SiteProvenance(viewID)
 		if err != nil {
