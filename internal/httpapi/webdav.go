@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -77,6 +78,9 @@ func (a *API) webdav(w http.ResponseWriter, r *http.Request) {
 		defer end()
 		// An admin's token only while the admin manages the site.
 		if err := a.uploadTokenStands(site, secret); err != nil {
+			if errors.Is(err, errUploadTokenRevoked) {
+				w.Header().Set("WWW-Authenticate", `Basic realm="Sitebin WebDAV (password = edit password)"`)
+			}
 			respondErr(w, err)
 			return
 		}

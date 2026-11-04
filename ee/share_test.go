@@ -877,10 +877,11 @@ func TestShareAPausedShareShowsTheReasonAndNoManage(t *testing.T) {
 	}
 }
 
-// Final review M7: an owner who becomes the operator lends no exemptions.
-// SharingAllowed is false for the operator account, so every share they made
-// pauses -- at the core's gate as on the dashboard -- and resumes if they
-// stop being the operator.
+// Final review M7 (as narrowed by P41): an owner who becomes the operator
+// lends no exemptions. The standing rule refuses an admin on a site whose
+// OWNER is the operator, so every share they made pauses -- at the core's
+// gate as on the dashboard -- and resumes if they stop being the operator.
+// SharingAllowed stays a plan answer only.
 func TestShareOfAnOwnerWhoBecomesTheOperatorPauses(t *testing.T) {
 	e := newShareEnv(t)
 	e.shared(nil)
