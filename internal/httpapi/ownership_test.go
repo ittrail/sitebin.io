@@ -442,6 +442,32 @@ func TestSiteOwnerReadsMetaOnly(t *testing.T) {
 	}
 }
 
+func TestSiteAdminsReadsMetaOnly(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1"})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	o := e.own(t)
+	if got, err := o.SiteAdmins(c.ID); err != nil || len(got) != 0 {
+		t.Fatalf("SiteAdmins of a fresh site = %v, %v; want none", got, err)
+	}
+	until := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	by := ext.ChangeBy{Account: "acct-1"}
+	err := o.SetAdmins(c.ID, by, func([]ext.SiteAdmin) ([]ext.SiteAdmin, error) {
+		return []ext.SiteAdmin{{Account: "b", Until: &until}, {Account: "c"}}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := o.SiteAdmins(c.ID)
+	if err != nil || len(got) != 2 || got[0].Account != "b" || got[0].Until == nil || !got[0].Until.Equal(until) || got[1].Account != "c" || got[1].Until != nil {
+		t.Fatalf("SiteAdmins = %+v, %v", got, err)
+	}
+	if _, err := o.SiteAdmins(noSuchSite); !errors.Is(err, ext.ErrSiteGone) {
+		t.Errorf("SiteAdmins of a missing site = %v, want ErrSiteGone", err)
+	}
+}
+
 func TestDeleteSiteIfOwner(t *testing.T) {
 	ext.Register(&fakeProvider{enabled: true, owner: "acct-1"})
 	defer ext.Reset()

@@ -113,6 +113,14 @@ func (s siteService) SiteOwner(viewID string) (string, error) {
 	return site.Meta.OwnerAccountID, nil
 }
 
+func (s siteService) SiteAdmins(viewID string) ([]ext.SiteAdmin, error) {
+	site, err := s.a.st.ByViewID(viewID)
+	if err != nil {
+		return nil, mapSiteGone(err, viewID)
+	}
+	return extAdmins(site.Meta.Admins), nil
+}
+
 func (s siteService) DeleteSiteIfOwner(viewID, owner string) error {
 	site, err := s.a.st.ByViewID(viewID)
 	if err != nil {

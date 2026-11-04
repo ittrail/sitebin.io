@@ -186,3 +186,36 @@ func TestTagsOfDeletedAccountIsNotFound(t *testing.T) {
 		t.Fatal("directory recreated")
 	}
 }
+
+func TestRegistrySiteTagsValidateAndPersist(t *testing.T) {
+	s := newStore(t)
+	a, _ := s.CreateLocal("a@example.com", "h", "free")
+	site := "abcdefghijklmnopqrstuvwxyz"
+	err := s.UpdateTags(a.ID, func(r *TagRegistry) error {
+		r.Sites = map[string][]string{site: {"  Kunde ", "kunde", "Urgent"}}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := s.Tags(a.ID)
+	if err != nil || !reflect.DeepEqual(r.Sites[site], []string{"Kunde", "Urgent"}) {
+		t.Fatalf("Sites = %+v, %v", r.Sites, err)
+	}
+	// A bad tag refuses the whole write.
+	err = s.UpdateTags(a.ID, func(r *TagRegistry) error {
+		r.Sites[site] = []string{"bad\ttag"}
+		return nil
+	})
+	if !errors.Is(err, store.ErrBadTag) {
+		t.Fatalf("a bad site tag = %v, want ErrBadTag", err)
+	}
+	// An empty registry omits the key from the file.
+	if err := s.UpdateTags(a.ID, func(r *TagRegistry) error { delete(r.Sites, site); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(tagsFile(s, a.ID))
+	if strings.Contains(string(b), `"sites"`) {
+		t.Errorf("an empty Sites map is written: %s", b)
+	}
+}

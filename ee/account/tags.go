@@ -58,6 +58,10 @@ type TagMeta struct {
 type TagRegistry struct {
 	Groups []TagGroup         `json:"groups"`
 	Tags   map[string]TagMeta `json:"tags"`
+	// Sites is this account's OWN tags on the sites shared with it (it is
+	// an admin there), keyed by view id. The owner's Meta.Tags is never
+	// touched; the tags here are only this account's labels.
+	Sites map[string][]string `json:"sites,omitempty"`
 }
 
 // NewTagGroupID returns a fresh group id.
@@ -152,6 +156,20 @@ func (r *TagRegistry) validate() error {
 		if m.Group != "" && !groupIDs[m.Group] {
 			return ErrUnknownGroup
 		}
+	}
+	for id, list := range r.Sites {
+		clean, err := store.CleanTags(list)
+		if err != nil {
+			return err
+		}
+		if len(clean) == 0 {
+			delete(r.Sites, id)
+			continue
+		}
+		r.Sites[id] = clean
+	}
+	if len(r.Sites) == 0 {
+		r.Sites = nil
 	}
 	return nil
 }

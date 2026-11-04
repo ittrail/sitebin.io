@@ -15,6 +15,7 @@ import (
 	"github.com/ittrail/sitebin.io/ee/account"
 	"github.com/ittrail/sitebin.io/ee/eeconfig"
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/ids"
 )
 
 const sharingTiersJSON = `[
@@ -346,4 +347,112 @@ func TestDashboardDeleteRefusesWhenTheOwnerChangedAfterTheCheck(t *testing.T) {
 		t.Errorf("delete after a transfer = %d, want 403", w.Code)
 	}
 	assertSiteIntact(t, fs, "dashboard delete")
+}
+
+// sharedSite makes a site in the fake service that lists admin (with until,
+// when set), and links admin's share marker for it.
+func sharedSite(t *testing.T, p *provider, sites *fakeSites, admin string, until *time.Time) string {
+	t.Helper()
+	id := ids.New()
+	sites.infos[id] = ext.SiteInfo{ViewID: id, Mode: "webserver", Owner: "someone-else",
+		Tags: []string{"owner-tag"}, Admins: []ext.SiteAdmin{{Account: admin, Until: until}}}
+	if err := p.owner.LinkShare(admin, id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func TestSharedSiteIDsKeepsOnlySitesThatStillListTheAccount(t *testing.T) {
+	p, _ := sharingProvider(t, "accounts", "")
+	sites := p.host.Sites().(*fakeSites)
+	me, other := ids.New(), ids.New()
+
+	live := sharedSite(t, p, sites, me, nil)
+	end := time.Now().Add(-time.Hour)
+	ended := sharedSite(t, p, sites, me, &end) // the core gate decides a date; the index keeps it
+	removed := sharedSite(t, p, sites, me, nil)
+	sites.infos[removed] = ext.SiteInfo{ViewID: removed, Admins: []ext.SiteAdmin{{Account: other}}}
+	gone := ids.New()
+	if err := p.owner.LinkShare(me, gone); err != nil { // its site is deleted
+		t.Fatal(err)
+	}
+	broken := sharedSite(t, p, sites, me, nil)
+	sites.adminErrs = map[string]error{broken: errors.New("meta.json is damaged")}
+
+	got := p.SharedSiteIDs(me)
+	slices.Sort(got)
+	want := []string{live, ended}
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("SharedSiteIDs = %v, want %v", got, want)
+	}
+	if got := p.SharedSiteIDs(other); len(got) != 0 {
+		t.Errorf("an account with no marker = %v", got)
+	}
+}
+
+func TestAdminTagsAreTheAdminsOwn(t *testing.T) {
+	p, _ := sharingProvider(t, "accounts", "")
+	sites := p.host.Sites().(*fakeSites)
+	mux := serveMux(p)
+	_, me := adminUser(t, p, mux, "admin@example.com", "free")
+	_, other := adminUser(t, p, mux, "other@example.com", "free")
+	site := sharedSite(t, p, sites, me, nil)
+
+	if got := p.AdminTags(me, site); got != nil {
+		t.Fatalf("AdminTags before = %v", got)
+	}
+	if err := p.SetAdminTags(me, site, []string{"Kunde", "Urgent"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.AdminTags(me, site); !slices.Equal(got, []string{"Kunde", "Urgent"}) {
+		t.Errorf("AdminTags = %v", got)
+	}
+	if got := p.AdminTags(other, site); got != nil {
+		t.Errorf("another account sees %v", got)
+	}
+	if got := sites.infos[site].Tags; !slices.Equal(got, []string{"owner-tag"}) {
+		t.Errorf("the owner's Meta.Tags changed: %v", got)
+	}
+	// An empty list clears the key.
+	if err := p.SetAdminTags(me, site, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.AdminTags(me, site); got != nil {
+		t.Errorf("AdminTags after clearing = %v", got)
+	}
+	reg, _ := p.accounts.Tags(me)
+	if _, there := reg.Sites[site]; there {
+		t.Errorf("the key stays: %v", reg.Sites)
+	}
+
+	// A site that does not list the account is refused, and nothing is stored.
+	notMine := ids.New()
+	sites.infos[notMine] = ext.SiteInfo{ViewID: notMine, Owner: me} // the owner is not an admin of its own site
+	for name, id := range map[string]string{"another's site": notMine, "no such site": ids.New()} {
+		if err := p.SetAdminTags(me, id, []string{"x"}); err == nil {
+			t.Errorf("%s: SetAdminTags was accepted", name)
+		}
+	}
+	// A refused tag list is an error and stores nothing.
+	if err := p.SetAdminTags(me, site, []string{"bad\ttag"}); err == nil {
+		t.Error("an invalid tag was accepted")
+	}
+	reg, _ = p.accounts.Tags(me)
+	if len(reg.Sites) != 0 {
+		t.Errorf("a refused write stored %v", reg.Sites)
+	}
+}
+
+func TestOwnershipHelpersWithoutInit(t *testing.T) {
+	p := newProvider() // Init never ran, as for `sitebin cleanup`
+	if got := p.SharedSiteIDs("x"); got != nil {
+		t.Errorf("SharedSiteIDs = %v", got)
+	}
+	if got := p.AdminTags("x", "y"); got != nil {
+		t.Errorf("AdminTags = %v", got)
+	}
+	if err := p.SetAdminTags("x", "y", []string{"a"}); err == nil {
+		t.Error("SetAdminTags without Init succeeded")
+	}
 }

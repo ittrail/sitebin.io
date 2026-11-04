@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/ittrail/sitebin.io/ee/account"
 	"github.com/ittrail/sitebin.io/ee/eeconfig"
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 // Sharing: the plan gate for transfer and admins, and the one rule for who
@@ -55,16 +57,105 @@ func (p *provider) SharingAllowed(accountID string) (bool, error) {
 	return t.Sharing, nil
 }
 
-// AdminTags is an admin's own tags on a shared site. Task 5 replaces this.
-func (p *provider) AdminTags(accountID, viewID string) []string { return nil }
-
-// SetAdminTags stores an admin's own tags. Task 5 replaces this.
-func (p *provider) SetAdminTags(accountID, viewID string, tags []string) error {
-	return errors.New("admin tags are not available yet")
+// AdminTags is an admin's own tags on a shared site, from the admin's own tag
+// registry (tags.json). It never reads the site's Meta.Tags. nil for none, and
+// for an account or registry that cannot be read (the tags are decoration).
+func (p *provider) AdminTags(accountID, viewID string) []string {
+	if p.accounts == nil {
+		return nil
+	}
+	reg, err := p.accounts.Tags(accountID)
+	if err != nil {
+		if !errors.Is(err, account.ErrNotFound) {
+			slog.Error("could not read an admin's tags", "account", accountID, "err", err)
+		}
+		return nil
+	}
+	if tags := reg.Sites[viewID]; len(tags) > 0 {
+		return slices.Clone(tags)
+	}
+	return nil
 }
 
-// SharedSiteIDs lists the sites shared with the account. Task 5 replaces this.
-func (p *provider) SharedSiteIDs(accountID string) []string { return nil }
+// SetAdminTags stores an admin's own tags on a shared site, cleaned with
+// store.CleanTags, in the admin's registry; an empty list deletes the entry.
+// It refuses unless meta.json lists the account as an admin of the site, so
+// it can only label sites shared with the account, and it never touches the
+// site's own Meta.Tags.
+func (p *provider) SetAdminTags(accountID, viewID string, tags []string) error {
+	if p.accounts == nil {
+		return errors.New("the account store is not open")
+	}
+	clean, err := store.CleanTags(tags)
+	if err != nil {
+		return err
+	}
+	admins, err := p.siteAdmins(viewID)
+	if err != nil {
+		return err
+	}
+	if !listsAccount(admins, accountID) {
+		return fmt.Errorf("%w: %s", ext.ErrNotOwner, viewID)
+	}
+	return p.accounts.UpdateTags(accountID, func(r *account.TagRegistry) error {
+		if len(clean) == 0 {
+			delete(r.Sites, viewID)
+			return nil
+		}
+		if r.Sites == nil {
+			r.Sites = map[string][]string{}
+		}
+		r.Sites[viewID] = clean
+		return nil
+	})
+}
+
+// SharedSiteIDs lists the sites shared with the account: the share markers
+// whose site's meta.json still lists the account as an admin (with or without
+// an end date: the core's gate decides whether a share is live). A marker
+// whose site no longer lists the account, or no longer exists, is ignored and
+// left for the background loop to unlink. A site that cannot be read is left
+// out and logged.
+func (p *provider) SharedSiteIDs(accountID string) []string {
+	if p.owner == nil {
+		return nil
+	}
+	marked, err := p.owner.SharedSites(accountID)
+	if err != nil {
+		slog.Error("could not list the sites shared with an account", "account", accountID, "err", err)
+		return nil
+	}
+	var out []string
+	for _, id := range marked {
+		admins, err := p.siteAdmins(id)
+		switch {
+		case errors.Is(err, ext.ErrSiteGone):
+		case err != nil:
+			slog.Error("could not read the admins of a shared site; leaving it out", "account", accountID, "site", id, "err", err)
+		case listsAccount(admins, accountID):
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func listsAccount(admins []ext.SiteAdmin, accountID string) bool {
+	return slices.ContainsFunc(admins, func(a ext.SiteAdmin) bool { return a.Account == accountID })
+}
+
+type siteAdminsReader interface {
+	SiteAdmins(viewID string) ([]ext.SiteAdmin, error)
+}
+
+// siteAdmins is the admins in a site's meta.json, through the core's optional
+// ext.OwnershipSites. It reads meta only.
+func (p *provider) siteAdmins(viewID string) ([]ext.SiteAdmin, error) {
+	r, ok := p.host.Sites().(siteAdminsReader)
+	if !ok {
+		return nil, errors.New("the site service cannot report a site's admins")
+	}
+	return r.SiteAdmins(viewID)
+}
 
 // The two methods of the core's ext.OwnershipSites that the account pages use,
 // asserted on their own so a SiteService (or a test fake) that does not

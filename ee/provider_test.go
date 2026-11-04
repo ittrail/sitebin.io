@@ -25,6 +25,8 @@ type fakeSites struct {
 	linkOwner map[string]string
 	// ownerErrs fails SiteOwner for the listed site ids.
 	ownerErrs map[string]error
+	// adminErrs fails SiteAdmins for the listed site ids.
+	adminErrs map[string]error
 	deleted   []string
 	rotated   []string
 	quotas    map[string]ext.CreateGrant
@@ -78,6 +80,18 @@ func (s *fakeSites) SiteOwner(id string) (string, error) {
 		return "", fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
 	}
 	return i.Owner, nil
+}
+
+// SiteAdmins is the admins in the fake's info, or ErrSiteGone.
+func (s *fakeSites) SiteAdmins(id string) ([]ext.SiteAdmin, error) {
+	if s.adminErrs[id] != nil {
+		return nil, s.adminErrs[id]
+	}
+	i, ok := s.Info(id)
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
+	}
+	return i.Admins, nil
 }
 
 func (s *fakeSites) DeleteSiteIfOwner(id, owner string) error {

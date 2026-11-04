@@ -912,6 +912,11 @@ type OwnershipSites interface {
 	// sites. A site that no longer exists is ErrSiteGone, distinct from
 	// any other read error.
 	SiteOwner(viewID string) (owner string, err error)
+	// SiteAdmins is the admins listed in the site's meta.json, with their
+	// end dates (nil for none). Like SiteOwner it reads meta only, never
+	// the content or the git repository. A site that no longer exists is
+	// ErrSiteGone.
+	SiteAdmins(viewID string) ([]SiteAdmin, error)
 	// DeleteSiteIfOwner deletes the site only if, under the site lock, its
 	// meta.json owner is owner (never empty); otherwise it deletes nothing
 	// and returns ErrNotOwner. Every rule of SiteService.Delete holds: a

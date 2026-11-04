@@ -22,6 +22,7 @@ import (
 	"github.com/ittrail/sitebin.io/ee/containers"
 	"github.com/ittrail/sitebin.io/ee/eeconfig"
 	"github.com/ittrail/sitebin.io/ee/licensing"
+	"github.com/ittrail/sitebin.io/ee/ownership"
 	"github.com/ittrail/sitebin.io/ee/session"
 	"github.com/ittrail/sitebin.io/ee/smtp"
 	"github.com/ittrail/sitebin.io/internal/ext"
@@ -33,6 +34,9 @@ type provider struct {
 	host     ext.Host
 	cfg      eeconfig.Config
 	accounts *account.Store
+	// owner is the offers, invitations and share index. nil where Init was
+	// not called (sitebin cleanup); every user of it checks.
+	owner    *ownership.Store
 	sessions *session.Manager
 	local    *authn.Local
 	oidc     *authn.OIDC
@@ -111,6 +115,11 @@ func (p *provider) Init(h ext.Host) error {
 		return fmt.Errorf("account store: %w", err)
 	}
 	p.accounts = store
+	own, err := ownership.New(h.DataDir())
+	if err != nil {
+		return fmt.Errorf("ownership store: %w", err)
+	}
+	p.owner = own
 	if err := p.initContainers(); err != nil {
 		return fmt.Errorf("containers: %w", err)
 	}
