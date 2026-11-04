@@ -300,7 +300,38 @@
   </div>
 
   <!-- filled by the Git tab (see edit.js, "tabs") -->
-  <div class="tabpanel hidden" id="panel-git" role="tabpanel" aria-labelledby="tab-git"></div>
+  <div class="tabpanel hidden" id="panel-git" role="tabpanel" aria-labelledby="tab-git">
+    <section class="card">
+      <h3>Connect</h3>
+      <div id="git-connect"></div>
+    </section>
+    <section class="card">
+      <h3>Status</h3>
+      <p class="sub" id="git-lifecycle">This repository belongs to this site. Deleting the site deletes the repository. <span id="git-expiry"></span></p>
+      <div id="git-status"></div>
+    </section>
+    <section class="card" id="git-sec-refs">
+      <h3>Branches and tags</h3>
+      <div id="git-refs"></div>
+    </section>
+    <section class="card" id="git-sec-history">
+      <h3>History</h3>
+      <div id="git-commit" class="gitdetail hidden"></div>
+      <div id="git-log"></div>
+    </section>
+    <section class="card" id="git-sec-files">
+      <h3>Files <button class="btn small" id="git-zip" type="button">Download ZIP</button></h3>
+      <div class="crumbs"><div class="trail" id="git-crumbs"></div></div>
+      <div id="git-tree"></div>
+    </section>
+    <section class="card hidden" id="git-danger" style="border-color:rgba(242,109,109,.25)">
+      <h3 style="color:var(--danger)">Delete repository</h3>
+      <div class="row">
+        <button class="btn danger" id="git-delete" type="button">Delete repository</button>
+        <span class="sub" id="git-delete-hint"></span>
+      </div>
+    </section>
+  </div>
 </main>
 
 <div id="editor-overlay" class="hidden">
@@ -317,5 +348,6 @@
 
 <div id="toast" role="status"></div>
 <script src="/_sitebin/assets/static/edit.js" defer></script>
+<script src="/_sitebin/assets/static/edit-git.js" defer></script>
 </body>
 </html>

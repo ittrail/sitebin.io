@@ -267,6 +267,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
       </form>
       <form class="inline" method="post" action="/account/sites/{{.ViewID}}/delete">
         <input type="hidden" name="csrf" value="{{.CSRF}}">
+        {{if .GitText}}<span class="u">Deletes the site and its Git repository ({{.GitText}}).</span>{{end}}
         <button class="btn small danger" type="submit">Delete</button>
       </form>
       {{end}}

@@ -156,3 +156,28 @@ func TestAdminRegisterShowsAndSearchesNames(t *testing.T) {
 		t.Error("searching the register by name does not find exactly the named site")
 	}
 }
+
+// Deleting a site deletes its Git repository; the dashboard says so, with the
+// repository's size, beside the Delete button -- and only when one exists.
+func TestDashboardDeleteConfirmNamesRepository(t *testing.T) {
+	p, host, mux, acc, cookie := namedAccount(t)
+	const plain = "bbcdefghijklmnopqrstuvwxyz"
+	for _, id := range []string{ownedSite, plain} {
+		if err := p.accounts.LinkSite(acc, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	host.sites.infos[ownedSite] = ext.SiteInfo{ViewID: ownedSite, Mode: "webserver", ViewURL: "http://a.sitebin.example", EditURL: "http://sitebin.example/e/one", Bytes: 100, GitBytes: 3 << 20}
+	host.sites.infos[plain] = ext.SiteInfo{ViewID: plain, Mode: "webserver", ViewURL: "http://b.sitebin.example", EditURL: "http://sitebin.example/e/two", Bytes: 100}
+	w := getAs(mux, "/account", cookie)
+	if w.Code != 200 {
+		t.Fatalf("dashboard = %d", w.Code)
+	}
+	body := w.Body.String()
+	if n := strings.Count(body, "and its Git repository ("); n != 1 {
+		t.Errorf("the repository is named %d times, want once (only the site that has one)", n)
+	}
+	if !strings.Contains(body, "and its Git repository (3.0 MB)") {
+		t.Errorf("the repository's size is missing: %s", body)
+	}
+}

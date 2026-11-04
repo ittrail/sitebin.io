@@ -485,6 +485,16 @@ func TestGetSiteGitAvailable(t *testing.T) {
 	if present, on := read(e, edit, pw); !present || !on {
 		t.Errorf("git_available present=%v value=%v, want true", present, on)
 	}
+	// Unavailable only because of the plan: the tab still shows, carrying
+	// the upgrade notice.
+	edit3, pw3 := gitSite(t, e, nil)
+	no := false
+	if err := e.st.SetQuotaGit(siteByEdit(t, e, edit3), &no); err != nil {
+		t.Fatal(err)
+	}
+	if present, on := read(e, edit3, pw3); !present || !on {
+		t.Errorf("plan without Git: git_available present=%v value=%v, want true", present, on)
+	}
 	e.api.cfg.GitEnabled = false
 	if present, on := read(e, edit, pw); !present || on {
 		t.Errorf("with Git disabled: present=%v value=%v, want present and false", present, on)

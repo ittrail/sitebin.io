@@ -643,6 +643,9 @@ type siteRow struct {
 	SizeText   string
 	ExpiryText string
 	CSRF       string
+	// GitText is the size of the site's Git repository, "" when it has none;
+	// the Delete button names the repository when it is set.
+	GitText string
 	// LockedText is the lock's date, for the line a locked site shows in
 	// place of its actions. Who placed it is not shown to the owner.
 	LockedText string
@@ -753,6 +756,9 @@ func (p *provider) renderDashboard(w http.ResponseWriter, r *http.Request, acc *
 				SizeText:   humanBytes(info.Bytes + info.GitBytes),
 				ExpiryText: expiryText(info.ExpiresAt),
 				CSRF:       token,
+			}
+			if info.GitBytes > 0 {
+				row.GitText = humanBytes(info.GitBytes)
 			}
 			if info.Locked != nil {
 				row.LockedText = info.Locked.At.Local().Format("2006-01-02")

@@ -672,3 +672,59 @@ pre.snippet {
   background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 12px;
 }
 label.chk { display: inline-flex; gap: 6px; align-items: center; color: var(--ink-dim); font-size: 14px; }
+
+/* ---------- Git tab ---------- */
+
+.usagebar.split { display: flex; }
+.usagebar.split .fill.git { background: linear-gradient(90deg, var(--amber-deep), var(--amber)); border-radius: 0; }
+.gitcmd { display: flex; gap: 10px; align-items: flex-start; margin: 10px 0; }
+.gitcmd pre, .gitcmd code {
+  flex: 1; margin: 0; min-width: 0; overflow-x: auto;
+  font: 13px/1.5 var(--mono); color: var(--ink);
+  background: var(--bg); border: 1px solid var(--line-soft); border-radius: 8px; padding: 8px 10px;
+}
+.gitways { margin: 8px 0; padding-left: 20px; color: var(--ink-dim); font-size: 14px; }
+.gitways code, .gitoauth code { font: 12.5px var(--mono); color: var(--ink); }
+.gitoauth { margin-top: 14px; }
+.gitfacts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 12px 0 0; font-size: 14px; }
+.gitfacts dt { color: var(--ink-faint); }
+.gitfacts dd { margin: 0; overflow-wrap: anywhere; }
+.gitplan { color: var(--amber); font-size: 14px; }
+.gitstart { margin-top: 12px; }
+.gitrefs { display: flex; flex-wrap: wrap; gap: 8px; }
+.gitref {
+  display: inline-flex; gap: 8px; align-items: baseline; cursor: pointer;
+  background: #0d1322; color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
+  padding: 5px 10px; font: 13px var(--mono);
+}
+.gitref:hover { border-color: #344160; }
+.gitref.on { border-color: var(--amber); }
+.gitref .kind { color: var(--ink-faint); font-size: 11px; text-transform: uppercase; }
+.gitref .dflt { color: var(--amber); font-size: 11px; }
+.gitcommit, .gitentry {
+  display: flex; gap: 12px; align-items: baseline; width: 100%; text-align: left; cursor: pointer;
+  background: none; color: var(--ink); border: 0; border-bottom: 1px solid var(--line-soft);
+  padding: 7px 4px; font: 14px var(--body);
+}
+.gitcommit:hover, .gitentry:hover:not(:disabled) { background: rgba(255,255,255,.03); }
+.gitcommit .sha { font: 12.5px var(--mono); color: var(--amber); flex: none; }
+.gitcommit .subj { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gitcommit .who { color: var(--ink-faint); font-size: 12.5px; flex: none; }
+.gitentry .ic { color: var(--ink-faint); width: 1em; flex: none; }
+.gitentry .nm { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.gitentry.dir .nm { color: var(--blue); }
+.gitentry .sz { color: var(--ink-faint); font: 12px var(--mono); }
+.gitdetail { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
+.gitmsg { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 var(--mono); margin: 10px 0; }
+.gitchanged { list-style: none; margin: 10px 0 0; padding: 0; font: 12.5px var(--mono); }
+.gitchanged li { display: flex; gap: 12px; padding: 2px 0; }
+.gitchanged .st { color: var(--ink-faint); width: 1.5em; flex: none; }
+.gitchanged .fp { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.gitchanged .ch { color: var(--ink-dim); flex: none; }
+.gitfile {
+  margin: 8px 0 0; max-height: 640px; overflow: auto; background: var(--bg);
+  border: 1px solid var(--line-soft); border-radius: 8px; padding: 10px 12px;
+  font: 12.5px/1.5 var(--mono); tab-size: 4;
+}
+.gitfile code { background: none; padding: 0; white-space: pre; }
+#git-log .more { margin-top: 10px; }

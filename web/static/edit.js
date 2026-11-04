@@ -160,7 +160,9 @@ const tabs = {
 tabs.register({
   id: "live", label: "Live", panel: $("panel-live"),
   hash: () => dirHash(cwd),
-  onShow() {}, // renders as it always did
+  onShow() { // renders as it always did; the stats poll resumes here
+    if (wantStats() && !ctStatsTimer && !ctStatsBusy && !document.hidden) scheduleStats(0);
+  },
 });
 
 // ---- unlock flow ----
@@ -178,7 +180,7 @@ function unlock() {
   // The Git tab shows when Git works here, or when only the plan lacks it
   // (the tab then carries the upgrade notice).
   if (site.git_available && !tabs.list.some((t) => t.id === "git")) {
-    tabs.register({ id: "git", label: "Git", panel: $("panel-git"), onShow() {} });
+    tabs.register({ id: "git", label: "Git", panel: $("panel-git"), onShow() { gitTab.show(); } });
   }
   tabs.start();
   loadDir(dirFromHash());
@@ -831,8 +833,8 @@ function renderContainer() {
   web.className = "usage proj hidden";
   web.id = "ct-web";
   box.append(web);
-  if (wantStats()) {
-    if (!ctStatsTimer && !ctStatsBusy) scheduleStats(Math.max(0, statsEvery - (Date.now() - ctStatsAt)));
+  if (statsRunning()) {
+    if (wantStats() && !ctStatsTimer && !ctStatsBusy) scheduleStats(Math.max(0, statsEvery - (Date.now() - ctStatsAt)));
   } else {
     // Stopped, starting or failed: nothing it showed is true any more.
     clearTimeout(ctStatsTimer);
@@ -868,10 +870,15 @@ function renderContainer() {
 const statsEvery = 10000;
 let ctStats = null, ctStatsAt = 0, ctStatsTimer = null, ctStatsBusy = false;
 
-function wantStats() {
+// statsRunning: the project is running, so its numbers are true.
+function statsRunning() {
   const ct = site && site.container;
   return site && site.mode === "container" && ct && ct.enabled && ct.status === "running";
 }
+
+// wantStats: and the Live tab, the only one that shows them, is open -- no
+// polling behind another tab.
+function wantStats() { return tabs.active === "live" && statsRunning(); }
 
 function scheduleStats(delay) {
   clearTimeout(ctStatsTimer);
@@ -1683,12 +1690,19 @@ $("f-cancel").addEventListener("click", () => { resetFormEditor(); renderForms()
 
 // ---- danger ----
 
+// gitNote names the site's Git repository, when it has one, in the delete
+// confirmation: "... and its Git repository (X)".
+function gitNote() {
+  const g = site && site.usage && site.usage.git_bytes;
+  return g > 0 ? " and its Git repository (" + fmtBytes(g) + ")" : "";
+}
+
 let armed = false;
 $("delete-site").addEventListener("click", async () => {
   if (!armed) {
     armed = true;
     $("delete-site").textContent = "Click again to delete forever";
-    $("delete-hint").textContent = "Really delete " + site.id + "? This cannot be undone.";
+    $("delete-hint").textContent = "Really delete " + site.id + gitNote() + "? This cannot be undone.";
     setTimeout(() => {
       armed = false;
       $("delete-site").textContent = "Delete this site";

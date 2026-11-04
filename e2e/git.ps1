@@ -67,6 +67,36 @@ Assert "edit page has the tab bar" ($r.body.Contains('id="tabs"'))
 Assert "edit page has the Git panel" ($r.body.Contains('id="panel-git"'))
 Assert "edit page keeps the Live panel" ($r.body.Contains('id="panel-live"'))
 
+# ---------- the Git tab ----------
+
+Assert "panel skeleton carries the lifecycle sentence" ($r.body.Contains('This repository belongs to this site. Deleting the site deletes the repository.'))
+Assert "panel skeleton has the file browser" ($r.body.Contains('id="git-tree"') -and $r.body.Contains('id="git-zip"'))
+Assert "edit page loads the Git tab script" ($r.body.Contains('edit-git.js'))
+$js = Req "GET" "$origin/_sitebin/assets/static/edit-git.js"
+Assert "the Git tab script is served" ($js.code -eq 200) "code $($js.code)"
+
+$hdr = @("-H", "X-Edit-Password: $($site.edit_password)")
+$r = Req "GET" "$origin/api/sites/$editId/git" $hdr
+Assert "git info before a push: exists false" ($r.code -eq 200 -and ($r.body | ConvertFrom-Json).exists -eq $false) "code $($r.code) $($r.body)"
+
+$repo = Join-Path $work "git-tab-repo"
+if (Test-Path $repo) { Remove-Item -Recurse -Force $repo }
+New-Item -ItemType Directory -Force $repo | Out-Null
+git -C $repo init -q -b main
+git -C $repo config user.email "e2e@example.com"
+git -C $repo config user.name "E2E"
+[IO.File]::WriteAllText((Join-Path $repo "a.txt"), "hello")
+git -C $repo add -A
+git -C $repo commit -q -m "first"
+$remote = "$($origin -replace '^http://', "http://$editId`:$($site.edit_password)@")/git/$editId.git"
+git -C $repo push -q $remote main 2>$null
+Assert "git push to the site succeeds" ($LASTEXITCODE -eq 0)
+
+$r = Req "GET" "$origin/api/sites/$editId/git" $hdr
+Assert "git info after a push: exists true" ($r.code -eq 200 -and ($r.body | ConvertFrom-Json).exists -eq $true) "code $($r.code) $($r.body)"
+$r = Req "GET" "$origin/api/sites/$editId" $hdr
+Assert "site payload carries git_bytes" ($r.code -eq 200 -and ($r.body | ConvertFrom-Json).usage.git_bytes -gt 0) "code $($r.code)"
+
 # ---------- teardown & summary ----------
 
 if (-not $KeepUp) {
