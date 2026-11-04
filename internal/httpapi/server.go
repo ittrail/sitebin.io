@@ -576,7 +576,11 @@ func (a *API) verifyEditIP(clientIP string, site *store.Site, pw string) verifyR
 	if strings.HasPrefix(pw, ids.UploadTokenPrefix) {
 		return verifyFailed
 	}
-	sum := sha256.Sum256([]byte(pw))
+	// The entry is bound to the hash it was checked against: a reader of a
+	// newer hash (a transfer, a rotation) never matches an entry made against
+	// the old one, and a late Put against a stale site object never matches a
+	// later read. The EditID prefix stays, so Drop(EditID + ":") still works.
+	sum := sha256.Sum256([]byte(site.Meta.EditPasswordHash + "|" + pw)) // the hash holds no "|", so the join is unambiguous
 	cacheKey := site.EditID + ":" + hex.EncodeToString(sum[:])
 	if a.verifyCache.Check(cacheKey) {
 		return verifyOK
