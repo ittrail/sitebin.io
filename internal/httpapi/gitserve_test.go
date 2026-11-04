@@ -403,6 +403,7 @@ func TestGitInstanceBusyIsReadable(t *testing.T) {
 	// An RPC cannot carry a remote error: a plain 503.
 	req, _ := http.NewRequest("POST", g.url("/git/"+edit+".git/git-upload-pack"), strings.NewReader("0000"))
 	req.SetBasicAuth("drop", pw)
+	req.Header.Set("Content-Type", "application/x-git-upload-pack-request")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -797,6 +798,7 @@ func TestGitInstanceRefusals(t *testing.T) {
 		// An RPC is a plain status: it cannot carry a remote error.
 		r = httptest.NewRequest("POST", "/git/"+edit+".git/git-upload-pack", strings.NewReader("0000"))
 		r.SetBasicAuth("drop", pw)
+		r.Header.Set("Content-Type", "application/x-git-upload-pack-request")
 		if w := e.public(t, r); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), msgGitUnavailableHere) {
 			t.Errorf("no git, RPC: %d %q, want 403", w.Code, w.Body)
 		}

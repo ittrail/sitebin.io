@@ -102,6 +102,16 @@ func (f *flushWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// setHeaders marks a smart HTTP response: its content type, never cached,
+// never sniffed or rendered as anything else.
+func setHeaders(w http.ResponseWriter, contentType string) {
+	h := w.Header()
+	h.Set("Content-Type", contentType)
+	h.Set("Cache-Control", "no-cache")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Security-Policy", "sandbox")
+}
+
 // capWriter keeps the first max bytes written.
 type capWriter struct {
 	buf bytes.Buffer
@@ -143,8 +153,7 @@ func (r *Runner) AdvertiseRefs(ctx context.Context, dir string, svc Service, pro
 	defer release()
 	ctx, cancel := context.WithTimeout(ctx, r.responseMax)
 	defer cancel()
-	w.Header().Set("Content-Type", "application/x-"+string(svc)+"-advertisement")
-	w.Header().Set("Cache-Control", "no-cache")
+	setHeaders(w, "application/x-"+string(svc)+"-advertisement")
 	fw, done := r.newFlushWriter(w, cancel)
 	defer done()
 	if protocol != "version=2" {
@@ -273,8 +282,7 @@ func (r *Runner) ServeRPC(ctx context.Context, dir string, svc Service, body io.
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/x-"+string(svc)+"-result")
-	w.Header().Set("Cache-Control", "no-cache")
+	setHeaders(w, "application/x-"+string(svc)+"-result")
 	cmd := r.commandWith(ctx, dir, extraC, protoEnv(o.Protocol), svc.sub(), "--stateless-rpc", ".")
 	guardProcess(cmd)
 	errBuf := &capWriter{max: maxStderr}
@@ -309,8 +317,7 @@ func (r *Runner) ServeRPC(ctx context.Context, dir string, svc Service, body io.
 // WriteRefusal answers a smart HTTP request with a git-level error, which the
 // client prints as "fatal: remote error: <msg>".
 func WriteRefusal(w http.ResponseWriter, svc Service, msg string) {
-	w.Header().Set("Content-Type", "application/x-"+string(svc)+"-advertisement")
-	w.Header().Set("Cache-Control", "no-cache")
+	setHeaders(w, "application/x-"+string(svc)+"-advertisement")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, pkt("# service="+string(svc)+"\n")+"0000"+pkt("ERR "+msg+"\n"))
 }

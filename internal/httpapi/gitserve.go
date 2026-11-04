@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"mime"
 	"net/http"
 	"path"
 	"strings"
@@ -63,6 +64,7 @@ const (
 	msgGitRepoBusy        = "the repository is busy, try again in a moment"
 	msgGitTooLarge        = "request too large"
 	msgGitBadRequest      = "bad git request"
+	msgGitContentType     = "not a git request"
 )
 
 // errGitNoRepo: a read of a site whose repository does not exist and may not
@@ -70,9 +72,13 @@ const (
 var errGitNoRepo = errors.New("this site has no Git repository")
 
 // serveGit answers every Git request, in this order: the host, the site, the
-// service, the credential (gitAuth), the site's state (gitStateOf), then the
-// request itself.
+// service and an RPC's content type, the credential (gitAuth), the site's
+// state (gitStateOf), then the request itself.
 func (a *API) serveGit(w http.ResponseWriter, r *http.Request) {
+	// Nothing this endpoint answers — an advertisement, git's result, a
+	// refusal, an error — is ever to be sniffed or rendered as a page.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "sandbox")
 	// The base domain only. A site's own address, a custom domain, the view
 	// domain: those are user-content origins, never the place for this.
 	if !strings.EqualFold(hostWithoutPort(r.Host), hostWithoutPort(a.cfg.BaseDomain)) {
@@ -105,6 +111,13 @@ func (a *API) serveGit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown git service", http.StatusBadRequest)
 		return
 	}
+	// An RPC carries git's own request type, as every Git client sends it.
+	// A page's form cannot send this type, and a page's fetch() only after
+	// a CORS preflight, which this endpoint never answers.
+	if !info && !gitRequestType(r, svc) {
+		http.Error(w, msgGitContentType, http.StatusUnsupportedMediaType)
+		return
+	}
 	write := svc == gitrepo.ReceivePack
 
 	act, d := a.gitAuth(r, site, write)
@@ -127,6 +140,14 @@ func (a *API) serveGit(w http.ResponseWriter, r *http.Request) {
 	default:
 		a.gitFetch(w, r, site, st)
 	}
+}
+
+// gitRequestType reports whether r carries the content type of an RPC of
+// svc: application/x-git-upload-pack-request or
+// application/x-git-receive-pack-request.
+func gitRequestType(r *http.Request, svc gitrepo.Service) bool {
+	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	return err == nil && mt == "application/x-"+string(svc)+"-request"
 }
 
 // writeGitDenial answers what gitAuth refused. A refusal is a 200 carrying
