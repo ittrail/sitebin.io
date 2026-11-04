@@ -803,6 +803,17 @@ confirmed unchanged. Three additions follow from c6's gate notes:
     re-reads meta and refuses when the owner or the edit-password hash
     changed since `gitAuth`. This closes the window between auth and
     registration; it does not run the password hash again.
+    - The refusal is a git ERR pkt-line through `gitrepo.WriteRefusal`,
+      with the advertisement already started, like gitPush's other
+      refusals. A plain 403 makes git show "unexpected disconnect".
+    - The check sits right after `BeginGitWrite`, before `Init` and
+      `ServeRPC`. The info/refs path (`gitserve.go` ~231) also registers
+      briefly for `Init` on a writable site with no repo, and gets the same
+      check, so the old credential never creates the new owner's empty
+      repo.
+    - The owner path is pinned by `TestGitDeleteRepository*`
+      (`internal/httpapi/gitapi_test.go`) and the e2e check "delete
+      repository answers 204".
   - Standing covers every place that decides it: `editAuth` (whose actor
     is `OwnerAccountID`), `accountStands` (also used by `mcpops.go`'s
     actor and `gitAuth`), and ee `p.owns` (`dashboard.go`, `dashtags.go`).
