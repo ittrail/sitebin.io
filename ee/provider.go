@@ -15,6 +15,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/ittrail/sitebin.io/ee/account"
 	"github.com/ittrail/sitebin.io/ee/authn"
@@ -41,6 +42,9 @@ type provider struct {
 	local    *authn.Local
 	oidc     *authn.OIDC
 	mailer   *smtp.Mailer
+	// mailWG counts the mails still being looked up or sent in the
+	// background (ownership_mail.go), so a test can wait for them.
+	mailWG sync.WaitGroup
 	// billing is the ONE active backend, chosen by SITEBIN_BILLING. Keeping a
 	// single field rather than one per provider is what stops a second
 	// processor from quietly becoming reachable.

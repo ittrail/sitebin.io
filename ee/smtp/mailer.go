@@ -26,6 +26,12 @@ func New(cfg eeconfig.SMTPConfig) *Mailer {
 	return &Mailer{cfg: cfg, deliver: deliverSMTP}
 }
 
+// NewWithDeliver builds a Mailer whose delivery is deliver instead of SMTP, for
+// tests of the callers.
+func NewWithDeliver(cfg eeconfig.SMTPConfig, deliver func(cfg eeconfig.SMTPConfig, to, msg string) error) *Mailer {
+	return &Mailer{cfg: cfg, deliver: deliver}
+}
+
 // Send delivers a plain-text email.
 func (m *Mailer) Send(to, subject, body string) error {
 	if to == "" {

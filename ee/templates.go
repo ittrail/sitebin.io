@@ -262,6 +262,7 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
         </details>
       </div>
       <a class="btn small" href="{{.EditURL}}">Manage</a>
+      <a class="btn small" href="/account/transfer?site={{.ViewID}}">Transfer</a>
       <form class="inline" method="post" action="/account/sites/{{.ViewID}}/rotate">
         <input type="hidden" name="csrf" value="{{.CSRF}}">
         <button class="btn small" type="submit" title="Issue a new edit password">Reset edit password</button>
@@ -986,4 +987,125 @@ var reportsTmpl = template.Must(template.New("reports").Parse(pageHead + adminCo
     {{end}}
   </section>
 </main>
+` + pageFoot))
+
+// ---- transfer (the sender's side) ----
+
+var transferPlanTmpl = template.Must(template.New("transferplan").Parse(pageHead + `
+<main class="acct"><div class="authwrap"><div class="card">
+  <h1>Transferring needs Pro or Studio</h1>
+  <p class="muted">Handing sites over to another account is part of the Pro and Studio plans.</p>
+  <div style="margin-top:18px"><a class="btn primary" href="/account#plan">See the plans</a> <a class="btn" href="/account">Back</a></div>
+</div></div></main>
+` + pageFoot))
+
+// transferNoticesBlock is what the sender is told before an offer goes out.
+const transferNoticesBlock = `{{if .Notices.NotMove}}
+    <div class="inline-status err" role="note" style="margin-top:12px"><strong>These addresses will not move</strong> (their proof depends on your account):
+      <ul style="margin:6px 0 0 18px">{{range .Notices.NotMove}}{{$s := .Site}}{{range .Lines}}<li>{{.}} <span class="muted">({{$s}})</span></li>{{end}}{{end}}</ul>
+    </div>{{end}}
+    {{if .Notices.Forms}}
+    <div class="inline-status" role="note" style="margin-top:12px"><strong>Forms:</strong> the form recipients stay as they are, so submissions keep going to:
+      <ul style="margin:6px 0 0 18px">{{range .Notices.Forms}}<li>{{.Site}}: {{range $i, $l := .Lines}}{{if $i}}, {{end}}{{$l}}{{end}}</li>{{end}}</ul>
+    </div>{{end}}
+    <p class="muted" style="margin-top:12px">Any pending domain claims on a host that moves are not moved with it; the sweep drops them later. The edit password, API tokens, tags and shares do not travel: the new owner gets a fresh edit password when they accept.</p>`
+
+var transferTmpl = template.Must(template.New("transfer").Parse(pageHead + `
+<main class="acct">
+  <div class="card">
+    <h1>Transfer sites</h1>
+    <p class="muted">Offer one or more of your sites (up to 50) to another account by email. The person has until the accept-by date to accept; until then you can change or cancel the offer.</p>
+    {{with .Error}}<div class="inline-status err" role="alert" style="margin-top:10px">{{.}}</div>{{end}}
+    {{if or .Hosts .Tags}}<p class="muted" style="margin-top:12px">Select:
+      {{range .Hosts}}<a href="{{.Href}}">every site on {{.Label}}</a> &middot; {{end}}
+      {{range .Tags}}<a href="{{.Href}}">every site tagged {{.Label}}</a> &middot; {{end}}
+      <a href="/account/transfer">none</a></p>{{end}}
+    <form method="post" action="/account/transfer">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      {{if not .Sites}}<p class="muted">You have no sites to transfer.</p>{{end}}
+      <div style="margin-top:12px">{{range .Sites}}
+        <label style="display:block;padding:3px 0;overflow-wrap:anywhere"><input type="checkbox" name="site" value="{{.ID}}"{{if .Checked}} checked{{end}}{{if .Locked}} disabled{{end}}> {{.Label}}{{if .Locked}} <span class="muted">(locked)</span>{{end}}</label>{{end}}
+      </div>
+      <label class="f" for="tr-email">Recipient's email address</label>
+      <input type="email" id="tr-email" name="email" required maxlength="254" autocomplete="off" value="{{.Email}}">
+      <label class="f" for="tr-accept">Accept by (required, at most 365 days ahead)</label>
+      <input type="date" id="tr-accept" name="accept_by" required value="{{.AcceptBy}}">
+      <label class="f" for="tr-avail">Available from (optional, before the accept-by date)</label>
+      <input type="date" id="tr-avail" name="available_from" value="{{.AvailableFrom}}">
+      {{if .HasNotices}}` + transferNoticesBlock + `{{end}}
+      <div style="margin-top:16px"><button class="btn primary" type="submit">Review the offer</button> <a class="btn" href="/account">Back</a></div>
+    </form>
+  </div>
+  {{range .Offers}}
+  <div class="card" id="offer-{{.ID}}">
+    <h3>Offer to {{.Email}}</h3>
+    <p class="muted">{{.State}} &middot; accept by {{.AcceptBy}}{{if .AvailableFrom}} &middot; available from {{.AvailableFrom}}{{end}}</p>
+    {{if .Editable}}
+    <form method="post" action="/account/transfer/{{.ID}}/dates" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-top:10px">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}">
+      <div><label class="f" for="d-a-{{.ID}}">Accept by</label><input type="date" id="d-a-{{.ID}}" name="accept_by" required value="{{.AcceptBy}}"></div>
+      <div><label class="f" for="d-f-{{.ID}}">Available from</label><input type="date" id="d-f-{{.ID}}" name="available_from" value="{{.AvailableFrom}}"></div>
+      <button class="btn small" type="submit">Change dates</button>
+    </form>
+    <form method="post" action="/account/transfer/{{.ID}}/sites" style="margin-top:12px">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}">
+      <p class="muted">Sites in this offer (tick to remove):</p>
+      {{range .Sites}}<label style="display:block;padding:2px 0;overflow-wrap:anywhere"><input type="checkbox" name="remove" value="{{.ID}}"> {{.Label}}</label>{{end}}
+      {{if .Addable}}<p class="muted" style="margin-top:8px">Add more (tick to add):</p>
+      {{range .Addable}}<label style="display:block;padding:2px 0;overflow-wrap:anywhere"><input type="checkbox" name="add" value="{{.ID}}"> {{.Label}}</label>{{end}}{{end}}
+      <div style="margin-top:8px"><button class="btn small" type="submit">Save the sites</button></div>
+    </form>
+    <form method="post" action="/account/transfer/{{.ID}}/cancel" style="margin-top:12px">
+      <input type="hidden" name="csrf" value="{{$.CSRF}}">
+      <button class="btn small danger" type="submit">Cancel this offer</button>
+    </form>
+    {{else}}
+    <ul style="margin:8px 0 0 18px">{{range .Sites}}<li>{{.Label}}</li>{{end}}</ul>
+    <p class="muted" style="margin-top:8px">This offer is being accepted right now and cannot be changed.</p>
+    {{end}}
+  </div>
+  {{end}}
+</main>
+` + pageFoot))
+
+var transferConfirmTmpl = template.Must(template.New("transferconfirm").Parse(pageHead + `
+<main class="acct"><div class="authwrap"><div class="card">
+  <h1>Offer these sites?</h1>
+  <p class="muted">To {{.Email}}. They can accept until {{.AcceptBy}}{{if .AvailableFrom}}, from {{.AvailableFrom}} on{{end}}.</p>
+  <ul style="margin:10px 0 0 18px">{{range .Sites}}<li style="overflow-wrap:anywhere">{{.Label}}</li>{{end}}</ul>
+  {{range .Replace}}
+  <div class="inline-status err" role="alert" style="margin-top:12px"><strong>This replaces an open offer to {{.Email}}</strong> that holds some of these sites:
+    <ul style="margin:6px 0 0 18px">{{range .Sites}}<li style="overflow-wrap:anywhere">{{.Label}}</li>{{end}}</ul>
+    Confirming cancels that offer.
+  </div>{{end}}
+  ` + transferNoticesBlock + `
+  <form method="post" action="/account/transfer" style="margin-top:16px;display:inline">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    {{range .Fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}
+    <input type="hidden" name="step" value="create">
+    {{if .Replace}}<input type="hidden" name="replace" value="1">{{end}}
+    <button class="btn primary" type="submit">{{if .Replace}}Cancel the old offer and offer these sites{{else}}Offer these sites{{end}}</button>
+  </form>
+  <form method="post" action="/account/transfer" style="display:inline">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    {{range .Fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}
+    <input type="hidden" name="step" value="form">
+    <button class="btn" type="submit">Change</button>
+  </form>
+</div></div></main>
+` + pageFoot))
+
+var transferConflictTmpl = template.Must(template.New("transferconflict").Parse(pageHead + `
+<main class="acct"><div class="authwrap"><div class="card">
+  <h1>These sites share a host</h1>
+  <p class="muted">A host travels whole: an address cannot stay with you while another address on the same host moves. These other sites of yours use a host the bundle uses:</p>
+  <ul style="margin:10px 0 0 18px">{{range .Conflicts}}<li style="overflow-wrap:anywhere">{{.Label}}</li>{{end}}</ul>
+  <p class="muted" style="margin-top:12px">Add them to the bundle, or remove their addresses on that host first.</p>
+  <form method="post" action="{{.Action}}" style="margin-top:16px">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    {{range .Fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}
+    <button class="btn primary" type="submit">Add them to the bundle</button>
+    <a class="btn" href="{{.Back}}">Back</a>
+  </form>
+</div></div></main>
 ` + pageFoot))

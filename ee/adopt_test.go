@@ -26,6 +26,7 @@ type adoptFake struct {
 	byteErr   map[string]error
 	throttled map[string]bool
 	notMove   map[string][]string
+	forms     map[string][]string // view id -> form recipients
 	adopted   []adoptCall
 	adoptErr  error
 	trusted   map[string]bool
@@ -41,7 +42,7 @@ func (s *fakeSites) ad() *adoptFake {
 	if s.adopt == nil {
 		s.adopt = &adoptFake{
 			passwords: map[string]string{}, bytes: map[string]int64{}, files: map[string]int{},
-			byteErr: map[string]error{}, throttled: map[string]bool{}, notMove: map[string][]string{},
+			byteErr: map[string]error{}, throttled: map[string]bool{}, notMove: map[string][]string{}, forms: map[string][]string{},
 			trusted: map[string]bool{},
 		}
 	}

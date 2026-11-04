@@ -68,6 +68,7 @@ func (p *provider) PublicRoutes() map[string]http.Handler {
 	p.billingRoutes(routes)
 	p.gdprRoutes(routes)
 	p.zoneRoutes(routes)
+	p.transferRoutes(routes)
 	return routes
 }
 

@@ -85,6 +85,10 @@ type Offer struct {
 	Created       time.Time  `json:"created"`
 	State         string     `json:"state"`
 	Done          []string   `json:"done,omitempty"`
+	// NotifiedAt is when the recipient was first mailed (best effort, only to
+	// a verified account). nil: not yet, so the background loop mails once the
+	// available-from date has passed.
+	NotifiedAt *time.Time `json:"notified_at,omitempty"`
 }
 
 // Invite makes the recipient's account an admin of one site, until Until
