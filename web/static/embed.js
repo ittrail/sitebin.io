@@ -940,7 +940,10 @@ input::placeholder { color: var(--ink-faint); }
       if (owned) {
         this._accountLine("Saved to your account.", "Open my account", true);
       } else if (this.session && !this.demo) {
-        this._accountLine("Sign in, and your next drop renews itself.", "Sign in", false);
+        // An anonymous drop can be adopted into an account: the link carries
+        // the view address only, never the edit password or id.
+        this._accountLine("Keep this site in your account.", "Take it into my account", false,
+          this.instance + "/account/adopt?site=" + encodeURIComponent(body.view_url));
       } else {
         this._accountLine(null);
       }
@@ -964,14 +967,14 @@ input::placeholder { color: var(--ink-faint); }
 
     // _accountLine shows text plus a link to the instance's account page,
     // or hides the line when text is null.
-    _accountLine(text, linkText, owned) {
+    _accountLine(text, linkText, owned, href) {
       const line = this.$("t-acct");
       const link = this.$("t-acct-link");
       line.classList.toggle("hidden", !text);
       line.classList.toggle("owned", !!owned);
       this.$("t-acct-text").textContent = text || "";
       link.textContent = linkText || "";
-      if (text) link.href = this.instance + "/account";
+      if (text) link.href = href || this.instance + "/account";
       else link.removeAttribute("href");
     }
 

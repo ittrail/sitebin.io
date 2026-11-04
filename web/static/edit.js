@@ -196,10 +196,16 @@ $("lockform").addEventListener("submit", async (e) => {
     sessionStorage.setItem(pwKey, sitePw);
     unlock();
   } catch (err) {
-    $("lockerr").textContent =
+    $("lockerr").textContent = err.status >= 500 ? serverDown(err) :
       err.status === 429 ? "Too many attempts — wait a moment." : "Wrong password — check your claim ticket.";
   }
 });
+
+// serverDown is what a 5xx shows: the server's own message, or a generic one.
+function serverDown(err) {
+  return err.message && err.message !== "Service Unavailable" ? err.message :
+    "The server could not answer, try again in a minute.";
+}
 
 // boot opens the site without asking whenever it can: for its signed-in
 // owner (the session), or with a password this tab already entered. Only
@@ -209,6 +215,16 @@ $("lockform").addEventListener("submit", async (e) => {
     site = await api("GET", "");
     unlock();
   } catch (err) {
+    if (err.status >= 500) {
+      // The server could not answer: that says nothing about the password,
+      // so keep it and do not show the lock screen.
+      $("app").classList.add("hidden");
+      $("lock").classList.add("hidden");
+      const m = $("boot-error");
+      m.textContent = serverDown(err);
+      m.classList.remove("hidden");
+      return;
+    }
     if (sitePw) {
       sessionStorage.removeItem(pwKey);
       sitePw = "";
@@ -249,6 +265,14 @@ function render() {
     if (site.last_seen) meta += " (last " + new Date(site.last_seen).toLocaleString() + ")";
   }
   $("site-meta").textContent = meta;
+
+  // An admin manages the site for its owner. Hiding is cosmetic: the API
+  // refuses the owner-only actions anyway.
+  const admin = site.role === "admin";
+  $("admin-banner").classList.toggle("hidden", !admin);
+  $("admin-shared-by").textContent = admin ? "Shared by " + (site.shared_by || "the owner") : "";
+  $("expiry-opt").classList.toggle("hidden", admin);
+  $("danger-zone").classList.toggle("hidden", admin);
 
   renderFiles();
 

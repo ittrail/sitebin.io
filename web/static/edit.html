@@ -22,6 +22,7 @@
 
 <!-- lock screen: hidden until the page knows it is needed — a signed-in
      owner never sees it -->
+<div class="ctmsg note hidden" id="boot-error" role="alert" style="max-width:520px;margin:48px auto"></div>
 <div class="lockwrap hidden" id="lock">
   <div class="card">
     <h1>Unlock this site</h1>
@@ -52,6 +53,10 @@
     <h1 id="site-id">…</h1>
     <a class="viewlink" id="view-link" href="#" target="_blank" rel="noopener">open site ↗</a>
     <span class="meta" id="site-meta"></span>
+  </div>
+  <div class="ctmsg note hidden" id="admin-banner">
+    <strong id="admin-shared-by"></strong>
+    <div>You manage this site as an admin. Only the owner can delete it, change its expiry or transfer it.</div>
   </div>
 
   <nav class="tabs hidden" role="tablist" aria-label="Site sections" id="tabs"></nav>
@@ -222,7 +227,7 @@
           </div>
         </div>
       </div>
-      <div class="opt" style="margin-top:16px">
+      <div class="opt" id="expiry-opt" style="margin-top:16px">
         <label for="e-expires">Expires</label>
         <div class="row">
           <input type="datetime-local" id="e-expires" style="max-width:250px">
@@ -290,7 +295,7 @@
       </div>
     </section>
 
-    <section class="card" style="border-color:rgba(242,109,109,.25)">
+    <section class="card" id="danger-zone" style="border-color:rgba(242,109,109,.25)">
       <h3 style="color:var(--danger)">Danger zone</h3>
       <div class="row">
         <button class="btn danger" id="delete-site">Delete this site</button>

@@ -523,7 +523,7 @@ const gitTab = (() => {
 
   function renderDanger() {
     const box = q("git-danger");
-    box.classList.toggle("hidden", !S.info.exists);
+    box.classList.toggle("hidden", !S.info.exists || S.info.role === "admin");
     const btn = q("git-delete");
     const hint = q("git-delete-hint");
     const size = fmtBytes(site.usage.git_bytes || 0);
