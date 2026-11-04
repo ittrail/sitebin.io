@@ -468,8 +468,8 @@ func (p *provider) recordMoved(run *acceptRun, from, to *account.Account, by ext
 // bundle (limitsCheck), so it is not asked again per site.
 func (p *provider) transferGrant(acc *account.Account) (ext.CreateGrant, error) {
 	if p.cfg.Mode != eeconfig.ModeTiers {
-		gitOn := true
-		return ext.CreateGrant{OwnerAccountID: acc.ID, Git: &gitOn}, nil
+		on := true
+		return ext.CreateGrant{OwnerAccountID: acc.ID, Git: &on, Analytics: &on}, nil
 	}
 	t, err := p.effectiveTierStrict(acc)
 	if err != nil {

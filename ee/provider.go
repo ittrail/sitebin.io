@@ -400,8 +400,8 @@ func (p *provider) QuotaFor(ownerAccountID string) (ext.CreateGrant, bool, error
 		return ext.CreateGrant{}, false, err
 	}
 	if p.cfg.Mode != eeconfig.ModeTiers {
-		gitOn := true
-		return ext.CreateGrant{OwnerAccountID: acc.ID, Git: &gitOn}, true, nil
+		on := true
+		return ext.CreateGrant{OwnerAccountID: acc.ID, Git: &on, Analytics: &on}, true, nil
 	}
 	// Strict: the cleanup sweep deletes on this answer. A PayGate outage or an
 	// account on a tier the config does not have both surface as an error, and
@@ -417,8 +417,8 @@ func (p *provider) QuotaFor(ownerAccountID string) (ext.CreateGrant, bool, error
 // grant carrying its per-site quota caps.
 func (p *provider) grantForAccount(acc *account.Account) (ext.CreateGrant, error) {
 	if p.cfg.Mode != eeconfig.ModeTiers {
-		gitOn := true
-		return ext.CreateGrant{OwnerAccountID: acc.ID, Git: &gitOn}, nil // accounts mode: ownership and git
+		on := true
+		return ext.CreateGrant{OwnerAccountID: acc.ID, Git: &on, Analytics: &on}, nil // accounts mode: ownership, git and analytics
 	}
 	// Creation is the only moment a downgraded customer is guaranteed to come
 	// back for. Their existing sites have no expiry, so the cleanup sweep skips
@@ -450,6 +450,7 @@ func (p *provider) grantForAccount(acc *account.Account) (ext.CreateGrant, error
 func grantFromTier(owner string, t eeconfig.Tier) ext.CreateGrant {
 	webdav := t.WebDAV
 	git := t.Git
+	analytics := t.Analytics
 	domains := t.CustomDomains
 	forms := t.MaxForms
 	return ext.CreateGrant{
@@ -460,6 +461,7 @@ func grantFromTier(owner string, t eeconfig.Tier) ext.CreateGrant {
 		MaxCustomDomain: &domains,
 		WebDAV:          &webdav,
 		Git:             &git,
+		Analytics:       &analytics,
 		MaxForms:        &forms,
 		// An anonymous site is never trusted, whatever its tier says: the
 		// anonymous tier is a quota bundle, not a statement about who uploaded.

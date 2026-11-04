@@ -150,6 +150,7 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 		}
 		reconcileTrust(st, site)
 		reconcileGit(st, site)
+		reconcileAnalytics(st, site)
 		// The second half of custom-domain verification: claims whose record
 		// appeared since the owner asked are attached, verified domains are
 		// re-checked. Lookup errors change nothing (see store.ReconcileDomains).
@@ -305,6 +306,7 @@ func reconcile(st *store.Store, site *store.Site, now time.Time) (keep bool, err
 		Domains:    grant.MaxCustomDomain,
 		WebDAV:     grant.WebDAV,
 		Git:        grant.Git,
+		Analytics:  grant.Analytics,
 		Forms:      grant.MaxForms,
 	}, 0); err != nil {
 		return false, fmt.Errorf("apply quota: %w", err)

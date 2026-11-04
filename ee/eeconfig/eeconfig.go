@@ -99,6 +99,7 @@ type Tier struct {
 	MaxSites      int    `json:"max_sites"`
 	WebDAV        bool   `json:"webdav"`
 	Git           bool   `json:"git,omitempty"`
+	Analytics     bool   `json:"analytics,omitempty"`
 	CustomDomains int    `json:"custom_domains"`
 	MaxExpiryDays int    `json:"max_expiry_days"`
 	// MaxContainers caps the services an account runs across ALL its

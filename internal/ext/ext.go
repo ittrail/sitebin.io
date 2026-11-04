@@ -316,6 +316,7 @@ type CreateGrant struct {
 	MaxCustomDomain *int  // nil = inherit global; value (incl. 0) = explicit cap
 	WebDAV          *bool // nil = inherit global
 	Git             *bool // nil = no git repository for the site
+	Analytics       *bool // nil = no site analytics
 	// MaxForms caps the site's email forms (tier max_forms). nil = inherit the
 	// instance default; a value, 0 included, is an explicit cap.
 	MaxForms *int

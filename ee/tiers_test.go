@@ -938,3 +938,16 @@ func TestAccountsModeGrantsGit(t *testing.T) {
 		t.Fatalf("grantForAccount Git = %v err=%v, want true", g.Git, err)
 	}
 }
+
+func TestGrantFromTierCopiesAnalytics(t *testing.T) {
+	var tier eeconfig.Tier
+	if err := json.Unmarshal([]byte(`{"id":"pro","analytics":true}`), &tier); err != nil {
+		t.Fatal(err)
+	}
+	if g := grantFromTier("acct", tier); g.Analytics == nil || !*g.Analytics {
+		t.Fatalf("Analytics = %v, want true", g.Analytics)
+	}
+	if g := grantFromTier("acct", eeconfig.Tier{ID: "free"}); g.Analytics == nil || *g.Analytics {
+		t.Fatalf("Analytics = %v for a tier without analytics, want an explicit false", g.Analytics)
+	}
+}

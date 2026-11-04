@@ -16,6 +16,7 @@ func stampCaps(m *store.Meta, g ext.CreateGrant) {
 	m.QuotaDomains = g.MaxCustomDomain
 	m.QuotaWebDAV = g.WebDAV
 	m.QuotaGit = g.Git
+	m.QuotaAnalytics = g.Analytics
 	m.QuotaForms = g.MaxForms
 }
 

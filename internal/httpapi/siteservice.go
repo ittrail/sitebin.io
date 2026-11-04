@@ -403,6 +403,7 @@ func quotaFromGrant(g ext.CreateGrant) store.Quota {
 		Domains:    g.MaxCustomDomain,
 		WebDAV:     g.WebDAV,
 		Git:        g.Git,
+		Analytics:  g.Analytics,
 		Forms:      g.MaxForms,
 	}
 }
