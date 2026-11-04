@@ -889,3 +889,52 @@ func TestPlanUnknownIsAnsweredAsSuch(t *testing.T) {
 		t.Error("an unknown plan changed the share")
 	}
 }
+
+// operatorSharing is the sharing fake that also knows the operator.
+type operatorSharing struct {
+	*sharingFake
+	ops map[string]bool
+}
+
+func (o *operatorSharing) IsOperator(id string) bool { return o.ops[id] }
+
+var _ ext.OperatorAccounts = (*operatorSharing)(nil)
+
+// An admin has no standing on a site whose OWNER is the operator (the
+// operator's exemptions would be lent to the admin), but the operator as an
+// ADMIN elsewhere stands like anyone: the rule is keyed on the owner only.
+func TestStandingNeedsAnOwnerWhoIsNotTheOperator(t *testing.T) {
+	e := newEnv(t, nil)
+	f := registerSharing(t, ext.CreateGrant{Trusted: true})
+	_, _, viewID := sharedSite(t, e, f)
+	ops := map[string]bool{}
+	ext.Reset()
+	ext.Register(&operatorSharing{sharingFake: f, ops: ops})
+	site, err := e.st.ByViewID(viewID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name string
+		ops  map[string]bool
+		want standing
+	}{
+		{"nobody is the operator", map[string]bool{}, standAdmin},
+		{"the owner is the operator", map[string]bool{"acct-1": true}, standNone},
+		{"the admin is the operator", map[string]bool{"acct-2": true}, standAdmin},
+	} {
+		for k := range ops {
+			delete(ops, k)
+		}
+		for k, v := range c.ops {
+			ops[k] = v
+		}
+		got, err := e.api.accountStanding(site, "acct-2")
+		if err != nil || got != c.want {
+			t.Errorf("%s: standing = %v, %v; want %v", c.name, got, err, c.want)
+		}
+	}
+	if got, _ := e.api.accountStanding(site, "acct-1"); got != standOwner {
+		t.Errorf("owner = %v", got)
+	}
+}

@@ -403,8 +403,11 @@ func (s standing) role() string {
 //   - Admin: an account the site's meta lists as a live admin
 //     (store.Meta.LiveAdmin: no end date, or one still ahead) while the
 //     extension's SharingAllowed is true for BOTH the owner and that
-//     account. Without a provider implementing ext.SharingAccounts there is
-//     no admin standing at all.
+//     account, and the owner is not the operator (ext.OperatorAccounts, when
+//     the provider has it, asked only after the meta lists the account). The
+//     operator account as an ADMIN of someone else's site stands as any other.
+//     Without a provider implementing ext.SharingAccounts there is no admin
+//     standing at all.
 //
 // The error is errSharingUnknown, and only that: a listed admin whose plan
 // (or whose owner's plan) could not be asked. It refuses this one request —
@@ -440,6 +443,12 @@ func (a *API) standingWith(site *store.Site, accountID string, plans planCache) 
 	}
 	sa, ok := sharingProvider()
 	if !ok {
+		return standNone, nil
+	}
+	// An operator-owned site carries the operator's exemptions (operator
+	// zones, no scanner lock); an admin there would borrow them. Keyed on
+	// the OWNER only: the operator as an admin elsewhere lends nothing.
+	if op, ok := sa.(ext.OperatorAccounts); ok && op.IsOperator(m.OwnerAccountID) {
 		return standNone, nil
 	}
 	for _, id := range []string{m.OwnerAccountID, accountID} {

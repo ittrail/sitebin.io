@@ -681,9 +681,11 @@ content is in the rows above and below.)
 - **The recipient is told what travels:** an expiry date the sender chose
   (card, offer mail, result page) and a view password (result page).
 - **Shares:** the owner's End form names a share by an opaque reference, never
-  the admin's account id. A paused share says why on both sides. The
-  operator account's plan never shares, so an owner who becomes the operator
-  pauses their shares.
+  the admin's account id. A paused share says why on both sides. An
+  operator-owned site grants no admin standing (the standing rule asks
+  `ext.OperatorAccounts` for the owner), so an owner who becomes the operator
+  pauses their shares; the operator account itself may still adopt, transfer,
+  accept and be an admin on another account's site.
 - **Account deletion** links the markers a site lost before its lock check,
   ends offers and invitations made to the account as a lapse does (never
   "cancelled"), and cleans up after the deleted sites' admins only after

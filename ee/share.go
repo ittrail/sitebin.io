@@ -136,6 +136,11 @@ func (p *provider) managedBy(acc *account.Account, viewID string) (ownerID strin
 	}) {
 		return "", false, false
 	}
+	// An operator-owned site grants no admin standing (the core asks the
+	// same of ext.OperatorAccounts); keyed on the owner, never the admin.
+	if p.IsOperator(ownerID) {
+		return "", false, false
+	}
 	for _, id := range []string{ownerID, acc.ID} {
 		if ok, err := p.SharingAllowed(id); err != nil || !ok {
 			return "", false, false
@@ -230,8 +235,8 @@ func (p *provider) handleShareInvite(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	// The operator's plan answer is "no" (SharingAllowed) for this reason,
-	// which is said in its own words rather than as a plan to upgrade.
+	// An operator-owned site is not shared (the standing rule refuses its
+	// admins), said in its own words rather than as a plan to upgrade.
 	if p.IsOperator(acc.ID) {
 		p.renderShareRefusal(w, refuse("Sites owned by the operator account cannot be shared"))
 		return

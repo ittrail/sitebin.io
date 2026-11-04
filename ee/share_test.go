@@ -889,8 +889,11 @@ func TestShareOfAnOwnerWhoBecomesTheOperatorPauses(t *testing.T) {
 	}
 	e.p.cfg.AdminAccounts = []string{"pro@example.com"}
 	e.setTier(e.acc, "admin")
-	if ok, err := e.p.SharingAllowed(e.acc.ID); ok || err != nil {
-		t.Errorf("SharingAllowed(operator) = %v, %v; want false", ok, err)
+	if ok, err := e.p.SharingAllowed(e.acc.ID); !ok || err != nil {
+		t.Errorf("SharingAllowed(operator) = %v, %v; want true (the plan has sharing)", ok, err)
+	}
+	if _, _, admin := e.p.managedBy(e.to, shareSite); admin {
+		t.Error("managedBy gives an admin standing on an operator-owned site")
 	}
 	if _, admin := e.p.manages(e.to, shareSite); admin {
 		t.Error("the operator's share still stands")
@@ -1025,5 +1028,47 @@ func TestShareInviteMailPromisesNoSharedTags(t *testing.T) {
 	m := e.mailsTo(takerEmail, invSubject)
 	if len(m) != 1 || strings.Contains(strings.ToLower(m[0]), "tags") {
 		t.Errorf("mail = %v", m)
+	}
+}
+
+// The operator account is only refused as an OWNER whose site is shared. As
+// itself it may send and accept a transfer, and be an admin on someone
+// else's site: its exemptions are lent by owning, never by being an admin.
+func TestOperatorAccountMayTransferAcceptAndBeAnAdmin(t *testing.T) {
+	e := newShareEnv(t)
+	// The recipient becomes the operator.
+	e.p.cfg.AdminAccounts = []string{takerEmail}
+	e.setTier(e.to, "admin")
+	if !e.p.IsOperator(e.to.ID) {
+		t.Fatal("fixture: the recipient is not the operator")
+	}
+
+	// (c) an admin on a non-operator account's site.
+	e.shared(nil)
+	if _, owner, admin := e.p.managedBy(e.to, shareSite); owner || !admin {
+		t.Errorf("operator as admin: owner=%v admin=%v, want admin", owner, admin)
+	}
+	if body := e.dashboard(e.toCookie); strings.Contains(body, "Paused:") {
+		t.Errorf("the operator admin's row reads a pause:\n%s", body)
+	}
+
+	// (b) accepts a transfer.
+	e.site(tid(7))
+	o := e.offer(tid(7))
+	if w := e.takeEnv.accept(o); w.Code >= 400 {
+		t.Errorf("the operator's accept = %d (%s)", w.Code, w.Body)
+	}
+	if got := e.current(o).State; got == ownership.StateOpen {
+		t.Errorf("the offer is still open after the operator accepted (%s)", got)
+	}
+
+	// (a) sends a transfer of its own site: no plan refusal.
+	e.fs.infos[tid(8)] = ext.SiteInfo{ViewID: tid(8), Mode: "webserver", Owner: e.to.ID, ViewURL: "https://" + tid(8) + ".sitebin.app"}
+	if err := linkOwned(e.p, e.to, tid(8)); err != nil {
+		t.Fatal(err)
+	}
+	w := e.postTo(e.toCookie, e.to, "/account/transfer", offerForm("someone@example.com", daysAhead(5), "", tid(8)))
+	if w.Code == http.StatusForbidden || strings.Contains(w.Body.String(), "/account#plan") {
+		t.Errorf("the operator's transfer was refused on the plan: %d (%s)", w.Code, w.Body)
 	}
 }

@@ -100,9 +100,12 @@ the optional `ext.SessionAccounts`); the edit password.
   admin listed in `Meta.Admins` (`Until` nil or ahead) while
   `ext.SharingAccounts.SharingAllowed` says BOTH the owner's and the admin's
   plan share. No provider, no admins. An unknown plan (a lookup error) is a 503
-  for that one request, never a pass and never an ended share. The operator
-  account's plan never shares (`SharingAllowed` is false for it), so an owner
-  who becomes the operator pauses every share they made.
+  for that one request, never a pass and never an ended share. An
+  operator-owned site grants no admin standing (the standing rule asks
+  `ext.OperatorAccounts` for the OWNER, after the meta lists the admin), so an
+  owner who becomes the operator pauses every share they made; the operator
+  account itself may still adopt, transfer, accept and be an admin on another
+  account's site.
 - **An admin may do all the owner may** except the owner-only actions. In the
   core, `refuseUnlessOwner` / `ownerOnly` (`internal/httpapi/sharing.go`) refuse
   role `admin` ONLY, for: delete the site, set/clear `expires_at` (checked per

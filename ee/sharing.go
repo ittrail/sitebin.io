@@ -29,6 +29,9 @@ var _ ext.SharingAccounts = (*provider)(nil)
 // tiers to withhold a feature, so a live account may share. In tiers mode an
 // unknown plan is an ERROR, never false: the core then refuses the admin
 // standing for that one request and ends no share on a failed lookup.
+// It answers about the PLAN only: that the owner is the operator is a
+// separate, owner-keyed rule (the core's standing rule, managedBy).
+// The operator account itself may adopt, transfer, accept and be an admin.
 func (p *provider) SharingAllowed(accountID string) (bool, error) {
 	if !p.cfg.Enabled() {
 		return false, nil // open mode has no accounts to share between
@@ -41,13 +44,6 @@ func (p *provider) SharingAllowed(accountID string) (bool, error) {
 		return false, err
 	}
 	if acc.Suspended() {
-		return false, nil
-	}
-	// An operator's sites carry the operator's exemptions; sharing them
-	// would lend those to another account. Checked here, not only when an
-	// invitation is made, so an owner who becomes the operator later pauses
-	// every share they made.
-	if p.isAdmin(acc) {
 		return false, nil
 	}
 	switch p.cfg.Mode {
