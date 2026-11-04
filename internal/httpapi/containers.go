@@ -190,7 +190,7 @@ func (a *API) containerAction(w http.ResponseWriter, r *http.Request, site *stor
 	}
 	noteOf(r).detail = action
 	a.log.Info("container action", "id", site.ViewID, "owner", site.Meta.OwnerAccountID, "action", action)
-	writeJSON(w, 202, a.sitePayload(site))
+	writeJSON(w, 202, a.payloadFor(r, site))
 }
 
 // maxLogTail bounds how much of a service's log one request returns.

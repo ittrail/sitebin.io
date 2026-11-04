@@ -107,10 +107,13 @@ func (o mcpOps) mcpError(err error) error {
 
 // ---- site addressing ----
 
-// openSite authenticates one tool call against one site. It is withEditAuth's
-// rule set, reached without an http.ResponseWriter:
+// openSiteAs authenticates one tool call against one site and returns the
+// standing the connection's account has on it (accountStanding: the owner or
+// an admin), or standNone when the edit password opened it. It is
+// withEditAuth's rule set, reached without an http.ResponseWriter:
 //
-//   - an account token that owns the site stands in for the edit password;
+//   - an account token or OAuth grant whose account stands on the site (its
+//     owner, or a live admin) stands in for the edit password;
 //   - otherwise the edit password is verified through the same rate-limited,
 //     cached path the API and FTP use;
 //   - and a site created without an account has no API on a gated instance,
@@ -118,61 +121,62 @@ func (o mcpOps) mcpError(err error) error {
 //
 // The last rule is where MCP is deliberately stricter than the JSON API: the
 // API lets Sitebin's own pages through on browser fetch metadata, and an MCP
-// client is never one of Sitebin's own pages.
+// client is never one of Sitebin's own pages. MCP never reads a session.
 //
 // A locked site is refused once the caller has authenticated, exactly as
 // withEditAuth refuses it; get_site alone opens one (openSiteEvenLocked), so
 // an agent can see and report the lock.
-func (o mcpOps) openSite(auth mcp.Auth, ref mcp.SiteRef) (*store.Site, error) {
-	site, err := o.openSiteEvenLocked(auth, ref)
+func (o mcpOps) openSiteAs(auth mcp.Auth, ref mcp.SiteRef) (*store.Site, standing, error) {
+	site, st, err := o.openSiteEvenLocked(auth, ref)
 	if err != nil {
-		return nil, err
+		return nil, standNone, err
 	}
 	if site.Meta.IsLocked() {
-		return nil, errors.New(store.LockedMessage(site.Meta.Locked))
+		return nil, standNone, errors.New(store.LockedMessage(site.Meta.Locked))
 	}
-	return site, nil
+	return site, st, nil
 }
 
-// openSiteEvenLocked is openSite without the lock refusal. Only get_site uses
-// it; its result then carries the lock and no files.
-func (o mcpOps) openSiteEvenLocked(auth mcp.Auth, ref mcp.SiteRef) (*store.Site, error) {
+// openSiteEvenLocked is openSiteAs without the lock refusal. Only get_site
+// uses it; its result then carries the lock and no files.
+func (o mcpOps) openSiteEvenLocked(auth mcp.Auth, ref mcp.SiteRef) (*store.Site, standing, error) {
 	if strings.TrimSpace(ref.EditID) == "" {
-		return nil, errors.New("edit_id is required")
+		return nil, standNone, errors.New("edit_id is required")
 	}
 	site, err := o.a.st.ByEditID(ref.EditID)
 	if err != nil {
-		return nil, o.mcpError(err)
+		return nil, standNone, o.mcpError(err)
 	}
-	if o.a.accountStands(site, auth.AccountID) {
-		return site, nil
+	if st := o.a.accountStanding(site, auth.AccountID); st != standNone {
+		return site, st, nil
 	}
 	if ref.EditPassword == "" {
 		if auth.AccountID != "" {
-			return nil, errors.New("this site is not owned by the connected account: pass its edit_password, or use list_sites to see the sites this token can manage")
+			return nil, standNone, errors.New("this site is not owned by the connected account: pass its edit_password, or use list_sites to see the sites this token can manage")
 		}
-		return nil, errors.New("edit_password is required for this site — it was returned once by create_site")
+		return nil, standNone, errors.New("edit_password is required for this site — it was returned once by create_site")
 	}
 	if strings.HasPrefix(ref.EditPassword, ids.UploadTokenPrefix) {
-		return nil, errors.New("that is an upload token from open_upload: it works only with your own HTTP client on its upload_url or webdav_url — pass the site's edit_password here, or connect with an account API token")
+		return nil, standNone, errors.New("that is an upload token from open_upload: it works only with your own HTTP client on its upload_url or webdav_url — pass the site's edit_password here, or connect with an account API token")
 	}
 	switch o.a.verifyEditIP(auth.ClientIP, site, ref.EditPassword) {
 	case verifyOK:
 		if o.a.gatedAnonymous(site) {
-			return nil, errors.New("this site was created without an account, so it cannot be managed by a script or an agent — create it with an account API token at " + o.a.apiAccountHint() + " to automate it")
+			return nil, standNone, errors.New("this site was created without an account, so it cannot be managed by a script or an agent — create it with an account API token at " + o.a.apiAccountHint() + " to automate it")
 		}
-		return site, nil
+		return site, standNone, nil
 	case verifyThrottled:
-		return nil, errors.New("too many password attempts for this site, slow down")
+		return nil, standNone, errors.New("too many password attempts for this site, slow down")
 	default:
-		return nil, errors.New("wrong edit_password")
+		return nil, standNone, errors.New("wrong edit_password")
 	}
 }
 
 // ---- results ----
 
-// siteResult maps a site onto the struct every site-shaped tool returns.
-func (o mcpOps) siteResult(site *store.Site) *mcp.SiteResult {
+// siteResult maps a site onto the struct every site-shaped tool returns, for
+// the caller openSiteAs let in as st: an admin's tags are the admin's own.
+func (o mcpOps) siteResult(site *store.Site, auth mcp.Auth, st standing) *mcp.SiteResult {
 	files, err := o.a.st.ListFiles(site)
 	if err != nil || site.Meta.IsLocked() {
 		// A locked site's content stays out of reach, its file names too.
@@ -186,7 +190,7 @@ func (o mcpOps) siteResult(site *store.Site) *mcp.SiteResult {
 		ViewURL:       o.a.cfg.ViewURL(m.ID),
 		EditURL:       o.a.cfg.EditURL(m.EditID),
 		Name:          m.Name,
-		Tags:          append([]string(nil), m.Tags...),
+		Tags:          o.a.tagsFor(site, st.role(), auth.AccountID),
 		Mode:          m.Mode,
 		EntryFile:     m.EntryFile,
 		SPAFallback:   m.SPAFallback,
@@ -282,7 +286,7 @@ func (o mcpOps) CreateSite(_ context.Context, auth mcp.Auth, in mcp.CreateInput)
 	// The MCP request is handed to createSiteWith so the extension resolves the
 	// caller's tier from the same Authorization header the tools authenticated
 	// with. browserOK is false: an MCP client is never one of Sitebin's pages.
-	act := mcpActor(auth, nil)
+	act := mcpActor(auth, nil, standNone)
 	site, editPassword, warnings, err := o.a.createSiteWith(auth.Request, createOpts{
 		origin:    store.OriginMCP,
 		browserOK: false,
@@ -301,7 +305,7 @@ func (o mcpOps) CreateSite(_ context.Context, auth mcp.Auth, in mcp.CreateInput)
 	if err != nil {
 		return nil, o.mcpError(err)
 	}
-	res := o.siteResult(site)
+	res := o.siteResult(site, auth, standNone) // the creator: the owner, or nobody
 	res.EditPassword = editPassword
 	res.Warnings = warnings
 	return res, nil
@@ -323,6 +327,7 @@ func (o mcpOps) ListSites(_ context.Context, auth mcp.Auth) ([]mcp.SiteSummary, 
 		return nil, errors.New("could not read this account's sites")
 	}
 	out := make([]mcp.SiteSummary, 0, len(ids))
+	listed := make(map[string]bool, len(ids))
 	for _, id := range ids {
 		site, err := o.a.st.ByViewID(id)
 		if err != nil {
@@ -331,63 +336,91 @@ func (o mcpOps) ListSites(_ context.Context, auth mcp.Auth) ([]mcp.SiteSummary, 
 			// store. A stale id is a row to skip, not a failed listing.
 			continue
 		}
-		u, _ := o.a.st.SiteUsage(site)
-		out = append(out, mcp.SiteSummary{
-			ID:        site.Meta.ID,
-			EditID:    site.Meta.EditID,
-			ViewURL:   o.a.cfg.ViewURL(site.Meta.ID),
-			Name:      site.Meta.Name,
-			Tags:      append([]string(nil), site.Meta.Tags...),
-			Mode:      site.Meta.Mode,
-			Bytes:     u.Bytes(),
-			FileCount: u.Files,
-			Domains:   site.Meta.CustomDomains,
-			CreatedAt: site.Meta.CreatedAt,
-			ExpiresAt: site.Meta.ExpiresAt,
-			Origin:    site.Meta.Origin,
-			Locked:    mcpLock(site.Meta.Locked),
-		})
+		listed[site.ViewID] = true
+		out = append(out, o.siteSummary(site, append([]string(nil), site.Meta.Tags...), ""))
+	}
+	// Then the sites shared with the account, in the extension's order:
+	// each only where the account's standing on it really is admin
+	// (accountStanding, from meta.json and both plans), so a share that
+	// ended, a stale index entry or a site the account owns is never shown
+	// as shared. An admin's row carries the admin's own tags.
+	if sa, ok := sharingProvider(); ok {
+		for _, id := range sa.SharedSiteIDs(auth.AccountID) {
+			if listed[id] {
+				continue
+			}
+			site, err := o.a.st.ByViewID(id)
+			if err != nil || o.a.accountStanding(site, auth.AccountID) != standAdmin {
+				continue
+			}
+			listed[site.ViewID] = true
+			out = append(out, o.siteSummary(site, sa.AdminTags(auth.AccountID, site.ViewID), roleAdmin))
+		}
 	}
 	return out, nil
 }
 
+// siteSummary is one list_sites row, with the tags the caller sees and its
+// role ("" on the caller's own site).
+func (o mcpOps) siteSummary(site *store.Site, tags []string, role string) mcp.SiteSummary {
+	u, _ := o.a.st.SiteUsage(site)
+	return mcp.SiteSummary{
+		ID:        site.Meta.ID,
+		EditID:    site.Meta.EditID,
+		ViewURL:   o.a.cfg.ViewURL(site.Meta.ID),
+		Name:      site.Meta.Name,
+		Tags:      tags,
+		Mode:      site.Meta.Mode,
+		Bytes:     u.Bytes(),
+		FileCount: u.Files,
+		Domains:   site.Meta.CustomDomains,
+		CreatedAt: site.Meta.CreatedAt,
+		ExpiresAt: site.Meta.ExpiresAt,
+		Origin:    site.Meta.Origin,
+		Locked:    mcpLock(site.Meta.Locked),
+		Role:      role,
+	}
+}
+
 func (o mcpOps) GetSite(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) (*mcp.SiteResult, error) {
-	site, err := o.openSiteEvenLocked(auth, ref)
+	site, st, err := o.openSiteEvenLocked(auth, ref)
 	if err != nil {
 		return nil, err
 	}
-	return o.siteResult(site), nil
+	return o.siteResult(site, auth, st), nil
 }
 
 func (o mcpOps) UpdateSite(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, s mcp.Settings) (*mcp.SiteResult, error) {
-	site, err := o.openSite(auth, ref)
+	site, st, err := o.openSiteAs(auth, ref)
 	if err != nil {
 		return nil, err
 	}
 	set := settingsToUpdateSet(s)
-	if err := o.a.applySettings(site, set); err != nil {
+	// The API's own path: an admin is refused expires_at before anything is
+	// written, and an admin's tags are the admin's own.
+	if err := o.a.applySettingsAs(site, set, mcpActor(auth, site, st)); err != nil {
 		return nil, o.mcpError(err)
 	}
-	o.a.recordMCP(auth, site, provenance.ActionSettings, 0, settingsDetail(set))
+	o.a.recordMCP(auth, site, st, provenance.ActionSettings, 0, settingsDetail(set))
 	if err := o.a.syncViewerLayout(site); err != nil {
 		return nil, o.mcpError(err)
 	}
-	return o.siteResult(site), nil
+	return o.siteResult(site, auth, st), nil
 }
 
 func (o mcpOps) ListFiles(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) ([]mcp.FileInfo, error) {
-	site, err := o.openSite(auth, ref)
+	site, st, err := o.openSiteAs(auth, ref)
 	if err != nil {
 		return nil, err
 	}
-	return o.siteResult(site).Files, nil
+	return o.siteResult(site, auth, st).Files, nil
 }
 
 // ReadFile returns text as text and anything else as base64. The choice is
 // made from the bytes, not the extension: a .txt holding a JPEG is still a
 // JPEG, and handing invalid UTF-8 to a model as "text" corrupts it silently.
 func (o mcpOps) ReadFile(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, path string) (mcp.File, error) {
-	site, err := o.openSite(auth, ref)
+	site, _, err := o.openSiteAs(auth, ref)
 	if err != nil {
 		return mcp.File{}, err
 	}
@@ -408,7 +441,7 @@ func (o mcpOps) ReadFile(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, path
 }
 
 func (o mcpOps) WriteFiles(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, files []mcp.DecodedFile, replace bool) (*mcp.SiteResult, error) {
-	site, err := o.openSite(auth, ref)
+	site, st, err := o.openSiteAs(auth, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -428,7 +461,7 @@ func (o mcpOps) WriteFiles(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, fi
 		if err := rep.Commit(); err != nil {
 			if errors.Is(err, store.ErrHeld) {
 				// committed, as evidence: the trail names it
-				o.a.recordMCP(auth, site, provenance.ActionReplace, len(files), mcpPaths(files)+", held for review")
+				o.a.recordMCP(auth, site, st, provenance.ActionReplace, len(files), mcpPaths(files)+", held for review")
 			}
 			return nil, o.mcpError(err)
 		}
@@ -442,7 +475,7 @@ func (o mcpOps) WriteFiles(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, fi
 					done, detail = i+1, ", held for review"
 				}
 				if done > 0 {
-					o.a.recordMCP(auth, site, provenance.ActionUpload, done, mcpPaths(files[:done])+detail)
+					o.a.recordMCP(auth, site, st, provenance.ActionUpload, done, mcpPaths(files[:done])+detail)
 				}
 				return nil, o.mcpError(err)
 			}
@@ -452,45 +485,48 @@ func (o mcpOps) WriteFiles(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, fi
 	if replace {
 		action = provenance.ActionReplace
 	}
-	o.a.recordMCP(auth, site, action, len(files), mcpPaths(files))
+	o.a.recordMCP(auth, site, st, action, len(files), mcpPaths(files))
 	if err := o.a.syncViewerLayout(site); err != nil {
 		return nil, o.mcpError(err)
 	}
-	return o.siteResult(site), nil
+	return o.siteResult(site, auth, st), nil
 }
 
 func (o mcpOps) DeleteFile(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, path string) (*mcp.SiteResult, error) {
-	site, err := o.openSite(auth, ref)
+	site, st, err := o.openSiteAs(auth, ref)
 	if err != nil {
 		return nil, err
 	}
 	if err := o.a.st.DeleteFile(site, path); err != nil {
 		return nil, o.mcpError(err)
 	}
-	o.a.recordMCP(auth, site, provenance.ActionDeleteFile, 0, path)
+	o.a.recordMCP(auth, site, st, provenance.ActionDeleteFile, 0, path)
 	if err := o.a.syncViewerLayout(site); err != nil {
 		return nil, o.mcpError(err)
 	}
-	return o.siteResult(site), nil
+	return o.siteResult(site, auth, st), nil
 }
 
 func (o mcpOps) DeleteSite(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) error {
-	site, err := o.openSite(auth, ref)
+	site, st, err := o.openSiteAs(auth, ref)
 	if err != nil {
 		return err
+	}
+	if err := ownerOnly(st.role()); err != nil {
+		return o.mcpError(err)
 	}
 	if err := o.a.st.Delete(site); err != nil {
 		return o.mcpError(err)
 	}
 	o.a.verifyCache.Drop(site.EditID + ":")
 	o.a.uploads.revokeSite(site.ViewID)
-	o.a.recordMCP(auth, site, provenance.ActionSiteDelete, 0, "")
+	o.a.recordMCP(auth, site, st, provenance.ActionSiteDelete, 0, "")
 	o.a.log.Info("site deleted", "id", site.ViewID, "via", "mcp")
 	return nil
 }
 
 func (o mcpOps) AddDomain(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, domain, target string) (*mcp.SiteResult, error) {
-	site, err := o.openSite(auth, ref)
+	site, st, err := o.openSiteAs(auth, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -505,8 +541,8 @@ func (o mcpOps) AddDomain(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, dom
 	if pending != "" {
 		detail += " (pending)"
 	}
-	o.a.recordMCP(auth, site, provenance.ActionDomainAdd, 0, detail)
-	res := o.siteResult(site)
+	o.a.recordMCP(auth, site, st, provenance.ActionDomainAdd, 0, detail)
+	res := o.siteResult(site, auth, st)
 	// A site under a path that is not built for it: in warnings too.
 	if addr, err := store.NormalizeAddress(domain); err == nil {
 		if w := o.a.st.BasePathWarning(site, addr); w != "" {
@@ -525,20 +561,20 @@ func (o mcpOps) AddDomain(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, dom
 }
 
 func (o mcpOps) RemoveDomain(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, domain string) (*mcp.SiteResult, error) {
-	site, err := o.openSite(auth, ref)
+	site, st, err := o.openSiteAs(auth, ref)
 	if err != nil {
 		return nil, err
 	}
 	if err := o.a.st.RemoveDomain(site, domain); err != nil {
 		return nil, o.mcpError(err)
 	}
-	o.a.recordMCP(auth, site, provenance.ActionDomainRemove, 0, domain)
-	return o.siteResult(site), nil
+	o.a.recordMCP(auth, site, st, provenance.ActionDomainRemove, 0, domain)
+	return o.siteResult(site, auth, st), nil
 }
 
 // SetDomainRedirect goes through changeDomainRedirect, the API's own path.
 func (o mcpOps) SetDomainRedirect(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, domain, to string, code int) (*mcp.SiteResult, error) {
-	site, err := o.openSite(auth, ref)
+	site, st, err := o.openSiteAs(auth, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -546,26 +582,26 @@ func (o mcpOps) SetDomainRedirect(_ context.Context, auth mcp.Auth, ref mcp.Site
 		return nil, o.mcpError(err)
 	}
 	d := strings.ToLower(strings.TrimSpace(domain))
-	o.a.recordMCP(auth, site, provenance.ActionDomainRedirect, 0, addressDetail(d, "", to, site.Meta.DomainRedirects[d].Code))
-	return o.siteResult(site), nil
+	o.a.recordMCP(auth, site, st, provenance.ActionDomainRedirect, 0, addressDetail(d, "", to, site.Meta.DomainRedirects[d].Code))
+	return o.siteResult(site, auth, st), nil
 }
 
 // SetDomainTarget goes through changeDomainTarget, the API's own path.
 func (o mcpOps) SetDomainTarget(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, domain, target string) (*mcp.SiteResult, error) {
-	site, err := o.openSite(auth, ref)
+	site, st, err := o.openSiteAs(auth, ref)
 	if err != nil {
 		return nil, err
 	}
 	if err := o.a.changeDomainTarget(site, domain, target); err != nil {
 		return nil, o.mcpError(err)
 	}
-	o.a.recordMCP(auth, site, provenance.ActionDomainTarget, 0, strings.ToLower(strings.TrimSpace(domain))+" → "+strings.TrimSpace(target))
-	return o.siteResult(site), nil
+	o.a.recordMCP(auth, site, st, provenance.ActionDomainTarget, 0, strings.ToLower(strings.TrimSpace(domain))+" → "+strings.TrimSpace(target))
+	return o.siteResult(site, auth, st), nil
 }
 
 // SetViewAddress goes through changeViewAddress, the API's own path.
 func (o mcpOps) SetViewAddress(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, endpoint, mode, to string, code int) (*mcp.SiteResult, error) {
-	site, err := o.openSite(auth, ref)
+	site, st, err := o.openSiteAs(auth, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -573,12 +609,12 @@ func (o mcpOps) SetViewAddress(_ context.Context, auth mcp.Auth, ref mcp.SiteRef
 		return nil, o.mcpError(err)
 	}
 	from, stored := viewAddressStored(site.Meta, endpoint)
-	o.a.recordMCP(auth, site, provenance.ActionViewAddress, 0, addressDetail(from, mode, stored.To, stored.Code))
-	return o.siteResult(site), nil
+	o.a.recordMCP(auth, site, st, provenance.ActionViewAddress, 0, addressDetail(from, mode, stored.To, stored.Code))
+	return o.siteResult(site, auth, st), nil
 }
 
 func (o mcpOps) DownloadSite(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) ([]byte, error) {
-	site, err := o.openSite(auth, ref)
+	site, _, err := o.openSiteAs(auth, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -598,25 +634,25 @@ func (o mcpOps) DownloadSite(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) 
 }
 
 // OpenUpload issues an upload token for a site the caller may write to. The
-// authority check is openSite — the one write_files uses — so whoever may
+// authority check is openSiteAs — the one write_files uses — so whoever may
 // write files through MCP may open an upload, and nobody else.
 func (o mcpOps) OpenUpload(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) (*mcp.UploadResult, error) {
-	site, err := o.openSite(auth, ref)
+	site, st, err := o.openSiteAs(auth, ref)
 	if err != nil {
 		return nil, err
 	}
 	// The token carries the connection's account only when that account
-	// opened the site as its owner: an upload through it is then that
-	// account's, and otherwise it is the edit password's.
-	issuer := ""
-	if act := mcpActor(auth, site); act.auth != provenance.AuthPassword {
-		issuer = act.account
+	// opened the site as its owner or an admin: an upload through it is then
+	// that account's, in that role, and otherwise it is the edit password's.
+	issuer, role := "", ""
+	if act := mcpActor(auth, site, st); act.auth != provenance.AuthPassword {
+		issuer, role = act.account, act.role
 	}
-	secret, expires, err := o.a.uploads.issueFor(site.ViewID, site.EditID, issuer)
+	secret, expires, err := o.a.uploads.issueAs(site.ViewID, site.EditID, issuer, role)
 	if err != nil {
 		return nil, err // errTooManyUploads says what to do
 	}
-	o.a.recordMCP(auth, site, provenance.ActionOpenUpload, 0, "")
+	o.a.recordMCP(auth, site, st, provenance.ActionOpenUpload, 0, "")
 	o.a.log.Info("upload token issued", "id", site.ViewID, "token", secret[:10])
 
 	res := &mcp.UploadResult{
@@ -662,7 +698,7 @@ func toFormsResult(v formsJSON) *mcp.FormsResult {
 }
 
 func (o mcpOps) ListForms(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) (*mcp.FormsResult, error) {
-	site, err := o.openSite(auth, ref)
+	site, _, err := o.openSiteAs(auth, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -670,7 +706,7 @@ func (o mcpOps) ListForms(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) (*m
 }
 
 func (o mcpOps) AddForm(ctx context.Context, auth mcp.Auth, ref mcp.SiteRef, in mcp.FormInput) (*mcp.FormsResult, error) {
-	site, err := o.openSite(auth, ref)
+	site, st, err := o.openSiteAs(auth, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -682,12 +718,12 @@ func (o mcpOps) AddForm(ctx context.Context, auth mcp.Auth, ref mcp.SiteRef, in 
 	if in.Name != nil {
 		name = *in.Name
 	}
-	o.a.recordMCP(auth, site, provenance.ActionFormAdd, 0, name)
+	o.a.recordMCP(auth, site, st, provenance.ActionFormAdd, 0, name)
 	return toFormsResult(v), nil
 }
 
 func (o mcpOps) UpdateForm(ctx context.Context, auth mcp.Auth, ref mcp.SiteRef, key string, in mcp.FormInput) (*mcp.FormsResult, error) {
-	site, err := o.openSite(auth, ref)
+	site, st, err := o.openSiteAs(auth, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -695,12 +731,12 @@ func (o mcpOps) UpdateForm(ctx context.Context, auth mcp.Auth, ref mcp.SiteRef, 
 	if err != nil {
 		return nil, o.mcpError(err)
 	}
-	o.a.recordMCP(auth, site, provenance.ActionFormUpdate, 0, key)
+	o.a.recordMCP(auth, site, st, provenance.ActionFormUpdate, 0, key)
 	return toFormsResult(v), nil
 }
 
 func (o mcpOps) RemoveForm(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, key string) (*mcp.FormsResult, error) {
-	site, err := o.openSite(auth, ref)
+	site, st, err := o.openSiteAs(auth, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -708,12 +744,12 @@ func (o mcpOps) RemoveForm(_ context.Context, auth mcp.Auth, ref mcp.SiteRef, ke
 	if err != nil {
 		return nil, o.mcpError(err)
 	}
-	o.a.recordMCP(auth, site, provenance.ActionFormRemove, 0, key)
+	o.a.recordMCP(auth, site, st, provenance.ActionFormRemove, 0, key)
 	return toFormsResult(v), nil
 }
 
 func (o mcpOps) ResendFormConfirmation(ctx context.Context, auth mcp.Auth, ref mcp.SiteRef, key string) (*mcp.FormsResult, error) {
-	site, err := o.openSite(auth, ref)
+	site, st, err := o.openSiteAs(auth, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -721,7 +757,7 @@ func (o mcpOps) ResendFormConfirmation(ctx context.Context, auth mcp.Auth, ref m
 	if err != nil {
 		return nil, o.mcpError(err)
 	}
-	o.a.recordMCP(auth, site, provenance.ActionFormResend, 0, key)
+	o.a.recordMCP(auth, site, st, provenance.ActionFormResend, 0, key)
 	return toFormsResult(v), nil
 }
 

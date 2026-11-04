@@ -258,6 +258,10 @@ type SiteSummary struct {
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	Origin    string     `json:"origin,omitempty" jsonschema:"which surface created the site: mcp, or empty for the web UI and the JSON API"`
 	Locked    *SiteLock  `json:"locked,omitempty" jsonschema:"present only when the operator has locked the site: it is not served, and no tool but get_site can open it"`
+	// Role is "admin" on a site another account shared with the caller, and
+	// absent on the caller's own: every row a client saw before sharing
+	// existed reads exactly as it did.
+	Role string `json:"role,omitempty" jsonschema:"admin when another account shared this site with you: you manage it, but only its owner can delete it or change its expiry; absent on your own sites"`
 }
 
 // CreateInput is what create_site hands to Ops. Its files are already decoded

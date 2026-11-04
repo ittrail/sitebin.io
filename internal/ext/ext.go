@@ -536,9 +536,11 @@ type ScanFinding struct {
 	At       time.Time
 }
 
-// AccountDirectory is implemented by a Provider that can name an account
-// for the operator. OPTIONAL, like OperatorAccounts: the core asks it only
-// to put an owner's address into an abuse alert, never on a request path.
+// AccountDirectory is implemented by a Provider that can name an account.
+// OPTIONAL, like OperatorAccounts: the core asks it to put an owner's
+// address into an abuse alert, and for the "shared by" line an admin of a
+// shared site is shown (the owner's address, never the other way round). It
+// is never asked on the serving path.
 type AccountDirectory interface {
 	AccountEmail(accountID string) (email string, ok bool)
 }
@@ -573,14 +575,50 @@ type OperatorAccounts interface {
 // in with a browser session. OPTIONAL, like OperatorAccounts: without it the
 // per-site API knows no session, only edit passwords and tokens.
 //
-// The core asks it on the per-site API routes so a signed-in owner manages
-// their own sites on the edit page without the site's edit password. The
-// extension answers only WHOSE session this is — signed cookie, live account,
-// current token version, so signing out revokes it. The ownership comparison
-// and the cross-site rule are the core's (httpapi.sessionOwns), exactly as
-// for BearerCredential.
+// The core asks it on the per-site API routes so a signed-in owner (or an
+// admin of a shared site) manages the site on the edit page without the
+// site's edit password. The extension answers only WHOSE session this is —
+// signed cookie, live account, current token version, so signing out revokes
+// it. The standing and the cross-site rule are the core's
+// (httpapi.sessionStanding, httpapi.accountStanding), exactly as for
+// BearerCredential.
 type SessionAccounts interface {
 	SessionAccount(r *http.Request) (accountID string, ok bool)
+}
+
+// SharingAccounts is implemented by a Provider whose plans let an owner share
+// a site with admins (the tier flag `sharing`). OPTIONAL, like SessionAccounts:
+// without it no account has admin standing on any site, whatever a site's
+// Meta.Admins lists, so the community build and a provider without sharing
+// stay exactly as they were.
+//
+// The core keeps the per-site truth (who owns a site, who its admins are and
+// until when, in meta.json) and states the standing rule once
+// (httpapi.accountStanding): an account listed in Meta.Admins whose Until is
+// unset or still ahead, while SharingAllowed is true for BOTH the site's
+// owner and that account. The extension answers only about accounts and
+// keeps what is an admin's own: their tags on a shared site and the index of
+// sites shared with them.
+//
+// The owner's address on a shared site ("shared by") comes from
+// AccountDirectory, which already names an account; this interface does not
+// repeat it.
+type SharingAccounts interface {
+	// SharingAllowed reports whether the account's CURRENT plan includes
+	// sharing. An error means unknown: the core refuses the admin standing
+	// for that one request and changes nothing stored — a share is never
+	// ended because a plan lookup failed.
+	SharingAllowed(accountID string) (bool, error)
+	// AdminTags is the admin's own tags on the shared site viewID (nil for
+	// none). An admin never sees or writes the owner's Meta.Tags.
+	AdminTags(accountID, viewID string) []string
+	// SetAdminTags stores the admin's own tags on viewID, already validated
+	// by store.CleanTags (an empty list clears them).
+	SetAdminTags(accountID, viewID string, tags []string) error
+	// SharedSiteIDs lists the view ids shared with the account. The core
+	// re-checks each against meta.json (the standing rule above) before it
+	// shows one, so a stale entry grants nothing.
+	SharedSiteIDs(accountID string) []string
 }
 
 // ZoneAccounts is implemented by a Provider whose plans include account

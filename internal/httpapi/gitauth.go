@@ -18,7 +18,7 @@ import (
 //
 // Git sends HTTP Basic and nothing else, so the password's SHAPE says what
 // the credential is, and each shape is judged by the rule that already holds
-// for it elsewhere — the same extension lookup, the same accountStands, the
+// for it elsewhere — the same extension lookup, the same accountStanding, the
 // same verifyEdit. A credential that fails is refused: it is never tried again
 // as a weaker one. A browser session never counts here, so the endpoint has no
 // cookie path and no CSRF surface.
@@ -75,16 +75,21 @@ func gitRefusal(msg string) *gitDenial {
 //  2. an upload token (anywhere on the request): 403 — it opens only its own
 //     routes, and is never tried as a password;
 //  3. an account token (sbp_): tokenAccount, the JSON API's own rule — its
-//     account must stand on the site, and an OAuth credential never counts;
-//     anything else is a challenge;
+//     account must stand on the site (its owner or a live admin), and an
+//     OAuth credential never counts; anything else is a challenge;
 //  4. a compact JWS (three base64url segments): an OAuth access token, asked
 //     about with the Git marker — the only way the extension verifies one
-//     here. Its account must stand on the site and it must hold the scope
-//     (read to fetch, write to push: a readable refusal otherwise). A refusal the verifier
-//     notes — consent outstanding, or the stack unavailable — is a readable
-//     refusal; any other is a challenge;
+//     here. Its account must stand on the site (accountStanding) and it must
+//     hold the scope (read to fetch, write to push: a readable refusal
+//     otherwise). A refusal the verifier notes — consent outstanding, or the
+//     stack unavailable — is a readable refusal; any other is a challenge;
 //  5. anything else: the site's edit password, through verifyEdit (its rate
 //     limits and verify cache): 429 when throttled, a challenge when wrong.
+//
+// The actor's role is the standing the credential earned, from the very call
+// that authenticated it (tokenAccount, accountStanding; rolePassword for the
+// edit password), and never worked out again: the push's re-check after its
+// registration (gitStandingHolds) compares it with meta.json as it is then.
 //
 // What follows authentication — a locked site, the plan, an anonymous site on
 // an accounts instance — is the handler's, not the gate's.
@@ -100,11 +105,11 @@ func (a *API) gitAuth(r *http.Request, site *store.Site, write bool) (actor, *gi
 
 	switch {
 	case strings.HasPrefix(pw, ids.APITokenPrefix):
-		account, ok := a.tokenAccount(gitBearerRequest(r.Context(), r, pw), site)
-		if !ok {
+		account, st := a.tokenAccount(gitBearerRequest(r.Context(), r, pw), site)
+		if st == standNone {
 			return actor{}, gitChallenge()
 		}
-		return actor{surface: provenance.SurfaceGit, auth: provenance.AuthToken, account: account}, nil
+		return actor{surface: provenance.SurfaceGit, auth: provenance.AuthToken, account: account, role: st.role()}, nil
 
 	case jwsShaped(pw):
 		ctx := ext.WithRefusalNote(ext.WithGitCaller(r.Context()))
@@ -118,7 +123,11 @@ func (a *API) gitAuth(r *http.Request, site *store.Site, write bool) (actor, *gi
 			}
 			return actor{}, gitChallenge()
 		}
-		if !cred.OAuth || !a.accountStands(site, cred.AccountID) {
+		if !cred.OAuth {
+			return actor{}, gitChallenge()
+		}
+		st := a.accountStanding(site, cred.AccountID)
+		if st == standNone {
 			return actor{}, gitChallenge()
 		}
 		scope, missing := mcp.ScopeRead, msgGitNoRead
@@ -128,12 +137,12 @@ func (a *API) gitAuth(r *http.Request, site *store.Site, write bool) (actor, *gi
 		if !mcp.Allows(cred.Scopes, cred.OAuth, scope) {
 			return actor{}, gitRefusal(missing)
 		}
-		return actor{surface: provenance.SurfaceGit, auth: provenance.AuthOAuth, account: cred.AccountID}, nil
+		return actor{surface: provenance.SurfaceGit, auth: provenance.AuthOAuth, account: cred.AccountID, role: st.role()}, nil
 	}
 
 	switch a.verifyEdit(r, site, pw) {
 	case verifyOK:
-		return actor{surface: provenance.SurfaceGit, auth: provenance.AuthPassword}, nil
+		return actor{surface: provenance.SurfaceGit, auth: provenance.AuthPassword, role: rolePassword}, nil
 	case verifyThrottled:
 		return actor{}, &gitDenial{status: http.StatusTooManyRequests, msg: "too many password attempts, slow down"}
 	default:

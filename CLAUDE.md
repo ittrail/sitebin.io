@@ -91,9 +91,15 @@ Corollaries worth stating, because they have been violated before:
 
 `withEditAuth` (internal/httpapi/server.go) is the one gate for every per-site
 API route. In order: an upload token is refused (it opens only its own route);
-an account API token whose account owns the site (never an MCP OAuth token);
-the owner's **browser session** (`sessionOwns`, via the optional
-`ext.SessionAccounts`); the edit password. `sessionOwns` is a real CSRF boundary — the session counts only with
+an account API token whose account stands on the site (never an MCP OAuth
+token); the owner's or an admin's **browser session** (`sessionStanding`, via
+the optional `ext.SessionAccounts`); the edit password. Standing is
+`accountStanding` (server.go), the one rule: the owner, or an admin listed in
+`Meta.Admins` (no end date, or one ahead) while `ext.SharingAccounts`
+says both plans share — no provider, no admins. An admin may do all the owner
+may except the owner-only actions (`refuseUnlessOwner`, `ownerOnly`: delete
+the site, set/clear `expires_at`, `DELETE …/git`); the edit password keeps
+every owner right. `sessionStanding` is a real CSRF boundary — the session counts only with
 `X-Sitebin-Session: 1` and a same-origin `Sec-Fetch-Site` when one is sent —
 and must never be loosened into `fromOwnBrowser`, which is a forgeable plan
 heuristic. MCP never reads the session, and the dashboard never reads a token.
@@ -122,7 +128,7 @@ including its lock-retention addendum.
   expiry, view password and container routing — that one check is "not
   served" for every address.
 - **Every per-site gate refuses it after authenticating** — `withEditAuth`,
-  `withUploadAuth`, WebDAV, FTP login, MCP `openSite`, the dashboard's seam
+  `withUploadAuth`, WebDAV, FTP login, MCP `openSiteAs`, the dashboard's seam
   methods. A new per-site route or tool gets this for free through those
   gates; one that bypasses them must call `refuseLocked` itself. Only the
   settings read (`withEditAuthEvenLocked`, `get_site`) answers a locked site,
@@ -516,7 +522,7 @@ second copy of the rule.
 - **OAuth tokens act on `/mcp` and `/git/` only.** `/mcp` marks every request
   (`ext.WithMCPCaller`) and the Git gate marks its credential question
   (`ext.WithGitCaller`); `ext.OAuthSurface` is true for either.
-  `ext.Credential.OAuth` is honoured nowhere without a marker — `tokenOwns`
+  `ext.Credential.OAuth` is honoured nowhere without a marker — `tokenAccount`
   never; in ee, `accountForAPI` only with the MCP marker (`ext.IsMCPCaller`)
   and `BearerCredential` with either (`ext.OAuthSurface`). The Git
   marker holds the token to its scopes like MCP does (`mcp.Allows`). A read-only token once could `DELETE /api/sites/{id}`. The
@@ -616,11 +622,14 @@ deploys or restarts anything. Read
   `application/x-git-<svc>-request` (else 415, before any credential work),
   and every answer of the endpoint carries `nosniff` and `CSP: sandbox`.
 - **The gate is the password's shape** (`gitAuth`, `internal/httpapi/gitauth.go`):
-  `sbu_` refused; `sbp_` through the same `tokenAccount`/`accountStands` the
+  `sbu_` refused; `sbp_` through the same `tokenAccount`/`accountStanding` the
   API uses; a compact JWS is an OAuth token; anything else is the edit
   password through `verifyEditIP`. A failing credential never falls back to a
   weaker one. No cookies, no browser session (no CSRF surface). Never restate
-  the ownership comparison: `accountStands` is the one rule.
+  the ownership comparison: `accountStanding` is the one rule. The actor's
+  role comes from that call, and a push re-checks it from `meta.json` once
+  registered, before Init and git (`gitStandingHolds`, no seam call), with a
+  refusal git prints (`gitrepo.WriteRPCRefusal` on the POST).
 - **Refusals after authentication are readable.** Git prints nothing for a bare
   401/403, so `info/refs` answers `200` with a service advertisement carrying
   `ERR <message>` (`fatal: remote error: …`). The messages are constants in

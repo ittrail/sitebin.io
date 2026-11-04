@@ -228,3 +228,20 @@ func itoa(i int) string {
 	}
 	return itoa(i/10) + d[i%10:i%10+1]
 }
+
+// An account's write as an admin of a shared site never merges into its
+// write as the owner (after a transfer to it, say), nor the other way round.
+func TestRecordDoesNotMergeAcrossRoles(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "p.jsonl")
+	owner := upload(t0, "198.51.100.1", 1)
+	owner.Account = "acct-2"
+	admin := owner
+	admin.Time = t0.Add(time.Minute)
+	admin.Role = RoleAdmin
+	Record(p, owner)
+	Record(p, admin)
+	got, _ := Read(p)
+	if len(got) != 2 || got[0].Role != "" || got[1].Role != RoleAdmin {
+		t.Fatalf("want an owner line and an admin line, got %+v", got)
+	}
+}

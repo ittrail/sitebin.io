@@ -60,6 +60,10 @@ type gitInfoPayload struct {
 	LastPush      *gitLastPush   `json:"last_push"`
 	ExpiresAt     *time.Time     `json:"expires_at"`
 	Credentials   gitCredentials `json:"credentials"`
+	// Role is the caller's, as on the site payload (owner, admin or
+	// password): the Git tab offers "Delete repository" only where it is
+	// not refused (an admin's).
+	Role string `json:"role,omitempty"`
 }
 
 // gitOAuthCredentials is what the info route says about signing in with
@@ -108,6 +112,7 @@ func (a *API) gitInfo(w http.ResponseWriter, r *http.Request, site *store.Site) 
 			OAuth:    a.gitOAuthCredentials(r.Context()),
 		},
 		ExpiresAt: site.Meta.ExpiresAt,
+		Role:      a.actorOf(r).role,
 	}
 	dir := site.GitDir()
 	if a.git != nil && gitrepo.Exists(dir) {
@@ -361,7 +366,11 @@ func attachmentDisposition(name string) string {
 }
 
 func (a *API) deleteGitRepo(w http.ResponseWriter, r *http.Request, site *store.Site) {
-	// TODO(ownership): refuseUnlessOwner
+	// "Delete repository" is the owner's: an admin is refused (the edit
+	// password, the owner's credential, is not).
+	if a.refuseUnlessOwner(w, r) {
+		return
+	}
 	if err := a.st.DeleteGitRepo(site); err != nil {
 		storeError(w, err)
 		return

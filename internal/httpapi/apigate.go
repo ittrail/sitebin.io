@@ -119,7 +119,7 @@ func (a *API) isSessionOrigin(origin string) bool {
 // createPreflight), so a page elsewhere cannot send it from a browser; and
 // the Origin a browser sends cannot be chosen by the page.
 //
-// THIS IS A SECURITY BOUNDARY, like sessionOwns and unlike fromOwnBrowser: it
+// THIS IS A SECURITY BOUNDARY, like sessionStanding and unlike fromOwnBrowser: it
 // decides whether a cross-origin request may create a site in the visitor's
 // account. Never relax it into fromOwnBrowser's heuristics.
 func (a *API) sessionOriginRequest(r *http.Request) bool {

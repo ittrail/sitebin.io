@@ -23,6 +23,23 @@ var (
 // MaxAdmins is the most admins a site can have.
 const MaxAdmins = 10
 
+// LiveAdmin reports whether account is one of the site's admins at now:
+// listed in Admins, with no end date or one still ahead. It is only the
+// meta.json half of an admin's standing; the gate (httpapi.accountStanding)
+// adds the plan half, and nothing else may treat a listed account as an
+// admin. An anonymous site has no admins, whatever its meta says.
+func (m Meta) LiveAdmin(account string, now time.Time) bool {
+	if account == "" || m.OwnerAccountID == "" || account == m.OwnerAccountID {
+		return false
+	}
+	for _, a := range m.Admins {
+		if a.Account == account {
+			return a.Until == nil || now.Before(*a.Until)
+		}
+	}
+	return false
+}
+
 // ownershipMeta reads meta.json for an ownership change; the caller holds
 // the site lock.
 func ownershipMeta(site *Site) (Meta, error) {

@@ -43,6 +43,7 @@ type uploadToken struct {
 	viewID   string // the revocation handle
 	editID   string // the one site the token opens
 	account  string // the account that opened it, for the provenance record
+	role     string // the standing it opened the site with (roleOwner, roleAdmin), with account
 	issuedAt time.Time
 	lastSeen time.Time
 	inflight int
@@ -87,10 +88,20 @@ func (u *uploadTokens) issue(viewID, editID string) (string, time.Time, error) {
 	return u.issueFor(viewID, editID, "")
 }
 
-// issueFor is issue for a caller acting as account (empty when it opened the
-// site with its edit password): the uploads the token makes are recorded as
-// that account's.
+// issueFor is issue for a caller acting as account, the site's owner (empty
+// when it opened the site with its edit password): the uploads the token
+// makes are recorded as that account's.
 func (u *uploadTokens) issueFor(viewID, editID, account string) (string, time.Time, error) {
+	role := ""
+	if account != "" {
+		role = roleOwner
+	}
+	return u.issueAs(viewID, editID, account, role)
+}
+
+// issueAs is issueFor for an account that opened the site in role (roleOwner
+// or roleAdmin): an admin's token records its uploads as the admin's.
+func (u *uploadTokens) issueAs(viewID, editID, account, role string) (string, time.Time, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	now := u.now()
@@ -114,7 +125,7 @@ func (u *uploadTokens) issueFor(viewID, editID, account string) (string, time.Ti
 		return "", time.Time{}, errTooManyUploads
 	}
 	secret := ids.NewUploadToken()
-	u.m[hashUploadToken(secret)] = &uploadToken{viewID: viewID, editID: editID, account: account, issuedAt: now, lastSeen: now}
+	u.m[hashUploadToken(secret)] = &uploadToken{viewID: viewID, editID: editID, account: account, role: role, issuedAt: now, lastSeen: now}
 	return secret, now.Add(uploadTokenMaxAge), nil
 }
 
@@ -158,12 +169,18 @@ func (u *uploadTokens) begin(secret, editID string) (end func(), ok bool) {
 // issuer returns the account a live token was opened by ("" for none, or
 // for an unknown token).
 func (u *uploadTokens) issuer(secret string) string {
+	account, _ := u.issuerRole(secret)
+	return account
+}
+
+// issuerRole is issuer with the role the account opened the site in.
+func (u *uploadTokens) issuerRole(secret string) (account, role string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if t, ok := u.m[hashUploadToken(secret)]; ok {
-		return t.account
+		return t.account, t.role
 	}
-	return ""
+	return "", ""
 }
 
 // revokeSite drops every token for the site viewID. A request already running

@@ -886,7 +886,7 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := a.sitePayload(site)
+	resp := a.payloadFor(r, site) // a creation has no gate actor: no role
 	resp["edit_password"] = editPassword
 	// Whether the site went into an account, so an embed can tell an owned
 	// ticket from an anonymous one without asking again.
@@ -898,7 +898,7 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) getSite(w http.ResponseWriter, r *http.Request, site *store.Site) {
-	writeJSON(w, 200, a.sitePayload(site))
+	writeJSON(w, 200, a.payloadFor(r, site))
 }
 
 // getFileContent returns a single content file's bytes (for the editor).
@@ -948,7 +948,9 @@ func (a *API) updateSite(w http.ResponseWriter, r *http.Request, site *store.Sit
 	}
 	oldHash := site.Meta.ViewPasswordHash
 	noteOf(r).detail = settingsDetail(set)
-	if err := a.applySettings(site, set); err != nil {
+	// An admin is refused an owner-only setting here, before anything is
+	// written, and an admin's tags are their own (applySettingsAs).
+	if err := a.applySettingsAs(site, set, a.actorOf(r)); err != nil {
 		respondErr(w, err)
 		return
 	}
@@ -959,10 +961,13 @@ func (a *API) updateSite(w http.ResponseWriter, r *http.Request, site *store.Sit
 	if site.Meta.ViewPasswordHash != oldHash {
 		a.log.Info("view password changed", "id", site.ViewID)
 	}
-	writeJSON(w, 200, a.sitePayload(site))
+	writeJSON(w, 200, a.payloadFor(r, site))
 }
 
 func (a *API) deleteSite(w http.ResponseWriter, r *http.Request, site *store.Site) {
+	if a.refuseUnlessOwner(w, r) {
+		return
+	}
 	a.stopContainersBeforeDelete(site)
 	if err := a.st.Delete(site); err != nil {
 		respondErr(w, err)
@@ -1007,7 +1012,7 @@ func (a *API) uploadFiles(w http.ResponseWriter, r *http.Request, site *store.Si
 		respondErr(w, err)
 		return
 	}
-	writeJSON(w, 200, a.sitePayload(site))
+	writeJSON(w, 200, a.payloadFor(r, site))
 }
 
 func (a *API) deleteFile(w http.ResponseWriter, r *http.Request, site *store.Site) {
@@ -1021,7 +1026,7 @@ func (a *API) deleteFile(w http.ResponseWriter, r *http.Request, site *store.Sit
 		respondErr(w, err)
 		return
 	}
-	writeJSON(w, 200, a.sitePayload(site))
+	writeJSON(w, 200, a.payloadFor(r, site))
 }
 
 func (a *API) addDomain(w http.ResponseWriter, r *http.Request, site *store.Site) {
@@ -1048,11 +1053,11 @@ func (a *API) addDomain(w http.ResponseWriter, r *http.Request, site *store.Site
 		// Recorded, not attached: the payload carries the record to create
 		// and what this check found.
 		a.log.Info("custom domain pending verification", "id", site.ViewID, "owner", site.Meta.OwnerAccountID, "domain", body.Domain)
-		writeJSON(w, 202, a.sitePayload(site))
+		writeJSON(w, 202, a.payloadFor(r, site))
 		return
 	}
 	a.log.Info("custom domain attached", "id", site.ViewID, "owner", site.Meta.OwnerAccountID, "domain", body.Domain)
-	writeJSON(w, 200, a.sitePayload(site))
+	writeJSON(w, 200, a.payloadFor(r, site))
 }
 
 // Checks an owner asks for — adding a domain, "Check now", MCP's add_domain —
@@ -1133,7 +1138,7 @@ func (a *API) removeDomain(w http.ResponseWriter, r *http.Request, site *store.S
 		respondErr(w, err)
 		return
 	}
-	writeJSON(w, 200, a.sitePayload(site))
+	writeJSON(w, 200, a.payloadFor(r, site))
 }
 
 // maxListedContainerFiles caps the file listing of a container site.

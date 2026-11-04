@@ -214,8 +214,8 @@ func TestGitAuthIgnoresSessionCookie(t *testing.T) {
 		r.Header.Set("Sec-Fetch-Site", "same-origin")
 		return r
 	}
-	// The cookie on its own would pass sessionOwns: the test means something.
-	if !e.api.sessionOwns(withSession(""), site) {
+	// The cookie on its own would pass sessionStanding: the test means something.
+	if _, st := e.api.sessionStanding(withSession(""), site); st != standOwner {
 		t.Fatal("the fixture session does not own the site")
 	}
 	for _, write := range []bool{false, true} {
@@ -252,7 +252,7 @@ func TestGitAuthEditPassword(t *testing.T) {
 			// a credential helper may send anything.
 			for _, user := range []string{site.ViewID, "anything", "OAUTH-USER"} {
 				act, d := e.api.gitAuth(gitReq(user, c.EditPassword), site, write)
-				wantActor(t, act, d, actor{surface: provenance.SurfaceGit, auth: provenance.AuthPassword}, "edit password, user "+user)
+				wantActor(t, act, d, actor{surface: provenance.SurfaceGit, auth: provenance.AuthPassword, role: rolePassword}, "edit password, user "+user)
 			}
 		}
 	})
@@ -263,7 +263,7 @@ func TestGitAuthEditPassword(t *testing.T) {
 		site := siteByEdit(t, e, edit)
 		act, d := e.api.gitAuth(gitReq("drop", pw), site, true)
 		// The password names no account, as on every other surface.
-		wantActor(t, act, d, actor{surface: provenance.SurfaceGit, auth: provenance.AuthPassword}, "edit password on an owned site")
+		wantActor(t, act, d, actor{surface: provenance.SurfaceGit, auth: provenance.AuthPassword, role: rolePassword}, "edit password on an owned site")
 	})
 }
 
@@ -330,7 +330,7 @@ func TestGitAuthUploadTokenRefused(t *testing.T) {
 		t.Fatalf("an upload token beside the password: %+v, want a plain 403", d)
 	}
 	act, d := e.api.gitAuth(gitReq("drop", c.EditPassword), site, true)
-	wantActor(t, act, d, actor{surface: provenance.SurfaceGit, auth: provenance.AuthPassword}, "the password after five upload tokens")
+	wantActor(t, act, d, actor{surface: provenance.SurfaceGit, auth: provenance.AuthPassword, role: rolePassword}, "the password after five upload tokens")
 }
 
 // An account token opens the sites its account stands on, and nothing else.
@@ -342,7 +342,7 @@ func TestGitAuthAccountToken(t *testing.T) {
 
 	for _, write := range []bool{false, true} {
 		act, d := e.api.gitAuth(gitReq("drop", "sbp_owner"), site, write)
-		wantActor(t, act, d, actor{surface: provenance.SurfaceGit, auth: provenance.AuthToken, account: "acct-1"}, "the owner's token")
+		wantActor(t, act, d, actor{surface: provenance.SurfaceGit, auth: provenance.AuthToken, account: "acct-1", role: roleOwner}, "the owner's token")
 		_, d = e.api.gitAuth(gitReq("drop", "sbp_other"), site, write)
 		wantChallenge(t, d, "another account's token")
 	}
@@ -413,7 +413,7 @@ func TestGitAuthOAuthScopes(t *testing.T) {
 	g := newGitFake(t)
 	edit, _ := ownedSiteWithPassword(t, e)
 	site := siteByEdit(t, e, edit)
-	owner := actor{surface: provenance.SurfaceGit, auth: provenance.AuthOAuth, account: "acct-1"}
+	owner := actor{surface: provenance.SurfaceGit, auth: provenance.AuthOAuth, account: "acct-1", role: roleOwner}
 
 	act, d := e.api.gitAuth(gitReq("OAUTH-USER", jwtRead), site, false)
 	wantActor(t, act, d, owner, "a read token fetching")

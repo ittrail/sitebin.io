@@ -228,7 +228,7 @@ func (a *API) putDomainRedirect(w http.ResponseWriter, r *http.Request, site *st
 		code = store.DefaultRedirectCode
 	}
 	noteOf(r).detail = addressDetail(strings.ToLower(domain), "", body.To, code)
-	writeJSON(w, 200, a.sitePayload(site))
+	writeJSON(w, 200, a.payloadFor(r, site))
 }
 
 // deleteDomainRedirect is DELETE /api/sites/{editID}/domains/{domain}/redirect:
@@ -240,7 +240,7 @@ func (a *API) deleteDomainRedirect(w http.ResponseWriter, r *http.Request, site 
 		return
 	}
 	noteOf(r).detail = addressDetail(domain, "", "", 0)
-	writeJSON(w, 200, a.sitePayload(site))
+	writeJSON(w, 200, a.payloadFor(r, site))
 }
 
 // putViewAddress is PUT /api/sites/{editID}/view-address,
@@ -259,7 +259,7 @@ func (a *API) putViewAddress(w http.ResponseWriter, r *http.Request, site *store
 	}
 	from, stored := viewAddressStored(site.Meta, body.Endpoint)
 	noteOf(r).detail = addressDetail(from, body.Mode, stored.To, stored.Code)
-	writeJSON(w, 200, a.sitePayload(site))
+	writeJSON(w, 200, a.payloadFor(r, site))
 }
 
 // viewAddressStored names a generated address for provenance and returns its
@@ -301,7 +301,7 @@ func (a *API) putDomainTarget(w http.ResponseWriter, r *http.Request, site *stor
 		return
 	}
 	noteOf(r).detail = strings.ToLower(domain) + " → " + strings.TrimSpace(body.Endpoint)
-	writeJSON(w, 200, a.sitePayload(site))
+	writeJSON(w, 200, a.payloadFor(r, site))
 }
 
 // redirectsPayload is the site's stored domain redirects, each with whether it

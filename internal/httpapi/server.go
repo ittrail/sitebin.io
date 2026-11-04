@@ -365,51 +365,113 @@ func storeError(w http.ResponseWriter, err error) {
 	}
 }
 
-// accountStands reports whether accountID may act on site the way its owner
-// does — manage it, write to it, push to its repository.
-//
-// It is the one place the core's ACCESS GATES compare an account with a
-// site: tokenOwns/tokenAccount (an account token, on the JSON API and the Git
-// endpoint), sessionOwns (the owner's browser session), MCP's openSite (the
-// connection's account) and gitAuth's OAuth branch. None of them compares an
-// account with the owner itself. Today it is the owner alone; an anonymous
-// site (no owner) has nobody standing on it.
-//
-// Two other standing decisions exist and do NOT go through it — when site
-// ownership grows admins, they change with it:
-//   - mcpActor (internal/httpapi/provenance.go): attribution, which credential
-//     and account an MCP action is recorded under. OpenUpload also uses it to
-//     decide whose upload token it issues.
-//   - the enterprise dashboard's provider.owns (ee/provider.go), which reads
-//     the account's own site list.
-func (a *API) accountStands(site *store.Site, accountID string) bool {
-	return accountID != "" && accountID == site.Meta.OwnerAccountID
+// standing is what an account is to a site: nothing, its owner, or an admin
+// the owner shared it with. An admin may do everything the owner may with the
+// site, except the owner-only actions (refuseUnlessOwner).
+type standing int
+
+const (
+	standNone standing = iota
+	standOwner
+	standAdmin
+)
+
+// role is the standing as the actor records it and the payloads name it;
+// standNone has none (the caller then authenticated otherwise, if at all).
+func (s standing) role() string {
+	switch s {
+	case standOwner:
+		return roleOwner
+	case standAdmin:
+		return roleAdmin
+	}
+	return ""
 }
 
-// tokenOwns reports whether the request carries an account API token whose
-// account stands on this site. See tokenAccount.
-func (a *API) tokenOwns(r *http.Request, site *store.Site) bool {
-	_, ok := a.tokenAccount(r, site)
-	return ok
+// accountStanding is what accountID is to site — the ONE rule by which the
+// core's access gates compare an account with a site: tokenAccount (an
+// account token, on the JSON API and the Git endpoint), sessionStanding (a
+// browser session on the edit page), MCP's openSiteAs (the connection's
+// account) and gitAuth's OAuth branch. None of them compares an account with
+// the owner or the admins itself, and nothing else may treat an account as
+// standing on a site.
+//
+//   - Owner: the site's OwnerAccountID. An anonymous site (no owner) has
+//     nobody standing on it.
+//   - Admin: an account the site's meta lists as a live admin
+//     (store.Meta.LiveAdmin: no end date, or one still ahead) while the
+//     extension's SharingAllowed is true for BOTH the owner and that
+//     account. Without a provider implementing ext.SharingAccounts there is
+//     no admin standing at all. A SharingAllowed error refuses this one
+//     request and changes nothing stored: the share stays.
+//
+// The plan is asked only for an account the meta lists, so an owner, a
+// stranger and every site nobody shares cost no lookup.
+//
+// Attribution follows the standing a gate found, never a second comparison:
+// the actor's role (editAuth, gitAuth, mcpActor from openSiteAs, an upload
+// token's issuer). The enterprise dashboard's provider.owns (ee/provider.go)
+// is the extension's own decision over the account's own site list.
+func (a *API) accountStanding(site *store.Site, accountID string) standing {
+	m := site.Meta
+	if accountID == "" || m.OwnerAccountID == "" {
+		return standNone
+	}
+	if accountID == m.OwnerAccountID {
+		return standOwner
+	}
+	if !m.LiveAdmin(accountID, time.Now()) {
+		return standNone
+	}
+	sa, ok := sharingProvider()
+	if !ok {
+		return standNone
+	}
+	for _, id := range []string{m.OwnerAccountID, accountID} {
+		allowed, err := sa.SharingAllowed(id)
+		if err != nil {
+			a.log.Warn("sharing: plan unknown, admin standing refused for this request", "id", site.ViewID, "account", id, "err", err)
+			return standNone
+		}
+		if !allowed {
+			return standNone
+		}
+	}
+	return standAdmin
+}
+
+// sharingProvider returns the extension's sharing answers, when there is a
+// provider with accounts enabled that has them.
+func sharingProvider() (ext.SharingAccounts, bool) {
+	p, ok := ext.Get()
+	if !ok || !p.AccountsEnabled() {
+		return nil, false
+	}
+	sa, ok := p.(ext.SharingAccounts)
+	return sa, ok
 }
 
 // tokenAccount resolves the request's account API token (Authorization:
-// Bearer) to the account it acts for, when that account stands on site
-// (accountStands). The check lives here, in the core, because the core is the
-// side that holds the site's metadata; the extension only says which account
-// the token belongs to.
+// Bearer) to the account it acts for and that account's standing on site
+// (accountStanding); standNone, with no account, when it has none. The check
+// lives here, in the core, because the core is the side that holds the site's
+// metadata; the extension only says which account the token belongs to.
 //
 // An OAuth access token never counts, whatever the extension hands back. Its
 // audience is the MCP resource, and the JSON API has no scope check to hold
 // it to what it was granted: honoured here, a read-only grant could overwrite
 // and delete sites. MCP reads its OAuth credentials in mcpOps.Authenticate and
 // the Git endpoint in gitAuth's own OAuth branch, never through this.
-func (a *API) tokenAccount(r *http.Request, site *store.Site) (string, bool) {
+func (a *API) tokenAccount(r *http.Request, site *store.Site) (string, standing) {
 	cred, ok := bearerCredential(r)
-	if !ok || cred.OAuth || !a.accountStands(site, cred.AccountID) {
-		return "", false
+	if !ok || cred.OAuth {
+		return "", standNone
 	}
-	return cred.AccountID, true
+	st := a.accountStanding(site, cred.AccountID)
+	if st == standNone {
+		return "", standNone
+	}
+	return cred.AccountID, st
 }
 
 // bearerCredential asks the extension what the request's bearer is. Without a
@@ -423,12 +485,14 @@ func bearerCredential(r *http.Request) (ext.Credential, bool) {
 }
 
 // sessionHeader marks a request from Sitebin's own edit page that asks for
-// the browser's account session to be honoured. See sessionOwns.
+// the browser's account session to be honoured. See sessionStanding.
 const sessionHeader = "X-Sitebin-Session"
 
-// sessionOwns reports whether the account the request's browser session
-// belongs to owns site — the standing an account token has, reached from the
-// owner's own browser. See docs/superpowers/specs/2026-09-25-owner-session-edit-design.md.
+// sessionStanding resolves the request's browser session to its account and
+// that account's standing on site (accountStanding) — the standing an account
+// token has, reached from the owner's or an admin's own browser; standNone,
+// with no account, when it has none. See
+// docs/superpowers/specs/2026-09-25-owner-session-edit-design.md.
 //
 // THIS IS A SECURITY BOUNDARY, unlike fromOwnBrowser. A cookie rides along on
 // any request the browser makes, where an edit password or a bearer token
@@ -438,19 +502,26 @@ const sessionHeader = "X-Sitebin-Session"
 // would not do — the marketing apex serves uploaded content and is same-site
 // with the app — so a Sec-Fetch-Site the browser did send must also say
 // same-origin. Never relax this into fromOwnBrowser's forgeable heuristics.
-func (a *API) sessionOwns(r *http.Request, site *store.Site) bool {
+func (a *API) sessionStanding(r *http.Request, site *store.Site) (string, standing) {
 	if r.Header.Get(sessionHeader) != "1" {
-		return false
+		return "", standNone
 	}
 	if s := r.Header.Get("Sec-Fetch-Site"); s != "" && s != "same-origin" {
-		return false
+		return "", standNone
 	}
 	sa, ok := a.sessionProvider()
 	if !ok {
-		return false
+		return "", standNone
 	}
 	id, ok := sa.SessionAccount(r)
-	return ok && a.accountStands(site, id)
+	if !ok {
+		return "", standNone
+	}
+	st := a.accountStanding(site, id)
+	if st == standNone {
+		return "", standNone
+	}
+	return id, st
 }
 
 // sessionProvider returns the extension's session lookup, when there is a
@@ -507,16 +578,20 @@ func (a *API) editAuth(next func(http.ResponseWriter, *http.Request, *store.Site
 			return
 		}
 		// An account API token stands in for the edit password on sites that
-		// account owns. That is the whole point of tokens: a script should not
-		// have to carry one secret per site to manage the sites it created.
-		if a.tokenOwns(r, site) {
-			next(w, withActor(r, actor{surface: a.apiSurface(r), auth: provenance.AuthToken, account: site.Meta.OwnerAccountID}), site)
+		// account owns or administers. That is the whole point of tokens: a
+		// script should not have to carry one secret per site to manage the
+		// sites it created. The actor carries the standing as its role, which
+		// is what refuseUnlessOwner and payloadFor read.
+		if account, st := a.tokenAccount(r, site); st != standNone {
+			next(w, withActor(r, actor{surface: a.apiSurface(r), auth: provenance.AuthToken, account: account, role: st.role()}), site)
 			return
 		}
-		// The owner, signed in, on Sitebin's own edit page: the same standing,
-		// through the browser session.
-		if a.sessionOwns(r, site) {
-			next(w, withActor(r, actor{surface: a.apiSurface(r), auth: provenance.AuthSession, account: site.Meta.OwnerAccountID}), site)
+		// The owner or an admin, signed in, on Sitebin's own edit page: the
+		// same standing, through the browser session. It is asked before the
+		// edit password the page may send beside it, so a signed-in admin who
+		// also holds the password is still an admin (R16).
+		if account, st := a.sessionStanding(r, site); st != standNone {
+			next(w, withActor(r, actor{surface: a.apiSurface(r), auth: provenance.AuthSession, account: account, role: st.role()}), site)
 			return
 		}
 		pw := r.Header.Get("X-Edit-Password")
@@ -543,7 +618,7 @@ func (a *API) editAuth(next func(http.ResponseWriter, *http.Request, *store.Site
 				writeError(w, 403, "this site was created without an account, so it has no API — create it while signed in at "+a.apiAccountHint()+" to script it")
 				return
 			}
-			next(w, withActor(r, actor{surface: a.apiSurface(r), auth: provenance.AuthPassword}), site)
+			next(w, withActor(r, actor{surface: a.apiSurface(r), auth: provenance.AuthPassword, role: rolePassword}), site)
 		case verifyThrottled:
 			writeError(w, 429, "too many password attempts, slow down")
 		default:

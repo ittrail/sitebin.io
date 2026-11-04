@@ -262,3 +262,27 @@ func TestTransferOwnerMarkerFailureStillCompletes(t *testing.T) {
 	}
 	p.wait(t)
 }
+
+// LiveAdmin is the meta half of an admin's standing: listed, with no end
+// date or one still ahead, on a site that has an owner — never the owner
+// itself, never an empty account.
+func TestLiveAdmin(t *testing.T) {
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	ahead, past := now.Add(time.Hour), now.Add(-time.Hour)
+	m := Meta{OwnerAccountID: "owner", Admins: []SiteAdmin{
+		{Account: "open"}, {Account: "ahead", Until: &ahead}, {Account: "ended", Until: &past}, {Account: "edge", Until: &now},
+	}}
+	for account, want := range map[string]bool{
+		"open": true, "ahead": true, "ended": false, "edge": false,
+		"owner": false, "stranger": false, "": false,
+	} {
+		if got := m.LiveAdmin(account, now); got != want {
+			t.Errorf("LiveAdmin(%q) = %v, want %v", account, got, want)
+		}
+	}
+	anon := m
+	anon.OwnerAccountID = ""
+	if anon.LiveAdmin("open", now) {
+		t.Error("an anonymous site has an admin")
+	}
+}

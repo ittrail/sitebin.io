@@ -29,11 +29,17 @@ import (
 // happened is never failed or undone because its record could not be
 // written.
 
-// actor is who made a change.
+// actor is who made a change. role is the standing the credential earned on
+// the site, set by the gate that authenticated it and never worked out again
+// elsewhere: roleOwner or roleAdmin for an account (a token, a session, an
+// OAuth grant), rolePassword for the edit password. It is empty where no
+// site was opened (a creation, an anonymous caller). refuseUnlessOwner reads
+// it, and so does payloadFor.
 type actor struct {
 	surface string
 	auth    string
 	account string
+	role    string
 }
 
 type actorKey struct{}
@@ -63,8 +69,11 @@ func (a *API) apiSurface(r *http.Request) string {
 
 // entryFor builds an entry for r. The address is auth.ClientIP's: the last
 // X-Forwarded-For entry, the one Caddy appended.
+//
+// An admin's line names the admin's account and carries Role "admin"; an
+// owner's and a password's carry no role, so they read as they always did.
 func entryFor(r *http.Request, act actor, action string) provenance.Entry {
-	return provenance.Entry{
+	e := provenance.Entry{
 		Time:    time.Now().UTC(),
 		Action:  action,
 		Surface: act.surface,
@@ -73,6 +82,10 @@ func entryFor(r *http.Request, act actor, action string) provenance.Entry {
 		IP:      clientIP(r),
 		UA:      r.UserAgent(),
 	}
+	if act.role == roleAdmin {
+		e.Role = provenance.RoleAdmin
+	}
+	return e
 }
 
 // record adds e to the site's log, logging (never returning) a failure.
@@ -186,17 +199,21 @@ func (a *API) createActor(r *http.Request, owner string) actor {
 
 // mcpActor is who acts through MCP: the connection's account, and the
 // credential that opened the site — the account's own token or OAuth grant
-// when it owns the site, the edit password otherwise.
-func mcpActor(auth mcp.Auth, site *store.Site) actor {
+// when it stands on the site (st, as openSiteAs found it: the owner or an
+// admin, which becomes the role), the edit password otherwise. With no site
+// (a creation) st is not read.
+func mcpActor(auth mcp.Auth, site *store.Site, st standing) actor {
 	act := actor{surface: provenance.SurfaceMCP, auth: provenance.AuthNone, account: auth.AccountID}
 	switch {
-	case site != nil && auth.AccountID != "" && auth.AccountID == site.Meta.OwnerAccountID:
+	case site != nil && st != standNone:
 		act.auth = provenance.AuthToken
 		if auth.OAuth {
 			act.auth = provenance.AuthOAuth
 		}
+		act.role = st.role()
 	case site != nil:
 		act.auth = provenance.AuthPassword
+		act.role = rolePassword
 	case auth.OAuth:
 		act.auth = provenance.AuthOAuth
 	case auth.AccountID != "":
@@ -205,13 +222,13 @@ func mcpActor(auth mcp.Auth, site *store.Site) actor {
 	return act
 }
 
-// recordMCP records one MCP write.
-func (a *API) recordMCP(auth mcp.Auth, site *store.Site, action string, files int, detail string) {
+// recordMCP records one MCP write by the caller openSiteAs let in as st.
+func (a *API) recordMCP(auth mcp.Auth, site *store.Site, st standing, action string, files int, detail string) {
 	r := auth.Request
 	if r == nil {
 		r = &http.Request{Header: http.Header{}}
 	}
-	e := entryFor(r, mcpActor(auth, site), action)
+	e := entryFor(r, mcpActor(auth, site, st), action)
 	if auth.ClientIP != "" {
 		e.IP = auth.ClientIP
 	}
@@ -375,10 +392,16 @@ func (s siteService) SitesSeenFrom(m provenance.Match) (map[string][]provenance.
 	return out, nil
 }
 
-// uploadIssuer is the account behind an upload token, for the record.
-func (a *API) uploadIssuer(secret string) string {
+// uploadActor is who writes with an upload token, for the record: the
+// account that opened it through MCP, in the role it opened the site with
+// (an admin's token writes as the admin), or the edit password's holder.
+func (a *API) uploadActor(surface, secret string) actor {
+	act := actor{surface: surface, auth: provenance.AuthUploadToken, role: rolePassword}
 	if !strings.HasPrefix(secret, ids.UploadTokenPrefix) {
-		return ""
+		return act
 	}
-	return a.uploads.issuer(secret)
+	if account, role := a.uploads.issuerRole(secret); account != "" {
+		act.account, act.role = account, role
+	}
+	return act
 }

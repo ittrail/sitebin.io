@@ -60,14 +60,14 @@ func (a *API) webdav(w http.ResponseWriter, r *http.Request) {
 
 	// Who is writing, for the provenance record: the upload token's account,
 	// or whoever holds the edit password.
-	act := actor{surface: provenance.SurfaceWebDAV, auth: provenance.AuthPassword}
+	act := actor{surface: provenance.SurfaceWebDAV, auth: provenance.AuthPassword, role: rolePassword}
 
 	// An upload token opens the tree whatever the site's WebDAV toggle says:
 	// it is an agent's upload channel, not the site's network drive, and it
 	// grants nothing write_files does not. It is answered only as a token — a
 	// bad one is a 401, never a fall-through to the edit password.
 	if secret := uploadCredential(r); secret != "" {
-		act = actor{surface: provenance.SurfaceWebDAV, auth: provenance.AuthUploadToken, account: a.uploadIssuer(secret)}
+		act = a.uploadActor(provenance.SurfaceWebDAV, secret)
 		end, ok := a.uploads.begin(secret, editID)
 		if !ok {
 			w.Header().Set("WWW-Authenticate", `Basic realm="Sitebin WebDAV (password = edit password)"`)

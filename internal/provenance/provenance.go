@@ -113,6 +113,9 @@ const (
 	AuthUploadToken = "upload-token"
 )
 
+// RoleAdmin marks an entry made by an admin of a shared site (Entry.Role).
+const RoleAdmin = "admin"
+
 // Entry is one event. The JSON names are short because a log is read in bulk.
 type Entry struct {
 	Time time.Time `json:"t"`
@@ -127,8 +130,13 @@ type Entry struct {
 	// Account is the acting account; empty for an anonymous caller and for
 	// one that authenticated with a site's edit password.
 	Account string `json:"account,omitempty"`
-	IP      string `json:"ip,omitempty"`
-	UA      string `json:"ua,omitempty"`
+	// Role is RoleAdmin when Account acted as an admin of a shared site, not
+	// as its owner. Empty otherwise: an owner's lines and an edit password's
+	// read exactly as they did before sites could be shared (Auth and
+	// Account tell them apart), so no existing line changes meaning.
+	Role string `json:"role,omitempty"`
+	IP   string `json:"ip,omitempty"`
+	UA   string `json:"ua,omitempty"`
 	// Site is the site an account-log entry is about.
 	Site   string `json:"site,omitempty"`
 	Files  int    `json:"files,omitempty"`
@@ -168,7 +176,7 @@ func standalone(action string) bool {
 
 func mergeable(last, e Entry) bool {
 	if standalone(e.Action) || last.Action != e.Action || last.Surface != e.Surface || last.Auth != e.Auth ||
-		last.Account != e.Account || last.IP != e.IP || last.UA != e.UA || last.Site != e.Site {
+		last.Account != e.Account || last.Role != e.Role || last.IP != e.IP || last.UA != e.UA || last.Site != e.Site {
 		return false
 	}
 	gap := e.Time.Sub(last.Latest())

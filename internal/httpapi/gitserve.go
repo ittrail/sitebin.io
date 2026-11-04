@@ -65,11 +65,17 @@ const (
 	msgGitTooLarge        = "request too large"
 	msgGitBadRequest      = "bad git request"
 	msgGitContentType     = "not a git request"
+	// msgGitStandingGone: the credential's standing on the site ended
+	// between the gate and the push's registration (gitStandingHolds).
+	msgGitStandingGone = "this credential no longer opens this site: it changed hands, its share ended or its edit password changed; sign in again or ask its owner"
 )
 
 // errGitNoRepo: a read of a site whose repository does not exist and may not
 // be created. The state check refuses it first; this is the backstop.
 var errGitNoRepo = errors.New("this site has no Git repository")
+
+// errGitStandingGone: gitStandingHolds found the credential's standing gone.
+var errGitStandingGone = errors.New(msgGitStandingGone)
 
 // serveGit answers every Git request, in this order: the host, the site, the
 // service and an RPC's content type, the credential (gitAuth), the site's
@@ -134,11 +140,11 @@ func (a *API) serveGit(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case info:
-		a.gitAdvertise(w, r, site, svc, st)
+		a.gitAdvertise(w, r, site, svc, st, act)
 	case write:
 		a.gitPush(w, r, site, act)
 	default:
-		a.gitFetch(w, r, site, st)
+		a.gitFetch(w, r, site, st, act)
 	}
 }
 
@@ -172,6 +178,54 @@ func gitRefuse(w http.ResponseWriter, svc gitrepo.Service, info bool, status int
 		return
 	}
 	http.Error(w, msg, status)
+}
+
+// gitRefuseReadable answers a refusal git prints on every request: an
+// advertisement's ERR line on info/refs, the RPC's own error shape on a POST
+// (gitrepo.WriteRPCRefusal) — never a bare status, which git shows as "RPC
+// failed" and "unexpected disconnect".
+func gitRefuseReadable(w http.ResponseWriter, svc gitrepo.Service, info bool, msg string) {
+	if info {
+		gitrepo.WriteRefusal(w, svc, msg)
+		return
+	}
+	gitrepo.WriteRPCRefusal(w, svc, msg)
+}
+
+// gitStandingHolds checks, inside a push registration (BeginGitWrite), that
+// the standing act was let in with on site — the site as gitAuth read it —
+// still holds in meta.json as it is now:
+//   - an owner: the site still has that owner;
+//   - an admin: the site has the same owner, and still lists the admin with
+//     no end date or one ahead (store.Meta.LiveAdmin);
+//   - the edit password: its hash has not changed (a rotation, a transfer).
+//
+// A push takes no site lock, so a transfer, a share ending or a rotation
+// that lands between the gate and the registration would otherwise let it
+// write into a site its credential no longer opens; one that lands after
+// the registration stops the push itself (stopGitWrite). It reads meta.json
+// only: the plan (SharingAllowed) was asked in gitAuth just before, and a
+// delete or a lock waiting on this registration must never wait on a plan
+// lookup. Called before Init and before git runs.
+func (a *API) gitStandingHolds(site *store.Site, act actor) error {
+	fresh, err := a.st.ByViewID(site.ViewID)
+	if err != nil {
+		return err
+	}
+	was, now := site.Meta, fresh.Meta
+	var holds bool
+	switch act.role {
+	case roleOwner:
+		holds = act.account != "" && now.OwnerAccountID == act.account
+	case roleAdmin:
+		holds = now.OwnerAccountID == was.OwnerAccountID && now.LiveAdmin(act.account, time.Now())
+	case rolePassword:
+		holds = now.EditPasswordHash == was.EditPasswordHash
+	}
+	if !holds {
+		return errGitStandingGone
+	}
+	return nil
 }
 
 // gitStateRefusal is why st does not allow the request, or "". A plan
@@ -218,9 +272,10 @@ func (a *API) gitAllowance(site *store.Site) (allowance int64, refusal string, e
 // A missing one is created only where the site may write, and only inside a
 // push registration (BeginGitWrite), so a delete or a lock that lands at
 // the same moment cancels it or is seen by it — never leaves an orphaned
-// git/ behind. The registration ends with the Init: the read itself is
-// served outside it, beside any push.
-func (a *API) gitRepoReady(site *store.Site, writable bool) error {
+// git/ behind. Inside it, the standing act was let in with is checked again
+// before the Init (gitStandingHolds). The registration ends with the Init:
+// the read itself is served outside it, beside any push.
+func (a *API) gitRepoReady(site *store.Site, writable bool, act actor) error {
 	dir := site.GitDir()
 	if gitrepo.Exists(dir) {
 		return nil
@@ -237,6 +292,9 @@ func (a *API) gitRepoReady(site *store.Site, writable bool) error {
 		return err
 	}
 	defer end()
+	if err := a.gitStandingHolds(site, act); err != nil {
+		return err
+	}
 	return a.git.Init(dir)
 }
 
@@ -254,6 +312,8 @@ func (a *API) gitFail(w http.ResponseWriter, r *http.Request, site *store.Site, 
 		gitRefuse(w, svc, info, http.StatusForbidden, store.LockedMessage(nil))
 	case errors.Is(err, errGitNoRepo):
 		gitRefuse(w, svc, info, http.StatusNotFound, errGitNoRepo.Error())
+	case errors.Is(err, errGitStandingGone):
+		gitRefuseReadable(w, svc, info, msgGitStandingGone)
 	case errors.Is(err, store.ErrNotFound):
 		// Deleted after this request was let in.
 		http.NotFound(w, r)
@@ -286,7 +346,7 @@ func gitClientFault(err error) bool {
 // gitAdvertise answers GET info/refs. AdvertiseRefs writes the service line
 // before git starts, so it is called only once the repository exists: a
 // missing one is a refusal, never a truncated 200.
-func (a *API) gitAdvertise(w http.ResponseWriter, r *http.Request, site *store.Site, svc gitrepo.Service, st gitState) {
+func (a *API) gitAdvertise(w http.ResponseWriter, r *http.Request, site *store.Site, svc gitrepo.Service, st gitState, act actor) {
 	if svc == gitrepo.ReceivePack {
 		// A push beside a registration is told so here: on its POST, the
 		// 409 that BeginGitWrite answers is all Git would show. Only a look —
@@ -309,7 +369,7 @@ func (a *API) gitAdvertise(w http.ResponseWriter, r *http.Request, site *store.S
 			return
 		}
 	}
-	if err := a.gitRepoReady(site, st.Writable); err != nil {
+	if err := a.gitRepoReady(site, st.Writable, act); err != nil {
 		a.gitFail(w, r, site, svc, true, err)
 		return
 	}
@@ -329,9 +389,9 @@ func (a *API) gitAdvertise(w http.ResponseWriter, r *http.Request, site *store.S
 
 // gitFetch answers POST git-upload-pack. A fetch only reads: it runs beside
 // a push, outside any registration.
-func (a *API) gitFetch(w http.ResponseWriter, r *http.Request, site *store.Site, st gitState) {
+func (a *API) gitFetch(w http.ResponseWriter, r *http.Request, site *store.Site, st gitState, act actor) {
 	svc := gitrepo.UploadPack
-	if err := a.gitRepoReady(site, st.Writable); err != nil {
+	if err := a.gitRepoReady(site, st.Writable, act); err != nil {
 		a.gitFail(w, r, site, svc, false, err)
 		return
 	}
@@ -380,7 +440,9 @@ func fetchBody(r *http.Request) (*boundedBody, error) {
 // registration from before the repository is created (if it must be)
 // through git's run to the bookkeeping that follows, and takes no site lock
 // in between: a delete or a lock waits for the registration's end, and
-// cancels ctx to get it.
+// cancels ctx to get it. Once registered, and before the Init and git, it
+// checks that the standing act was let in with still holds
+// (gitStandingHolds).
 func (a *API) gitPush(w http.ResponseWriter, r *http.Request, site *store.Site, act actor) {
 	svc := gitrepo.ReceivePack
 	allowance, refusal, err := a.gitAllowance(site)
@@ -407,6 +469,10 @@ func (a *API) gitPush(w http.ResponseWriter, r *http.Request, site *store.Site, 
 		return
 	}
 	defer end()
+	if err := a.gitStandingHolds(site, act); err != nil {
+		a.gitFail(w, r, site, svc, false, err)
+		return
+	}
 
 	dir := site.GitDir()
 	if err := a.git.Init(dir); err != nil {

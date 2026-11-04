@@ -32,7 +32,7 @@ function toast(msg, isErr) {
 // authHeaders are sent with every API call. X-Sitebin-Session asks the server
 // to honour the browser's account session: a signed-in owner needs no edit
 // password. A page on another origin cannot send this header, which is what
-// makes that safe (see sessionOwns in internal/httpapi/server.go).
+// makes that safe (see sessionStanding in internal/httpapi/server.go).
 function authHeaders() {
   return { "X-Edit-Password": sitePw, "X-Sitebin-Session": "1" };
 }

@@ -73,6 +73,6 @@ func (a *API) withUploadAuth(next func(http.ResponseWriter, *http.Request, *stor
 		if refuseLocked(w, site) {
 			return
 		}
-		next(w, withActor(r, actor{surface: provenance.SurfaceUploadToken, auth: provenance.AuthUploadToken, account: a.uploadIssuer(secret)}), site)
+		next(w, withActor(r, a.uploadActor(provenance.SurfaceUploadToken, secret)), site)
 	}
 }
