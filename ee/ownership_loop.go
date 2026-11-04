@@ -32,8 +32,15 @@ import (
 //     (UpdateOffer, UpdateInvite), so an accept, a cancel or a decline that
 //     lands at the same moment wins or loses cleanly, and the mail goes out
 //     only for the change this tick made.
-//   - No seam call is made while a lock is held: the store's callbacks do
-//     slice and state work only.
+//   - The store's own locked callbacks (UpdateOffer, UpdateInvite) and the
+//     seam's SetAdmins edit function do slice and state work only and call
+//     nothing back. tickMu serialises ticks and is private to the loop: no
+//     request path or seam call ever takes it, so holding it across the
+//     tick's seam calls cannot deadlock anything.
+//   - A marker is only ever removed after a fresh read of that one site
+//     shows it wrong AND the marker is older than markerGrace: the
+//     recipient's marker is linked before meta.json changes owner, and a
+//     share marker before the admin entry is written.
 
 const (
 	// ownershipTickEvery is how often the loop runs; the first tick comes
@@ -42,10 +49,11 @@ const (
 	ownershipFirstTick = time.Minute
 	// reconcileEvery is how often the markers are reconciled with meta.json.
 	reconcileEvery = time.Hour
-	// shareMarkerGrace is how old a share marker must be before it can be
-	// called stray: an invitation being accepted links the marker a moment
-	// before it writes the admin entry.
-	shareMarkerGrace = 10 * time.Minute
+	// markerGrace is how old a marker must be before it can be called stray:
+	// an invitation being accepted links the share marker a moment before it
+	// writes the admin entry, and a transfer links the recipient's marker
+	// before meta.json changes owner.
+	markerGrace = 10 * time.Minute
 	// logEvery is the most often one lasting error is logged for one subject.
 	logEvery = time.Hour
 )
@@ -91,15 +99,18 @@ func (p *provider) stopOwnershipLoop() {
 	})
 }
 
-// safeTick is one tick that cannot take the server down: a panic is logged
-// and the next tick tries again.
-func (p *provider) safeTick() {
+// safeTick is one tick (each step recovers on its own, see step).
+func (p *provider) safeTick() { p.ownershipTick(time.Now()) }
+
+// step runs one step of a tick so that a panic in it is logged and the other
+// steps still run: a repeating panic in one step must not stop the rest.
+func (p *provider) step(name string, f func()) {
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("ownership: the background loop panicked; it goes on at the next tick", "panic", r)
+			slog.Error("ownership: a step of the background loop panicked; the other steps go on", "step", name, "panic", r)
 		}
 	}()
-	p.ownershipTick(time.Now())
+	f()
 }
 
 // ownershipTick is one step of the loop at time now, callable directly. The
@@ -116,15 +127,15 @@ func (p *provider) ownershipTick(now time.Time) {
 	defer p.tickMu.Unlock()
 	p.pruneLoopLog(now)
 
-	p.finishAccepting(now)
-	p.expireOffers(now)
-	p.reopenPaused(now)
-	p.notifyDue(now)
-	p.lapseInvites(now)
-	p.expireAdmins(now)
+	p.step("accepting", func() { p.finishAccepting(now) })
+	p.step("expire-offers", func() { p.expireOffers(now) })
+	p.step("reopen", func() { p.reopenPaused(now) })
+	p.step("notify", func() { p.notifyDue(now) })
+	p.step("invites", func() { p.lapseInvites(now) })
+	p.step("admins", func() { p.expireAdmins(now) })
 	if p.lastReconcile.IsZero() || now.Sub(p.lastReconcile) >= reconcileEvery {
 		p.lastReconcile = now
-		p.reconcileMarkers(now)
+		p.step("reconcile", func() { p.reconcileMarkers(now) })
 	}
 }
 
@@ -249,7 +260,16 @@ func (p *provider) reopenPaused(now time.Time) {
 			p.loopLog("pause:"+o.ID, now, "ownership: could not tell whether an offer is paused", "offer", o.ID, "err", err)
 			continue
 		}
-		if reason != "" || len(hc.HostConflicts(o.Sites, o.From)) > 0 {
+		if reason != "" {
+			continue
+		}
+		conflicts, err := hc.HostConflicts(o.Sites, o.From)
+		if err != nil {
+			// Unknown: the offer stays paused.
+			p.loopLog("conflicts:"+o.ID, now, "ownership: could not read the host conflicts of a paused offer", "offer", o.ID, "err", err)
+			continue
+		}
+		if len(conflicts) > 0 {
 			continue
 		}
 		if _, err := p.owner.UpdateOffer(o.ID, func(x *ownership.Offer) error {
@@ -291,7 +311,7 @@ func (p *provider) notifyDue(now time.Time) {
 		if reason != "" {
 			continue
 		}
-		p.notifyOffer(o)
+		p.notifyOfferAt(o, now)
 	}
 }
 
@@ -394,11 +414,18 @@ func (p *provider) expireAdmin(now time.Time, accID, viewID string) {
 	case !removed:
 		return // renewed meanwhile
 	}
-	if err := p.owner.UnlinkShare(accID, viewID); err != nil {
-		slog.Error("share: could not drop a share marker", "site", viewID, "account", accID, "err", err)
-	}
-	if err := p.dropAdminTags(accID, viewID); err != nil {
-		slog.Error("share: could not drop an admin's tags", "site", viewID, "account", accID, "err", err)
+	// The marker and the tags go only if a fresh read shows the account is
+	// no longer listed: a re-accept between SetAdmins and here keeps both.
+	// A read error is unknown, and the reconciliation settles it later.
+	if p.stillAdmin(accID, viewID) {
+		slog.Info("share expired but was renewed meanwhile; its marker stays", "site", viewID, "account", accID)
+	} else {
+		if err := p.owner.UnlinkShare(accID, viewID); err != nil {
+			slog.Error("share: could not drop a share marker", "site", viewID, "account", accID, "err", err)
+		}
+		if err := p.dropAdminTags(accID, viewID); err != nil {
+			slog.Error("share: could not drop an admin's tags", "site", viewID, "account", accID, "err", err)
+		}
 	}
 	e := provenance.Entry{
 		Time: time.Now().UTC(), Action: provenance.ActionAdmins,
@@ -411,50 +438,71 @@ func (p *provider) expireAdmin(now time.Time, accID, viewID string) {
 	if accID != owner {
 		p.RecordAccountProvenance(accID, adminLog)
 	}
+	slog.Info("share expired", "site", viewID, "account", accID)
+	if p.mailer == nil {
+		return
+	}
 	ownerEmail, adminEmail := p.emailOf(owner), p.emailOf(accID)
 	subject, body := p.shareExpiredMail(viewID, ownerEmail, adminEmail)
 	p.mailVerified(ownerEmail, subject, body)
 	p.mailVerified(adminEmail, subject, body)
-	slog.Info("share expired", "site", viewID, "account", accID)
 }
 
 // ---- reconciliation ----
 
 type siteOwnersLister interface {
-	SiteOwners() (map[string]string, error)
+	SiteOwners() (map[string]ext.SiteOwnership, error)
 }
 
 // reconcileMarkers brings the markers back in line with meta.json, which is
 // the truth. It only ever removes a marker it has positively shown to be
-// wrong, by a fresh read of that one site; an unreadable site, an incomplete
-// walk or a failed listing leaves the marker alone.
+// wrong by a fresh read of that one site, and only once the marker is older
+// than markerGrace; an unreadable site, an incomplete walk or a failed
+// listing leaves the marker alone.
 func (p *provider) reconcileMarkers(now time.Time) {
 	accIDs, err := p.accounts.ListIDs()
 	if err != nil {
 		p.loopLog("list-accounts", now, "ownership: could not list the accounts", "err", err)
 		return
 	}
-	p.reconcileIndex(now, accIDs)
-	p.reconcileShares(now, accIDs)
+	var owners map[string]ext.SiteOwnership
+	if lister, ok := p.host.Sites().(siteOwnersLister); ok {
+		var werr error
+		owners, werr = lister.SiteOwners()
+		if werr != nil {
+			// The list is partial or missing: what it holds is still true,
+			// but absence from it proves nothing. Every verdict is a fresh
+			// read of the one site anyway.
+			p.loopLog("walk", now, "ownership: could not read every site's owner; the markers are reconciled only where the reads were sure", "err", werr)
+		}
+	}
+	p.reconcileIndex(now, accIDs, owners)
+	p.reconcileShares(now, accIDs, owners)
+}
+
+// heldByAcceptance reports whether the account is the recipient of an
+// accepting offer holding the site: its marker is linked ahead of the move
+// and must stay until meta.json says so. Read fresh; a read error counts as
+// held.
+func (p *provider) heldByAcceptance(accID, viewID string) bool {
+	offers, err := p.owner.OpenOffers()
+	if err != nil {
+		return true
+	}
+	return slices.ContainsFunc(offers, func(o ownership.Offer) bool {
+		return o.State == ownership.StateAccepting && o.AcceptedBy == accID && slices.Contains(o.Sites, viewID)
+	})
 }
 
 // reconcileIndex reconciles the account index markers both ways: a marker
 // whose site belongs to another account, or whose site is gone, is unlinked;
 // a site whose meta names an owner with no marker gets one (LinkSite can fail
 // after an adopt or a transfer). An ownerless site names nobody, so its
-// markers are left alone and none is made.
-func (p *provider) reconcileIndex(now time.Time, accIDs []string) {
-	lister, ok := p.host.Sites().(siteOwnersLister)
-	if !ok {
-		return
-	}
-	owners, werr := lister.SiteOwners()
-	if werr != nil {
-		// The list is partial or missing: what it holds is still true, but
-		// absence from it proves nothing.
-		p.loopLog("walk", now, "ownership: could not read every site's owner; the index is reconciled only where the reads were sure", "err", werr)
-	}
-	complete := werr == nil
+// markers are left alone and none is made. The walk only nominates
+// candidates; a candidate is acted on after the grace, after the accepting
+// offers are ruled out, and after a fresh read of that one site, which
+// unlinks only on "gone" or on another named owner.
+func (p *provider) reconcileIndex(now time.Time, accIDs []string, owners map[string]ext.SiteOwnership) {
 	known := map[string]bool{} // accounts whose markers were listed
 	linked := map[string]map[string]bool{}
 	for _, id := range accIDs {
@@ -462,7 +510,7 @@ func (p *provider) reconcileIndex(now time.Time, accIDs []string) {
 		if err != nil {
 			continue
 		}
-		markers, err := p.accounts.ListSiteIDs(acc)
+		markers, err := p.accounts.SiteMarkers(acc)
 		if err != nil {
 			p.loopLog("markers:"+id, now, "ownership: could not list an account's site markers", "account", id, "err", err)
 			continue
@@ -470,68 +518,98 @@ func (p *provider) reconcileIndex(now time.Time, accIDs []string) {
 		known[id] = true
 		linked[id] = map[string]bool{}
 		for _, m := range markers {
-			linked[id][m] = true
-			owner, listed := owners[m]
-			if !(listed && owner != "" && owner != id) && !(!listed && complete) {
+			linked[id][m.Site] = true
+			if so, listed := owners[m.Site]; listed && (so.Owner == "" || so.Owner == id) {
 				continue
 			}
-			// The walk is a snapshot; the verdict is a fresh read of this site.
-			cur, err := p.siteOwner(m)
+			if now.Sub(m.At) < markerGrace || p.heldByAcceptance(id, m.Site) {
+				continue
+			}
+			cur, err := p.siteOwner(m.Site)
 			if !errors.Is(err, ext.ErrSiteGone) && (err != nil || cur == "" || cur == id) {
 				continue
 			}
-			if err := p.accounts.UnlinkSite(acc, m); err != nil {
-				p.loopLog("unlink:"+id+":"+m, now, "ownership: could not unlink a stray site marker", "account", id, "site", m, "err", err)
+			if err := p.accounts.UnlinkSite(acc, m.Site); err != nil {
+				p.loopLog("unlink:"+id+":"+m.Site, now, "ownership: could not unlink a stray site marker", "account", id, "site", m.Site, "err", err)
 				continue
 			}
-			delete(linked[id], m)
-			slog.Info("ownership: unlinked a stray site marker", "account", id, "site", m)
+			delete(linked[id], m.Site)
+			slog.Info("ownership: unlinked a stray site marker", "account", id, "site", m.Site)
 		}
 	}
-	for site, owner := range owners {
-		if owner == "" || !known[owner] || linked[owner][site] {
+	for site, so := range owners {
+		if so.Owner == "" || !known[so.Owner] || linked[so.Owner][site] {
 			continue
 		}
-		if cur, err := p.siteOwner(site); err != nil || cur != owner {
+		if cur, err := p.siteOwner(site); err != nil || cur != so.Owner {
 			continue
 		}
-		acc, err := p.accounts.ByID(owner)
+		acc, err := p.accounts.ByID(so.Owner)
 		if err != nil {
 			continue
 		}
 		if err := p.accounts.LinkSite(acc, site); err != nil {
-			p.loopLog("link:"+owner+":"+site, now, "ownership: could not link a missing site marker", "account", owner, "site", site, "err", err)
+			p.loopLog("link:"+so.Owner+":"+site, now, "ownership: could not link a missing site marker", "account", so.Owner, "site", site, "err", err)
 			continue
 		}
-		slog.Info("ownership: linked a missing site marker", "account", owner, "site", site)
+		slog.Info("ownership: linked a missing site marker", "account", so.Owner, "site", site)
 	}
 }
 
-// reconcileShares unlinks a share marker whose site no longer lists the
-// account (or is gone), once the marker is old enough not to be an invitation
-// in the middle of being accepted, and prunes an account's registry tags for
-// sites it no longer administers. A site whose admins cannot be read is left
-// alone.
-func (p *provider) reconcileShares(now time.Time, accIDs []string) {
+// reconcileShares reconciles the share markers both ways against meta.json's
+// admins: a marker whose site is gone or no longer lists the account is
+// unlinked (after the grace), a listed admin with no marker gets one, and an
+// account's registry tags for sites it no longer administers are pruned. A
+// site whose admins cannot be read is left alone.
+func (p *provider) reconcileShares(now time.Time, accIDs []string, owners map[string]ext.SiteOwnership) {
+	accSet := map[string]bool{}
+	for _, id := range accIDs {
+		accSet[id] = true
+	}
 	sharers, err := p.owner.SharingAccounts()
+	listedOK := err == nil
 	if err != nil {
 		p.loopLog("list-sharers", now, "ownership: could not list the sharing accounts", "err", err)
 	}
+	marked := map[string]map[string]bool{} // accounts whose share markers were listed
 	for _, id := range sharers {
 		markers, err := p.owner.ShareMarkers(id)
 		if err != nil {
 			p.loopLog("share-markers:"+id, now, "ownership: could not list an account's share markers", "account", id, "err", err)
+			listedOK = false
 			continue
 		}
+		marked[id] = map[string]bool{}
 		for _, m := range markers {
-			if now.Sub(m.At) < shareMarkerGrace || p.stillAdmin(id, m.Site) {
+			marked[id][m.Site] = true
+			if now.Sub(m.At) < markerGrace || p.stillAdmin(id, m.Site) {
 				continue
 			}
 			if err := p.owner.UnlinkShare(id, m.Site); err != nil {
 				p.loopLog("unlink-share:"+id+":"+m.Site, now, "ownership: could not unlink a stray share marker", "account", id, "site", m.Site, "err", err)
 				continue
 			}
+			delete(marked[id], m.Site)
 			slog.Info("ownership: unlinked a stray share marker", "account", id, "site", m.Site)
+		}
+	}
+	if listedOK {
+		for site, so := range owners {
+			for _, adm := range so.Admins {
+				// An account with no share folder has no markers at all.
+				if !accSet[adm] || marked[adm][site] {
+					continue
+				}
+				admins, err := p.siteAdmins(site)
+				if err != nil || !listsAccount(admins, adm) {
+					continue
+				}
+				if err := p.owner.LinkShare(adm, site); err != nil {
+					p.loopLog("link-share:"+adm+":"+site, now, "ownership: could not link a missing share marker", "account", adm, "site", site, "err", err)
+					continue
+				}
+				slog.Info("ownership: linked a missing share marker", "account", adm, "site", site)
+			}
 		}
 	}
 	for _, id := range accIDs {

@@ -20,7 +20,7 @@ func setupEmail(t *testing.T) *provider {
 	t.Setenv("SITEBIN_SMTP_PORT", "1")
 	t.Setenv("SITEBIN_SMTP_FROM", "no-reply@sitebin.example")
 	p := newProvider()
-	if err := p.Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
+	if err := initT(t, p, &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
 		t.Fatal(err)
 	}
 	if p.mailer == nil {

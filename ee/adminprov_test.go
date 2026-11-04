@@ -23,7 +23,7 @@ func setupProvAdmin(t *testing.T) (*provider, *provHost, http.Handler, *http.Coo
 	p := newProvider()
 	fs := &fakeSites{infos: map[string]ext.SiteInfo{}}
 	host := &provHost{fakeHost: &fakeHost{dir: t.TempDir(), sites: fs}, sites: &provSites{fakeSites: fs}}
-	if err := p.Init(host); err != nil {
+	if err := initT(t, p, host); err != nil {
 		t.Fatal(err)
 	}
 	mux := serveMux(p)

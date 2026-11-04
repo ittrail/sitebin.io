@@ -34,7 +34,7 @@ func setupStackInstance(t *testing.T, secret string) (*provider, *fakeHost, http
 	}
 	p := newProvider()
 	host := &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}
-	if err := p.Init(host); err != nil {
+	if err := initT(t, p, host); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	mux := http.NewServeMux()

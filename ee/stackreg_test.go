@@ -37,7 +37,7 @@ func stackProvider(t *testing.T, licensing string) *provider {
 		t.Setenv("SITEBIN_STACK_LICENSING", licensing)
 	}
 	p := newProvider()
-	if err := p.Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
+	if err := initT(t, p, &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	return p
@@ -168,7 +168,7 @@ func TestDashboardShowsThePriceOfAPayGateTier(t *testing.T) {
 	t.Setenv("SITEBIN_DEFAULT_TIER", "free")
 	t.Setenv("SITEBIN_TIER_SELF_SELECT", "true")
 	p := newProvider()
-	if err := p.Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
+	if err := initT(t, p, &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	mux := http.NewServeMux()
@@ -308,7 +308,7 @@ func TestStackDeclarationCarriesGDPR(t *testing.T) {
 		t.Setenv("SITEBIN_TIERS", stackTiersJSON)
 		t.Setenv("SITEBIN_DEFAULT_TIER", "free")
 		p := newProvider()
-		if err := p.Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
+		if err := initT(t, p, &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
 			t.Fatalf("Init: %v", err)
 		}
 		reg := p.stackDeclaration("sitebin")

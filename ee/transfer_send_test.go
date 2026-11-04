@@ -23,7 +23,10 @@ import (
 
 // The fake core's side of the sender's page: the host rule and the form
 // recipients, over fakeSites' infos.
-func (s *fakeSites) HostConflicts(ids []string, sender string) map[string][]string {
+func (s *fakeSites) HostConflicts(ids []string, sender string) (map[string][]string, error) {
+	if s.conflictsErr != nil {
+		return nil, s.conflictsErr
+	}
 	in := map[string]bool{}
 	for _, id := range ids {
 		in[id] = true
@@ -45,7 +48,7 @@ func (s *fakeSites) HostConflicts(ids []string, sender string) map[string][]stri
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
 func (s *fakeSites) FormRecipients(id string) []string { return s.ad().forms[id] }

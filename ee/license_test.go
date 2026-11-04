@@ -80,7 +80,7 @@ func licensedProvider(t *testing.T, key string) (*provider, *fakeHost) {
 	t.Setenv("SITEBIN_LICENSE_KEY", key)
 	p := newProvider()
 	host := &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}
-	if err := p.Init(host); err != nil {
+	if err := initT(t, p, host); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	t.Cleanup(func() {
@@ -136,7 +136,7 @@ func TestAuthorizeCreatePermittedWhenLicenseUnknown(t *testing.T) {
 	t.Setenv("SITEBIN_ACCOUNT_MODE", "open")
 	t.Setenv("SITEBIN_LICENSE_KEY", "")
 	p := newProvider()
-	if err := p.Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
+	if err := initT(t, p, &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	p.license.Stop()
@@ -205,7 +205,7 @@ func TestElapsedTrialRefusesCreation(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := newProvider()
-	if err := p.Init(&fakeHost{dir: dir, sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
+	if err := initT(t, p, &fakeHost{dir: dir, sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	t.Cleanup(func() { p.license.Stop() })
@@ -434,7 +434,7 @@ func TestNoTrustedRootsIsLoggedAsAnError(t *testing.T) {
 
 	p := newProvider()
 	host := &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}
-	if err := p.Init(host); err != nil {
+	if err := initT(t, p, host); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	t.Cleanup(p.license.Stop)

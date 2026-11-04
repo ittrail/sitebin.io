@@ -355,18 +355,44 @@ func TestHostConflicts(t *testing.T) {
 		}
 	}
 	o := e.own(t)
-	got := o.HostConflicts([]string{a.ViewID}, "acct")
+	got, err := o.HostConflicts([]string{a.ViewID}, "acct")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(got) != 1 || len(got["m.example"]) != 1 || got["m.example"][0] != b.ViewID {
 		t.Fatalf("HostConflicts = %v, want m.example -> [%s]", got, b.ViewID)
 	}
-	if got := o.HostConflicts([]string{a.ViewID, b.ViewID}, "acct"); len(got) != 0 {
+	if got, _ := o.HostConflicts([]string{a.ViewID, b.ViewID}, "acct"); len(got) != 0 {
 		t.Errorf("the whole host moves together, yet: %v", got)
 	}
-	if got := o.HostConflicts([]string{c.ViewID}, "acct"); len(got) != 0 {
+	if got, _ := o.HostConflicts([]string{c.ViewID}, "acct"); len(got) != 0 {
 		t.Errorf("a host of its own: %v", got)
 	}
-	if got := o.HostConflicts([]string{a.ViewID}, "someone-else"); len(got) != 0 {
+	if got, _ := o.HostConflicts([]string{a.ViewID}, "someone-else"); len(got) != 0 {
 		t.Errorf("another sender's sites counted: %v", got)
+	}
+	// A site that is gone is skipped, not an error.
+	if _, err := o.HostConflicts([]string{noSuchSite}, "acct"); err != nil {
+		t.Errorf("a missing bundle site = %v, want no error", err)
+	}
+	// An unreadable meta.json is unknown, never "no conflict": a bundle
+	// site, and a site holding an address on the host.
+	bad := filepath.Join(e.cfg.DataDir, "sites", b.ViewID, "meta.json")
+	good, err := os.ReadFile(bad)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bad, []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := o.HostConflicts([]string{a.ViewID}, "acct"); err == nil {
+		t.Errorf("a host-mate with a broken meta.json gave %v, nil; want an error", got)
+	}
+	if got, err := o.HostConflicts([]string{b.ViewID}, "acct"); err == nil {
+		t.Errorf("a bundle site with a broken meta.json gave %v, nil; want an error", got)
+	}
+	if err := os.WriteFile(bad, good, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -670,13 +696,24 @@ func TestSiteOwnersReadsMetaOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SiteOwners: %v", err)
 	}
+	e.st.Update(e.siteOf(t, mine.ID), func(m *store.Meta) error {
+		m.Admins = []store.SiteAdmin{{Account: "adm-1"}, {Account: "adm-2"}}
+		return nil
+	})
+	got, err = o.SiteOwners()
+	if err != nil {
+		t.Fatalf("SiteOwners: %v", err)
+	}
+	if a := got[mine.ID].Admins; len(a) != 2 || a[0] != "adm-1" || a[1] != "adm-2" {
+		t.Errorf("admins from the same read = %v", a)
+	}
 	want := map[string]string{mine.ID: "acct-1", anon.ID: "", other.ID: "acct-2"}
 	if len(got) != len(want) {
 		t.Fatalf("SiteOwners = %v, want %v", got, want)
 	}
 	for id, owner := range want {
-		if g, ok := got[id]; !ok || g != owner {
-			t.Errorf("owner of %s = %q (present %v), want %q", id, g, ok, owner)
+		if g, ok := got[id]; !ok || g.Owner != owner {
+			t.Errorf("owner of %s = %q (present %v), want %q", id, g.Owner, ok, owner)
 		}
 	}
 
@@ -690,7 +727,7 @@ func TestSiteOwnersReadsMetaOnly(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unreadable meta.json was not reported")
 	}
-	if got[mine.ID] != "acct-1" {
+	if got[mine.ID].Owner != "acct-1" {
 		t.Errorf("the readable sites were dropped with the error: %v", got)
 	}
 	if _, ok := got[other.ID]; ok {

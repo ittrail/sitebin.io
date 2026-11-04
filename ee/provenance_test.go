@@ -68,7 +68,7 @@ func setupProvAccounts(t *testing.T) (*provider, *provHost, http.Handler) {
 	p := newProvider()
 	fs := &fakeSites{infos: map[string]ext.SiteInfo{}}
 	host := &provHost{fakeHost: &fakeHost{dir: t.TempDir(), sites: fs}, sites: &provSites{fakeSites: fs}}
-	if err := p.Init(host); err != nil {
+	if err := initT(t, p, host); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	mux := http.NewServeMux()
@@ -314,7 +314,7 @@ func TestOIDCCallbackRecordsSignupThenSignin(t *testing.T) {
 	t.Setenv("SITEBIN_OAUTH_OIDC_CLIENT_SECRET", "s3cret")
 	p := newProvider()
 	host := &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}
-	if err := p.Init(host); err != nil {
+	if err := initT(t, p, host); err != nil {
 		t.Fatal(err)
 	}
 	mux := serveMux(p)
@@ -358,7 +358,7 @@ func TestGDPRExportCarriesTheAccountsProvenance(t *testing.T) {
 	p := newProvider()
 	fs := &fakeSites{infos: map[string]ext.SiteInfo{}}
 	host := &provHost{fakeHost: &fakeHost{dir: t.TempDir(), sites: fs}, sites: &provSites{fakeSites: fs}}
-	if err := p.Init(host); err != nil {
+	if err := initT(t, p, host); err != nil {
 		t.Fatal(err)
 	}
 	mux := serveMux(p)

@@ -32,7 +32,7 @@ func sharingProvider(t *testing.T, mode, tiers string) (*provider, http.Handler)
 	}
 	p := newProvider()
 	host := &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}
-	if err := p.Init(host); err != nil {
+	if err := initT(t, p, host); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	return p, serveMux(p)
@@ -332,7 +332,7 @@ func TestDashboardDeleteRefusesWhenTheOwnerChangedAfterTheCheck(t *testing.T) {
 	p := newProvider()
 	fs := &fakeSites{infos: map[string]ext.SiteInfo{}}
 	host := &racyHost{fakeHost: &fakeHost{dir: t.TempDir(), sites: fs}, s: &racySites{fakeSites: fs, newOwner: "someone-else"}}
-	if err := p.Init(host); err != nil {
+	if err := initT(t, p, host); err != nil {
 		t.Fatal(err)
 	}
 	mux := serveMux(p)

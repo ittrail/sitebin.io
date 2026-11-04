@@ -126,8 +126,13 @@ func (s siteService) SiteOwner(viewID string) (string, error) {
 	return site.Meta.OwnerAccountID, nil
 }
 
-func (s siteService) SiteOwners() (map[string]string, error) {
-	return s.a.st.SiteOwners()
+func (s siteService) SiteOwners() (map[string]ext.SiteOwnership, error) {
+	got, err := s.a.st.SiteOwners()
+	out := make(map[string]ext.SiteOwnership, len(got))
+	for id, so := range got {
+		out[id] = ext.SiteOwnership{Owner: so.Owner, Admins: so.Admins}
+	}
+	return out, err
 }
 
 func (s siteService) SiteLocked(viewID string) (bool, error) {
@@ -262,19 +267,30 @@ func (s siteService) WillNotMove(viewID, sender string) []string {
 // HostConflicts maps each host the bundle's sites use to the sender's other
 // sites that also have an address on it: they would be left sharing a host
 // with a site that changed owner.
-func (s siteService) HostConflicts(viewIDs []string, sender string) map[string][]string {
+//
+// A site of the bundle that is gone is skipped (the owner check refuses it
+// elsewhere); any other read error, of a bundle site or of an address on its
+// host, is returned: the answer is then unknown, never "no conflict".
+func (s siteService) HostConflicts(viewIDs []string, sender string) (map[string][]string, error) {
 	out := map[string][]string{}
 	if sender == "" {
-		return out
+		return out, nil
 	}
 	for _, id := range viewIDs {
 		site, err := s.a.st.ByViewID(id)
-		if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
 			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read site %s: %w", id, err)
 		}
 		for _, d := range site.Meta.CustomDomains {
 			host := store.HostOf(d)
-			for _, ha := range s.a.st.HostAddresses(host) {
+			addrs, err := s.a.st.HostAddressesStrict(host)
+			if err != nil {
+				return nil, fmt.Errorf("read the addresses on %s: %w", host, err)
+			}
+			for _, ha := range addrs {
 				other := ha.Site
 				if slices.Contains(viewIDs, other.ViewID) || other.Meta.OwnerAccountID != sender {
 					continue
@@ -288,7 +304,7 @@ func (s siteService) HostConflicts(viewIDs []string, sender string) map[string][
 	for _, ids := range out {
 		slices.Sort(ids)
 	}
-	return out
+	return out, nil
 }
 
 // FormRecipients lists the recipients of the site's active and pending

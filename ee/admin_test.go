@@ -34,7 +34,7 @@ func setupAdmin(t *testing.T, allowlist string) (*provider, *fakeHost, http.Hand
 	t.Setenv("SITEBIN_ADMIN_ACCOUNTS", allowlist)
 	p := newProvider()
 	host := &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}
-	if err := p.Init(host); err != nil {
+	if err := initT(t, p, host); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	mux := http.NewServeMux()
@@ -366,7 +366,7 @@ func TestTrustedTierGrantsTrustOnlyToOwnedSites(t *testing.T) {
 	t.Setenv("SITEBIN_DEFAULT_TIER", "free")
 	t.Setenv("SITEBIN_ANON_TIER", "drop")
 	p := newProvider()
-	if err := p.Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
+	if err := initT(t, p, &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
 		t.Fatal(err)
 	}
 

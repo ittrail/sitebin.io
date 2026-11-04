@@ -70,16 +70,22 @@ var errNothingToMail = errors.New("nothing to mail")
 // done) and then mails the recipient if they are a verified account. The
 // sender is never told whether anyone was mailed. An offer that is not open,
 // or already notified, is left alone.
-func (p *provider) notifyOffer(o ownership.Offer) {
+func (p *provider) notifyOffer(o ownership.Offer) { p.notifyOfferAt(o, time.Now()) }
+
+// notifyOfferAt is notifyOffer at time now. The store's own update re-checks
+// that the offer is still open, unnotified, available and within accept-by,
+// so a sender who moved the dates a moment ago is not mailed too early.
+func (p *provider) notifyOfferAt(o ownership.Offer, now time.Time) {
 	if p.owner == nil {
 		return
 	}
 	cur, err := p.owner.UpdateOffer(o.ID, func(x *ownership.Offer) error {
-		if x.NotifiedAt != nil || x.State != ownership.StateOpen {
+		if x.NotifiedAt != nil || x.State != ownership.StateOpen ||
+			(x.AvailableFrom != nil && now.Before(*x.AvailableFrom)) || now.After(x.AcceptBy) {
 			return errNothingToMail
 		}
-		now := time.Now().UTC()
-		x.NotifiedAt = &now
+		at := now.UTC()
+		x.NotifiedAt = &at
 		return nil
 	})
 	if err != nil {
@@ -87,6 +93,9 @@ func (p *provider) notifyOffer(o ownership.Offer) {
 			slog.Error("could not mark an offer as notified", "offer", o.ID, "err", err)
 		}
 		return
+	}
+	if p.mailer == nil {
+		return // nothing to send: do not walk the sites for a body
 	}
 	senderEmail := "an account on this instance"
 	if p.accounts != nil {
@@ -275,10 +284,20 @@ func (p *provider) shareEndedMail(viewID, ownerEmail, adminEmail, byEmail string
 // ---- expiry ----
 
 // mailTransferExpired tells both sides that an offer lapsed unaccepted.
+//
+// The recipient is told only if they were ever told of the offer
+// (NotifiedAt set): an offer that stayed paused or unavailable throughout
+// never reached them, and a mail about it would be the first they hear.
 func (p *provider) mailTransferExpired(o ownership.Offer) {
+	if p.mailer == nil {
+		return
+	}
 	senderEmail := p.emailOf(o.From)
 	subject, body := p.transferExpiredMail(o, senderEmail, true)
 	p.mailVerified(senderEmail, subject, body)
+	if o.NotifiedAt == nil {
+		return
+	}
 	subject, body = p.transferExpiredMail(o, senderEmail, false)
 	p.mailVerified(o.ToEmail, subject, body)
 }

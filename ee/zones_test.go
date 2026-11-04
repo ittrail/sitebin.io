@@ -27,7 +27,7 @@ func setupZones(t *testing.T) (*provider, *fakeSites, http.Handler) {
 	p := newProvider()
 	sites := &fakeSites{infos: map[string]ext.SiteInfo{}}
 	host := &fakeHost{dir: t.TempDir(), sites: sites}
-	if err := p.Init(host); err != nil {
+	if err := initT(t, p, host); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	mux := http.NewServeMux()

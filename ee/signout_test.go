@@ -40,7 +40,7 @@ func setupSSO(t *testing.T, ti *testIssuer, localAuth bool) (*provider, http.Han
 	t.Setenv("SITEBIN_OAUTH_OIDC_CLIENT_SECRET", "s3cret")
 	t.Setenv("SITEBIN_OAUTH_OIDC_LABEL", "IT-Trail Login")
 	p := newProvider()
-	if err := p.Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
+	if err := initT(t, p, &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
 		t.Fatal(err)
 	}
 	return p, serveMux(p)

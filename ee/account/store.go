@@ -239,11 +239,53 @@ func (s *Store) LinkSite(a *Account, viewID string) error {
 	l := s.lock(a.ID)
 	l.Lock()
 	defer l.Unlock()
-	f, err := os.OpenFile(filepath.Join(s.accountDir(a.ID), "sites", viewID), os.O_CREATE|os.O_WRONLY, 0o644)
+	path := filepath.Join(s.accountDir(a.ID), "sites", viewID)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		return err
+	}
+	// The marker's age is how the background reconciliation tells a stray
+	// marker from one whose site is being handed over right now (the
+	// recipient's marker is linked BEFORE meta.json changes owner), so a
+	// re-link makes an old marker young again.
+	now := time.Now()
+	return os.Chtimes(path, now, now)
+}
+
+// SiteMarker is an ownership marker and when it was last linked.
+type SiteMarker struct {
+	Site string
+	At   time.Time
+}
+
+// SiteMarkers lists the account's ownership markers with their ages. Like
+// ListSiteIDs, a marker proves nothing by itself.
+func (s *Store) SiteMarkers(a *Account) ([]SiteMarker, error) {
+	entries, err := os.ReadDir(filepath.Join(s.accountDir(a.ID), "sites"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out := make([]SiteMarker, 0, len(entries))
+	for _, e := range entries {
+		if !ids.ValidID(e.Name()) {
+			continue
+		}
+		fi, err := e.Info()
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		out = append(out, SiteMarker{Site: e.Name(), At: fi.ModTime()})
+	}
+	return out, nil
 }
 
 // UnlinkSite removes the ownership marker (no error if already gone).

@@ -249,7 +249,11 @@ func (p *provider) acceptCheck(o ownership.Offer, acc *account.Account) (*takeRe
 	if !ok {
 		return nil, errors.New("the site service cannot report host conflicts")
 	}
-	if conflicts := hc.HostConflicts(o.Sites, o.From); len(conflicts) > 0 {
+	conflicts, err := hc.HostConflicts(o.Sites, o.From)
+	if err != nil {
+		return nil, fmt.Errorf("read the host conflicts: %w", err)
+	}
+	if len(conflicts) > 0 {
 		return &takeRefusal{kind: takeHost, reason: p.hostConflictText(conflicts)}, nil
 	}
 	lines, err := p.limitsCheck(acc, o.Sites)

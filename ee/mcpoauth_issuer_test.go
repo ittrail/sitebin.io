@@ -207,7 +207,7 @@ func setupMCPOAuthInstance(t *testing.T, ti *testIssuer, stack http.Handler) (*p
 	t.Setenv("SITEBIN_STACK_GDPR_SECRET", strings.Repeat("g", 32))
 	p := newProvider()
 	host := &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}, mcpIssuer: ti.URL()}
-	if err := p.Init(host); err != nil {
+	if err := initT(t, p, host); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	return p, host
@@ -590,7 +590,7 @@ func TestProviderWithoutAStackRefusesAnUnknownSubject(t *testing.T) {
 	t.Setenv("SITEBIN_OAUTH_OIDC_ISSUER", ti.URL())
 	t.Setenv("SITEBIN_OAUTH_OIDC_CLIENT_ID", "sitebin-app")
 	p := newProvider()
-	if err := p.Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}, mcpIssuer: ti.URL()}); err != nil {
+	if err := initT(t, p, &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}, mcpIssuer: ti.URL()}); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	tok := ti.sign(t, nil, nil)
@@ -621,7 +621,8 @@ func TestInitRefusesAnMCPIssuerThatIsNotTheLoginIssuer(t *testing.T) {
 			t.Setenv("SITEBIN_OAUTH_OIDC_ISSUER", loginIssuer)
 			t.Setenv("SITEBIN_OAUTH_OIDC_CLIENT_ID", "sitebin-app")
 		}
-		return newProvider().Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}, mcpIssuer: mcpIssuer})
+		p := newProvider()
+		return initT(t, p, &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}, mcpIssuer: mcpIssuer})
 	}
 	const realm = "https://auth.example.com/realms/saas-stack"
 

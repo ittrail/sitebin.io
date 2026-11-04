@@ -57,7 +57,7 @@ func (p *provider) transferRoutes(routes map[string]http.Handler) {
 
 // Narrow seams over the core's ext.OwnershipSites, asserted one by one.
 type hostConflictReader interface {
-	HostConflicts(viewIDs []string, sender string) map[string][]string
+	HostConflicts(viewIDs []string, sender string) (map[string][]string, error)
 }
 
 type formRecipientReader interface {
@@ -204,8 +204,14 @@ func (p *provider) hostRule(acc *account.Account, bundle []string) *refusal {
 		slog.Error("transfer: the site service cannot report host conflicts")
 		return &refusal{retry: true}
 	}
+	found, err := hc.HostConflicts(bundle, acc.ID)
+	if err != nil {
+		// Unknown is never a pass: the sender retries.
+		slog.Error("transfer: could not read the host conflicts", "err", err)
+		return &refusal{retry: true}
+	}
 	var conflicts []string
-	for _, ids := range hc.HostConflicts(bundle, acc.ID) {
+	for _, ids := range found {
 		for _, id := range ids {
 			if !slices.Contains(bundle, id) && !slices.Contains(conflicts, id) {
 				conflicts = append(conflicts, id)

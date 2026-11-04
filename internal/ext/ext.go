@@ -864,6 +864,14 @@ type ChangeBy struct {
 	Surface string
 }
 
+// SiteOwnership is what one meta.json read says about who stands on a site:
+// its owner ("" for an anonymous site) and the accounts listed as admins
+// (whether or not an end date has passed).
+type SiteOwnership struct {
+	Owner  string
+	Admins []string
+}
+
 // OwnershipSites is the part of the core's site service that moves a site
 // between accounts, shares it and measures it. It is OPTIONAL: the core's
 // SiteService implements it and the extension asserts it, so a SiteService
@@ -912,8 +920,10 @@ type OwnershipSites interface {
 	// decides again under the lock and refuses on such an error.
 	WillNotMove(viewID, sender string) []string
 	// HostConflicts maps each host used by the bundle to the sender's OTHER
-	// sites (outside viewIDs) that have an address on that host.
-	HostConflicts(viewIDs []string, sender string) map[string][]string
+	// sites (outside viewIDs) that have an address on that host. A meta
+	// read error (other than a site that is gone) is an error: the answer
+	// is then unknown, never "no conflict".
+	HostConflicts(viewIDs []string, sender string) (map[string][]string, error)
 	// FormRecipients lists the recipients of the site's active or pending
 	// forms, each once.
 	FormRecipients(viewID string) []string
@@ -933,7 +943,7 @@ type OwnershipSites interface {
 	// meta.json cannot be read is NOT listed and makes the returned error
 	// non-nil, together with the sites that did read: absence from the map is
 	// "gone" only when the error is nil. ContainerSites is not this list.
-	SiteOwners() (map[string]string, error)
+	SiteOwners() (map[string]SiteOwnership, error)
 	// SiteLocked reports whether the operator holds the site locked, from its
 	// meta.json only (never the content or the git repository). A site that
 	// no longer exists is ErrSiteGone.

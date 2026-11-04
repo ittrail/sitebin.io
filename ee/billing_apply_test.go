@@ -18,7 +18,7 @@ func setupBilling(t *testing.T) *provider {
 	t.Setenv("SITEBIN_STRIPE_SECRET_KEY", "sk_test")
 	t.Setenv("SITEBIN_STRIPE_WEBHOOK_SECRET", "whsec_test")
 	p := newProvider()
-	if err := p.Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
+	if err := initT(t, p, &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
 		t.Fatal(err)
 	}
 	if p.billing == nil || p.billing.Name() != eeconfig.BackendStripe {

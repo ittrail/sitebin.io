@@ -34,7 +34,7 @@ func setupTiers(t *testing.T) *provider {
 	t.Setenv("SITEBIN_DEFAULT_TIER", "free")
 	p := newProvider()
 	host := &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}
-	if err := p.Init(host); err != nil {
+	if err := initT(t, p, host); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	return p
@@ -85,7 +85,7 @@ func TestTierAnonymousUsesAnonTier(t *testing.T) {
 	t.Setenv("SITEBIN_DEFAULT_TIER", "free")
 	t.Setenv("SITEBIN_ANON_TIER", "free")
 	p := newProvider()
-	if err := p.Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
+	if err := initT(t, p, &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
 		t.Fatal(err)
 	}
 	grant, err := p.AuthorizeCreate(httptest.NewRequest("POST", "/api/sites", nil))
@@ -112,7 +112,7 @@ func TestSelfSelectTier(t *testing.T) {
 	t.Setenv("SITEBIN_DEFAULT_TIER", "free")
 	t.Setenv("SITEBIN_TIER_SELF_SELECT", "true")
 	p := newProvider()
-	if err := p.Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
+	if err := initT(t, p, &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
@@ -200,7 +200,7 @@ func setupPayGate(t *testing.T, srvURL string) *provider {
 	t.Setenv("SITEBIN_OAUTH_OIDC_CLIENT_ID", "sitebin")
 	p := newProvider()
 	host := &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}
-	if err := p.Init(host); err != nil {
+	if err := initT(t, p, host); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	return p
@@ -668,7 +668,7 @@ func setupRealSites(t *testing.T, paygateURL string) (*provider, *store.Store) {
 		t.Fatal(err)
 	}
 	p := newProvider()
-	if err := p.Init(&storeHost{dir: t.TempDir(), sites: api.SiteService()}); err != nil {
+	if err := initT(t, p, &storeHost{dir: t.TempDir(), sites: api.SiteService()}); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	return p, st

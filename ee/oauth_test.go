@@ -21,7 +21,7 @@ func setupOAuth(t *testing.T) *provider {
 	t.Setenv("SITEBIN_OAUTH_GOOGLE_CLIENT_ID", "gid")
 	t.Setenv("SITEBIN_OAUTH_GOOGLE_CLIENT_SECRET", "gsecret")
 	p := newProvider()
-	if err := p.Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
+	if err := initT(t, p, &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
 		t.Fatal(err)
 	}
 	return p
@@ -158,7 +158,7 @@ func TestGenericOIDCLoginButtonLabel(t *testing.T) {
 	t.Setenv("SITEBIN_OAUTH_OIDC_CLIENT_ID", "sitebin")
 	t.Setenv("SITEBIN_OAUTH_OIDC_LABEL", "IT-Trail SSO")
 	p := newProvider()
-	if err := p.Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
+	if err := initT(t, p, &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
 		t.Fatal(err)
 	}
 	mux := serveMux(p)
@@ -181,7 +181,7 @@ func setupSSOOnly(t *testing.T) *provider {
 	t.Setenv("SITEBIN_OAUTH_OIDC_CLIENT_ID", "sitebin")
 	t.Setenv("SITEBIN_OAUTH_OIDC_LABEL", "IT-Trail Login")
 	p := newProvider()
-	if err := p.Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
+	if err := initT(t, p, &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
 		t.Fatal(err)
 	}
 	return p

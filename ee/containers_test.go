@@ -24,7 +24,7 @@ func TestContainerCapFollowsTheTier(t *testing.T) {
 	t.Setenv("SITEBIN_ACCOUNT_MODE", "tiers")
 	t.Setenv("SITEBIN_DEFAULT_TIER", "free")
 	p := newProvider()
-	if err := p.Init(&fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
+	if err := initT(t, p, &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}); err != nil {
 		t.Fatal(err)
 	}
 	acc, err := p.local.Signup("c@example.com", "password123", "free")

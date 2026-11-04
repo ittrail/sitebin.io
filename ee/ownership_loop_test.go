@@ -19,15 +19,25 @@ import (
 	"github.com/ittrail/sitebin.io/internal/provenance"
 )
 
+// initT is Init with the ownership loop stopped when the test ends.
+func initT(t testing.TB, p *provider, h ext.Host) error {
+	t.Cleanup(p.stopOwnershipLoop)
+	return p.Init(h)
+}
+
 // SiteOwners is the fake core's walk over every site: meta only.
-func (s *fakeSites) SiteOwners() (map[string]string, error) {
+func (s *fakeSites) SiteOwners() (map[string]ext.SiteOwnership, error) {
 	if s.ownersErr != nil {
 		return nil, s.ownersErr
 	}
-	out := map[string]string{}
+	out := map[string]ext.SiteOwnership{}
 	for id := range s.infos {
 		i, _ := s.info(id)
-		out[id] = i.Owner
+		so := ext.SiteOwnership{Owner: i.Owner}
+		for _, a := range i.Admins {
+			so.Admins = append(so.Admins, a.Account)
+		}
+		out[id] = so
 	}
 	return out, nil
 }
@@ -114,8 +124,9 @@ func TestLoopExpiresOffersPastAcceptByAndMailsBothSides(t *testing.T) {
 	past := time.Now().Add(-time.Hour)
 	open := e.offer(tid(31))
 	paused := e.offer(tid(32))
-	e.change(open, func(x *ownership.Offer) { x.AcceptBy = past })
-	e.change(paused, func(x *ownership.Offer) { x.AcceptBy = past; x.State = ownership.StatePaused })
+	told := time.Now().Add(-48 * time.Hour)
+	e.change(open, func(x *ownership.Offer) { x.AcceptBy = past; x.NotifiedAt = &told })
+	e.change(paused, func(x *ownership.Offer) { x.AcceptBy = past; x.State = ownership.StatePaused; x.NotifiedAt = &told })
 	fresh := e.offer(tid(33))
 	declined := e.offer(tid(34))
 	e.change(declined, func(x *ownership.Offer) { x.State = ownership.StateDeclined; x.AcceptBy = past })
@@ -743,10 +754,11 @@ func TestLoopReconciliationLeavesEverythingAloneOnAReadError(t *testing.T) {
 		e := setup(t)
 		e.fs.ownersErr = errors.New("disk")
 		e.tick(later().Add(2 * time.Hour))
-		// Without the list of sites nothing is known about the index
-		// markers; the share markers answer to the admins read instead.
-		if !has(e.markers(e.to), tid(31)) || !has(e.markers(e.acc), tid(50)) {
-			t.Errorf("an index marker was unlinked without the walk: to=%v acc=%v", e.markers(e.to), e.markers(e.acc))
+		// The walk only nominates: the fresh single-site read is the
+		// verdict, so a stray and a dangling marker are still cleaned (one
+		// unreadable meta must not stop dangling cleanup instance-wide).
+		if has(e.markers(e.to), tid(31)) || has(e.markers(e.acc), tid(50)) {
+			t.Errorf("a proven-stray marker survived a failed walk: to=%v acc=%v", e.markers(e.to), e.markers(e.acc))
 		}
 	})
 	t.Run("every read fails", func(t *testing.T) {
@@ -806,4 +818,170 @@ func TestInitStartsTheLoopAndStopEndsIt(t *testing.T) {
 		t.Fatal("the loop did not stop")
 	}
 	e.p.stopOwnershipLoop() // twice is fine
+}
+
+// ---- fix round 1 ----
+
+// A marker linked just now for an account that is not yet meta's owner is a
+// transfer in flight (the recipient's marker comes first): it survives; once
+// older than the grace it is stray.
+func TestLoopIndexMarkerGrace(t *testing.T) {
+	e := newLoopEnv(t)
+	if err := e.p.accounts.LinkSite(e.to, tid(31)); err != nil {
+		t.Fatal(err)
+	}
+	e.tick(time.Now().Add(time.Minute))
+	if !has(e.markers(e.to), tid(31)) {
+		t.Fatal("a young marker was unlinked: the recipient's marker of a transfer in flight")
+	}
+	e.tick(time.Now().Add(2 * time.Hour))
+	if has(e.markers(e.to), tid(31)) {
+		t.Error("a marker older than the grace, for a site meta gives to another account, was kept")
+	}
+}
+
+func TestLoopKeepsTheMarkerOfAnAcceptingRecipient(t *testing.T) {
+	e := newLoopEnv(t)
+	o := e.offer(tid(31))
+	e.change(o, func(x *ownership.Offer) { x.State, x.AcceptedBy = ownership.StateAccepting, e.to.ID })
+	if err := e.p.accounts.LinkSite(e.to, tid(31)); err != nil {
+		t.Fatal(err)
+	}
+	// The move is held by another run, so the loop cannot finish it.
+	release, ok := e.p.claimAccept(o.ID)
+	if !ok {
+		t.Fatal("no claim")
+	}
+	e.tick(later())
+	if !has(e.markers(e.to), tid(31)) {
+		t.Error("the marker of the recipient of an accepting offer was unlinked")
+	}
+	release()
+}
+
+func TestLoopLinksAMissingShareMarker(t *testing.T) {
+	e := newLoopEnv(t)
+	e.shared(nil)
+	if err := e.p.owner.UnlinkShare(e.to.ID, shareSite); err != nil {
+		t.Fatal(err)
+	}
+	e.tick(later())
+	if ids, _ := e.p.owner.SharedSites(e.to.ID); !has(ids, shareSite) {
+		t.Errorf("share markers = %v, want the listed admin's marker linked", ids)
+	}
+	// An unreadable admins list links nothing.
+	e2 := newLoopEnv(t)
+	e2.shared(nil)
+	e2.p.owner.UnlinkShare(e2.to.ID, shareSite)
+	e2.fs.adminErrs = map[string]error{shareSite: errors.New("disk")}
+	e2.tick(later())
+	if ids, _ := e2.p.owner.SharedSites(e2.to.ID); has(ids, shareSite) {
+		t.Error("a marker was linked on an unknown")
+	}
+}
+
+// A re-accept between SetAdmins and the unlink keeps the marker and tags.
+func TestLoopExpiredShareRenewedMeanwhileKeepsItsMarker(t *testing.T) {
+	e := newLoopEnv(t)
+	e.shared(inDays(1))
+	if err := e.p.SetAdminTags(e.to.ID, shareSite, []string{"mine"}); err != nil {
+		t.Fatal(err)
+	}
+	reads := 0
+	e.fs.onAdmins = func(id string) {
+		reads++
+		if reads == 2 { // 1: the expiry check, 2: the fresh read after SetAdmins
+			i := e.fs.infos[id]
+			i.Admins = []ext.SiteAdmin{{Account: e.to.ID, Until: inDays(30)}}
+			e.fs.infos[id] = i
+		}
+	}
+	e.tick(time.Now().Add(48 * time.Hour))
+	e.fs.onAdmins = nil
+	if ids, _ := e.p.owner.SharedSites(e.to.ID); !has(ids, shareSite) {
+		t.Errorf("share markers = %v, want the renewed share's kept", ids)
+	}
+	if reg, _ := e.p.accounts.Tags(e.to.ID); len(reg.Sites[shareSite]) != 1 {
+		t.Errorf("tags = %+v, want kept", reg.Sites)
+	}
+}
+
+func TestLoopTransferExpiredSkipsARecipientNeverNotified(t *testing.T) {
+	e := newLoopEnv(t)
+	o := e.offer(tid(31))
+	e.change(o, func(x *ownership.Offer) { x.AcceptBy = time.Now().Add(-time.Hour); x.State = ownership.StatePaused })
+	e.tick(time.Now())
+	if got := e.current(o).State; got != ownership.StateExpired {
+		t.Fatalf("state = %s", got)
+	}
+	if e.mails("pro@example.com", subjTransferGone) != 1 {
+		t.Error("the sender was not told")
+	}
+	if e.mails(takerEmail, subjTransferGone) != 0 {
+		t.Error("a recipient who was never told of the offer got an expiry mail")
+	}
+}
+
+func TestLoopHostConflictReadErrorIsUnknown(t *testing.T) {
+	e := newLoopEnv(t)
+	o := e.offer(tid(31))
+	e.change(o, func(x *ownership.Offer) { x.State = ownership.StatePaused })
+	e.fs.conflictsErr = errors.New("disk")
+	e.tick(time.Now())
+	if got := e.current(o).State; got != ownership.StatePaused {
+		t.Errorf("state = %s, want paused on an unknown", got)
+	}
+	e.fs.conflictsErr = nil
+	e.tick(time.Now().Add(time.Minute))
+	if got := e.current(o).State; got != ownership.StateOpen {
+		t.Errorf("state = %s, want open once readable", got)
+	}
+}
+
+func TestHostConflictReadErrorRefusesCreateAndAccept(t *testing.T) {
+	e := newLoopEnv(t)
+	o := e.offer(tid(31))
+	e.fs.conflictsErr = errors.New("disk")
+	if w := e.takeEnv.accept(o); w.Code == http.StatusOK || w.Code == http.StatusSeeOther {
+		t.Errorf("accept with unreadable host conflicts = %d, want refused", w.Code)
+	}
+	if owner, _ := e.fs.SiteOwner(tid(31)); owner != e.acc.ID {
+		t.Error("a site moved on an unknown")
+	}
+	if ref := e.p.hostRule(e.acc, []string{tid(32)}); ref == nil || !ref.retry {
+		t.Errorf("hostRule on an error = %+v, want a retry refusal, never a pass", ref)
+	}
+}
+
+func TestLoopAPanickingStepDoesNotStopTheOthers(t *testing.T) {
+	e := newLoopEnv(t)
+	captureLog(t)
+	if err := e.p.accounts.LinkSite(e.to, tid(31)); err != nil { // stray
+		t.Fatal(err)
+	}
+	e.shared(inDays(1))
+	e.fs.onAdmins = func(string) { panic("boom") }
+	e.tick(later().Add(48 * time.Hour)) // must not panic
+	e.fs.onAdmins = nil
+	if has(e.markers(e.to), tid(31)) {
+		t.Error("the reconciliation did not run after earlier steps panicked")
+	}
+}
+
+func TestNotifyOfferRechecksDatesInTheStore(t *testing.T) {
+	e := newLoopEnv(t)
+	from := time.Now().Add(48 * time.Hour)
+	o := e.offer(tid(31))
+	o = e.change(o, func(x *ownership.Offer) { x.AvailableFrom = &from })
+	e.p.notifyOfferAt(o, time.Now())
+	e.p.mailWG.Wait()
+	if e.current(o).NotifiedAt != nil || e.mails(takerEmail, subjOffered) != 0 {
+		t.Error("an offer before its available-from was notified")
+	}
+	e.change(o, func(x *ownership.Offer) { x.AvailableFrom = nil; x.AcceptBy = time.Now().Add(-time.Hour) })
+	e.p.notifyOfferAt(e.current(o), time.Now())
+	e.p.mailWG.Wait()
+	if e.current(o).NotifiedAt != nil {
+		t.Error("an offer past accept-by was notified")
+	}
 }

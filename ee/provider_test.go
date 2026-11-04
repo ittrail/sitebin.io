@@ -75,6 +75,10 @@ type fakeSites struct {
 	onSetAdmins func(id string)
 	// ownersErr fails SiteOwners (the loop's walk over every site).
 	ownersErr error
+	// onAdmins, when set, runs at the start of every SiteAdmins read.
+	onAdmins func(id string)
+	// conflictsErr fails HostConflicts.
+	conflictsErr error
 	// onOwner, when set, runs at the start of every SiteOwner read.
 	onOwner func(id string)
 }
@@ -116,6 +120,9 @@ func (s *fakeSites) SiteOwner(id string) (string, error) {
 
 // SiteAdmins is the admins in the fake's info, or ErrSiteGone.
 func (s *fakeSites) SiteAdmins(id string) ([]ext.SiteAdmin, error) {
+	if s.onAdmins != nil {
+		s.onAdmins(id)
+	}
 	if s.adminErrs[id] != nil {
 		return nil, s.adminErrs[id]
 	}
@@ -512,7 +519,7 @@ func setupAccounts(t *testing.T) (*provider, *fakeHost, http.Handler) {
 	t.Setenv("SITEBIN_ACCOUNT_MODE", "accounts")
 	p := newProvider()
 	host := &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}
-	if err := p.Init(host); err != nil {
+	if err := initT(t, p, host); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	mux := http.NewServeMux()
@@ -532,7 +539,7 @@ func TestPathViewsRefusedWithAccounts(t *testing.T) {
 	t.Setenv("SITEBIN_ACCOUNT_MODE", "accounts")
 	p := newProvider()
 	host := &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}, pathViews: true}
-	err := p.Init(host)
+	err := initT(t, p, host)
 	if err == nil || !strings.Contains(err.Error(), "SITEBIN_VIEW_ACCESS") {
 		t.Fatalf("expected path+accounts to be refused, got %v", err)
 	}

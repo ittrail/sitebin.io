@@ -247,18 +247,26 @@ func (s *Store) AccountBoundAddresses(m *Meta, account string) ([]string, error)
 	return out, nil
 }
 
+// SiteOwnership is one site's owner and admin accounts from a single
+// meta.json read.
+type SiteOwnership struct {
+	Owner  string
+	Admins []string
+}
+
 // SiteOwners maps each site folder's view id to the owner in its meta.json
-// ("" for an anonymous site). It reads meta.json only. A folder that vanishes
+// ("" for an anonymous site) and the accounts it lists as admins. It reads
+// meta.json only. A folder that vanishes
 // during the walk is skipped; any other read error is joined into the
 // returned error while the sites that did read stay in the map, so the
 // caller knows the list is incomplete and never reads an unreadable site as
 // a deleted one.
-func (s *Store) SiteOwners() (map[string]string, error) {
+func (s *Store) SiteOwners() (map[string]SiteOwnership, error) {
 	entries, err := os.ReadDir(s.sitesDir())
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]string, len(entries))
+	out := make(map[string]SiteOwnership, len(entries))
 	var failed []error
 	for _, e := range entries {
 		if !e.IsDir() || !ids.ValidID(e.Name()) {
@@ -270,7 +278,11 @@ func (s *Store) SiteOwners() (map[string]string, error) {
 		case err != nil:
 			failed = append(failed, fmt.Errorf("site %s: %w", e.Name(), err))
 		default:
-			out[site.ViewID] = site.Meta.OwnerAccountID
+			so := SiteOwnership{Owner: site.Meta.OwnerAccountID}
+			for _, a := range site.Meta.Admins {
+				so.Admins = append(so.Admins, a.Account)
+			}
+			out[site.ViewID] = so
 		}
 	}
 	return out, errors.Join(failed...)

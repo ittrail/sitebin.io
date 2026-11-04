@@ -1,6 +1,8 @@
 package store
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,25 +83,47 @@ type HostAddress struct {
 // stat and one ReadDir: off the serving path, but cheap enough for every
 // claim and check.
 func (s *Store) HostAddresses(host string) []HostAddress {
+	out, _ := s.HostAddressesStrict(host)
+	return out
+}
+
+// HostAddressesStrict is HostAddresses that reports what it could not read:
+// an address whose site's meta.json is unreadable, or an index folder that
+// cannot be listed, is an error (the addresses that did read are still
+// returned). An address whose site is gone is simply not there.
+func (s *Store) HostAddressesStrict(host string) ([]HostAddress, error) {
 	h, err := normalizeDomain(host)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	var out []HostAddress
+	var failed []error
+	note := func(addr string, err error) {
+		if !errors.Is(err, ErrNotFound) {
+			failed = append(failed, fmt.Errorf("address %s: %w", addr, err))
+		}
+	}
 	if site, err := s.load(s.addrLink(h)); err == nil {
 		out = append(out, HostAddress{Addr: h, Site: site})
+	} else {
+		note(h, err)
 	}
 	entries, err := os.ReadDir(filepath.Join(s.pathIndexDir(), h))
 	if err != nil {
-		return out
+		if !os.IsNotExist(err) {
+			failed = append(failed, err)
+		}
+		return out, errors.Join(failed...)
 	}
 	for _, e := range entries {
 		addr := h + "/" + strings.ReplaceAll(e.Name(), "+", "/")
 		if site, err := s.load(filepath.Join(s.pathIndexDir(), h, e.Name())); err == nil {
 			out = append(out, HostAddress{Addr: addr, Site: site})
+		} else {
+			note(addr, err)
 		}
 	}
-	return out
+	return out, errors.Join(failed...)
 }
 
 // HostKnown reports whether any address is attached on host, which is what
