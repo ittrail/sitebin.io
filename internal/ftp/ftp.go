@@ -33,6 +33,10 @@ type Session struct {
 	Dir      string
 	MaxBytes int64
 	MaxFiles int
+	// UsedOutside, when set, is the bytes the site holds against MaxBytes
+	// outside Dir (its Git repository). It is asked at every byte check, so
+	// a push between two transfers is counted.
+	UsedOutside func() int64
 	// Guard stages every write and checks every rename, so the abuse guard
 	// settles its verdict before a transferred file is visible. Nil writes
 	// straight into Dir (tests of the quota rules alone).
@@ -136,6 +140,7 @@ func (d *driver) AuthUser(cc ftpserver.ClientContext, user, pass string) (ftpser
 	}
 	q := newQuotaFs(sess.Dir, sess.MaxBytes, sess.MaxFiles)
 	q.guard = sess.Guard
+	q.usedOutside = sess.UsedOutside
 	if rec, ok := d.auth.(Recorder); ok {
 		q.onWrite = func(action, path string) { rec.FTPWrote(user, ip, action, path) }
 	}

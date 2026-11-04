@@ -233,11 +233,12 @@ type fakeSites struct {
 	mu        sync.Mutex
 	sites     map[string]*ext.ContainerSite
 	bytes     map[string]int64
+	gitBytes  map[string]int64
 	endpoints map[string][]string
 }
 
 func newFakeSites() *fakeSites {
-	return &fakeSites{sites: map[string]*ext.ContainerSite{}, bytes: map[string]int64{}, endpoints: map[string][]string{}}
+	return &fakeSites{sites: map[string]*ext.ContainerSite{}, bytes: map[string]int64{}, gitBytes: map[string]int64{}, endpoints: map[string][]string{}}
 }
 
 func (s *fakeSites) synced(id string) ([]string, bool) {
@@ -326,7 +327,7 @@ func (s *fakeSites) SetContainerLimits(id string, l map[string]ext.ContainerLimi
 func (s *fakeSites) Info(id string) (ext.SiteInfo, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return ext.SiteInfo{ViewID: id, Bytes: s.bytes[id]}, true
+	return ext.SiteInfo{ViewID: id, Bytes: s.bytes[id], GitBytes: s.gitBytes[id]}, true
 }
 func (s *fakeSites) All() ([]ext.SiteInfo, error)              { return nil, nil }
 func (s *fakeSites) SetExpiry(string, *time.Time) error        { return nil }
@@ -788,6 +789,25 @@ func TestStorageCapStopsTheProject(t *testing.T) {
 	st := r.sites.get(siteA).Observed
 	if st.Status != store.ContainerStopped || !strings.Contains(st.Message, "storage") || len(r.eng.containers) != 0 {
 		t.Errorf("over storage: %+v, %d containers", st, len(r.eng.containers))
+	}
+}
+
+// The one deliberate exception to "files and repository share one cap": a
+// push must never stop a running app, so the stop rule counts files only.
+func TestEnforceStorageIgnoresRepository(t *testing.T) {
+	r := newRig(t)
+	r.sites.add(siteA, "acct", example)
+	r.reconcile(t, siteA, true)
+	// MaxBytes is the rig's cap: files alone under it, files + repository over.
+	cap := r.sites.get(siteA).MaxBytes
+	if cap <= 0 {
+		t.Fatalf("the rig site has no byte cap (%d)", cap)
+	}
+	r.sites.bytes[siteA] = cap - 1
+	r.sites.gitBytes[siteA] = 10 << 20
+	r.m.enforceStorage(context.Background())
+	if st := r.sites.get(siteA).Observed; st.Status != store.ContainerRunning || len(r.eng.containers) == 0 {
+		t.Errorf("a repository stopped a project under its cap by files: %+v, %d containers", st, len(r.eng.containers))
 	}
 }
 

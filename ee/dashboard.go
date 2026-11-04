@@ -750,7 +750,7 @@ func (p *provider) renderDashboard(w http.ResponseWriter, r *http.Request, acc *
 		if info, ok := p.host.Sites().Info(id); ok {
 			row := siteRow{
 				SiteInfo:   info,
-				SizeText:   humanBytes(info.Bytes),
+				SizeText:   humanBytes(info.Bytes + info.GitBytes),
 				ExpiryText: expiryText(info.ExpiresAt),
 				CSRF:       token,
 			}

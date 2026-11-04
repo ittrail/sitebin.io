@@ -126,12 +126,15 @@ func (a *API) webdav(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if r.Method == "PUT" {
-		used, count, err := a.st.Usage(site)
+		// Files and repository share the byte cap; the file count is the
+		// files'.
+		u, err := a.st.SiteUsage(site)
 		if err != nil {
 			writeError(w, 500, "internal error")
 			return
 		}
-		remaining := a.st.EffMaxBytes(site) - used
+		count := u.Files
+		remaining := a.st.EffMaxBytes(site) - u.Bytes()
 		if r.ContentLength > remaining || remaining <= 0 {
 			http.Error(w, "site size limit exceeded", http.StatusInsufficientStorage)
 			return

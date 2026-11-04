@@ -28,7 +28,7 @@ func (s siteService) Info(viewID string) (ext.SiteInfo, bool) {
 // the admin console and the account dashboard can never disagree about what a
 // site looks like.
 func (s siteService) infoOf(site *store.Site) ext.SiteInfo {
-	bytes, files, _ := s.a.st.Usage(site)
+	u, _ := s.a.st.SiteUsage(site)
 	st := s.a.st.Stats(site)
 	view := site.Meta.ViewRule()
 	return ext.SiteInfo{
@@ -45,8 +45,9 @@ func (s siteService) infoOf(site *store.Site) ext.SiteInfo {
 		Domains:        site.Meta.CustomDomains,
 		DomainLinks:    s.domainLinks(site),
 		Origin:         site.Meta.Origin,
-		Bytes:          bytes,
-		Files:          files,
+		Bytes:          u.FileBytes,
+		GitBytes:       u.GitBytes,
+		Files:          u.Files,
 		ViewURL:        s.a.cfg.ViewURL(site.ViewID),
 		EditURL:        s.a.cfg.EditURL(site.Meta.EditID),
 		CreatedAt:      site.Meta.CreatedAt,

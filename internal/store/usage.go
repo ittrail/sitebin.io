@@ -21,14 +21,17 @@ func (u Usage) Bytes() int64 { return u.FileBytes + u.GitBytes }
 
 // SiteUsage is the central byte function: every write's cap check counts a
 // site's bytes through it (byteChecks in usage_test.go lists them), and so
-// do the size a site reports beside its cap and the ownership limits check,
-// so none can forget the repository. It walks the content directory as
+// does every size report (the edit page, get_site, the dashboard), so none
+// can forget the repository. It walks the content directory as
 // usage does and the repository (GitDir) the same way — regular files only,
 // links neither counted nor followed. A site with no repository has
 // GitBytes 0.
 //
-// Store.Usage stays files-only for the one exception: the container
-// runtime's stop rule, which must never stop an app for a push.
+// Store.Usage stays files-only where the figure is about files, not the
+// cap: file COUNTS (WebDAV's new-file check), the MCP download bound (a
+// download is of the files), and the container runtime's stop rule
+// (enforceStorage, through ext.SiteInfo.Bytes), which must never stop an app
+// for a push.
 func (s *Store) SiteUsage(site *Site) (Usage, error) {
 	fb, n, err := usage(site.ContentDir())
 	if err != nil {

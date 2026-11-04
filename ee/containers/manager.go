@@ -1140,6 +1140,10 @@ func (m *Manager) enforcePlans(ctx context.Context) {
 // enforceStorage stops running projects whose site is over its byte cap. A
 // container cannot be refused mid-write the way an upload is; this is the
 // bound. Nothing is deleted.
+//
+// This is the ONE place that counts a site's FILES ALONE (info.Bytes, not
+// Bytes+GitBytes): a push must never stop a running app. Everywhere else the
+// repository shares the byte cap. Pinned by TestEnforceStorageIgnoresRepository.
 func (m *Manager) enforceStorage(ctx context.Context) {
 	all, err := m.sites.ContainerSites()
 	if err != nil {

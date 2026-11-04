@@ -29,6 +29,9 @@ type quotaFs struct {
 	// onWrite, when set, is told about every write that succeeded, for the
 	// site's provenance log.
 	onWrite func(action, path string)
+	// usedOutside, when set, is what the site holds against maxBytes beyond
+	// root (see Session.UsedOutside).
+	usedOutside func() int64
 	// guard, when set, stages writes and checks renames (see Guard).
 	guard Guard
 }
@@ -86,6 +89,9 @@ func (q *quotaFs) OpenFile(name string, flag int, perm os.FileMode) (afero.File,
 		return nil, errQuota // reject writes to the root / invalid names
 	}
 	used, count := q.usage()
+	if q.usedOutside != nil {
+		used += q.usedOutside()
+	}
 	var existing int64
 	if fi, err := q.Fs.Stat(name); err == nil {
 		// Only a truncating open replaces the file; an append keeps every

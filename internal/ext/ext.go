@@ -676,10 +676,14 @@ type SiteInfo struct {
 	DomainLinks []DomainLink
 	// Origin is the surface that created the site — "mcp", or empty for the UI
 	// and the JSON API. Provenance only; nothing gates on it.
-	Origin  string
-	Bytes   int64
-	Files   int
-	ViewURL string
+	Origin string
+	// Bytes is the site's files alone: the container runtime's stop rule
+	// reads it and must never count a push. GitBytes is its Git repository,
+	// which shares the byte cap; a size shown to a person is Bytes+GitBytes.
+	Bytes    int64
+	GitBytes int64
+	Files    int
+	ViewURL  string
 	// ViewOff is set when the generated address (ViewURL) does not serve the
 	// site — its owner switched it off, or it redirects to ViewRedirectTo.
 	// The dashboard then shows it without a link.

@@ -46,6 +46,15 @@ func (a *API) FTPAuth(editID, password, clientIP string) (ftp.Session, error) {
 			MaxBytes: a.st.EffMaxBytes(site),
 			MaxFiles: a.st.EffMaxFiles(site),
 			Guard:    ftpGuard{st: a.st, site: site},
+			// The repository shares the byte cap, and a push can land
+			// between two transfers: asked at every check, never cached.
+			UsedOutside: func() int64 {
+				u, err := a.st.SiteUsage(site)
+				if err != nil {
+					return 0
+				}
+				return u.GitBytes
+			},
 		}, nil
 	case verifyThrottled:
 		return ftp.Session{}, errors.New("too many authentication attempts")

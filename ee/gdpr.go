@@ -276,7 +276,7 @@ func (p *provider) handleGDPRExport(w http.ResponseWriter, r *http.Request) {
 			}
 			out.Sites = append(out.Sites, gdprSite{
 				ID: info.ViewID, ViewURL: info.ViewURL, Mode: info.Mode, Domains: info.Domains,
-				Tags: info.Tags, Origin: info.Origin, Bytes: info.Bytes, Files: info.Files,
+				Tags: info.Tags, Origin: info.Origin, Bytes: info.Bytes + info.GitBytes, Files: info.Files,
 				CreatedAt: info.CreatedAt, ExpiresAt: info.ExpiresAt,
 			})
 		}

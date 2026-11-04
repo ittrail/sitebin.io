@@ -99,3 +99,34 @@ func TestQuotaAppendDoesNotCreditTheExistingSize(t *testing.T) {
 		t.Fatalf("append within the cap refused: %v", err)
 	}
 }
+
+// The repository shares the site's byte cap: a transfer that fits the files'
+// budget but not files + repository is refused, and the repository is asked
+// at every check (a push can land between two transfers).
+func TestFTPCountsRepository(t *testing.T) {
+	outside := int64(8)
+	q := newQuotaFs(t.TempDir(), 10, 100)
+	q.usedOutside = func() int64 { return outside }
+	f, err := q.Create("/a.txt")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := f.Write([]byte("123")); err == nil {
+		t.Fatal("3 bytes beside an 8-byte repository under a 10-byte cap were accepted")
+	} else if !errors.Is(err, errQuota) {
+		t.Fatalf("write = %v, want errQuota", err)
+	}
+	if _, err := f.Write([]byte("12")); err != nil {
+		t.Fatalf("2 bytes fill the cap exactly: %v", err)
+	}
+	f.Close()
+
+	outside = 10 // a push since
+	if _, err := q.Create("/b.txt"); err != nil {
+		t.Fatalf("create: %v", err)
+	} else if f, _ := q.Create("/c.txt"); f != nil {
+		if _, err := f.Write([]byte("x")); !errors.Is(err, errQuota) {
+			t.Fatalf("write once the repository holds the cap = %v, want errQuota", err)
+		}
+	}
+}

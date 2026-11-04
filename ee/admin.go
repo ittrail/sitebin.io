@@ -94,7 +94,7 @@ func (p *provider) instanceStats(sites []ext.SiteInfo) instanceFigures {
 		} else {
 			f.Anonymous++
 		}
-		f.Bytes += s.Bytes
+		f.Bytes += s.Bytes + s.GitBytes
 		f.Files += s.Files
 		if s.ExpiresAt != nil {
 			f.Expiring++
@@ -286,7 +286,7 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		row := adminRow{
 			SiteInfo:       s,
 			OwnerLabel:     emails[s.Owner],
-			SizeText:       humanBytes(s.Bytes),
+			SizeText:       humanBytes(s.Bytes + s.GitBytes),
 			CreatedText:    s.CreatedAt.Local().Format("2006-01-02"),
 			ExpiryText:     "—",
 			DomainsText:    strings.Join(s.Domains, ", "),

@@ -178,7 +178,7 @@ func (o mcpOps) siteResult(site *store.Site) *mcp.SiteResult {
 		// A locked site's content stays out of reach, its file names too.
 		files = []store.FileInfo{}
 	}
-	bytes, count, _ := o.a.st.Usage(site)
+	usage, _ := o.a.st.SiteUsage(site)
 	m := site.Meta
 	out := &mcp.SiteResult{
 		ID:            m.ID,
@@ -198,8 +198,8 @@ func (o mcpOps) siteResult(site *store.Site) *mcp.SiteResult {
 		ExpiresAt:     m.ExpiresAt,
 		ExpiryCapDays: o.a.expiryCap(site),
 		Files:         make([]mcp.FileInfo, 0, len(files)),
-		Bytes:         bytes,
-		FileCount:     count,
+		Bytes:         usage.Bytes(), // files + repository; no new field for the repository
+		FileCount:     usage.Files,
 		MaxBytes:      o.a.st.EffMaxBytes(site),
 		MaxFiles:      o.a.st.EffMaxFiles(site),
 		Locked:        mcpLock(m.Locked),
@@ -331,7 +331,7 @@ func (o mcpOps) ListSites(_ context.Context, auth mcp.Auth) ([]mcp.SiteSummary, 
 			// store. A stale id is a row to skip, not a failed listing.
 			continue
 		}
-		b, count, _ := o.a.st.Usage(site)
+		u, _ := o.a.st.SiteUsage(site)
 		out = append(out, mcp.SiteSummary{
 			ID:        site.Meta.ID,
 			EditID:    site.Meta.EditID,
@@ -339,8 +339,8 @@ func (o mcpOps) ListSites(_ context.Context, auth mcp.Auth) ([]mcp.SiteSummary, 
 			Name:      site.Meta.Name,
 			Tags:      append([]string(nil), site.Meta.Tags...),
 			Mode:      site.Meta.Mode,
-			Bytes:     b,
-			FileCount: count,
+			Bytes:     u.Bytes(),
+			FileCount: u.Files,
 			Domains:   site.Meta.CustomDomains,
 			CreatedAt: site.Meta.CreatedAt,
 			ExpiresAt: site.Meta.ExpiresAt,
@@ -585,6 +585,8 @@ func (o mcpOps) DownloadSite(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) 
 	// Buffered rather than streamed: the result is one JSON-RPC message, so it
 	// has to be complete before it can be sent. The cap is what keeps that
 	// buffer bounded.
+	// The download is of the site's files, so it is bounded by file bytes
+	// (Store.Usage), not by files + repository.
 	if b, _, _ := o.a.st.Usage(site); b > mcp.MaxContentBytes {
 		return nil, fmt.Errorf("this site holds more than %d MiB — download it over HTTP from its edit URL instead", mcp.MaxContentBytes>>20)
 	}

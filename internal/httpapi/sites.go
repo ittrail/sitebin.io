@@ -530,7 +530,7 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 	if m := site.Meta; m.Mode == store.ModeContainer && len(files) > maxListedContainerFiles {
 		files, filesTruncated = files[:maxListedContainerFiles], true
 	}
-	bytes, count, _ := a.st.Usage(site)
+	usage, _ := a.st.SiteUsage(site)
 	stats := a.st.Stats(site)
 	m := site.Meta
 	accountsEnabled := false
@@ -591,8 +591,9 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"base_domain":      a.cfg.BaseDomain,
 		"dns_target":       a.cfg.BaseDomain,
 		"usage": map[string]any{
-			"bytes":     bytes,
-			"files":     count,
+			"bytes":     usage.Bytes(), // files + repository, the figure the cap is checked against
+			"git_bytes": usage.GitBytes,
+			"files":     usage.Files,
 			"max_bytes": a.st.EffMaxBytes(site),
 			"max_files": maxFilesPayload(a.st.EffMaxFiles(site)),
 		},

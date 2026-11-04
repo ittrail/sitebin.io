@@ -158,8 +158,8 @@ func TestReplaceBudgetCountsRepository(t *testing.T) {
 // byteChecks is every place that checks a write against a site's byte cap,
 // and the test proving it counts the repository too (files and repository
 // share one cap; SiteUsage is the one function that counts them). A new way
-// to put bytes into a site joins this table with its test. Task 7 of the
-// site-git plan adds WebDAV and FTP.
+// to put bytes into a site joins this table with its test. The last row is
+// the one deliberate exception: the container stop rule counts files only.
 var byteChecks = []struct {
 	check string
 	dir   string // the package holding the test, from the repository root
@@ -168,6 +168,10 @@ var byteChecks = []struct {
 	{"Store.SaveFile (API, MCP, upload tokens)", "internal/store", "TestSaveFileCountsRepository"},
 	{"Store.ExtractZip (zip uploads)", "internal/store", "TestExtractZipCountsRepository"},
 	{"Replacement (staged replace: budget fixed at BeginReplace)", "internal/store", "TestReplaceBudgetCountsRepository"},
+	{"WebDAV PUT", "internal/httpapi", "TestWebDAVPutCountsRepository"},
+	{"FTP transfers (Session.UsedOutside)", "internal/ftp", "TestFTPCountsRepository"},
+	{"FTP login hands over the repository's bytes", "internal/httpapi", "TestFTPAuthReportsRepository"},
+	{"EXCEPTION: container stop rule keeps counting files only", "ee/containers", "TestEnforceStorageIgnoresRepository"},
 }
 
 func TestByteChecksCountRepository(t *testing.T) {
