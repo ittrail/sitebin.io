@@ -153,7 +153,7 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 
 	addTool(s, auth, &sdk.Tool{
 		Name:        "list_sites",
-		Description: "List the sites the connected account owns. Requires an account: an account API token, or a connection signed in through OAuth.",
+		Description: "List the sites the connected account owns, and those other accounts shared with it (role \"admin\"). Requires an account: an account API token, or a connection signed in through OAuth.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, _ noArgs) (*sdk.CallToolResult, *listResult, error) {
 		sites, err := ops.ListSites(ctx, auth)
 		if err != nil {
@@ -174,7 +174,7 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		Description: "Change a site's settings, including its name — a private label the owner sees in the account's " +
 			"site list — and its tags, private labels for grouping (the list replaces the current tags; an empty " +
 			"list removes them all). Any field you omit is left alone. Setting name to an empty string removes it; setting " +
-			"expires_at to an empty string clears the expiry, where the site's plan allows it.",
+			"expires_at to an empty string clears the expiry, where the site's plan allows it. An admin of a shared site cannot change its expiry.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in updateArgs) (*sdk.CallToolResult, *SiteResult, error) {
 		return out(ops.UpdateSite(ctx, auth, in.ref(), in.Settings))
 	})
@@ -226,7 +226,7 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 
 	addTool(s, auth, &sdk.Tool{
 		Name:        "delete_site",
-		Description: "Permanently delete a site and all its files. This cannot be undone.",
+		Description: "Permanently delete a site and all its files. This cannot be undone. An admin of a shared site cannot delete it.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in siteArgs) (*sdk.CallToolResult, *deleteResult, error) {
 		if err := ops.DeleteSite(ctx, auth, in.ref()); err != nil {
 			return nil, nil, err

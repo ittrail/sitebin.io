@@ -130,7 +130,7 @@ type DecodedFile struct {
 // distinction the JSON API's updateSet draws with the same technique.
 type Settings struct {
 	Name         *string   `json:"name,omitempty" jsonschema:"a private label for the site, up to 60 characters, shown to its owner in the account's site list and on the edit page, never to visitors; an empty string removes it"`
-	Tags         *[]string `json:"tags,omitempty" jsonschema:"private tags for the site, shown only to its owner: up to 10, each 1 to 30 characters without commas; case-insensitive, so Demo and demo are one tag; the list replaces the current tags, an empty list removes them all"`
+	Tags         *[]string `json:"tags,omitempty" jsonschema:"your own private tags for the site (the owner's tags for an owner, your private tags for an admin of a shared site): up to 10, each 1 to 30 characters without commas; case-insensitive, so Demo and demo are one tag; the list replaces the current tags, an empty list removes them all"`
 	Mode         *string   `json:"mode,omitempty" jsonschema:"webserver (serve the files as a site), viewer (wrap a single document in a viewer), or container (Enterprise: run the services sitebin-container-compose.yaml declares; every change to that file restarts them)"`
 	EntryFile    *string   `json:"entry_file,omitempty" jsonschema:"the file to serve at the site root"`
 	ViewPassword *string   `json:"view_password,omitempty" jsonschema:"password visitors must enter; an empty string removes the protection"`

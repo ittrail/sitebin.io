@@ -461,11 +461,11 @@ require stdio) can bridge with `npx mcp-remote https://…/mcp --header …`.
 | Tool | What it does |
 |---|---|
 | `create_site` | Publish files as a new site; returns the URL, the edit id and — once — the edit password |
-| `list_sites` | The connected account's sites, with their names, tags and custom domains *(needs a token)* |
-| `get_site` / `update_site` | Read and change the name, tags (`settings.tags` replaces them; an empty list removes all), settings, expiry, view password, WebDAV/FTP, SPA fallback, browser caching |
+| `list_sites` | The connected account's sites, with their names, tags and custom domains; sites other accounts [shared](#site-ownership-enterprise) with it appear with `role: "admin"` *(needs a token)* |
+| `get_site` / `update_site` | Read and change the name, tags (`settings.tags` replaces them; an empty list removes all), settings, expiry, view password, WebDAV/FTP, SPA fallback, browser caching; an admin of a shared site cannot change the expiry |
 | `list_files` / `read_file` | Inspect a site's contents |
 | `write_files` | Add or overwrite files; with `replace`, the site ends up containing exactly what you pass |
-| `delete_file` / `delete_site` | Remove a file, or the whole site |
+| `delete_file` / `delete_site` | Remove a file, or the whole site (not for an admin of a shared site) |
 | `add_domain` / `remove_domain` | Custom domains; on a container site, `add_domain` takes the HTTP port the domain serves *(Enterprise)* |
 | `set_domain_redirect` / `set_view_address` | Redirect a custom domain to another of the site's domains; switch a generated address off or redirect it *(Enterprise)* |
 | `set_domain_target` | Point a container site's custom domain at another of its HTTP ports *(Enterprise)* |
@@ -480,6 +480,12 @@ require stdio) can bridge with `npx mcp-remote https://…/mcp --header …`.
 - **With a token** (`Authorization: Bearer sbp_…`) new sites belong to that
   account and get its tier's quotas, `list_sites` works, and the token stands
   in for the edit password on every site the account owns.
+- **Shared sites.** An admin's own token or OAuth sign-in reaches the sites
+  shared with that account (`role: "admin"` in `list_sites`), with the owner-only
+  refusals of [Site ownership](#site-ownership-enterprise): no delete, no expiry
+  change. `tags` is the caller's own list, so an admin sees their private tags,
+  never the owner's. A connector that cached the tool schemas from before
+  sharing must reconnect to read the `role` field.
 - **Signed in through OAuth** (where the instance has it on, see
   [below](#oauth-21-optional)) the connection works like a token, within the
   scopes it was granted — on `/mcp` only.
@@ -1607,7 +1613,7 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_BILLING` | Which backend may charge customers: `stripe`, `paddle` or `paygate` (case-insensitive). Unset = inferred when exactly one is configured; **two configured and no choice is a startup error**. Exactly one backend is ever active: with `paygate` selected, configured Stripe/Paddle credentials are inert *and their webhook routes are not mounted*, so provider deliveries get a silent `404` — remove the webhook from the provider's dashboard, or you will be debugging retries. Startup also refuses a catalogue the selected direct backend cannot sell: every tier with a `price` must carry the matching `price.stripe` / `price.paddle`. See [Billing](#billing). |
 | `SITEBIN_PAYGATE_URL` / `_APP_ID` / `_API_KEY` | Sell tiers and resolve subscriptions through a SaaS-Stack PayGate. See [Billing](#billing) and [SaaS-Stack integration](#saas-stack-integration). |
 | `SITEBIN_PAYGATE_CACHE_TTL` | Per-user tier cache (default `5m`). "Manage subscription" needs no setting: with PayGate and `SITEBIN_OAUTH_OIDC_ISSUER` set it goes to the stack's hosted plan page, `<issuer origin>/apps/<SITEBIN_PAYGATE_APP_ID>/plan`, derived exactly as the stack's own `planUrl()` derives it. |
-| `SITEBIN_SMTP_HOST` / `_PORT` / `_USER` / `_PASS` / `_FROM` / `_TLS` | Email (verification, password reset). Port default 587; `_TLS=true` for implicit TLS (465). |
+| `SITEBIN_SMTP_HOST` / `_PORT` / `_USER` / `_PASS` / `_FROM` / `_TLS` | Email (verification, password reset, and the notices of [site ownership](#site-ownership-enterprise): offers, invitations, outcomes). Required for those notices: without it none is sent. Port default 587; `_TLS=true` for implicit TLS (465). |
 | `SITEBIN_STRIPE_SECRET_KEY` / `_WEBHOOK_SECRET` | Stripe billing, direct. Webhook: `POST /account/billing/stripe/webhook`. |
 | `SITEBIN_PADDLE_API_KEY` / `_WEBHOOK_SECRET` / `_SANDBOX` | Paddle billing, direct. Webhook: `POST /account/billing/paddle/webhook`. |
 | `SITEBIN_LICENSE_KEY` | Optional Enterprise license key (four base64url segments: a stack-signed certificate plus the license it vouches for). Verified offline; it never blocks startup. When set it WINS over any license collected from the stack, which is what makes an air-gapped install work. Without a valid key an instance behaves as licensed for 90 days from first start, then keeps serving and updating every existing site but creates no new ones. |
@@ -1644,6 +1650,80 @@ request counts as anonymous. Same-origin requests and non-browser clients
 answers `{"signed_in":true|false}` (with CORS credentials only for a session
 origin), never slides the session and sets no cookie; without accounts it is
 a `404`.
+
+### Site ownership *(Enterprise)*
+
+A signed-in account can take an anonymous drop into its account, hand sites to
+another account, and share a site with other accounts as admins. All three need
+the plan flag `sharing` (see [Enterprise configuration](#enterprise-configuration-all-startup-env-vars)):
+a tier that forgets the field gets nothing, like `custom_domains`. With
+`SITEBIN_ACCOUNT_MODE=accounts` (no tiers) every live account may do all three.
+
+**Adopt an anonymous drop.** "Adopt an anonymous drop" on the dashboard (or
+"Take it into my account" on a drop's claim ticket, which opens the same page
+with the site filled in) asks for the drop's public URL or view id and its edit
+password, at `/account/adopt`. The password is never put in a URL. The site
+must be anonymous, not locked and not expired, and the account's plan and limits
+must hold it. It is then stamped as if the account had created it: caps, forms,
+trust and tier expiry. The edit password is kept, so existing deploys go on
+working. Every failure answers the same text, and attempts are rate limited per
+account and per IP.
+
+**Transfer.** "Transfer" on the dashboard offers a **bundle of 1 to 50 sites**
+to an email address, with an *accept by* date (required, at most 365 days ahead)
+and an optional *available from* date. The recipient needs an account that
+already has a plan holding the whole bundle: sites, container services, domain
+ceiling, and per site bytes, files, custom domains and forms. They see a "Ready
+to take over" card with each limit marked, and **accept or decline the bundle as
+a whole**. Nothing moves partly, because that could split a host between two
+owners. A host travels whole: a site outside the bundle that shares a host with
+one inside is named, and one click adds it. The recipient's email is matched
+against verified account emails only, and the sender is never told whether
+there is a match.
+
+On accept, each site is restamped from the recipient's plan as if they had
+created it, and:
+
+- a **new edit password** is made and shown once, on the page the accept
+  returns, and stored nowhere (a site finished later shows "rotate to get a
+  password");
+- upload tokens are revoked and the old owner is cut off everywhere: dashboard,
+  tokens, MCP, git;
+- **what does not move:** the old edit password, tokens, tags (the old owner's
+  private labels), shares, and addresses whose proof belongs to the sender's
+  account (names under the sender's account zones or the operator's zones, and
+  addresses held only through the host). Those addresses are detached, and the
+  generated address serves if nothing else does. The offer lists them before it
+  is sent;
+- forms keep their confirmed recipients, which the offer and the result page
+  list, so submissions never go somewhere unannounced;
+- an expiry the old owner chose stays, within the new plan's cap.
+
+An offer pauses, and never deletes anything, while the sender's plan lacks
+`sharing`, a site is locked, or either account is suspended; the accept-by date
+keeps running. It ends on decline, cancel, accept-by, or when either account is
+deleted. Both parties are mailed.
+
+**Share.** The owner invites an account by email, with an optional *until*
+date, from the site's row on the dashboard. At most 10 admins per site; an invitation lapses
+after 30 days. The invitee accepts on their dashboard, where the site then
+appears marked "shared by". An admin may do everything the owner may, on the edit
+page, through their own account API token and through their own MCP connection,
+except the **owner-only** actions: delete the site, set, change or clear its
+expiry, rotate the edit password, delete its Git repository, transfer it, and
+invite admins or end other admins' shares. An admin can always **leave**. Caps
+and counts stay the owner's: a shared site never counts against the admin. The
+admin's own tags for the site are private to the admin and dropped when the share
+ends. After an *until* date the entry grants nothing and the sweep removes it. A
+share needs `sharing` on the owner's plan **and** the admin's: when either plan
+loses it the share pauses, and when a plan cannot be looked up the one request
+is refused, never the share. Sites owned by an operator account cannot be shared.
+A transfer ends the site's shares.
+
+**Mail.** Offers, invitations and their outcomes are sent as plain text, only to
+accounts whose email is verified, and only when `SITEBIN_SMTP_*` is configured
+(without it nothing is mailed; the dashboard cards still show everything).
+Design: [`docs/superpowers/specs/2026-11-03-site-ownership-design.md`](docs/superpowers/specs/2026-11-03-site-ownership-design.md).
 
 ### Account API tokens *(Enterprise)*
 
@@ -1732,6 +1812,8 @@ Note that an unlimited tier needs explicit large caps, not zeros:
 `max_expiry_days: 0` mean unlimited.
 
 A tier's `git` (bool, absent = false) turns on the [Git repository](#git-a-repository-per-site) for the sites it owns; a plan without it leaves an existing repository read-only, never deleted.
+
+A tier's `sharing` (bool, absent = false) allows [adopting, transferring and sharing sites](#site-ownership-enterprise); its notices need `SITEBIN_SMTP_*`.
 
 A tier's `price` maps it to provider price IDs, e.g. a tier with
 `"price":{"stripe":"price_123","paddle":"pri_456","display":"€9/mo"}` becomes a

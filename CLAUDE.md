@@ -96,11 +96,21 @@ an account API token whose account stands on the site (never an MCP OAuth
 token); the owner's or an admin's **browser session** (`sessionStanding`, via
 the optional `ext.SessionAccounts`); the edit password. Standing is
 `accountStanding` (server.go), the one rule: the owner, or an admin listed in
-`Meta.Admins` (no end date, or one ahead) while `ext.SharingAccounts`
-says both plans share — no provider, no admins. An admin may do all the owner
-may except the owner-only actions (`refuseUnlessOwner`, `ownerOnly`: delete
-the site, set/clear `expires_at`, `DELETE …/git`); the edit password keeps
-every owner right. `sessionStanding` is a real CSRF boundary — the session counts only with
+`Meta.Admins` (`Until` nil or ahead) while `ext.SharingAccounts.SharingAllowed`
+says BOTH the owner's and the admin's plan share — no provider, no admins. An
+unknown plan (a lookup error) is a 503 for that one request, never a pass and
+never an ended share. An admin may do all the owner may except the owner-only
+actions (`refuseUnlessOwner`, `ownerOnly` in `internal/httpapi/sharing.go`:
+delete the site, set/clear `expires_at` — checked per field in the settings
+write — rotate the edit password, transfer, invite or end others' shares,
+`DELETE …/git`). They are refused to role `admin` ONLY: a password actor stays
+owner-equivalent, as before. An admin's upload token re-checks the standing on
+every use (`uploadTokenStands`; WebDAV and the files POST), and a git push
+re-checks it from `meta.json` after `BeginGitWrite` (`gitStandingHolds`;
+`WriteRPCRefusal` prints the refusal on the POST). The `tags` an API or MCP
+caller sees are the caller's own: the owner's `Meta.Tags`, or the admin's
+private list (`AdminTags`) — never the owner's. See "Ownership" below. The
+edit password keeps every owner right. `sessionStanding` is a real CSRF boundary — the session counts only with
 `X-Sitebin-Session: 1` and a same-origin `Sec-Fetch-Site` when one is sent —
 and must never be loosened into `fromOwnBrowser`, which is a forgeable plan
 heuristic. MCP never reads the session, and the dashboard never reads a token.
@@ -115,6 +125,58 @@ from sibling subdomains). Same-origin and non-browser requests (no `Origin`, no
 `Sec-Fetch-Site`) are unchanged. MCP (`createOpts.browserOK` false) always
 gets the clone, so it never reads the session whatever it sends. See
 `docs/superpowers/specs/2026-11-03-front-door-design.md` (Corrections).
+
+## Ownership: meta.json is the owner's truth
+
+Adopt, transfer and share (`ee/adopt.go`, `transfer_send.go`,
+`transfer_accept.go`, `share.go`, `ownership_loop.go`, `ownership_mail.go`,
+`ownership_delete.go`; offers and invitations in `ee/ownership/`; the core's
+half in `internal/store/ownership.go`, `internal/httpapi/ownership.go`) hang on
+the plan flag `sharing`. Read
+`docs/superpowers/specs/2026-11-03-site-ownership-design.md`, with its
+"Corrections (post-implementation)".
+
+- **Markers are an index, meta decides.** `accounts/<id>/sites/` markers and
+  share markers only find candidates; `Meta.OwnerAccountID` and `Meta.Admins`
+  are the truth. `ownedSiteIDs` filters by meta, `SiteOwner`/`SiteAdmins` read
+  meta only, `SharedSiteIDs` keeps a marker only while meta lists the account.
+  Every `ee` walk (dashboard, restamp, suspend, locks, export) goes through
+  them. The loop (`ownership_loop.go`) reconciles hourly, both ways: a stray or
+  dangling marker is unlinked, a missing one linked — but only past a 10-minute
+  grace (`markerGrace`), because a transfer links the new owner first.
+- **Each move is ONE operation under the site lock, in core.**
+  `TransferSite`, `AdoptSite`, `SetAdmins(viewID, expectedOwner, by, edit)`
+  and `DeleteSiteIfOwner` (seam, `ext.OwnershipSites`; store: `TransferOwner`,
+  `AdoptOwner`, `UpdateAdmins`) check the owner under the lock and refuse with
+  `ErrNotOwner` otherwise; never check-then-write across two calls, and never
+  delete on a read error. They take `ext.ChangeBy` so the site's provenance
+  names the actor. The addresses that will not move are computed UNDER the
+  lock from fresh meta (`detach`), never from a list the caller read earlier.
+- **A transfer is stamped like a creation, from the strict tier**
+  (`effectiveTierStrict`: an unknown plan refuses the move, never fails open),
+  through `stampGrant`, the one function creation uses. Only an expiry the owner
+  chose survives, clamped to the new cap.
+- **The old owner is cut off at the root.** The verify cache is bound to the
+  password hash, so a cached old password stops working at once. No new
+  password is ever stored: the accept's response shows it once, and offers have
+  no password field.
+- **A bundle moves site by site, never under several locks** (sorted ids, each
+  its own lock). The offer's `accepting` state plus forward completion finishes
+  a crash. A per-offer run guard (`claimAccept`) means the live accept and the
+  loop never run one offer together, and **only `completeAccepting` ends an
+  accepting offer** — never expiry, cancel or the account-deletion path.
+  `Offer.AcceptedBy` says who; `Offer.NotifiedAt` makes the "available" mail go
+  out exactly once. `ended` is the final state of an accepted offer whose forward completion gave
+  up with no site moved (every site stayed with the sender).
+- **Pauses are computed, never stored** (`offerPause`: sender plan, locked
+  site, suspension; an error is unknown and refuses the accept). The one
+  stored pause is the host conflict, reopened by the loop when it clears.
+- **Mail** is plain text, best effort, only to verified accounts, and only
+  with a mailer (`mailVerified`).
+- **GDPR.** Account logs never name the other party's account (they name the
+  offer id); the site's own provenance keeps both for the operator. The stored
+  account log keeps its evidence, and the export (`gdprProvenance`) redacts
+  Account/IP/UA on foreign entries.
 
 ## Locked sites are an evidence hold
 

@@ -536,3 +536,126 @@ because a paid plan must be booked first.)
 - Mails are plain text. Without an account mailer, there is only the
   dashboard.
 - In v1 transfers and invitations are dashboard-only: no API or MCP tools.
+
+## Corrections (post-implementation)
+
+*2026-11-04.* The design shipped as written, except for the decisions below,
+made while building it. Where this block and the text above differ, this block
+holds.
+
+**Rulings from the plan (R1-R16, as decided)**
+
+- **R1, locking.** Transfer and adopt are each one store function under the
+  site lock, restamping inside it. Nothing nests seam calls inside a site lock.
+- **R2, truth.** `meta.json` decides who owns a site. Every `ee` walk filters
+  the account's markers by meta (`ownedSiteIDs`), and a stray marker is
+  unlinked by the background loop.
+- **R3, caller-aware results.** `sitePayload` is unchanged; handlers add
+  `role` and `shared_by` and, for an admin, the admin's own `tags`
+  (`payloadFor`). MCP gets the caller's standing from `openSiteAs`.
+- **R5, restamp.** Adoption and transfer stamp exactly as creation does:
+  caps, forms, trust marker, tier expiry. Only an owner-chosen date survives.
+- **R7, domains.** The recipient tier's per-site `custom_domains` cap is
+  checked against the addresses that move, zone names excluded. No licence
+  check there.
+- **R11.** "Upgrade" links point to `/account#plan`, because
+  `/account/upgrade` is POST-only.
+- **R12.** `/account/status` stays yes/no. The ticket's line links to the
+  adopt page, which explains the plan requirement.
+- **R13.** "Shared by" shows the owner's email; accounts have no name.
+- **R15.** The sender's pending claims on a moved host do not move; the sweep
+  drops them. The offer notice says so in one generic sentence.
+- **R16.** Tests pin that the edit page, which sends session and password
+  together, gets admin standing for an admin.
+
+(R4, R6, R8-R10, R14 and R17 are not separate rulings in the plan; their
+content is in the rows above and below.)
+
+**Build rulings that change behaviour or storage (P1-P37)**
+
+- **P2, adopt.** Adopt runs the plan gate, then the password check, then a
+  read-only adoptability check, then the shared limits check (`limitsCheck`,
+  the same one a transfer uses), then the one store operation. Failures before
+  the password is proven give the one text; a limits failure after it names
+  the failing lines.
+- **P5, P22, shares.** A share marker counts only while the site's meta lists
+  the account (`SharedSiteIDs`, `SiteAdmins`). A transfer removes the former
+  admins' markers and their private tags.
+- **P10, dashboard.** A live admin may rename and tag on the dashboard row
+  (tags go to the admin's own registry); rotating the edit password and
+  deleting stay owner-only.
+- **P12, bundle.** A bundle is accepted site by site in sorted order, each
+  under its own lock, with the offer's `accepting` state and forward
+  completion. There is no simultaneous multi-lock; the spec's "take the locks
+  in a fixed order" is met by never nesting them.
+- **P13, P4.** Accept racing cancel is decided by the offer store's mutex and
+  state check. `completeAccepting` finishes a crash by itself.
+- **P14.** Account deletion ends offers and invitations both from the account
+  and to its email.
+- **P15, stamp.** The stamp is one callback, `stampGrant`, writing meta, then
+  the trust marker, then stopping any running git push. A surviving expiry
+  later than now plus the new cap is clamped, without relabelling.
+- **P16, owner-only.** Owner-only actions are refused to role `admin` only. A
+  holder of the edit password keeps every owner right, as today.
+- **P17, git.** After `BeginGitWrite` a push re-checks from meta only (owner
+  unchanged, admin entry live, password hash unchanged). The plan is asked once
+  before registration, never inside it. The refusal is printed by git.
+- **P18, P7.** `GET .../git` carries the caller's role; the Git tab hides
+  "Delete repository" for an admin.
+- **P19, provenance.** The seam's writers take `ext.ChangeBy`
+  (account, IP, user agent), so a site's provenance line names the actor.
+- **P20, delete.** Account deletion removes a site only through
+  `DeleteSiteIfOwner` (owner checked under the site lock); a read error stops
+  the deletion.
+- **P21, passwords.** An offer stores no password. The new edit password is
+  shown once, in the accept response; a site finished later by the loop says
+  "rotate to get a password". Plaintext passwords never reach `data/`.
+- **P23, `NotifiedAt`.** `Offer.NotifiedAt` makes the recipient's "available"
+  mail go out exactly once. A transfer to the sender's own email is refused
+  with a plain message.
+- **P24.** Editing an offer's dates or sites does not ask the plan; only
+  create and accept do. A downgrade pauses the offer.
+- **P25, pauses.** A pause is computed (`offerPause`), never stored, except a
+  host-conflict pause, which the loop reopens when the conflict clears. An
+  error while computing is unknown and refuses the accept.
+- **P26, will-not-move.** The list of addresses that will not move is computed
+  under the site lock from fresh meta, not passed in by the caller.
+- **P27, strict tier.** A transfer stamps from the strict tier: an unknown
+  plan refuses the move instead of failing open.
+- **P28.** A host-split window (an address added on a shared host to a site
+  outside the bundle while it moves) stays open and is handled by the sweep's
+  host rules; closing it would need a multi-site lock.
+- **P29, `SetAdmins`.** `SetAdmins(viewID, expectedOwner, by, edit)` refuses
+  with `ErrNotOwner` when the owner changed, which closes accept-after-transfer.
+- **P30, P31, loop.** The loop reconciles the account index both ways, hourly
+  (links a missing marker, unlinks a stray or dangling one), and reconciles
+  share markers and admin tags. Invitations lapse silently; expired admin
+  entries go through `SetAdmins`.
+- **P32.** `HostConflicts` returns an error; an error is treated as unknown.
+- **P33.** The "transfer expired" mail skips a recipient who was never
+  notified.
+- **P34, P37, GDPR.** Account-log lines about a transfer name the offer id,
+  never the other party's account. The stored account log keeps its evidence;
+  the export blanks Account, IP and user agent on any entry whose account is not
+  the exporting account.
+- **P35.** The export lists every offer addressed to the account's email, seen
+  or not: it is data stored about that person.
+- **Run guard and final states.** Only one run per offer at a time in a
+  process (`claimAccept`), and only `completeAccepting` ends an accepting offer.
+- **Marker grace.** The hourly reconciliation unlinks a marker only when it is
+  at least 10 minutes old, because a transfer links the new owner first.
+
+**Notes**
+
+- After a transfer, the old owner's provenance entries on the site leave their
+  GDPR export (they are the site's data now) and are not erased with their
+  account; only the 90-day retention ends them.
+- Adopting through a public view URL spends that site's target limiter (the
+  attempts are bounded: 10 an hour per account and IP, paid plan only).
+- `/account/tags` and the bulk tag operations do not yet cover an admin's
+  shared-site tags; an admin sets them per site.
+- `gitrepo.WriteRPCRefusal` exists for refusals on a git RPC POST, where the
+  plain refusal is unreadable to git.
+- Offers have a new final state, `ended`: an accepted offer whose forward
+  completion gave up with no site moved. `Offer.AcceptedBy` records who
+  accepted, and `Offer.NotifiedAt` whether and when the recipient was told.
