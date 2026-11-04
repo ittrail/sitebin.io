@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -16,7 +17,7 @@ import (
 var saltDateRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 
 // Salts keeps the per-date random salts that visitor ids are hashed with.
-// A salt is deleted two days after its date, so an id can no longer be tied
+// A salt is deleted once its date is over in every time zone (two days after it), so an id can no longer be tied
 // to a person or to another day.
 type Salts struct {
 	dir   string
@@ -80,10 +81,12 @@ func (s *Salts) For(date string) ([]byte, error) {
 	return b, nil
 }
 
-// Prune deletes the salts of every date before today(UTC) minus two days and
-// drops them from the cache.
+// Prune deletes the salts of every date D once today(UTC) >= D+2, i.e. dates
+// before today minus one day (D is then over in every time zone), drops them
+// from the cache, and removes temp files a crashed write left behind once
+// they are over an hour old.
 func (s *Salts) Prune(today time.Time) error {
-	cutoff := today.UTC().AddDate(0, 0, -2).Format("2006-01-02")
+	cutoff := today.UTC().AddDate(0, 0, -1).Format("2006-01-02")
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for d := range s.cache {
@@ -101,6 +104,16 @@ func (s *Salts) Prune(today time.Time) error {
 	var errs []error
 	for _, e := range entries {
 		n := e.Name()
+		if strings.HasPrefix(n, ".tmp-") {
+			// A write that crashed between CreateTemp and Rename; the age
+			// keeps an in-flight write safe.
+			if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > time.Hour {
+				if err := os.Remove(filepath.Join(s.dir, n)); err != nil && !errors.Is(err, os.ErrNotExist) {
+					errs = append(errs, err)
+				}
+			}
+			continue
+		}
 		if !saltDateRe.MatchString(n) || n >= cutoff {
 			continue
 		}

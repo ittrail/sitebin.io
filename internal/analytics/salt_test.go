@@ -98,11 +98,11 @@ func TestSaltsPrune(t *testing.T) {
 		_, err := os.Stat(filepath.Join(dir, "analytics", "salts", d))
 		return err == nil
 	}
-	if exists("2026-11-01") {
-		t.Fatal("a salt more than two days old must be deleted")
+	if exists("2026-11-01") || exists("2026-11-02") {
+		t.Fatal("a salt whose date is over everywhere (today >= D+2) must be deleted")
 	}
-	if !exists("2026-11-02") || !exists("2026-11-03") || !exists("2026-11-04") {
-		t.Fatal("salts of the last three dates must stay")
+	if !exists("2026-11-03") || !exists("2026-11-04") {
+		t.Fatal("yesterday's and today's salt must stay")
 	}
 	// A pruned date gets a fresh salt, not a cached one.
 	if _, err := s.For("2026-11-01"); err != nil || !exists("2026-11-01") {
@@ -124,5 +124,58 @@ func TestSaltFileMode0600(t *testing.T) {
 	}
 	if fi.Mode().Perm() != 0o600 {
 		t.Fatalf("mode %v", fi.Mode().Perm())
+	}
+}
+
+func TestSaltsPruneBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		today string
+		kept  bool
+	}{{"2026-11-03", true}, {"2026-11-04", false}} {
+		dir := t.TempDir()
+		s := NewSalts(dir)
+		if _, err := s.For("2026-11-02"); err != nil {
+			t.Fatal(err)
+		}
+		now, _ := time.Parse("2006-01-02", tc.today)
+		if err := s.Prune(now.Add(23*time.Hour + 59*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		_, err := os.Stat(filepath.Join(dir, "analytics", "salts", "2026-11-02"))
+		if (err == nil) != tc.kept {
+			t.Errorf("today %s: kept=%v, want %v", tc.today, err == nil, tc.kept)
+		}
+	}
+}
+
+func TestSaltsPruneRemovesStaleTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSalts(dir)
+	if _, err := s.For("2026-11-04"); err != nil {
+		t.Fatal(err)
+	}
+	sd := filepath.Join(dir, "analytics", "salts")
+	old := filepath.Join(sd, ".tmp-old")
+	fresh := filepath.Join(sd, ".tmp-fresh")
+	for _, p := range []string{old, fresh} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	past := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(old, past, past); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Prune(time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(old); err == nil {
+		t.Error("stale temp file kept")
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Error("in-flight temp file removed")
+	}
+	if _, err := os.Stat(filepath.Join(sd, "2026-11-04")); err != nil {
+		t.Error("today's salt removed")
 	}
 }
