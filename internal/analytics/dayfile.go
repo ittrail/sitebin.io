@@ -74,37 +74,49 @@ func ReadDay(siteDir, date string) ([]Record, error) {
 	}
 }
 
-// countLines counts the lines of a day file, a cut last line included, and
-// reports whether the file ends inside a line (so the next append must
-// start a new one). A missing file has no lines.
-func countLines(path string) (lines int, cut bool, err error) {
+// countDay counts the lines of a day file per capped class, a cut last line
+// included, and reports whether the file ends inside a line (so the next
+// append must start a new one). A missing file has no lines.
+//
+// The class is the record's "s": the script's ("js") and the server's
+// ("srv") lines are counted apart, an import's ("um") in neither. A line
+// whose source cannot be read (one a crash cut short) counts as the
+// server's, so no line escapes the bound.
+func countDay(path string) (srv, js int, cut bool, err error) {
 	f, err := os.Open(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return 0, false, nil
+		return 0, 0, false, nil
 	}
 	if err != nil {
-		return 0, false, err
+		return 0, 0, false, err
 	}
 	defer f.Close()
-	buf := make([]byte, 64<<10)
-	var last byte = '\n'
+	br := bufio.NewReaderSize(f, 64<<10)
 	for {
-		n, err := f.Read(buf)
-		if n > 0 {
-			lines += bytes.Count(buf[:n], []byte{'\n'})
-			last = buf[n-1]
+		line, err := br.ReadBytes('\n')
+		if len(line) > 0 {
+			cut = line[len(line)-1] != '\n'
+			var rec struct {
+				S string `json:"s"`
+			}
+			if l := bytes.TrimSpace(line); len(l) > 0 {
+				_ = json.Unmarshal(l, &rec) // a line that does not parse has no source
+				switch rec.S {
+				case "js":
+					js++
+				case "um":
+				default:
+					srv++
+				}
+			}
 		}
 		if err == io.EOF {
-			break
+			return srv, js, cut, nil
 		}
 		if err != nil {
-			return 0, false, err
+			return 0, 0, false, err
 		}
 	}
-	if last != '\n' {
-		return lines + 1, true, nil
-	}
-	return lines, false, nil
 }
 
 // addOver adds n to a day's over-the-cap count, written through a temp file

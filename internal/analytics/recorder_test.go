@@ -254,6 +254,112 @@ func TestRecorderCapSeesLinesWrittenByAnotherWriter(t *testing.T) {
 	}
 }
 
+// scriptHit is pageHit as the script's beacon delivers it.
+func scriptHit() Hit {
+	h := pageHit()
+	h.Source = "js"
+	return h
+}
+
+// sourceCounts is the number of records per source in a day file.
+func sourceCounts(t *testing.T, dir, date string) map[string]int {
+	t.Helper()
+	recs, err := ReadDay(dir, date)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := map[string]int{}
+	for _, r := range recs {
+		n[r.S]++
+	}
+	return n
+}
+
+func TestRecorderDailyCapIsPerSource(t *testing.T) {
+	e := newRecorderEnv(t)
+	dir := e.site(t, testView)
+	over := func(date string) string {
+		b, _ := os.ReadFile(filepath.Join(dir, "analytics", "events", date+".over"))
+		return strings.TrimSpace(string(b))
+	}
+
+	// Forged beacons fill the script's cap; the server's records still land.
+	r := e.recorder(3)
+	for range 5 {
+		r.Add(scriptHit())
+	}
+	r.Add(pageHit())
+	r.Add(pageHit())
+	r.Flush()
+	if n := sourceCounts(t, dir, "2026-11-04"); n["js"] != 3 || n["srv"] != 2 || over("2026-11-04") != "2" {
+		t.Fatalf("records = %v, .over = %q; want js 3, srv 2, over 2", n, over("2026-11-04"))
+	}
+	// A restarted recorder counts each class from the file: the server's
+	// last free place is taken, and nothing more of either.
+	r2 := e.recorder(3)
+	r2.Add(pageHit())
+	r2.Add(pageHit())
+	r2.Add(scriptHit())
+	r2.Flush()
+	if n := sourceCounts(t, dir, "2026-11-04"); n["js"] != 3 || n["srv"] != 3 || over("2026-11-04") != "4" {
+		t.Fatalf("after restart: records = %v, .over = %q; want js 3, srv 3, over 4", n, over("2026-11-04"))
+	}
+
+	// And the other way round: a full server cap leaves the script's alone.
+	next := func(h Hit) Hit { h.Time = h.Time.Add(24 * time.Hour); return h }
+	for range 4 {
+		r2.Add(next(pageHit()))
+	}
+	r2.Add(next(scriptHit()))
+	r2.Add(next(scriptHit()))
+	r2.Flush()
+	if n := sourceCounts(t, dir, "2026-11-05"); n["srv"] != 3 || n["js"] != 2 || over("2026-11-05") != "1" {
+		t.Fatalf("next day: records = %v, .over = %q; want srv 3, js 2, over 1", n, over("2026-11-05"))
+	}
+}
+
+func TestRecorderCapCountsNoImportedLines(t *testing.T) {
+	e := newRecorderEnv(t)
+	dir := e.site(t, testView)
+	path := DayFile(dir, "2026-11-04")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	imported := strings.Repeat(`{"t":1,"k":"p","s":"um","p":"/old"}`+"\n", 5)
+	if err := os.WriteFile(path, []byte(imported), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := e.recorder(2)
+	for range 3 {
+		r.Add(pageHit())
+		r.Add(scriptHit())
+	}
+	r.Flush()
+	if n := sourceCounts(t, dir, "2026-11-04"); n["um"] != 5 || n["srv"] != 2 || n["js"] != 2 {
+		t.Fatalf("records = %v; want um 5, srv 2, js 2", n)
+	}
+}
+
+func TestCountDayClasses(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "d.jsonl")
+	body := `{"t":1,"k":"p","s":"srv"}` + "\n" +
+		`{"t":2,"k":"e","s":"js","n":"x","d":{"s":"um"}}` + "\n" +
+		`{"t":3,"k":"p","s":"um"}` + "\n" +
+		"\n" +
+		`{"t":4,"k":"p","s":"js","p":"/cut` // a crash cut it: no source to read
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv, js, cut, err := countDay(path)
+	if err != nil || srv != 2 || js != 1 || !cut {
+		t.Fatalf("countDay = srv %d, js %d, cut %v, %v; want 2, 1, true", srv, js, cut, err)
+	}
+	if srv, js, cut, err := countDay(filepath.Join(dir, "missing.jsonl")); err != nil || srv != 0 || js != 0 || cut {
+		t.Fatalf("missing file = %d %d %v %v", srv, js, cut, err)
+	}
+}
+
 func TestRecorderNeverGluesOntoAHalfWrittenLine(t *testing.T) {
 	e := newRecorderEnv(t)
 	dir := e.site(t, testView)

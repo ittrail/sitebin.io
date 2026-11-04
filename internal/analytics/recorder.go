@@ -26,6 +26,10 @@ const (
 // Hit is what a request hands the recorder: raw request facts, never
 // sanitized and never stored as they are. The writer turns it into a Record.
 //
+// Source "js" is capped apart from the server's records (see
+// RecorderConfig.DailyCap): anything a page can send, a forger can too, and
+// it must never crowd out what authz saw.
+//
 // Add takes ownership of the hit: the writer reads it later, on its own
 // goroutine. After Add the caller must not change Data, Own or ExtraQuery,
 // and PageCheck must not capture the *http.Request or its headers (the
@@ -51,8 +55,15 @@ type Hit struct {
 // fn under the site's stats lock and reports found=false, without calling
 // fn, when the site is gone. WithSite and Salts are required; Geo may be
 // nil.
+//
+// DailyCap is per source class and per site and local day: the server's
+// records ("srv") and the script's ("js") each get DailyCap, so beacons
+// forged against a site's open endpoint never stop its server-side
+// counting. The disk bound of a site-day is therefore 2×DailyCap lines;
+// imported records ("um") are written by the import, not here, and count
+// against neither. What is over either cap is added to one .over count.
 type RecorderConfig struct {
-	DailyCap int // <= 0: 50000
+	DailyCap int // <= 0: 50000; per source class, see above
 	Salts    *Salts
 	Geo      *Geo
 	WithSite func(viewID string, fn func(siteDir string) error) (bool, error)
@@ -75,7 +86,7 @@ type Recorder struct {
 	// The writer's state. wmu keeps it to one goroutine at a time: Run's
 	// loop, or Flush while Run is not active.
 	wmu         sync.Mutex
-	batches     map[batchKey][][]byte // encoded record lines
+	batches     map[batchKey][]batchLine
 	pending     int
 	days        map[string]dayCount // viewID → the day whose lines are counted
 	prunedDay   string              // the UTC date salts were last pruned on
@@ -85,15 +96,23 @@ type Recorder struct {
 
 type batchKey struct{ viewID, date string }
 
-// dayCount is the number of lines in a site's day file, kept so the cap
-// check does not read the file on every flush. size is the file's size
-// after the last count or append: a file of another size was rewritten
-// (an import) and is counted again. cut is a file ending inside a line.
+// batchLine is an encoded record line and whether it came from the script,
+// which has a daily cap of its own.
+type batchLine struct {
+	line []byte
+	js   bool
+}
+
+// dayCount is the number of lines of each capped class in a site's day
+// file, kept so the cap check does not read the file on every flush. size is
+// the file's size after the last count or append: a file of another size was
+// rewritten (an import) and is counted again. cut is a file ending inside a
+// line.
 type dayCount struct {
-	date  string
-	lines int
-	size  int64
-	cut   bool
+	date    string
+	srv, js int
+	size    int64
+	cut     bool
 }
 
 // NewRecorder returns a recorder; it records nothing until Run is started
@@ -117,7 +136,7 @@ func NewRecorder(c RecorderConfig) *Recorder {
 		c:        c,
 		ch:       make(chan Hit, recorderBuffer),
 		flushReq: make(chan chan struct{}),
-		batches:  map[batchKey][][]byte{},
+		batches:  map[batchKey][]batchLine{},
 		days:     map[string]dayCount{},
 	}
 }
@@ -232,7 +251,7 @@ func (r *Recorder) take(h Hit) {
 		return
 	}
 	k := batchKey{h.ViewID, date}
-	r.batches[k] = append(r.batches[k], line)
+	r.batches[k] = append(r.batches[k], batchLine{line: line, js: h.Source == "js"})
 	r.pending++
 	if r.pending >= flushRecords {
 		r.writeAll()
@@ -316,7 +335,7 @@ func (r *Recorder) writeAll() {
 // writeBatch writes one (site, day) batch under the site's stats lock. A
 // panic drops this batch only; the lock is released by WithSite's own
 // deferred unlock as the panic passes through it.
-func (r *Recorder) writeBatch(k batchKey, lines [][]byte) {
+func (r *Recorder) writeBatch(k batchKey, lines []batchLine) {
 	defer func() {
 		if p := recover(); p != nil {
 			delete(r.days, k.viewID) // the count may be off: read the file again next time
@@ -335,9 +354,9 @@ func (r *Recorder) writeBatch(k batchKey, lines [][]byte) {
 }
 
 // appendDay runs under the site's stats lock, so the site folder exists
-// and no delete can run. It appends the lines the daily cap still has room
-// for and counts the rest in the day's .over file.
-func (r *Recorder) appendDay(viewID, siteDir, date string, lines [][]byte) error {
+// and no delete can run. It appends the lines their class's daily cap still
+// has room for, in order, and counts the rest in the day's .over file.
+func (r *Recorder) appendDay(viewID, siteDir, date string, lines []batchLine) error {
 	if err := os.MkdirAll(eventsDir(siteDir), 0o755); err != nil {
 		return err
 	}
@@ -350,23 +369,32 @@ func (r *Recorder) appendDay(viewID, siteDir, date string, lines [][]byte) error
 	}
 	dc, ok := r.days[viewID]
 	if !ok || dc.date != date || dc.size != size {
-		n, cut, err := countLines(path)
+		srv, js, cut, err := countDay(path)
 		if err != nil {
 			delete(r.days, viewID)
 			return err
 		}
-		dc = dayCount{date: date, lines: n, size: size, cut: cut}
+		dc = dayCount{date: date, srv: srv, js: js, size: size, cut: cut}
 	}
-	keep := min(max(r.c.DailyCap-dc.lines, 0), len(lines))
+	var buf bytes.Buffer
+	keep := 0
+	for _, l := range lines {
+		n := &dc.srv
+		if l.js {
+			n = &dc.js
+		}
+		if *n >= r.c.DailyCap {
+			continue
+		}
+		*n++
+		if keep == 0 && dc.cut { // never glue a record onto a line a crash cut short
+			buf.WriteByte('\n')
+		}
+		buf.Write(l.line)
+		buf.WriteByte('\n')
+		keep++
+	}
 	if keep > 0 {
-		var buf bytes.Buffer
-		if dc.cut { // never glue a record onto a line a crash cut short
-			buf.WriteByte('\n')
-		}
-		for _, l := range lines[:keep] {
-			buf.Write(l)
-			buf.WriteByte('\n')
-		}
 		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if err != nil {
 			delete(r.days, viewID)
@@ -378,7 +406,6 @@ func (r *Recorder) appendDay(viewID, siteDir, date string, lines [][]byte) error
 			delete(r.days, viewID) // count the file again next time
 			return err
 		}
-		dc.lines += keep
 		dc.size += int64(buf.Len())
 		dc.cut = false
 	}
