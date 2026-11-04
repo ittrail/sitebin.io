@@ -99,8 +99,18 @@ func (p *provider) stopOwnershipLoop() {
 	})
 }
 
-// safeTick is one tick (each step recovers on its own, see step).
-func (p *provider) safeTick() { p.ownershipTick(time.Now()) }
+// safeTick is one tick. Each step recovers on its own (see step), so a
+// panicking step does not stop the others; this recover catches a panic
+// outside every step (the guards, the log pruning, the due checks), so the
+// loop and the server outlive it and the next tick runs as planned.
+func (p *provider) safeTick() {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("ownership: a tick of the background loop panicked; the next tick runs as planned", "panic", r)
+		}
+	}()
+	p.ownershipTick(time.Now())
+}
 
 // step runs one step of a tick so that a panic in it is logged and the other
 // steps still run: a repeating panic in one step must not stop the rest.
@@ -134,8 +144,13 @@ func (p *provider) ownershipTick(now time.Time) {
 	p.step("invites", func() { p.lapseInvites(now) })
 	p.step("admins", func() { p.expireAdmins(now) })
 	if p.lastPrune.IsZero() || now.Sub(p.lastPrune) >= pruneEvery {
-		p.lastPrune = now
-		p.step("prune", func() { p.pruneEnded(now) })
+		// Only a prune that worked waits a day; a failed one is tried again
+		// at the next tick.
+		p.step("prune", func() {
+			if p.pruneEnded(now) {
+				p.lastPrune = now
+			}
+		})
 	}
 	if p.lastReconcile.IsZero() || now.Sub(p.lastReconcile) >= reconcileEvery {
 		p.lastReconcile = now
@@ -671,8 +686,10 @@ const endedRetention = 90 * 24 * time.Hour
 const pruneEvery = 24 * time.Hour
 
 // pruneEnded deletes the final offers and invitations that ended more than
-// endedRetention ago. A read error leaves the record (the store skips it).
-func (p *provider) pruneEnded(now time.Time) {
+// endedRetention ago, and reports whether both passes worked. A record that
+// cannot be read is left (the store skips it) and does not count as a
+// failure.
+func (p *provider) pruneEnded(now time.Time) bool {
 	offers, invites, err := p.owner.PruneFinal(now.Add(-endedRetention))
 	if err != nil {
 		p.loopLog("prune-ended", now, "ownership: could not prune ended offers and invitations", "err", err)
@@ -680,4 +697,5 @@ func (p *provider) pruneEnded(now time.Time) {
 	if offers+invites > 0 {
 		slog.Info("ownership: pruned ended records past their retention", "offers", offers, "invitations", invites)
 	}
+	return err == nil
 }

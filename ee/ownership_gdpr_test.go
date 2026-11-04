@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1005,5 +1007,36 @@ func TestPruneRunsDailyNotEveryTick(t *testing.T) {
 	e.p.ownershipTick(now.Add(25 * time.Hour))
 	if _, err := e.p.owner.GetOffer(second.ID); !errors.Is(err, ownership.ErrNotFound) {
 		t.Error("a tick a day later did not prune")
+	}
+}
+
+// A prune that failed is tried again at the next tick, not a day later:
+// lastPrune is set only after a successful prune.
+func TestPruneRetriesAfterAFailedPrune(t *testing.T) {
+	e := newGDPREnv(t)
+	dir := filepath.Join(e.p.host.DataDir(), "ownership", "invites")
+	if err := os.Rename(dir, dir+".away"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	e.p.ownershipTick(now) // the invitations pass fails
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(dir+".away", dir); err != nil {
+		t.Fatal(err)
+	}
+	e.site(tid(62))
+	old := time.Now().UTC().AddDate(0, 0, -91)
+	o, err := e.p.owner.CreateOffer(ownership.Offer{Sites: []string{tid(62)}, From: e.acc.ID, ToEmail: takerEmail, State: ownership.StateCancelled, EndedAt: &old, AcceptBy: time.Now()}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.p.ownershipTick(now.Add(5 * time.Minute))
+	if _, err := e.p.owner.GetOffer(o.ID); !errors.Is(err, ownership.ErrNotFound) {
+		t.Error("the tick after a failed prune did not prune again")
 	}
 }

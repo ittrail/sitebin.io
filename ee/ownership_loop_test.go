@@ -985,3 +985,38 @@ func TestNotifyOfferRechecksDatesInTheStore(t *testing.T) {
 		t.Error("an offer past accept-by was notified")
 	}
 }
+
+// panicSitesHost is a host whose Sites() panics: ownershipTick asks for it
+// in its guard, outside every step.
+type panicSitesHost struct{ ext.Host }
+
+func (panicSitesHost) Sites() ext.SiteService { panic("the site service is broken") }
+
+// Final review N1: a panic outside a step (the nil guards, the log pruning,
+// the due checks) is recovered by the tick itself, so the loop -- and the
+// server -- survive it, and the next tick runs.
+func TestLoopTickRecoversAPanicOutsideAStep(t *testing.T) {
+	e := newLoopEnv(t)
+	good := e.p.host
+	e.p.host = panicSitesHost{good}
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("a panic outside a step escaped the tick: %v", r)
+			}
+		}()
+		e.p.safeTick()
+	}()
+	// The tick lock was not left held: the next tick runs.
+	e.p.host = good
+	done := make(chan struct{})
+	go func() {
+		e.p.safeTick()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the tick after a panic never finished")
+	}
+}

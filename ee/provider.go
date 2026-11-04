@@ -54,7 +54,8 @@ type provider struct {
 	// until Init starts the loop.
 	tickMu        sync.Mutex
 	lastReconcile time.Time
-	// lastPrune is when the ended records were last pruned (under tickMu).
+	// lastPrune is when the ended records were last pruned without an error
+	// (under tickMu); a failed prune leaves it, so the next tick retries.
 	lastPrune    time.Time
 	loopLogged   map[string]time.Time
 	loopStop     chan struct{}
