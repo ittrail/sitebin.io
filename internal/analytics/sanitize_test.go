@@ -28,6 +28,9 @@ func TestKeepQuery(t *testing.T) {
 	if !reflect.DeepEqual(clicks, []string{"gclid", "twclid"}) {
 		t.Fatalf("clicks order = %v", clicks)
 	}
+	if q, c := KeepQuery("gclid=X", []string{"gclid"}); len(q) != 0 || !reflect.DeepEqual(c, []string{"gclid"}) {
+		t.Fatalf("click id listed as extra: q=%v clicks=%v", q, c)
+	}
 	if q, c := KeepQuery("", nil); q != nil || c != nil {
 		t.Fatal("empty query should keep nothing")
 	}

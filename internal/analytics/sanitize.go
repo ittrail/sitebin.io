@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -76,7 +77,9 @@ func KeepQuery(rawQuery string, extra []string) (q map[string]string, clicks []s
 		keep(n)
 	}
 	for _, n := range extra {
-		keep(n)
+		if !slices.Contains(ClickIDs, n) { // a click id is never kept by value
+			keep(n)
+		}
 	}
 	for _, id := range ClickIDs {
 		if _, ok := vals[id]; ok {
