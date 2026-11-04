@@ -75,6 +75,7 @@ type Quota struct {
 	ExpiryDays int
 	Domains    *int
 	WebDAV     *bool
+	Git        *bool
 	Forms      *int
 }
 
@@ -120,6 +121,7 @@ func (s *Store) ApplyQuota(site *Site, q Quota, grace time.Duration) error {
 		m.QuotaExpiryDays = q.ExpiryDays
 		m.QuotaDomains = q.Domains
 		m.QuotaWebDAV = q.WebDAV
+		m.QuotaGit = q.Git
 		m.QuotaForms = q.Forms
 
 		now := time.Now()

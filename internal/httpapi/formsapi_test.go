@@ -515,3 +515,15 @@ func TestFormsSnippetOnPathViews(t *testing.T) {
 		t.Errorf("path-view snippet lacks the site: %s", out.Forms[0].Snippet)
 	}
 }
+
+func TestCreateStampsGitFromGrant(t *testing.T) {
+	e, _ := formsEnv(t, nil)
+	yes := true
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1", grant: ext.CreateGrant{Git: &yes}})
+	defer ext.Reset()
+	_, _, viewID := newFormSite(t, e)
+	site, _ := e.st.ByViewID(viewID)
+	if site.Meta.QuotaGit == nil || !*site.Meta.QuotaGit {
+		t.Fatalf("QuotaGit = %v, want true", site.Meta.QuotaGit)
+	}
+}

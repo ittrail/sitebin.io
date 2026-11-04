@@ -908,3 +908,32 @@ func TestDashboardReadsTheTierFreshAfterAPurchase(t *testing.T) {
 		t.Errorf("effectiveTier after the fresh read = %q, want pro", got)
 	}
 }
+
+func TestGrantFromTierCarriesGit(t *testing.T) {
+	var tier eeconfig.Tier
+	if err := json.Unmarshal([]byte(`{"id":"pro","git":true}`), &tier); err != nil {
+		t.Fatal(err)
+	}
+	if g := grantFromTier("acct", tier); g.Git == nil || !*g.Git {
+		t.Fatalf("Git = %v, want true", g.Git)
+	}
+	if g := grantFromTier("acct", eeconfig.Tier{ID: "free"}); g.Git == nil || *g.Git {
+		t.Fatalf("Git = %v for a tier without git, want an explicit false", g.Git)
+	}
+}
+
+func TestAccountsModeGrantsGit(t *testing.T) {
+	p, _, _ := setupAccounts(t)
+	acc, err := p.local.Signup("git@example.com", "password123", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, ok, err := p.QuotaFor(acc.ID)
+	if err != nil || !ok || g.Git == nil || !*g.Git {
+		t.Fatalf("QuotaFor Git = %v ok=%v err=%v, want true", g.Git, ok, err)
+	}
+	g, err = p.grantForAccount(acc)
+	if err != nil || g.Git == nil || !*g.Git {
+		t.Fatalf("grantForAccount Git = %v err=%v, want true", g.Git, err)
+	}
+}

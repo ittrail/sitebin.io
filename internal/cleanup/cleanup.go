@@ -59,6 +59,37 @@ func reconcileTrust(st *store.Store, site *store.Site) {
 	}
 }
 
+// reconcileGit backfills the git stamp onto an owned site from its owner's
+// current plan, and follows a plan change. It writes only that field: the
+// site's caps and expiry stay exactly as they are. A community build, a lookup
+// error and an unknown owner change nothing.
+func reconcileGit(st *store.Store, site *store.Site) {
+	if site.Meta.OwnerAccountID == "" {
+		return
+	}
+	p, ok := ext.Get()
+	if !ok {
+		return
+	}
+	grant, known, err := p.QuotaFor(site.Meta.OwnerAccountID)
+	if err != nil || !known {
+		return
+	}
+	if equalBoolPtr(grant.Git, site.Meta.QuotaGit) {
+		return
+	}
+	if err := st.SetQuotaGit(site, grant.Git); err != nil {
+		slog.Error("cleanup: reconcile git stamp", "id", site.ViewID, "owner", site.Meta.OwnerAccountID, "err", err)
+	}
+}
+
+func equalBoolPtr(a, b *bool) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
 // stopContainers removes a container site's containers before its files are
 // deleted, so nothing keeps writing into a directory that is going away. A
 // failure keeps the site for the next sweep.
@@ -116,6 +147,7 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 			slog.Info("cleanup: purged provenance past retention", "id", site.ViewID, "entries", n)
 		}
 		reconcileTrust(st, site)
+		reconcileGit(st, site)
 		// The second half of custom-domain verification: claims whose record
 		// appeared since the owner asked are attached, verified domains are
 		// re-checked. Lookup errors change nothing (see store.ReconcileDomains).
@@ -270,6 +302,7 @@ func reconcile(st *store.Store, site *store.Site, now time.Time) (keep bool, err
 		ExpiryDays: grant.MaxExpiryDays,
 		Domains:    grant.MaxCustomDomain,
 		WebDAV:     grant.WebDAV,
+		Git:        grant.Git,
 		Forms:      grant.MaxForms,
 	}, 0); err != nil {
 		return false, fmt.Errorf("apply quota: %w", err)

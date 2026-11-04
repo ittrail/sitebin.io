@@ -481,3 +481,27 @@ func TestApplyQuotaWithZeroGraceDoesNotStampAnExpiry(t *testing.T) {
 		t.Fatalf("grace 0 must not impose an expiry, got %v", got.Meta.ExpiresAt)
 	}
 }
+
+func TestApplyQuotaStampsGit(t *testing.T) {
+	s := newExpiryStore(t)
+	site := quotaSite(t, s, 7, 0, false)
+	yes, no := true, false
+
+	check := func(q *bool, want *bool, label string) {
+		t.Helper()
+		if err := s.ApplyQuota(site, Quota{Git: q}, DowngradeGrace); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := s.ByViewID(site.ViewID)
+		switch {
+		case want == nil && got.Meta.QuotaGit != nil:
+			t.Fatalf("%s: QuotaGit = %v, want nil", label, *got.Meta.QuotaGit)
+		case want != nil && (got.Meta.QuotaGit == nil || *got.Meta.QuotaGit != *want):
+			t.Fatalf("%s: QuotaGit = %v, want %v", label, got.Meta.QuotaGit, *want)
+		}
+	}
+	check(nil, nil, "nil stays nil")
+	check(&yes, &yes, "true")
+	check(&no, &no, "false")
+	check(&yes, &yes, "true again")
+}

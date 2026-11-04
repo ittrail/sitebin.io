@@ -579,3 +579,74 @@ func TestSweepLeavesAnAccountLockedAnonymousSiteAlone(t *testing.T) {
 		t.Fatalf("locked site gone: %v", err)
 	}
 }
+
+func gitOwnedSite(t *testing.T, st *store.Store) *store.Site {
+	t.Helper()
+	site, _, err := st.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	exp := time.Now().Add(48 * time.Hour).UTC()
+	if err := st.Update(site, func(m *store.Meta) error {
+		m.OwnerAccountID = "acct-1"
+		m.ExpiresAt = &exp
+		m.QuotaBytes = 5
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return site
+}
+
+func TestReconcileGitBackfillsWithoutTouchingExpiry(t *testing.T) {
+	yes := true
+	ext.Register(&stubProvider{ok: true, grant: ext.CreateGrant{OwnerAccountID: "acct-1", Git: &yes, MaxSiteBytes: 999, MaxFiles: 77, MaxExpiryDays: 1}})
+	defer ext.Reset()
+	st, err := store.New(t.TempDir(), "sitebin.example", 1<<20, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	site := gitOwnedSite(t, st)
+	before := *site.Meta.ExpiresAt
+
+	reconcileGit(st, site)
+
+	got, _ := st.ByViewID(site.ViewID)
+	if got.Meta.QuotaGit == nil || !*got.Meta.QuotaGit {
+		t.Fatalf("QuotaGit = %v, want true", got.Meta.QuotaGit)
+	}
+	if got.Meta.ExpiresAt == nil || !got.Meta.ExpiresAt.Equal(before) || got.Meta.QuotaBytes != 5 {
+		t.Fatalf("reconcileGit touched other fields: expires %v (was %v), bytes %d", got.Meta.ExpiresAt, before, got.Meta.QuotaBytes)
+	}
+}
+
+func TestReconcileGitLookupErrorChangesNothing(t *testing.T) {
+	yes := true
+	for name, p := range map[string]*stubProvider{
+		"error":   {ok: true, err: errors.New("outage"), grant: ext.CreateGrant{Git: &yes}},
+		"unknown": {ok: false, grant: ext.CreateGrant{Git: &yes}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ext.Register(p)
+			defer ext.Reset()
+			st, _ := store.New(t.TempDir(), "sitebin.example", 1<<20, 100)
+			site := gitOwnedSite(t, st)
+			reconcileGit(st, site)
+			got, _ := st.ByViewID(site.ViewID)
+			if got.Meta.QuotaGit != nil {
+				t.Fatalf("QuotaGit = %v, want nil", *got.Meta.QuotaGit)
+			}
+		})
+	}
+}
+
+func TestReconcileGitCommunityBuildDoesNothing(t *testing.T) {
+	ext.Reset()
+	st, _ := store.New(t.TempDir(), "sitebin.example", 1<<20, 100)
+	site := gitOwnedSite(t, st)
+	reconcileGit(st, site)
+	got, _ := st.ByViewID(site.ViewID)
+	if got.Meta.QuotaGit != nil {
+		t.Fatal("community build must not stamp git")
+	}
+}
