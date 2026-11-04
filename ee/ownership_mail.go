@@ -154,15 +154,22 @@ func (p *provider) mailAccepted(o ownership.Offer, stayed []string, reason strin
 	p.mailVerified(recipientEmail, subject, body)
 }
 
+// endedForRecipient is all the recipient is told about why sites could not
+// move: the reasons are the sender's business (their plan, their account,
+// their other sites).
+const endedForRecipient = "the offer could not be completed and has ended"
+
 // acceptedMail is "a transfer was accepted", for one side (toSender), naming
 // the other party's address (other), the sites that moved and, when some
-// could not, the ones that stay with the sender and why. Never a password:
-// the recipient saw the new ones once, on the result page.
+// could not, the ones that stay with the sender: why for the sender, a
+// generic sentence for the recipient. Never a password: the recipient saw
+// the new ones once, on the result page.
 func (p *provider) acceptedMail(o ownership.Offer, stayed []string, reason, other string, toSender bool) (subject, body string) {
 	var b strings.Builder
 	holder := "you"
 	if !toSender {
 		holder = other
+		reason = endedForRecipient
 	}
 	switch {
 	case len(o.Done) == 0:

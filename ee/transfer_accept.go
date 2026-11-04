@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ittrail/sitebin.io/ee/account"
+	"github.com/ittrail/sitebin.io/ee/eeconfig"
 	"github.com/ittrail/sitebin.io/ee/ownership"
 	"github.com/ittrail/sitebin.io/internal/auth"
 	"github.com/ittrail/sitebin.io/internal/ext"
@@ -36,6 +37,10 @@ import (
 //     an accept and a cancel. The sites then move one by one in sorted order,
 //     each under its own site lock in the core, and a run that stops is
 //     finished FORWARD by completeAccepting, never rolled back.
+//   - One run per offer at a time in this process (claimAccept): the accept
+//     holds the claim from its checks to its last move, and the background
+//     loop skips an offer that is claimed, so the two never read each
+//     other's moves as a site that changed hands.
 //   - The new edit passwords exist in memory only: the accept response shows
 //     each once, and no file, log line or mail ever holds one.
 //   - Plain POST forms with CSRF, no script.
@@ -48,6 +53,9 @@ const (
 )
 
 var (
+	// errAcceptBusy is an offer another run in this process is moving now.
+	// The background loop skips it; the accept asks for a reload.
+	errAcceptBusy    = errors.New("the offer is being moved by another run")
 	errNotAccepting  = errors.New("the offer is not being accepted")
 	errOfferNotOpen  = errors.New("the offer is not open")
 	errOfferChanged  = errors.New("the offer changed")
@@ -60,20 +68,35 @@ func (p *provider) takeoverRoutes(routes map[string]http.Handler) {
 	routes["GET "+transferPath+"/{id}/done"] = http.HandlerFunc(p.handleTakeoverDone)
 }
 
-// The core's ext.OwnershipSites.TransferSite, asserted on its own like the
-// other narrow seams.
+// The core's ext.OwnershipSites.TransferSite and SiteLocked, asserted on
+// their own like the other narrow seams.
 type siteTransferrer interface {
-	TransferSite(viewID, from, to string, g ext.CreateGrant, detach []string, by ext.ChangeBy) (string, error)
+	TransferSite(viewID, from, to string, g ext.CreateGrant, by ext.ChangeBy) (string, error)
+}
+
+type siteLockReader interface {
+	SiteLocked(viewID string) (bool, error)
 }
 
 // ---- who, when, whether ----
 
 // isRecipient reports whether acc is the offer's recipient: its address is
-// verified and equals the offer's, case-insensitively, and it is not the
-// sender. An unverified account is never anyone's recipient.
+// verified and, normalised the way the store normalises the offer's, equals
+// it; and it is not the sender. An unverified account is never anyone's
+// recipient.
 func isRecipient(acc *account.Account, o ownership.Offer) bool {
 	return acc != nil && acc.EmailVerified && acc.ID != o.From &&
-		strings.EqualFold(strings.TrimSpace(acc.Email), o.ToEmail)
+		ownership.NormEmail(acc.Email) == o.ToEmail
+}
+
+// claimAccept claims the offer for one run in this process: an accept from
+// its checks to its last move, or one call of completeAccepting. ok is false
+// while another run holds it.
+func (p *provider) claimAccept(offerID string) (release func(), ok bool) {
+	if _, busy := p.acceptRuns.LoadOrStore(offerID, struct{}{}); busy {
+		return nil, false
+	}
+	return func() { p.acceptRuns.Delete(offerID) }, true
 }
 
 // offerWindow is "" while now is within the offer's dates, else what the
@@ -103,6 +126,8 @@ func stateText(state string) string {
 		return "This offer lapsed and can no longer be accepted."
 	case ownership.StateCancelled:
 		return "The sender cancelled this offer."
+	case ownership.StateEnded:
+		return "Ended: no site could be moved."
 	}
 	return takeoverUnavailable
 }
@@ -123,8 +148,15 @@ func sameSites(a, b []string) bool {
 // recipient's account, so it is safe to tell the sender.
 //
 // A host conflict is not a pause reason here: the accept finds it, pauses the
-// offer and tells the sender (acceptCheck).
+// offer and tells the sender (acceptCheck). Locks are read from meta.json
+// only (SiteLocked), never by walking a site.
 func (p *provider) offerPause(o ownership.Offer) (string, error) {
+	return p.pauseReason(o, nil)
+}
+
+// pauseReason is offerPause with the sites' Info already read (infos, by
+// view id), so a locked site's name costs no second walk.
+func (p *provider) pauseReason(o ownership.Offer, infos map[string]ext.SiteInfo) (string, error) {
 	sender, err := p.accounts.ByID(o.From)
 	switch {
 	case errors.Is(err, account.ErrNotFound):
@@ -141,9 +173,22 @@ func (p *provider) offerPause(o ownership.Offer) (string, error) {
 	if !allowed {
 		return "the sender's plan no longer includes transfers", nil
 	}
+	locks, ok := p.host.Sites().(siteLockReader)
+	if !ok {
+		return "", errors.New("the site service cannot report a site's lock")
+	}
 	for _, id := range o.Sites {
-		if info, ok := p.host.Sites().Info(id); ok && info.Locked != nil {
-			return siteLabel(info) + " is locked by the operator", nil
+		locked, err := locks.SiteLocked(id)
+		switch {
+		case errors.Is(err, ext.ErrSiteGone):
+			// Not a pause: the owner check refuses a site that is gone.
+		case err != nil:
+			return "", fmt.Errorf("read the lock of %s: %w", id, err)
+		case locked:
+			if info, ok := infos[id]; ok {
+				return siteLabel(info) + " is locked by the operator", nil
+			}
+			return p.labelOf(id) + " is locked by the operator", nil
 		}
 	}
 	rcpt, err := p.accounts.ByEmail(o.ToEmail)
@@ -259,33 +304,44 @@ type acceptRun struct {
 type movedSite struct{ ID, Password string }
 
 // completeAccepting is the ONE forward completion of an accepting offer: the
-// accept runs it right after the state change (through runAccepting), and the
+// accept runs its body right after the state change (runAccepting), and the
 // background loop calls it for an offer a run left accepting. It moves to the
 // account that accepted (to, which must be o.AcceptedBy) every site of the
 // offer not yet done, in sorted view-id order, and never moves one twice:
 //
+//   - It claims the offer first (claimAccept). An offer another run in this
+//     process holds is errAcceptBusy: the loop skips it this time.
 //   - A site whose meta.json already names the recipient moved in an earlier
-//     run whose record did not land; its bookkeeping is finished (every step
+//     run whose record did not land: its bookkeeping is finished (every step
 //     is idempotent) and it counts as done.
 //   - The rest are re-checked first (acceptCheck, except the dates: the
-//     acceptance was made in time). If the check fails they stay with the
-//     sender, the offer becomes final (accepted when some sites moved,
-//     cancelled when none did) and both sides are mailed. An unknown answer
-//     changes nothing: the next call asks again.
+//     acceptance was made in time). A site the check finds no longer the
+//     sender's is looked at once more, as the recipient's may have just moved
+//     it. If the check fails, the rest stay with the sender, the offer
+//     becomes final (accepted when some sites moved, ended when none did) and
+//     both sides are mailed: the sender with the reason, the recipient with a
+//     generic sentence. An unknown answer changes nothing: the next call asks
+//     again.
 //   - A move the core refuses or fails stops the run; the offer stays
 //     accepting for the next call.
 //
 // With no request behind it (no address, no user agent), it records the
 // change as the background loop's.
 func (p *provider) completeAccepting(o ownership.Offer, to *account.Account, by ext.ChangeBy) (acceptRun, error) {
+	release, ok := p.claimAccept(o.ID)
+	if !ok {
+		return acceptRun{}, errAcceptBusy
+	}
+	defer release()
 	if by.IP == "" && by.UserAgent == "" && by.Surface == "" {
 		by.Surface = provenance.SurfaceBackground
 	}
 	return p.runAccepting(o.ID, to, by, true)
 }
 
-// runAccepting is completeAccepting's body. recheck is false only for the
-// accept itself, which checked everything a moment before its state change.
+// runAccepting is completeAccepting's body; the caller holds the claim.
+// recheck is false only for the accept itself, which checked everything a
+// moment before its state change, under the same claim.
 func (p *provider) runAccepting(id string, to *account.Account, by ext.ChangeBy, recheck bool) (acceptRun, error) {
 	var run acceptRun
 	o, err := p.owner.GetOffer(id)
@@ -308,55 +364,41 @@ func (p *provider) runAccepting(id string, to *account.Account, by ext.ChangeBy,
 		return run, fmt.Errorf("read the recipient's account: %w", err)
 	}
 	ts, ok := p.host.Sites().(siteTransferrer)
-	mover, ok2 := p.host.Sites().(moveReporter)
-	if !ok || !ok2 {
+	if !ok {
 		return run, errors.New("the site service cannot transfer sites")
 	}
 	from := p.accountOrStub(o.From)
 
 	var todo []string
-	for _, vid := range notDone(o) {
-		owner, err := p.siteOwner(vid)
-		if err == nil && owner == to.ID {
-			if err := p.accounts.LinkSite(to, vid); err != nil {
-				slog.Error("transfer: could not link a moved site to its new owner; meta.json decides", "site", vid, "account", to.ID, "err", err)
-			}
-			p.afterMove(vid, from, to, nil, by)
-			cur, err := p.markDone(id, vid)
-			if err != nil {
-				return run, err
-			}
-			run.Offer = cur
-			continue
+	for pass := 0; ; pass++ {
+		if todo, err = p.recordMoved(&run, from, to, by); err != nil {
+			return run, err
 		}
-		todo = append(todo, vid)
+		if len(todo) == 0 || !recheck {
+			break
+		}
+		rest := run.Offer
+		rest.Sites = todo
+		ref, err := p.acceptCheck(rest, to)
+		if err != nil {
+			return run, fmt.Errorf("re-check before completing: %w", err)
+		}
+		if ref == nil {
+			break
+		}
+		if ref.kind == takeGone && pass == 0 {
+			continue // a site the recipient already holds is moved, not gone
+		}
+		return p.endAccepting(run, todo, ref.reason)
 	}
 
 	if len(todo) > 0 {
-		if recheck {
-			rest := run.Offer
-			rest.Sites = todo
-			ref, err := p.acceptCheck(rest, to)
-			if err != nil {
-				return run, fmt.Errorf("re-check before completing: %w", err)
-			}
-			if ref != nil {
-				return p.endAccepting(run, todo, ref.reason)
-			}
-		}
-		grant, err := p.grantForAccount(to)
+		grant, err := p.transferGrant(to)
 		if err != nil {
 			return run, fmt.Errorf("the recipient's caps: %w", err)
 		}
 		for _, vid := range todo {
-			pw, cur, err := p.moveSite(id, vid, from, to, grant, ts, mover, by)
-			if pw != "" {
-				run.Moved = append(run.Moved, movedSite{vid, pw})
-			}
-			if cur.ID != "" {
-				run.Offer = cur
-			}
-			if err != nil {
+			if err := p.moveSite(&run, vid, from, to, grant, ts, by); err != nil {
 				return run, err
 			}
 		}
@@ -381,6 +423,47 @@ func (p *provider) runAccepting(id string, to *account.Account, by ext.ChangeBy,
 	return run, nil
 }
 
+// recordMoved finishes the bookkeeping of every site not yet done whose
+// meta.json already names the recipient (its move's record did not land) and
+// returns the sites still to move, in sorted view-id order.
+func (p *provider) recordMoved(run *acceptRun, from, to *account.Account, by ext.ChangeBy) ([]string, error) {
+	var todo []string
+	for _, vid := range notDone(run.Offer) {
+		owner, err := p.siteOwner(vid)
+		if err != nil || owner != to.ID {
+			todo = append(todo, vid)
+			continue
+		}
+		if err := p.accounts.LinkSite(to, vid); err != nil {
+			slog.Error("transfer: could not link a moved site to its new owner; meta.json decides", "site", vid, "account", to.ID, "err", err)
+		}
+		p.afterMove(vid, from, to, nil, by)
+		cur, err := p.markDone(run.Offer.ID, vid)
+		if err != nil {
+			return nil, fmt.Errorf("record %s as moved: %w", vid, err)
+		}
+		run.Offer = cur
+	}
+	return todo, nil
+}
+
+// transferGrant is the stamp a site taken over gets: the recipient's caps
+// from its plan as the STRICT tier lookup gives it. An unknown plan is an
+// error that stops the move; it never falls back to the stored or default
+// tier the way a creation does. The site cap was checked for the whole
+// bundle (limitsCheck), so it is not asked again per site.
+func (p *provider) transferGrant(acc *account.Account) (ext.CreateGrant, error) {
+	if p.cfg.Mode != eeconfig.ModeTiers {
+		gitOn := true
+		return ext.CreateGrant{OwnerAccountID: acc.ID, Git: &gitOn}, nil
+	}
+	t, err := p.effectiveTierStrict(acc)
+	if err != nil {
+		return ext.CreateGrant{}, err
+	}
+	return grantFromTier(acc.ID, t), nil
+}
+
 // notDone is the offer's sites not yet moved, in sorted view-id order.
 func notDone(o ownership.Offer) []string {
 	var out []string
@@ -394,7 +477,8 @@ func notDone(o ownership.Offer) []string {
 }
 
 // endAccepting leaves the sites that are not done with the sender, makes the
-// offer final and tells both sides.
+// offer final (accepted when some sites moved, ended when none did) and tells
+// both sides.
 func (p *provider) endAccepting(run acceptRun, stayed []string, reason string) (acceptRun, error) {
 	final, err := p.owner.UpdateOffer(run.Offer.ID, func(x *ownership.Offer) error {
 		if x.State != ownership.StateAccepting {
@@ -403,7 +487,7 @@ func (p *provider) endAccepting(run acceptRun, stayed []string, reason string) (
 		if len(x.Done) > 0 {
 			x.State = ownership.StateAccepted
 		} else {
-			x.State = ownership.StateCancelled
+			x.State = ownership.StateEnded
 		}
 		return nil
 	})
@@ -416,32 +500,40 @@ func (p *provider) endAccepting(run acceptRun, stayed []string, reason string) (
 	return run, nil
 }
 
-// moveSite moves one site and does its bookkeeping. The password is returned
-// whenever the core moved the site, even with an error from the record after
-// it, so the response can still show it; cur is the offer after the record.
-func (p *provider) moveSite(offerID, viewID string, from, to *account.Account, g ext.CreateGrant, ts siteTransferrer, mover moveReporter, by ext.ChangeBy) (pw string, cur ownership.Offer, err error) {
+// moveSite moves one site and does its bookkeeping. Once the core moved the
+// site, its password is in run.Moved and its id in run.Offer.Done, even when
+// recording it fails after: the response must still show that password, and
+// never list the site as still to move.
+func (p *provider) moveSite(run *acceptRun, viewID string, from, to *account.Account, g ext.CreateGrant, ts siteTransferrer, by ext.ChangeBy) error {
 	// The former admins, read before the transfer clears them: their share
 	// markers and their own tags for the site end with the share.
 	admins, err := p.siteAdmins(viewID)
 	if err != nil {
-		return "", cur, fmt.Errorf("read the admins of %s: %w", viewID, err)
+		return fmt.Errorf("read the admins of %s: %w", viewID, err)
 	}
 	// The recipient's marker first. A stray one (the transfer refused below)
 	// is harmless, because meta.json is the truth; a missing one would hide a
 	// moved site from its new owner's lists until the reconciliation.
 	if err := p.accounts.LinkSite(to, viewID); err != nil {
-		return "", cur, fmt.Errorf("link %s to the recipient: %w", viewID, err)
+		return fmt.Errorf("link %s to the recipient: %w", viewID, err)
 	}
-	pw, err = ts.TransferSite(viewID, from.ID, to.ID, g, mover.WillNotMove(viewID, from.ID), by)
+	// The core decides, under the site lock, which addresses stay with the
+	// sender.
+	pw, err := ts.TransferSite(viewID, from.ID, to.ID, g, by)
 	if err != nil {
-		return "", cur, fmt.Errorf("transfer %s: %w", viewID, err)
+		return fmt.Errorf("transfer %s: %w", viewID, err)
 	}
+	run.Moved = append(run.Moved, movedSite{viewID, pw})
 	p.afterMove(viewID, from, to, admins, by)
-	cur, err = p.markDone(offerID, viewID)
+	cur, err := p.markDone(run.Offer.ID, viewID)
 	if err != nil {
-		return pw, cur, fmt.Errorf("record %s as moved: %w", viewID, err)
+		if !slices.Contains(run.Offer.Done, viewID) {
+			run.Offer.Done = append(run.Offer.Done, viewID)
+		}
+		return fmt.Errorf("record %s as moved: %w", viewID, err)
 	}
-	return pw, cur, nil
+	run.Offer = cur
+	return nil
 }
 
 // afterMove is the bookkeeping after the core moved a site: the sender's
@@ -460,12 +552,17 @@ func (p *provider) afterMove(viewID string, from, to *account.Account, admins []
 			slog.Error("transfer: could not drop a former admin's tags", "site", viewID, "account", a.Account, "err", err)
 		}
 	}
-	surface := by.Surface
-	if surface == "" {
+	// A session asked on the dashboard; the background loop presents no
+	// credential of its own (it finishes what a session asked for earlier).
+	surface, credential := by.Surface, provenance.AuthSession
+	switch surface {
+	case "":
 		surface = provenance.SurfaceDashboard
+	case provenance.SurfaceBackground:
+		credential = provenance.AuthNone
 	}
 	e := provenance.Entry{
-		Time: time.Now().UTC(), Action: provenance.ActionTransfer, Surface: surface, Auth: provenance.AuthSession,
+		Time: time.Now().UTC(), Action: provenance.ActionTransfer, Surface: surface, Auth: credential,
 		Account: by.Account, IP: by.IP, UA: by.UserAgent, Site: viewID,
 	}
 	sent := e
@@ -548,7 +645,9 @@ type takeoverCard struct {
 }
 
 // takeoverCards are the cards for the offers made to acc's verified address
-// that are open or paused and within their dates.
+// that are open or paused and within their dates. OffersByEmail scans every
+// offer on each render; an index by email is the next step once offers
+// number in the thousands.
 func (p *provider) takeoverCards(acc *account.Account) []takeoverCard {
 	if p.owner == nil || !acc.EmailVerified {
 		return nil
@@ -576,12 +675,17 @@ func (p *provider) takeoverCard(acc *account.Account, o ownership.Offer) takeove
 	}
 	forms, _ := p.host.Sites().(formRecipientReader)
 	usable := o.State == ownership.StateOpen
+	// Info walks a site's files: it is read once per site here and shared
+	// with the limits check. The pause check reads locks from meta.json only.
+	infos := make(map[string]ext.SiteInfo, len(o.Sites))
 	for _, id := range o.Sites {
 		s := takeoverSite{ID: id, Label: id}
-		if info, ok := p.host.Sites().Info(id); ok {
+		info, ok := p.host.Sites().Info(id)
+		if ok {
+			infos[id] = info
 			s.Label, s.Domains = siteLabel(info), info.Domains
 		}
-		if owner, err := p.siteOwner(id); err != nil || owner != o.From {
+		if !ok || info.Owner != o.From {
 			usable = false
 		}
 		if forms != nil {
@@ -590,7 +694,7 @@ func (p *provider) takeoverCard(acc *account.Account, o ownership.Offer) takeove
 		c.Sites = append(c.Sites, s)
 	}
 	if usable {
-		reason, err := p.offerPause(o)
+		reason, err := p.pauseReason(o, infos)
 		if err != nil {
 			slog.Error("dashboard: could not check an offer's pauses", "offer", o.ID, "err", err)
 		}
@@ -600,7 +704,7 @@ func (p *provider) takeoverCard(acc *account.Account, o ownership.Offer) takeove
 		c.Unavailable = true
 		return c
 	}
-	lines, err := p.limitsCheck(acc, o.Sites)
+	lines, err := p.limitsCheckWith(acc, o.Sites, infos)
 	if err != nil {
 		slog.Error("dashboard: could not check an offer against the plan", "offer", o.ID, "account", acc.ID, "err", err)
 		c.Unavailable = true
@@ -687,6 +791,16 @@ func (p *provider) handleTakeoverAccept(w http.ResponseWriter, r *http.Request) 
 		p.renderOfferChanged(w)
 		return
 	}
+	// One run per offer: held from the checks to the last move, so the
+	// background loop cannot take a site this run moves for one that changed
+	// hands.
+	release, claimed := p.claimAccept(o.ID)
+	if !claimed {
+		p.renderTakeoverMessage(w, http.StatusConflict, "This offer is already being accepted",
+			"It is being accepted right now. Reload your dashboard in a moment to see the result.")
+		return
+	}
+	defer release()
 	ref, err := p.acceptCheck(o, acc)
 	if err != nil {
 		slog.Error("transfer: could not check an offer; refusing the accept", "offer", o.ID, "account", acc.ID, "err", err)
@@ -861,8 +975,14 @@ type takeoverResultView struct {
 func (p *provider) renderTakeoverResult(w http.ResponseWriter, o ownership.Offer, moved []movedSite) {
 	v := takeoverResultView{NoPassword: rotateHint}
 	forms, _ := p.host.Sites().(formRecipientReader)
+	done := slices.Clone(o.Done)
+	for _, m := range moved {
+		if !slices.Contains(done, m.ID) {
+			done = append(done, m.ID) // moved, though its record did not land
+		}
+	}
 	for _, id := range o.Sites {
-		if !slices.Contains(o.Done, id) {
+		if !slices.Contains(done, id) {
 			if o.State == ownership.StateAccepting {
 				v.Pending = append(v.Pending, p.labelOf(id))
 			} else {
@@ -896,6 +1016,9 @@ func (p *provider) renderTakeoverResult(w http.ResponseWriter, o ownership.Offer
 		v.Lede = "The other sites could not be moved right now. They are moved in the background if they still can be; otherwise they stay with the sender, and you are both told by mail."
 	case len(v.Sites) == 0:
 		v.Title = "No site was moved"
+		if o.State == ownership.StateEnded {
+			v.Title = "Ended: no site could be moved"
+		}
 		v.Lede = "The sites of this offer stay with the sender."
 	default:
 		v.Title = "You took over " + sitesWord(len(v.Sites))

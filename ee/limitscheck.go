@@ -67,6 +67,13 @@ type moveReporter interface {
 // the sharing line is returned; the instance-wide caps still apply when the
 // site is written to.
 func (p *provider) limitsCheck(acc *account.Account, viewIDs []string) ([]checkLine, error) {
+	return p.limitsCheckWith(acc, viewIDs, nil)
+}
+
+// limitsCheckWith is limitsCheck with the sites' Info already read (infos,
+// by view id; a site missing from it is read here). Info walks a site's
+// files, so a caller that has it, like the transfer card, passes it on.
+func (p *provider) limitsCheckWith(acc *account.Account, viewIDs []string, infos map[string]ext.SiteInfo) ([]checkLine, error) {
 	allowed, err := p.SharingAllowed(acc.ID)
 	if err != nil {
 		return nil, fmt.Errorf("could not read the plan: %w", err)
@@ -83,13 +90,15 @@ func (p *provider) limitsCheck(acc *account.Account, viewIDs []string) ([]checkL
 		return nil, fmt.Errorf("could not read the plan: %w", err)
 	}
 
-	infos := make([]ext.SiteInfo, 0, len(viewIDs))
+	read := make([]ext.SiteInfo, 0, len(viewIDs))
 	for _, id := range viewIDs {
-		info, ok := p.host.Sites().Info(id)
+		info, ok := infos[id]
 		if !ok {
-			return nil, fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
+			if info, ok = p.host.Sites().Info(id); !ok {
+				return nil, fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
+			}
 		}
-		infos = append(infos, info)
+		read = append(read, info)
 	}
 
 	// Sites: counted by meta.json's owner, not the markers (ownedSiteIDs).
@@ -135,7 +144,7 @@ func (p *provider) limitsCheck(acc *account.Account, viewIDs []string) ([]checkL
 	}
 	mover, _ := p.host.Sites().(moveReporter)
 	for i, id := range viewIDs {
-		info := infos[i]
+		info := read[i]
 		name := siteLabel(info)
 		bytes, files, err := sizer.SiteBytes(id)
 		if err != nil {

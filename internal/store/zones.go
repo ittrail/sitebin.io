@@ -255,6 +255,25 @@ func (s *Store) accountZoneFor(d string) (*Zone, bool) {
 	}
 }
 
+// accountZoneForStrict is accountZoneFor for a caller that acts on the
+// answer: a zone file that exists but cannot be read is an error, not "no
+// zone here".
+func (s *Store) accountZoneForStrict(d string) (*Zone, bool, error) {
+	d = strings.ToLower(hostOf(d))
+	for strings.Count(d, ".") >= 1 {
+		z, err := s.readZone(d)
+		switch {
+		case err == nil && z.Verified():
+			return z, true, nil
+		case err != nil && !errors.Is(err, os.ErrNotExist):
+			return nil, false, err
+		}
+		_, rest, _ := strings.Cut(d, ".")
+		d = rest
+	}
+	return nil, false, nil
+}
+
 // ZoneOf reports the verified account zone that holds d for accountID, or "".
 // It is what the edit page shows as "via zone".
 func (s *Store) ZoneOf(d, accountID string) string {

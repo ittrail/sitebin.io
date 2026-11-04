@@ -39,17 +39,22 @@ func stampWith(g ext.CreateGrant) func(*store.Meta, time.Time) bool {
 
 // ownershipEntry is a site-log line for a change the extension asked for.
 // The extension names the acting account, address, user agent and surface
-// (by); no surface is the dashboard.
+// (by); no surface is the dashboard, where a session asked. The background
+// loop presents no credential of its own: it finishes what a session asked
+// for earlier.
 func ownershipEntry(action string, by ext.ChangeBy, detail string) provenance.Entry {
-	surface := by.Surface
-	if surface == "" {
+	surface, credential := by.Surface, provenance.AuthSession
+	switch surface {
+	case "":
 		surface = provenance.SurfaceDashboard
+	case provenance.SurfaceBackground:
+		credential = provenance.AuthNone
 	}
 	return provenance.Entry{
 		Time:    time.Now().UTC(),
 		Action:  action,
 		Surface: surface,
-		Auth:    provenance.AuthSession,
+		Auth:    credential,
 		Account: by.Account,
 		IP:      by.IP,
 		UA:      by.UserAgent,
@@ -57,11 +62,14 @@ func ownershipEntry(action string, by ext.ChangeBy, detail string) provenance.En
 	}
 }
 
-func (s siteService) TransferSite(viewID, from, to string, g ext.CreateGrant, detach []string, by ext.ChangeBy) (string, error) {
+func (s siteService) TransferSite(viewID, from, to string, g ext.CreateGrant, by ext.ChangeBy) (string, error) {
 	site, err := s.a.st.ByViewID(viewID)
 	if err != nil {
 		return "", mapSiteGone(err, viewID)
 	}
+	// What stays with the sender is decided on the meta under the site lock,
+	// so an address added a moment before cannot slip through.
+	detach := func(m *store.Meta) ([]string, error) { return s.a.st.AccountBoundAddresses(m, from) }
 	pw, err := s.a.st.TransferOwner(site, from, to, detach, stampWith(g))
 	if err != nil {
 		return "", mapOwnershipErr(err, viewID)
@@ -116,6 +124,14 @@ func (s siteService) SiteOwner(viewID string) (string, error) {
 		return "", mapSiteGone(err, viewID)
 	}
 	return site.Meta.OwnerAccountID, nil
+}
+
+func (s siteService) SiteLocked(viewID string) (bool, error) {
+	site, err := s.a.st.ByViewID(viewID)
+	if err != nil {
+		return false, mapSiteGone(err, viewID)
+	}
+	return site.Meta.IsLocked(), nil
 }
 
 func (s siteService) SiteAdmins(viewID string) ([]ext.SiteAdmin, error) {
@@ -224,23 +240,17 @@ func (s siteService) ResolveSite(in string) (string, bool) {
 
 // WillNotMove lists the addresses whose proof is the sender's account, not
 // the address's own DNS: a name in the sender's zone, a name in an operator
-// zone, and an address held through its host. A transfer detaches them.
+// zone, and an address held through its host. A transfer detaches them,
+// deciding again under the site lock (TransferSite); this is the display.
 func (s siteService) WillNotMove(viewID, sender string) []string {
 	site, err := s.a.st.ByViewID(viewID)
 	if err != nil {
 		return nil
 	}
-	var out []string
-	for _, d := range site.Meta.CustomDomains {
-		viaHost := false
-		for _, c := range site.Meta.DomainClaims {
-			if c.Domain == d && c.ViaHost {
-				viaHost = true
-			}
-		}
-		if viaHost || s.a.st.ZoneOf(d, sender) != "" || s.a.st.InOperatorZone(d) {
-			out = append(out, d)
-		}
+	out, err := s.a.st.AccountBoundAddresses(&site.Meta, sender)
+	if err != nil {
+		s.a.log.Warn("could not tell which addresses stay with the sender", "id", viewID, "err", err)
+		return nil
 	}
 	return out
 }

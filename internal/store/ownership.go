@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"time"
@@ -77,16 +78,18 @@ func (s *Store) applyMarker(site *Site, trusted bool) {
 // TransferOwner hands the site from account from to account to, under one
 // site lock. It refuses unless from owns the site (ErrNotOwner) and the site
 // is not locked (ErrLocked), and refuses an empty recipient (ErrNotOwner: it
-// would leave an anonymous, adoptable site). Every address in detach is
+// would leave an anonymous, adoptable site). detach is asked, on the fresh
+// meta under the lock, which addresses go (nil: none); an error from it
+// refuses the call with nothing written. Every address it names is
 // normalized first, so a bad one refuses the whole call with nothing
-// detached; then each is detached. Tags and Admins are cleared; stamp
-// restamps the new owner's caps (and says whether the site is trusted); and
-// a fresh edit password is set, returned once, so the old owner's password
-// stops working. A push the old owner started is cancelled right after the
-// write, still under the lock. A trust-marker failure is logged, not
-// returned (the sweep corrects the marker), so the new password always
-// reaches the caller once meta holds it.
-func (s *Store) TransferOwner(site *Site, from, to string, detach []string, stamp func(*Meta, time.Time) bool) (newPassword string, err error) {
+// detached; then each is detached, which prunes its redirects and targets.
+// Tags and Admins are cleared; stamp restamps the new owner's caps (and says
+// whether the site is trusted); and a fresh edit password is set, returned
+// once, so the old owner's password stops working. A push the old owner
+// started is cancelled right after the write, still under the lock. A
+// trust-marker failure is logged, not returned (the sweep corrects the
+// marker), so the new password always reaches the caller once meta holds it.
+func (s *Store) TransferOwner(site *Site, from, to string, detach func(m *Meta) ([]string, error), stamp func(*Meta, time.Time) bool) (newPassword string, err error) {
 	l := s.lockSite(site.ViewID)
 	l.Lock()
 	defer l.Unlock()
@@ -101,8 +104,14 @@ func (s *Store) TransferOwner(site *Site, from, to string, detach []string, stam
 	if m.Locked != nil {
 		return "", ErrLocked
 	}
-	addrs := make([]string, 0, len(detach))
-	for _, a := range detach {
+	var list []string
+	if detach != nil {
+		if list, err = detach(&m); err != nil {
+			return "", err
+		}
+	}
+	addrs := make([]string, 0, len(list))
+	for _, a := range list {
 		d, err := normalizeAddress(a)
 		if err != nil {
 			return "", err
@@ -199,4 +208,34 @@ func (s *Store) UpdateAdmins(site *Site, edit func([]SiteAdmin) ([]SiteAdmin, er
 	}
 	site.Meta = m
 	return nil
+}
+
+// AccountBoundAddresses lists the site's verified addresses whose proof is
+// the account's rather than their own DNS: a name in one of the account's
+// verified zones, a name in an operator zone (SITEBIN_OPERATOR_DOMAINS), and
+// an address held only through its host (ViaHost). They would not survive
+// the site leaving the account, so a transfer detaches them. A zone file that
+// cannot be read is an error, never "not in a zone": the caller acts on the
+// answer.
+func (s *Store) AccountBoundAddresses(m *Meta, account string) ([]string, error) {
+	var out []string
+	for _, d := range m.CustomDomains {
+		bound := s.InOperatorZone(d)
+		for _, c := range m.DomainClaims {
+			if c.Domain == d && c.ViaHost {
+				bound = true
+			}
+		}
+		if !bound && account != "" {
+			z, ok, err := s.accountZoneForStrict(d)
+			if err != nil {
+				return nil, fmt.Errorf("the zone of %s: %w", d, err)
+			}
+			bound = ok && z.AccountID == account
+		}
+		if bound {
+			out = append(out, d)
+		}
+	}
+	return out, nil
 }

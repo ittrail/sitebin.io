@@ -42,7 +42,7 @@ import (
 )
 
 // The states of an offer or an invitation. An invitation uses open, accepted,
-// declined, expired and cancelled; an offer also paused and accepting.
+// declined, expired and cancelled; an offer also paused, accepting and ended.
 const (
 	StateOpen      = "open"
 	StatePaused    = "paused"
@@ -51,13 +51,16 @@ const (
 	StateDeclined  = "declined"
 	StateExpired   = "expired"
 	StateCancelled = "cancelled"
+	// StateEnded is an accepted offer of which no site could be moved: the
+	// forward completion gave up, and every site stayed with the sender.
+	StateEnded = "ended"
 )
 
 // IsFinal reports whether a state ends an offer or invitation. Open, paused
 // and accepting are not final: the offer still holds its sites.
 func IsFinal(state string) bool {
 	switch state {
-	case StateAccepted, StateDeclined, StateExpired, StateCancelled:
+	case StateAccepted, StateDeclined, StateExpired, StateCancelled, StateEnded:
 		return true
 	}
 	return false
@@ -132,8 +135,9 @@ func (s *Store) offersDir() string  { return filepath.Join(s.root, "offers") }
 func (s *Store) invitesDir() string { return filepath.Join(s.root, "invites") }
 func (s *Store) sharesDir() string  { return filepath.Join(s.root, "shares") }
 
-// normEmail is the stored (and compared) form of an address.
-func normEmail(e string) string { return strings.ToLower(strings.TrimSpace(e)) }
+// NormEmail is the stored (and compared) form of an address: trimmed and
+// lowercased. Whoever matches an account against an offer compares this.
+func NormEmail(e string) string { return strings.ToLower(strings.TrimSpace(e)) }
 
 func writeJSON(path string, v any) error {
 	b, err := json.MarshalIndent(v, "", "  ")
@@ -233,7 +237,7 @@ func (s *Store) CreateOffer(o Offer, dailyLimit int) (Offer, error) {
 		return Offer{}, errors.New("an offer needs at least one site")
 	}
 	o.ID = ids.New()
-	o.ToEmail = normEmail(o.ToEmail)
+	o.ToEmail = NormEmail(o.ToEmail)
 	if o.State == "" {
 		o.State = StateOpen
 	}
@@ -290,7 +294,7 @@ func (s *Store) UpdateOffer(id string, mutate func(*Offer) error) (Offer, error)
 		return Offer{}, err
 	}
 	o.ID = id
-	o.ToEmail = normEmail(o.ToEmail)
+	o.ToEmail = NormEmail(o.ToEmail)
 	if !IsFinal(o.State) {
 		if err := s.checkSitesFree(id, o.Sites); err != nil {
 			return Offer{}, err
@@ -325,9 +329,11 @@ func (s *Store) OffersBySender(account string) ([]Offer, error) {
 }
 
 // OffersByEmail lists the offers made to an address (case and surrounding
-// space ignored), newest first.
+// space ignored), newest first. Like every lookup here it scans the offers;
+// an index by email is the next step when they number in the thousands, since
+// every dashboard render asks this.
 func (s *Store) OffersByEmail(email string) ([]Offer, error) {
-	e := normEmail(email)
+	e := NormEmail(email)
 	return s.offersWhere(func(o Offer) bool { return o.ToEmail == e })
 }
 
@@ -354,7 +360,7 @@ func (s *Store) OpenOffers() ([]Offer, error) {
 // CreateInvite stores i under a fresh id; the same normalising as CreateOffer.
 func (s *Store) CreateInvite(i Invite, dailyLimit int) (Invite, error) {
 	i.ID = ids.New()
-	i.ToEmail = normEmail(i.ToEmail)
+	i.ToEmail = NormEmail(i.ToEmail)
 	if i.State == "" {
 		i.State = StateOpen
 	}
@@ -400,7 +406,7 @@ func (s *Store) UpdateInvite(id string, mutate func(*Invite) error) (Invite, err
 		return Invite{}, err
 	}
 	i.ID = id
-	i.ToEmail = normEmail(i.ToEmail)
+	i.ToEmail = NormEmail(i.ToEmail)
 	if err := writeJSON(path, i); err != nil {
 		return Invite{}, err
 	}
@@ -431,7 +437,7 @@ func (s *Store) InvitesBySender(account string) ([]Invite, error) {
 
 // InvitesByEmail lists the invitations made to an address, newest first.
 func (s *Store) InvitesByEmail(email string) ([]Invite, error) {
-	e := normEmail(email)
+	e := NormEmail(email)
 	return s.invitesWhere(func(i Invite) bool { return i.ToEmail == e })
 }
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,11 @@ func ownSite(t *testing.T, s *Store, owner string) *Site {
 		t.Fatal(err)
 	}
 	return site
+}
+
+// detaching is a detach callback that names fixed addresses.
+func detaching(ds ...string) func(*Meta) ([]string, error) {
+	return func(*Meta) ([]string, error) { return ds, nil }
 }
 
 func TestTransferOwnerMovesEverything(t *testing.T) {
@@ -43,7 +49,7 @@ func TestTransferOwnerMovesEverything(t *testing.T) {
 	must(s.SetTrusted(site, true))
 
 	stamped := false
-	pw, err := s.TransferOwner(site, "a", "b", []string{"a.example"}, func(m *Meta, now time.Time) bool {
+	pw, err := s.TransferOwner(site, "a", "b", detaching("a.example"), func(m *Meta, now time.Time) bool {
 		stamped = true
 		m.QuotaFiles = 7
 		return false
@@ -89,7 +95,7 @@ func TestTransferOwnerGeneratedAddressServesAgain(t *testing.T) {
 	if err := s.SetViewAddress(site, ViewOff, "", 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.TransferOwner(site, "a", "b", []string{"a.example"}, nil); err != nil {
+	if _, err := s.TransferOwner(site, "a", "b", detaching("a.example"), nil); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := s.ByViewID(site.ViewID)
@@ -229,7 +235,7 @@ func TestTransferOwnerBadDetachAddressDetachesNothing(t *testing.T) {
 	if err := s.Update(site, func(m *Meta) error { m.OwnerAccountID = "a"; return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.TransferOwner(site, "a", "b", []string{"a.example", "not a domain!"}, nil); err == nil {
+	if _, err := s.TransferOwner(site, "a", "b", detaching("a.example", "not a domain!"), nil); err == nil {
 		t.Fatal("a bad address did not refuse the call")
 	}
 	got, _ := s.ByViewID(site.ViewID)
@@ -304,5 +310,59 @@ func TestDeleteIfOwnerSaysWhyItCannotRead(t *testing.T) {
 	os.Remove(metaPath(site.dir))
 	if err := s.DeleteIfOwner(site, "acct-1"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing meta = %v, want ErrNotFound", err)
+	}
+}
+
+// The detach list is decided on the meta as it stands under the site lock,
+// and a failure to decide it refuses the transfer with nothing written.
+func TestTransferOwnerDecidesTheDetachListUnderTheLock(t *testing.T) {
+	s, site := redirectSite(t, "a.example", "b.example")
+	if err := s.Update(site, func(m *Meta) error { m.OwnerAccountID = "a"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	stale := *site // loaded before the next write
+	if err := s.Update(site, func(m *Meta) error { m.Name = "fresh"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	boom := errors.New("zone unreadable")
+	if _, err := s.TransferOwner(&stale, "a", "b", func(m *Meta) ([]string, error) {
+		if m.Name != "fresh" || m.OwnerAccountID != "a" {
+			t.Errorf("detach saw a stale meta: name %q owner %q", m.Name, m.OwnerAccountID)
+		}
+		return nil, boom
+	}, nil); !errors.Is(err, boom) {
+		t.Fatalf("a failing detach = %v, want its error", err)
+	}
+	got, _ := s.ByViewID(site.ViewID)
+	if got.Meta.OwnerAccountID != "a" || len(got.Meta.CustomDomains) != 2 || got.Meta.EditPasswordHash != site.Meta.EditPasswordHash {
+		t.Fatalf("a refused transfer wrote: owner %q, domains %v", got.Meta.OwnerAccountID, got.Meta.CustomDomains)
+	}
+	if _, err := s.ByDomain("a.example"); err != nil {
+		t.Errorf("a.example lost its index link: %v", err)
+	}
+}
+
+func TestAccountBoundAddresses(t *testing.T) {
+	s, v := zoneStore(t)
+	s.SetOperatorZones([]string{"ops.example"})
+	s.SetOperatorCheck(func(id string) bool { return id == "a" })
+	mustZone(t, s, v, "a", "kunde.example")
+	mustZone(t, s, v, "b", "other.example")
+	m := &Meta{
+		OwnerAccountID: "a",
+		CustomDomains:  []string{"shop.kunde.example", "kunde.example/blog", "x.ops.example", "via.example", "self.example", "shop.other.example"},
+		DomainClaims:   []DomainClaim{{Domain: "via.example", ViaHost: true}},
+	}
+	got, err := s.AccountBoundAddresses(m, "a")
+	want := []string{"shop.kunde.example", "kunde.example/blog", "x.ops.example", "via.example"}
+	if err != nil || strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("AccountBoundAddresses = %v, %v; want %v", got, err, want)
+	}
+	// A zone file that exists but cannot be read is an error, not "no zone".
+	if err := os.WriteFile(filepath.Join(s.zonesDir(), "kunde.example.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.AccountBoundAddresses(m, "a"); err == nil {
+		t.Fatalf("an unreadable zone passed: %v", got)
 	}
 }

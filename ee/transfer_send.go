@@ -255,6 +255,8 @@ func notEditableText(state string) string {
 	switch state {
 	case ownership.StateAccepting:
 		return "This offer is being accepted right now and cannot be changed."
+	case ownership.StateEnded:
+		return "Ended: no site could be moved, so this offer can no longer be changed."
 	case ownership.StateAccepted, ownership.StateDeclined, ownership.StateExpired, ownership.StateCancelled:
 		return "This offer is " + state + " and can no longer be changed."
 	}

@@ -80,7 +80,7 @@ func TestTransferSiteRevokesOldCredentials(t *testing.T) {
 
 	g := ext.CreateGrant{MaxSiteBytes: 5000, MaxFiles: 9, MaxExpiryDays: 30}
 	by := ext.ChangeBy{Account: "acct-1", IP: "203.0.113.7", UserAgent: "test-agent"}
-	pw, err := e.own(t).TransferSite(c.ID, "acct-1", "acct-2", g, nil, by)
+	pw, err := e.own(t).TransferSite(c.ID, "acct-1", "acct-2", g, by)
 	if err != nil || pw == "" || pw == c.EditPassword {
 		t.Fatalf("TransferSite = %q, %v", pw, err)
 	}
@@ -117,13 +117,13 @@ func TestTransferSiteRevokesOldCredentials(t *testing.T) {
 	}
 
 	// Refusals map onto the seam's sentinels.
-	if _, err := e.own(t).TransferSite(c.ID, "acct-1", "acct-3", g, nil, by); !errors.Is(err, ext.ErrNotOwner) {
+	if _, err := e.own(t).TransferSite(c.ID, "acct-1", "acct-3", g, by); !errors.Is(err, ext.ErrNotOwner) {
 		t.Errorf("the old owner transferring again: %v", err)
 	}
-	if _, err := e.own(t).TransferSite(c.ID, "acct-2", "", g, nil, by); !errors.Is(err, ext.ErrNotOwner) {
+	if _, err := e.own(t).TransferSite(c.ID, "acct-2", "", g, by); !errors.Is(err, ext.ErrNotOwner) {
 		t.Errorf("a transfer to nobody: %v", err)
 	}
-	if _, err := e.own(t).TransferSite(noSuchSite, "acct-1", "acct-2", g, nil, by); !errors.Is(err, ext.ErrSiteGone) {
+	if _, err := e.own(t).TransferSite(noSuchSite, "acct-1", "acct-2", g, by); !errors.Is(err, ext.ErrSiteGone) {
 		t.Errorf("an unknown site: %v", err)
 	}
 }
@@ -270,6 +270,74 @@ func TestWillNotMove(t *testing.T) {
 	}
 }
 
+// TransferSite decides what stays with the sender itself, under the site
+// lock, by the rules WillNotMove shows: the sender's zone names go, with their
+// redirects; an address that proves itself moves. A zone it cannot read
+// refuses the transfer with nothing written.
+func TestTransferSiteDetachesWhatStaysWithTheSender(t *testing.T) {
+	e := newEnv(t, nil)
+	e.st.SetZoneCheck(func(string) (int, error) { return 1, nil })
+	if _, ok, err := e.api.SiteService().ClaimZone("acct", "kunde.example"); err != nil || !ok {
+		t.Fatalf("ClaimZone: %v %v", ok, err)
+	}
+	newSite := func(domains ...string) *store.Site {
+		site, _, err := e.st.Create()
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.st.Update(site, func(m *store.Meta) error { m.OwnerAccountID = "acct"; return nil })
+		for _, d := range domains {
+			if err := e.st.AddDomain(site, d); err != nil {
+				t.Fatalf("AddDomain %s: %v", d, err)
+			}
+		}
+		return site
+	}
+	site := newSite("shop.kunde.example", "self.example")
+	if err := e.st.SetDomainRedirect(site, "self.example", "shop.kunde.example", 301); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.own(t).TransferSite(site.ViewID, "acct", "acct-2", ext.CreateGrant{}, ext.ChangeBy{Account: "acct-2"}); err != nil {
+		t.Fatal(err)
+	}
+	m := e.siteOf(t, site.ViewID).Meta
+	if strings.Join(m.CustomDomains, ",") != "self.example" || len(m.DomainRedirects) != 0 {
+		t.Errorf("after the transfer: domains %v, redirects %v; want only self.example, no redirect", m.CustomDomains, m.DomainRedirects)
+	}
+	if _, err := e.st.ByDomain("shop.kunde.example"); err == nil {
+		t.Error("the zone name is still indexed")
+	}
+
+	other := newSite("blog.kunde.example", "other.example")
+	if err := os.WriteFile(filepath.Join(e.st.Root(), "zones", "kunde.example.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.own(t).TransferSite(other.ViewID, "acct", "acct-2", ext.CreateGrant{}, ext.ChangeBy{Account: "acct-2"}); err == nil {
+		t.Fatal("a transfer went ahead with an unreadable zone")
+	}
+	if m := e.siteOf(t, other.ViewID).Meta; m.OwnerAccountID != "acct" || len(m.CustomDomains) != 2 {
+		t.Errorf("a refused transfer wrote: owner %q, domains %v", m.OwnerAccountID, m.CustomDomains)
+	}
+}
+
+func TestSiteLockedReadsMetaOnly(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	o := e.own(t)
+	if locked, err := o.SiteLocked(c.ID); err != nil || locked {
+		t.Fatalf("SiteLocked of a fresh site = %v, %v", locked, err)
+	}
+	if _, err := e.st.SetLock(e.siteOf(t, c.ID), &store.SiteLock{At: time.Now(), By: "operator"}); err != nil {
+		t.Fatal(err)
+	}
+	if locked, err := o.SiteLocked(c.ID); err != nil || !locked {
+		t.Errorf("SiteLocked of a locked site = %v, %v", locked, err)
+	}
+	if _, err := o.SiteLocked(noSuchSite); !errors.Is(err, ext.ErrSiteGone) {
+		t.Errorf("SiteLocked of a missing site = %v, want ErrSiteGone", err)
+	}
+}
+
 func TestHostConflicts(t *testing.T) {
 	e := newEnv(t, nil)
 	mk := func(owner string) *store.Site {
@@ -411,7 +479,7 @@ func TestVerifyCacheIsBoundToThePasswordHash(t *testing.T) {
 	if e.api.verifyEditIP("203.0.113.1", stale, c.EditPassword) != verifyOK {
 		t.Fatal("the password did not verify before")
 	}
-	pw, err := e.own(t).TransferSite(c.ID, "acct-1", "acct-2", ext.CreateGrant{}, nil, ext.ChangeBy{Account: "acct-1"})
+	pw, err := e.own(t).TransferSite(c.ID, "acct-1", "acct-2", ext.CreateGrant{}, ext.ChangeBy{Account: "acct-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,26 +497,26 @@ func TestVerifyCacheIsBoundToThePasswordHash(t *testing.T) {
 }
 
 // A transfer the extension's background loop finishes (no request, so no
-// address and no user agent) is logged as the background surface, not as the
-// dashboard.
+// address and no user agent) is logged as the background surface with no
+// credential of its own, not as a dashboard session.
 func TestTransferSiteRecordsTheSurfaceItCameThrough(t *testing.T) {
 	e := newEnv(t, nil)
 	for _, tc := range []struct {
 		by   ext.ChangeBy
 		want string
 	}{
-		{ext.ChangeBy{Account: "acct-2", IP: "203.0.113.9", UserAgent: "ua"}, provenance.SurfaceDashboard},
-		{ext.ChangeBy{Account: "acct-2", Surface: provenance.SurfaceBackground}, provenance.SurfaceBackground},
+		{ext.ChangeBy{Account: "acct-2", IP: "203.0.113.9", UserAgent: "ua"}, provenance.SurfaceDashboard + "/" + provenance.AuthSession},
+		{ext.ChangeBy{Account: "acct-2", Surface: provenance.SurfaceBackground}, provenance.SurfaceBackground + "/" + provenance.AuthNone},
 	} {
 		c := e.createSite(t, nil, map[string]string{"index.html": "x"})
 		e.st.Update(e.siteOf(t, c.ID), func(m *store.Meta) error { m.OwnerAccountID = "acct-1"; return nil })
-		if _, err := e.own(t).TransferSite(c.ID, "acct-1", "acct-2", ext.CreateGrant{}, nil, tc.by); err != nil {
+		if _, err := e.own(t).TransferSite(c.ID, "acct-1", "acct-2", ext.CreateGrant{}, tc.by); err != nil {
 			t.Fatal(err)
 		}
 		var got []string
 		for _, en := range provLog(t, e, e.siteOf(t, c.ID)) {
 			if en.Action == provenance.ActionTransfer {
-				got = append(got, en.Surface+"/"+en.Account+"/"+en.IP)
+				got = append(got, en.Surface+"/"+en.Auth+"/"+en.Account+"/"+en.IP)
 			}
 		}
 		if want := tc.want + "/acct-2/" + tc.by.IP; len(got) != 1 || got[0] != want {

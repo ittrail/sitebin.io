@@ -876,12 +876,14 @@ type ChangeBy struct {
 type OwnershipSites interface {
 	// TransferSite hands the site from account from to account to under one
 	// site lock. The core stamps the recipient's caps from g exactly as a
-	// creation does, detaches every address in detach, clears the tags and
-	// the admins, sets a fresh edit password (returned once), cancels a push
-	// that is running, drops the verify cache and revokes the site's upload
-	// tokens. It does not relink the extension's own account indexes. An
-	// empty to is ErrNotOwner.
-	TransferSite(viewID, from, to string, g CreateGrant, detach []string, by ChangeBy) (newPassword string, err error)
+	// creation does; detaches every address whose proof is from's account
+	// (the rules WillNotMove shows, decided on the meta under the lock: a
+	// zone that cannot be read refuses the transfer with nothing written);
+	// clears the tags and the admins; sets a fresh edit password (returned
+	// once); cancels a push that is running; drops the verify cache and
+	// revokes the site's upload tokens. It does not relink the extension's
+	// own account indexes. An empty to is ErrNotOwner.
+	TransferSite(viewID, from, to string, g CreateGrant, by ChangeBy) (newPassword string, err error)
 	// AdoptSite gives an anonymous, unlocked, unexpired site to account to
 	// and stamps g onto it as a creation does.
 	AdoptSite(viewID, to string, g CreateGrant, by ChangeBy) error
@@ -903,7 +905,9 @@ type OwnershipSites interface {
 	ResolveSite(urlOrID string) (viewID string, ok bool)
 	// WillNotMove lists the site's addresses whose proof depends on the
 	// sender's account (a name in the sender's zone, an operator zone, an
-	// address held through its host) and would not survive a transfer.
+	// address held through its host) and would not survive a transfer. For
+	// display: an unreadable site or zone lists nothing; TransferSite
+	// decides again under the lock and refuses on such an error.
 	WillNotMove(viewID, sender string) []string
 	// HostConflicts maps each host used by the bundle to the sender's OTHER
 	// sites (outside viewIDs) that have an address on that host.
@@ -920,6 +924,10 @@ type OwnershipSites interface {
 	// sites. A site that no longer exists is ErrSiteGone, distinct from
 	// any other read error.
 	SiteOwner(viewID string) (owner string, err error)
+	// SiteLocked reports whether the operator holds the site locked, from its
+	// meta.json only (never the content or the git repository). A site that
+	// no longer exists is ErrSiteGone.
+	SiteLocked(viewID string) (bool, error)
 	// SiteAdmins is the admins listed in the site's meta.json, with their
 	// end dates (nil for none). Like SiteOwner it reads meta only, never
 	// the content or the git repository. A site that no longer exists is

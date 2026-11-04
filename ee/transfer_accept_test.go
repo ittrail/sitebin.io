@@ -34,8 +34,12 @@ type xferFake struct {
 	// fail fails the next TransferSite of a site once, before anything
 	// changed: a crash or a transient error in the middle of a bundle.
 	fail map[string]error
-	// block, when set, holds every TransferSite until it is closed.
-	block chan struct{}
+	// block, when set, holds every TransferSite until it is closed; entered,
+	// when set, is told the site id first.
+	block   chan struct{}
+	entered chan string
+	// after, when set, runs after a site moved.
+	after func(id string)
 	n     int
 }
 
@@ -56,19 +60,32 @@ func (s *fakeSites) xf() *xferFake {
 
 // TransferSite mirrors the core's: a gone, locked or not-the-sender's site,
 // and an empty recipient, are refused with the seam's sentinels and nothing
-// changes; otherwise the owner changes, the detached addresses go, the tags
-// and admins are cleared, and a fresh password is returned.
-func (s *fakeSites) TransferSite(id, from, to string, g ext.CreateGrant, detach []string, by ext.ChangeBy) (string, error) {
+// changes; otherwise the owner changes, the addresses that stay with the
+// sender go (the core decides them: here the fake's will-not-move list), the
+// tags and admins are cleared, and a fresh password is returned.
+func (s *fakeSites) TransferSite(id, from, to string, g ext.CreateGrant, by ext.ChangeBy) (string, error) {
 	x := s.xf()
+	if x.entered != nil {
+		x.entered <- id
+	}
 	if x.block != nil {
 		<-x.block
 	}
+	pw, err := s.transfer(x, id, from, to, g, by)
+	if err == nil && x.after != nil {
+		x.after(id)
+	}
+	return pw, err
+}
+
+func (s *fakeSites) transfer(x *xferFake, id, from, to string, g ext.CreateGrant, by ext.ChangeBy) (string, error) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	if err := x.fail[id]; err != nil {
 		delete(x.fail, id)
 		return "", err
 	}
+	detach := s.ad().notMove[id]
 	info, ok := s.infos[id]
 	if !ok {
 		return "", fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
@@ -76,7 +93,7 @@ func (s *fakeSites) TransferSite(id, from, to string, g ext.CreateGrant, detach 
 	if info.Locked != nil {
 		return "", fmt.Errorf("%w: %s", ext.ErrSiteLocked, id)
 	}
-	if cur, _ := s.Info(id); to == "" || cur.Owner != from {
+	if cur, _ := s.info(id); to == "" || cur.Owner != from {
 		return "", fmt.Errorf("%w: %s", ext.ErrNotOwner, id)
 	}
 	info.Owner = to
@@ -94,6 +111,15 @@ func (s *fakeSites) TransferSite(id, from, to string, g ext.CreateGrant, detach 
 	pw := fmt.Sprintf("NEWPW%02d%s", x.n, id[22:])
 	x.calls = append(x.calls, xferCall{id, from, to, g, slices.Clone(detach), by, pw})
 	return pw, nil
+}
+
+// SiteLocked is the fake's meta-only lock read.
+func (s *fakeSites) SiteLocked(id string) (bool, error) {
+	i, ok := s.infos[id]
+	if !ok {
+		return false, fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
+	}
+	return i.Locked != nil, nil
 }
 
 func (x *xferFake) callsFor(id string) int {
@@ -799,6 +825,21 @@ func TestTakeoverCrashIsCompleted(t *testing.T) {
 				t.Errorf("the loop's ChangeBy = %+v, want the background surface", cl.By)
 			}
 		}
+		for _, acc := range []*account.Account{e.acc, e.to} {
+			es, _ := e.p.accounts.Provenance(acc.ID)
+			for _, en := range es {
+				if en.Action != provenance.ActionTransfer {
+					continue
+				}
+				background := en.Site == b || en.Site == c
+				if background && (en.Surface != provenance.SurfaceBackground || en.Auth != provenance.AuthNone) {
+					t.Errorf("a loop's log line in %s = %s/%s, want background with no session", acc.Email, en.Surface, en.Auth)
+				}
+				if !background && (en.Surface != provenance.SurfaceDashboard || en.Auth != provenance.AuthSession) {
+					t.Errorf("the accept's log line in %s = %s/%s, want dashboard/session", acc.Email, en.Surface, en.Auth)
+				}
+			}
+		}
 		if cur := e.current(o); cur.State != ownership.StateAccepted || len(cur.Done) != 3 {
 			t.Errorf("offer = %+v", cur)
 		}
@@ -834,11 +875,20 @@ func TestTakeoverCrashIsCompleted(t *testing.T) {
 		}
 		sm := e.mailsTo("pro@example.com", "")
 		rm := e.mailsTo(takerEmail, "")
-		if !slices.ContainsFunc(sm, func(m string) bool { return strings.Contains(m, label(b)) && strings.Contains(m, "stay") }) {
-			t.Errorf("the sender was not told what stays: %q", sm)
+		if !slices.ContainsFunc(sm, func(m string) bool {
+			return strings.Contains(m, label(b)) && strings.Contains(m, "stay") && strings.Contains(m, "no longer exists")
+		}) {
+			t.Errorf("the sender was not told what stays and why: %q", sm)
 		}
-		if !slices.ContainsFunc(rm, func(m string) bool { return strings.Contains(m, label(b)) && strings.Contains(m, "stay") }) {
+		if !slices.ContainsFunc(rm, func(m string) bool {
+			return strings.Contains(m, label(b)) && strings.Contains(m, "stay") && strings.Contains(m, "could not be completed and has ended")
+		}) {
 			t.Errorf("the recipient was not told what stays: %q", rm)
+		}
+		for _, m := range rm {
+			if strings.Contains(m, "no longer exists") || strings.Contains(m, "sender's") {
+				t.Errorf("the recipient's mail carries the sender's reason:\n%s", m)
+			}
 		}
 	})
 
@@ -891,7 +941,7 @@ func TestTakeoverMovesContainerServices(t *testing.T) {
 		}
 		n := 0
 		for _, cs := range all {
-			if info, _ := e.fs.Info(cs.ViewID); info.Owner == owner && containers.Counts(cs) {
+			if info, _ := e.fs.info(cs.ViewID); info.Owner == owner && containers.Counts(cs) {
 				n += len(cs.Observed.Services)
 			}
 		}
@@ -973,4 +1023,251 @@ func TestTakeoverDecline(t *testing.T) {
 	if w := e.decline(p); w.Code != http.StatusSeeOther {
 		t.Errorf("declining a paused offer = %d", w.Code)
 	}
+}
+
+// ---- fix round 1 ----
+
+// A background completion never runs beside a live accept of the same offer:
+// it would take a site the accept just moved for one that changed hands.
+func TestTakeoverCompletionWaitsForALiveAccept(t *testing.T) {
+	e := newTakeEnv(t, "pro", true)
+	a, b, c := tid(1), tid(2), tid(3)
+	e.site(a)
+	e.site(b)
+	e.site(c)
+	o := e.offer(a, b, c)
+	x := e.fs.xf()
+	x.block, x.entered = make(chan struct{}), make(chan string, 3)
+	res := make(chan *httptest.ResponseRecorder, 1)
+	go func() { res <- e.accept(o) }()
+	if first := <-x.entered; first != a {
+		t.Fatalf("the accept moved %s first", first)
+	}
+	// The live accept is inside TransferSite(a): the loop must stand aside.
+	run, err := e.p.completeAccepting(e.current(o), e.to, ext.ChangeBy{Account: e.to.ID})
+	if !errors.Is(err, errAcceptBusy) || len(run.Moved) != 0 {
+		t.Fatalf("completeAccepting beside a live accept = %+v, %v; want errAcceptBusy", run, err)
+	}
+	if cur := e.current(o); cur.State != ownership.StateAccepting || len(cur.Done) != 0 {
+		t.Fatalf("the loop changed the offer: %+v", cur)
+	}
+	close(x.block)
+	w := <-res
+	if w.Code != http.StatusOK {
+		t.Fatalf("accept = %d (%s)", w.Code, w.Body)
+	}
+	for _, cl := range x.all() {
+		if strings.Count(w.Body.String(), cl.Password) != 1 {
+			t.Errorf("the password of %s is not shown once", cl.ViewID)
+		}
+	}
+	if strings.Contains(w.Body.String(), "Still to move") {
+		t.Error("the page lists a site as still to move")
+	}
+	if cur := e.current(o); cur.State != ownership.StateAccepted || len(cur.Done) != 3 {
+		t.Errorf("offer = %+v", cur)
+	}
+	if n := len(e.mailsTo("pro@example.com", "could not be completed")) + len(e.mailsTo(takerEmail, "could not be completed")); n != 0 {
+		t.Errorf("%d false give-up mails", n)
+	}
+}
+
+// An offer another run holds is not accepted beside it: the page asks for a
+// reload, and nothing changes.
+func TestTakeoverClaimedOfferAsksForAReload(t *testing.T) {
+	e := newTakeEnv(t, "pro", true)
+	e.site(tid(4))
+	o2 := e.offer(tid(4))
+	release, ok := e.p.claimAccept(o2.ID)
+	if !ok {
+		t.Fatal("could not claim a fresh offer")
+	}
+	if w := e.accept(o2); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "already being accepted") {
+		t.Errorf("accept of a claimed offer = %d:\n%s", w.Code, w.Body)
+	}
+	if cur := e.current(o2); cur.State != ownership.StateOpen {
+		t.Errorf("a refused accept changed the state to %s", cur.State)
+	}
+	release()
+	if w := e.accept(o2); w.Code != http.StatusOK {
+		t.Errorf("accept after the claim ended = %d", w.Code)
+	}
+}
+
+// The re-check finds a site no longer the sender's because the recipient
+// holds it already: it is moved, not gone, and the rest still moves.
+func TestTakeoverRecheckCountsTheRecipientsSiteAsMoved(t *testing.T) {
+	e := newTakeEnv(t, "pro", true)
+	a, b, c := tid(1), tid(2), tid(3)
+	e.site(a)
+	e.site(b)
+	e.site(c)
+	o := e.offer(a, b, c)
+	e.change(o, func(x *ownership.Offer) {
+		x.State, x.AcceptedBy, x.Done = ownership.StateAccepting, e.to.ID, []string{a}
+	})
+	i := e.fs.infos[a]
+	i.Owner = e.to.ID
+	e.fs.infos[a] = i
+	// b reaches the recipient between the scan and the re-check.
+	reads := 0
+	e.fs.onOwner = func(id string) {
+		if id != b {
+			return
+		}
+		if reads++; reads == 2 {
+			info := e.fs.infos[b]
+			info.Owner = e.to.ID
+			e.fs.infos[b] = info
+		}
+	}
+	run, err := e.p.completeAccepting(e.current(o), e.to, ext.ChangeBy{Account: e.to.ID})
+	if err != nil || !run.Complete || run.Ended {
+		t.Fatalf("completeAccepting = %+v, %v; want complete", run, err)
+	}
+	if e.fs.xf().callsFor(b) != 0 || e.fs.xf().callsFor(c) != 1 {
+		t.Errorf("transfers b=%d c=%d, want 0 and 1", e.fs.xf().callsFor(b), e.fs.xf().callsFor(c))
+	}
+	if cur := e.current(o); cur.State != ownership.StateAccepted || !slices.Equal(sortedCopy(cur.Done), []string{a, b, c}) {
+		t.Errorf("offer = %+v", cur)
+	}
+}
+
+// A site the core moved keeps its password on the page, and is never listed
+// as still to move, even when recording it in the offer fails.
+func TestTakeoverMovedSiteKeepsItsPasswordWhenTheRecordFails(t *testing.T) {
+	e := newTakeEnv(t, "pro", true)
+	a, b := tid(1), tid(2)
+	e.site(a)
+	e.site(b)
+	o := e.offer(a, b)
+	// The offer cannot take the record (here: its state changed under it).
+	e.fs.xf().after = func(id string) {
+		if id == a {
+			e.p.owner.UpdateOffer(o.ID, func(x *ownership.Offer) error { x.State = ownership.StateCancelled; return nil })
+		}
+	}
+	w := e.accept(o)
+	body := w.Body.String()
+	calls := e.fs.xf().all()
+	if w.Code != http.StatusOK || len(calls) != 1 || strings.Count(body, calls[0].Password) != 1 {
+		t.Fatalf("accept = %d, calls %d:\n%s", w.Code, len(calls), body)
+	}
+	_, pending, _ := strings.Cut(body, "Still to move")
+	if strings.Count(body, label(a)) != 1 || strings.Contains(pending, label(a)) || !strings.Contains(pending, label(b)) {
+		t.Errorf("the moved site is listed twice or as still to move:\n%s", body)
+	}
+}
+
+// The stamp comes from the strict tier: an unknown plan stops the move.
+func TestTakeoverGrantIsStrict(t *testing.T) {
+	e := newTakeEnv(t, "pro", true)
+	e.site(tid(1))
+	o := e.offer(tid(1))
+	e.change(o, func(x *ownership.Offer) { x.State, x.AcceptedBy = ownership.StateAccepting, e.to.ID })
+	e.setAccount(e.to, func(a *account.Account) { a.Tier = "legacy" })
+	release, _ := e.p.claimAccept(o.ID)
+	run, err := e.p.runAccepting(o.ID, e.to, ext.ChangeBy{Account: e.to.ID}, false)
+	release()
+	if err == nil || len(run.Moved) != 0 {
+		t.Fatalf("a move on an unknown plan = %+v, %v", run, err)
+	}
+	e.unchanged([]string{tid(1)})
+	if cur := e.current(o); cur.State != ownership.StateAccepting {
+		t.Errorf("state = %s, want accepting (unknown changes nothing)", cur.State)
+	}
+	if g, err := e.p.transferGrant(e.acc); err != nil || g.OwnerAccountID != e.acc.ID || g.MaxSiteBytes != 1000 {
+		t.Errorf("transferGrant on a known plan = %+v, %v", g, err)
+	}
+}
+
+// A give-up that moved nothing reads as ended, never as the sender's cancel.
+func TestTakeoverGiveUpWithNothingMovedIsEnded(t *testing.T) {
+	e := newTakeEnv(t, "pro", true)
+	a, b := tid(1), tid(2)
+	e.site(a)
+	e.site(b)
+	o := e.offer(a, b)
+	e.fs.xf().fail[a] = errors.New("the disk went away")
+	if w := e.accept(o); w.Code != http.StatusOK || len(e.fs.xf().all()) != 0 {
+		t.Fatalf("accept = %d", w.Code)
+	}
+	delete(e.fs.infos, b)
+	run, err := e.p.completeAccepting(e.current(o), e.to, ext.ChangeBy{Account: e.to.ID})
+	if err != nil || !run.Ended {
+		t.Fatalf("completeAccepting = %+v, %v", run, err)
+	}
+	if cur := e.current(o); cur.State != ownership.StateEnded || !ownership.IsFinal(cur.State) {
+		t.Fatalf("state = %s, want ended", cur.State)
+	}
+	w := e.accept(o)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "Ended: no site could be moved") || strings.Contains(w.Body.String(), "cancelled") {
+		t.Errorf("accepting an ended offer = %d:\n%s", w.Code, w.Body)
+	}
+	d := getAs(e.mux, "/account/transfer/"+o.ID+"/done", e.toCookie)
+	if !strings.Contains(d.Body.String(), "Ended: no site could be moved") {
+		t.Errorf("the done page:\n%s", d.Body)
+	}
+	if w := e.post("/account/transfer/"+o.ID+"/cancel", url.Values{}); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "Ended: no site could be moved") {
+		t.Errorf("the sender's cancel of an ended offer = %d:\n%s", w.Code, w.Body)
+	}
+	rm := e.mailsTo(takerEmail, "could not be completed")
+	if len(rm) != 1 || strings.Contains(rm[0], "no longer exists") {
+		t.Errorf("the recipient's mail = %q", rm)
+	}
+}
+
+// The recipient is matched by the store's own normalisation of the address.
+func TestIsRecipientUsesTheStoresNormalisation(t *testing.T) {
+	o := ownership.Offer{From: "sender", ToEmail: ownership.NormEmail("  Taker@Example.COM ")}
+	for _, tc := range []struct {
+		acc  account.Account
+		want bool
+	}{
+		{account.Account{ID: "r", Email: "taker@example.com", EmailVerified: true}, true},
+		{account.Account{ID: "r", Email: " TAKER@example.com", EmailVerified: true}, true},
+		{account.Account{ID: "r", Email: "taker@example.com", EmailVerified: false}, false},
+		{account.Account{ID: "sender", Email: "taker@example.com", EmailVerified: true}, false},
+		{account.Account{ID: "r", Email: "other@example.com", EmailVerified: true}, false},
+	} {
+		if got := isRecipient(&tc.acc, o); got != tc.want {
+			t.Errorf("isRecipient(%+v) = %v, want %v", tc.acc, got, tc.want)
+		}
+	}
+}
+
+// The card reads each site's Info once, and shares it with the limits check;
+// the pause check reads locks from meta.json only.
+func TestTakeoverCardReadsEachSiteOnce(t *testing.T) {
+	e := newTakeEnv(t, "pro", true)
+	a, b := tid(1), tid(2)
+	e.site(a)
+	e.site(b)
+	e.offer(a, b)
+	e.fs.infoMu.Lock()
+	e.fs.infoCalls = map[string]int{}
+	e.fs.infoMu.Unlock()
+	if dash := e.dashboard(e.toCookie); !strings.Contains(dash, "Ready to take over") {
+		t.Fatal("no card")
+	}
+	counts := func(when string) {
+		t.Helper()
+		e.fs.infoMu.Lock()
+		defer e.fs.infoMu.Unlock()
+		for _, id := range []string{a, b} {
+			if n := e.fs.infoCalls[id]; n != 1 {
+				t.Errorf("%s: Info(%s) read %d times for one card, want 1", when, id, n)
+			}
+		}
+		e.fs.infoCalls = map[string]int{}
+	}
+	counts("open")
+	// A locked site pauses the card; naming it costs no second read.
+	i := e.fs.infos[b]
+	i.Locked = &ext.SiteLock{By: ext.LockByAdmin, At: time.Now()}
+	e.fs.infos[b] = i
+	if dash := e.dashboard(e.toCookie); !strings.Contains(dash, "not available right now") {
+		t.Fatal("a locked site did not pause the card")
+	}
+	counts("paused")
 }

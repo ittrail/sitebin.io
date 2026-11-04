@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -63,9 +64,26 @@ type fakeSites struct {
 	adopt *adoptFake
 	// xfer is the state of the fake TransferSite (transfer_accept_test.go).
 	xfer *xferFake
+	// infoCalls counts Info per site (Info walks a site's files in the real
+	// core); the fake's own reads do not count.
+	infoMu    sync.Mutex
+	infoCalls map[string]int
+	// onOwner, when set, runs at the start of every SiteOwner read.
+	onOwner func(id string)
 }
 
 func (s *fakeSites) Info(id string) (ext.SiteInfo, bool) {
+	s.infoMu.Lock()
+	if s.infoCalls == nil {
+		s.infoCalls = map[string]int{}
+	}
+	s.infoCalls[id]++
+	s.infoMu.Unlock()
+	return s.info(id)
+}
+
+// info is Info without the count, for the fake's own methods.
+func (s *fakeSites) info(id string) (ext.SiteInfo, bool) {
 	i, ok := s.infos[id]
 	if ok && i.Owner == "" {
 		i.Owner = s.linkOwner[id]
@@ -76,10 +94,13 @@ func (s *fakeSites) Info(id string) (ext.SiteInfo, bool) {
 // SiteOwner and DeleteSiteIfOwner are the core's ext.OwnershipSites methods
 // the account pages use; the rest of that interface is not faked here.
 func (s *fakeSites) SiteOwner(id string) (string, error) {
+	if s.onOwner != nil {
+		s.onOwner(id)
+	}
 	if s.ownerErrs[id] != nil {
 		return "", s.ownerErrs[id]
 	}
-	i, ok := s.Info(id)
+	i, ok := s.info(id)
 	if !ok {
 		return "", fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
 	}
@@ -91,7 +112,7 @@ func (s *fakeSites) SiteAdmins(id string) ([]ext.SiteAdmin, error) {
 	if s.adminErrs[id] != nil {
 		return nil, s.adminErrs[id]
 	}
-	i, ok := s.Info(id)
+	i, ok := s.info(id)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
 	}
@@ -99,7 +120,7 @@ func (s *fakeSites) SiteAdmins(id string) ([]ext.SiteAdmin, error) {
 }
 
 func (s *fakeSites) DeleteSiteIfOwner(id, owner string) error {
-	i, ok := s.Info(id)
+	i, ok := s.info(id)
 	if !ok {
 		return fmt.Errorf("%w: %s", ext.ErrSiteGone, id)
 	}
