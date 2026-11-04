@@ -408,7 +408,7 @@ func (p *provider) gdprProvenance(acc *account.Account, siteIDs []string) *gdprP
 	if !ok {
 		return out
 	}
-	for _, id := range siteIDs {
+	for _, id := range p.touchedSites(acc, siteIDs) {
 		es, err := sp.SiteProvenance(id)
 		if err != nil {
 			continue

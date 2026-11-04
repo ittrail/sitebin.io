@@ -99,6 +99,9 @@ type Offer struct {
 	// a verified account). nil: not yet, so the background loop mails once the
 	// available-from date has passed.
 	NotifiedAt *time.Time `json:"notified_at,omitempty"`
+	// EndedAt is when the offer entered a final state: set by the store on
+	// every transition into one, and what the retention counts from.
+	EndedAt *time.Time `json:"ended_at,omitempty"`
 }
 
 // Invite makes the recipient's account an admin of one site, until Until
@@ -111,6 +114,8 @@ type Invite struct {
 	Until   *time.Time `json:"until,omitempty"`
 	Created time.Time  `json:"created"`
 	State   string     `json:"state"`
+	// EndedAt: see Offer.EndedAt.
+	EndedAt *time.Time `json:"ended_at,omitempty"`
 }
 
 // Store is the ownership store. Safe for concurrent use: one mutex covers
@@ -244,6 +249,7 @@ func (s *Store) CreateOffer(o Offer, dailyLimit int) (Offer, error) {
 	if o.Created.IsZero() {
 		o.Created = time.Now().UTC()
 	}
+	stampEnded(&o.EndedAt, o.State)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.checkDailyLimit(o.From, o.Created, dailyLimit); err != nil {
@@ -295,6 +301,7 @@ func (s *Store) UpdateOffer(id string, mutate func(*Offer) error) (Offer, error)
 	}
 	o.ID = id
 	o.ToEmail = NormEmail(o.ToEmail)
+	stampEnded(&o.EndedAt, o.State)
 	if !IsFinal(o.State) {
 		if err := s.checkSitesFree(id, o.Sites); err != nil {
 			return Offer{}, err
@@ -367,6 +374,7 @@ func (s *Store) CreateInvite(i Invite, dailyLimit int) (Invite, error) {
 	if i.Created.IsZero() {
 		i.Created = time.Now().UTC()
 	}
+	stampEnded(&i.EndedAt, i.State)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.checkDailyLimit(i.From, i.Created, dailyLimit); err != nil {
@@ -407,6 +415,7 @@ func (s *Store) UpdateInvite(id string, mutate func(*Invite) error) (Invite, err
 	}
 	i.ID = id
 	i.ToEmail = NormEmail(i.ToEmail)
+	stampEnded(&i.EndedAt, i.State)
 	if err := writeJSON(path, i); err != nil {
 		return Invite{}, err
 	}
@@ -675,4 +684,75 @@ func (s *Store) RemoveShares(accountID string) error {
 		return err
 	}
 	return nil
+}
+
+// ---- retention ----
+
+// stampEnded is the one place EndedAt is decided: a record that is final and
+// has no end date gets now, and one that is not final has none (an offer put
+// back as it was). Every create and update goes through it.
+func stampEnded(at **time.Time, state string) {
+	if !IsFinal(state) {
+		*at = nil
+		return
+	}
+	if *at == nil {
+		now := time.Now().UTC()
+		*at = &now
+	}
+}
+
+// PruneFinal deletes the final offers and invitations that ended before the
+// cutoff, under the store's mutex, and reports how many. A record without
+// EndedAt (written before it existed) counts from its file's modification
+// time. A record that cannot be read or stat'ed, and any that is not final,
+// stays; so does the rest of the pass after a failed removal.
+func (s *Store) PruneFinal(before time.Time) (offers, invites int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	offers, err = pruneDir[Offer](s.offersDir(), before, func(o Offer) (string, *time.Time) { return o.State, o.EndedAt })
+	if err != nil {
+		return offers, 0, err
+	}
+	invites, err = pruneDir[Invite](s.invitesDir(), before, func(i Invite) (string, *time.Time) { return i.State, i.EndedAt })
+	return offers, invites, err
+}
+
+func pruneDir[T any](dir string, before time.Time, view func(T) (string, *time.Time)) (int, error) {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, e := range ents {
+		id, ok := strings.CutSuffix(e.Name(), ".json")
+		if !ok || !ids.ValidID(id) {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		var v T
+		if err := readJSON(path, &v); err != nil {
+			continue // unreadable: keep it
+		}
+		state, ended := view(v)
+		if !IsFinal(state) {
+			continue
+		}
+		var when time.Time
+		if ended != nil {
+			when = *ended
+		} else if fi, err := e.Info(); err == nil {
+			when = fi.ModTime()
+		} else {
+			continue
+		}
+		if !when.Before(before) {
+			continue
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
 }

@@ -405,3 +405,116 @@ func TestShareMarkerAgesAndAccounts(t *testing.T) {
 		t.Errorf("a re-linked marker stayed old: %+v", ms)
 	}
 }
+
+// ---- retention ----
+
+func daysAgo(n int) *time.Time {
+	t := time.Now().UTC().Add(-time.Duration(n) * 24 * time.Hour)
+	return &t
+}
+
+func TestEndedAtIsSetOnEveryFinalTransition(t *testing.T) {
+	s := newStore(t)
+	for _, state := range []string{StateAccepted, StateDeclined, StateExpired, StateCancelled, StateEnded} {
+		o, err := s.CreateOffer(Offer{Sites: []string{ids.New()}, From: ids.New(), ToEmail: "a@example.com"}, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if o.EndedAt != nil {
+			t.Fatalf("an open offer has EndedAt %v", o.EndedAt)
+		}
+		o, err = s.UpdateOffer(o.ID, func(x *Offer) error { x.State = state; return nil })
+		if err != nil || o.EndedAt == nil || time.Since(*o.EndedAt) > time.Minute {
+			t.Errorf("offer -> %s: EndedAt %v, err %v", state, o.EndedAt, err)
+		}
+		first := *o.EndedAt
+		o, _ = s.UpdateOffer(o.ID, func(x *Offer) error { return nil })
+		if !o.EndedAt.Equal(first) {
+			t.Errorf("a later update moved EndedAt of a %s offer", state)
+		}
+	}
+	for _, state := range []string{StateAccepted, StateDeclined, StateExpired, StateCancelled} {
+		i, err := s.CreateInvite(Invite{Site: ids.New(), From: ids.New(), ToEmail: "a@example.com"}, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		i, err = s.UpdateInvite(i.ID, func(x *Invite) error { x.State = state; return nil })
+		if err != nil || i.EndedAt == nil {
+			t.Errorf("invite -> %s: EndedAt %v, err %v", state, i.EndedAt, err)
+		}
+	}
+	// Put back as it was: no end date.
+	o, _ := s.CreateOffer(Offer{Sites: []string{ids.New()}, From: ids.New(), ToEmail: "a@example.com"}, 0)
+	o, _ = s.UpdateOffer(o.ID, func(x *Offer) error { x.State = StateCancelled; return nil })
+	o, _ = s.UpdateOffer(o.ID, func(x *Offer) error { x.State = StateOpen; return nil })
+	if o.EndedAt != nil {
+		t.Error("a reopened offer keeps its end date")
+	}
+}
+
+func TestPruneFinalDeletesPastNinetyDaysOnly(t *testing.T) {
+	s := newStore(t)
+	mk := func(state string, ended *time.Time) (Offer, Invite) {
+		o, err := s.CreateOffer(Offer{Sites: []string{ids.New()}, From: ids.New(), ToEmail: "a@example.com", State: state, EndedAt: ended}, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		i, err := s.CreateInvite(Invite{Site: ids.New(), From: ids.New(), ToEmail: "a@example.com", State: state, EndedAt: ended}, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return o, i
+	}
+	oldO, oldI := mk(StateCancelled, daysAgo(91))
+	newO, newI := mk(StateAccepted, daysAgo(89))
+	// An open record is never pruned, however old.
+	openO, openI := mk(StateOpen, nil)
+	for _, p := range []string{filepath.Join(s.offersDir(), openO.ID+".json"), filepath.Join(s.invitesDir(), openI.ID+".json")} {
+		old := time.Now().AddDate(-2, 0, 0)
+		os.Chtimes(p, old, old)
+	}
+	// A record from before EndedAt existed counts from its file's mtime.
+	legacy, _ := mk(StateExpired, nil)
+	legacy.EndedAt = nil
+	lp := filepath.Join(s.offersDir(), legacy.ID+".json")
+	b, _ := os.ReadFile(lp)
+	os.WriteFile(lp, []byte(strings.Replace(string(b), `"ended_at"`, `"x_ended_at"`, 1)), 0o644)
+	old := time.Now().AddDate(0, 0, -91)
+	os.Chtimes(lp, old, old)
+	// A record that cannot be read stays.
+	bad := ids.New()
+	bp := filepath.Join(s.offersDir(), bad+".json")
+	os.WriteFile(bp, []byte("{not json"), 0o644)
+	os.Chtimes(bp, old, old)
+
+	offers, invites, err := s.PruneFinal(time.Now().AddDate(0, 0, -90))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if offers != 2 || invites != 1 {
+		t.Errorf("pruned %d offers, %d invitations; want 2 and 1", offers, invites)
+	}
+	gone := func(err error) bool { return errors.Is(err, ErrNotFound) }
+	if _, err := s.GetOffer(oldO.ID); !gone(err) {
+		t.Error("a 91-day-old offer was kept")
+	}
+	if _, err := s.GetInvite(oldI.ID); !gone(err) {
+		t.Error("a 91-day-old invitation was kept")
+	}
+	if _, err := s.GetOffer(legacy.ID); !gone(err) {
+		t.Error("a legacy record past 90 days by mtime was kept")
+	}
+	for name, err := range map[string]error{
+		"89-day offer":  func() error { _, e := s.GetOffer(newO.ID); return e }(),
+		"89-day invite": func() error { _, e := s.GetInvite(newI.ID); return e }(),
+		"open offer":    func() error { _, e := s.GetOffer(openO.ID); return e }(),
+		"open invite":   func() error { _, e := s.GetInvite(openI.ID); return e }(),
+	} {
+		if err != nil {
+			t.Errorf("the %s was not kept: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(bp); err != nil {
+		t.Error("an unreadable record was removed")
+	}
+}

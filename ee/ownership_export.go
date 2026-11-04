@@ -5,6 +5,7 @@ package ee
 import (
 	"errors"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/ittrail/sitebin.io/ee/account"
@@ -268,6 +269,40 @@ func (p *provider) registerOffersOf(viewID string) []ownership.Offer {
 	for _, o := range all {
 		if !ownership.IsFinal(o.State) {
 			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// touchedSites is the sites whose log the export searches for the account's
+// own entries: the ones it owns, the ones it currently administers (its share
+// markers, by meta.json) and the ones it handed over (the Done sites of its
+// offers that were accepted or ended). A site that no longer exists is read
+// as gone and skipped by the caller. Only the account's own entries are ever
+// taken from them, never anyone else's.
+func (p *provider) touchedSites(acc *account.Account, owned []string) []string {
+	out := slices.Clone(owned)
+	add := func(id string) {
+		if !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	if p.owner == nil {
+		return out
+	}
+	for _, id := range p.SharedSiteIDs(acc.ID) {
+		add(id)
+	}
+	offers, err := p.owner.OffersBySender(acc.ID)
+	if err != nil {
+		slog.Error("gdpr: could not read the account's offers for an export", "account", acc.ID, "err", err)
+		return out
+	}
+	for _, o := range offers {
+		if o.State == ownership.StateAccepted || o.State == ownership.StateEnded {
+			for _, id := range o.Done {
+				add(id)
+			}
 		}
 	}
 	return out

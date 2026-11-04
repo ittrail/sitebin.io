@@ -801,3 +801,118 @@ func TestTransferKeepsTheActorsOwnLineAndMakesTheOthersANotice(t *testing.T) {
 		t.Errorf("the counterpart's line carries the actor: %+v", got)
 	}
 }
+
+// ---- the export carries an account's own entries on sites it touched ----
+
+func exportedSiteEntries(t *testing.T, out map[string]any, site string) []map[string]any {
+	t.Helper()
+	prov, _ := out["provenance"].(map[string]any)
+	sites, _ := prov["sites"].([]any)
+	for _, s := range sites {
+		m := s.(map[string]any)
+		if m["site"] == site {
+			var es []map[string]any
+			for _, x := range m["entries"].([]any) {
+				es = append(es, x.(map[string]any))
+			}
+			return es
+		}
+	}
+	return nil
+}
+
+func TestExportCarriesAnAdminsOwnEntriesOnASharedSite(t *testing.T) {
+	e := newGDPREnv(t)
+	owner := e.oidc("sub-owner", "owner@example.com")
+	adm := e.oidc("sub-adm", "adm@example.com")
+	const s1 = "aaaaaaaaaaaaaaaaaaaaaaaaba"
+	e.own(owner, s1)
+	e.makeAdmin(owner, adm, s1, nil)
+	e.sites.RecordSiteProvenance(s1, provenance.Entry{Time: time.Now().UTC(), Action: provenance.ActionUpload, Surface: provenance.SurfaceDashboard, Account: adm.ID, IP: "198.51.100.5"})
+	e.sites.RecordSiteProvenance(s1, provenance.Entry{Time: time.Now().UTC(), Action: provenance.ActionSettings, Surface: provenance.SurfaceDashboard, Account: owner.ID, IP: "192.0.2.8"})
+
+	raw, out := e.gdprExport(adm)
+	es := exportedSiteEntries(t, out, s1)
+	if len(es) != 1 || es[0]["action"] != provenance.ActionUpload {
+		t.Fatalf("the admin's export lacks its own entry on the shared site: %v\n%s", es, raw)
+	}
+	if strings.Contains(raw, owner.ID) || strings.Contains(raw, "192.0.2.8") {
+		t.Errorf("the admin's export carries the owner's id or address:\n%s", raw)
+	}
+	rawO, _ := e.gdprExport(owner)
+	if strings.Contains(rawO, adm.ID) || strings.Contains(rawO, "198.51.100.5") {
+		t.Errorf("the owner's export carries the admin's id or address:\n%s", rawO)
+	}
+	// After the admin's account is gone the entry stays with the site.
+	if w := e.gdprDelete(adm); w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	var kept bool
+	for _, en := range e.siteLog(s1) {
+		if en.Account == adm.ID {
+			kept = true
+		}
+	}
+	if !kept {
+		t.Error("deleting the account erased its entries on the site")
+	}
+}
+
+func TestExportCarriesAFormerOwnersEntriesOnAHandedOverSite(t *testing.T) {
+	e := newGDPREnv(t)
+	sender := e.oidc("sub-sender", "sender@example.com")
+	rcpt := e.oidc("sub-rcpt", "rcpt@example.com")
+	const moving = "aaaaaaaaaaaaaaaaaaaaaaaabm"
+	e.own(sender, moving)
+	e.sites.RecordSiteProvenance(moving, provenance.Entry{Time: time.Now().UTC(), Action: provenance.ActionCreate, Surface: provenance.SurfaceAPI, Account: sender.ID, IP: "192.0.2.44"})
+	o := e.offerFrom(sender, "rcpt@example.com", true, moving)
+	o = e.change(o, func(x *ownership.Offer) { x.State, x.AcceptedBy = ownership.StateAccepting, rcpt.ID })
+	if _, err := e.p.completeAccepting(o, rcpt, ext.ChangeBy{Account: rcpt.ID, IP: "203.0.113.9"}); err != nil {
+		t.Fatal(err)
+	}
+	e.sites.RecordSiteProvenance(moving, provenance.Entry{Time: time.Now().UTC(), Action: provenance.ActionUpload, Surface: provenance.SurfaceAPI, Account: rcpt.ID, IP: "203.0.113.9"})
+
+	rawS, out := e.gdprExport(sender)
+	if es := exportedSiteEntries(t, out, moving); len(es) != 1 || es[0]["action"] != provenance.ActionCreate {
+		t.Fatalf("the former owner's export lacks its entry on the handed-over site: %v\n%s", es, rawS)
+	}
+	if strings.Contains(rawS, rcpt.ID) || strings.Contains(rawS, "203.0.113.9") {
+		t.Errorf("the former owner's export carries the new owner's id or address:\n%s", rawS)
+	}
+	rawR, out := e.gdprExport(rcpt)
+	if es := exportedSiteEntries(t, out, moving); len(es) != 1 || es[0]["action"] != provenance.ActionUpload {
+		t.Errorf("the new owner's export: %v", es)
+	}
+	if strings.Contains(rawR, sender.ID) || strings.Contains(rawR, "192.0.2.44") {
+		t.Errorf("the new owner's export carries the former owner's id or address:\n%s", rawR)
+	}
+}
+
+// ---- retention in the loop ----
+
+func TestLoopPrunesEndedRecordsPastNinetyDays(t *testing.T) {
+	e := newGDPREnv(t)
+	e.site(tid(50))
+	e.site(tid(51))
+	old, fresh := time.Now().UTC().AddDate(0, 0, -91), time.Now().UTC().AddDate(0, 0, -89)
+	mk := func(site string, ended time.Time) ownership.Offer {
+		o, err := e.p.owner.CreateOffer(ownership.Offer{Sites: []string{site}, From: e.acc.ID, ToEmail: takerEmail, State: ownership.StateCancelled, EndedAt: &ended, AcceptBy: time.Now()}, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return o
+	}
+	oldO, freshO := mk(tid(50), old), mk(tid(51), fresh)
+	oldI := e.inviteFrom(e.acc, takerEmail, shareSite, ownership.StateOpen)
+	e.p.owner.UpdateInvite(oldI.ID, func(i *ownership.Invite) error { i.State, i.EndedAt = ownership.StateDeclined, &old; return nil })
+	e.p.ownershipTick(time.Now())
+	if _, err := e.p.owner.GetOffer(oldO.ID); !errors.Is(err, ownership.ErrNotFound) {
+		t.Error("the loop kept a 91-day-old offer")
+	}
+	if _, err := e.p.owner.GetInvite(oldI.ID); !errors.Is(err, ownership.ErrNotFound) {
+		t.Error("the loop kept a 91-day-old invitation")
+	}
+	if _, err := e.p.owner.GetOffer(freshO.ID); err != nil {
+		t.Errorf("the loop pruned an 89-day-old offer: %v", err)
+	}
+}

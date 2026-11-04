@@ -133,6 +133,7 @@ func (p *provider) ownershipTick(now time.Time) {
 	p.step("notify", func() { p.notifyDue(now) })
 	p.step("invites", func() { p.lapseInvites(now) })
 	p.step("admins", func() { p.expireAdmins(now) })
+	p.step("prune", func() { p.pruneEnded(now) })
 	if p.lastReconcile.IsZero() || now.Sub(p.lastReconcile) >= reconcileEvery {
 		p.lastReconcile = now
 		p.step("reconcile", func() { p.reconcileMarkers(now) })
@@ -656,4 +657,20 @@ func (p *provider) stillAdmin(accID, viewID string) bool {
 		return true
 	}
 	return listsAccount(admins, accID)
+}
+
+// endedRetention is how long a final offer or invitation is kept: 90 days
+// from the day it ended.
+const endedRetention = 90 * 24 * time.Hour
+
+// pruneEnded deletes the final offers and invitations that ended more than
+// endedRetention ago. A read error leaves the record (the store skips it).
+func (p *provider) pruneEnded(now time.Time) {
+	offers, invites, err := p.owner.PruneFinal(now.Add(-endedRetention))
+	if err != nil {
+		p.loopLog("prune-ended", now, "ownership: could not prune ended offers and invitations", "err", err)
+	}
+	if offers+invites > 0 {
+		slog.Info("ownership: pruned ended records past their retention", "offers", offers, "invitations", invites)
+	}
 }
