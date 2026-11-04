@@ -51,6 +51,118 @@ async function api(method, path, body, isForm) {
   return data;
 }
 
+// ---- tabs ----
+//
+// The page below the header is a row of tabs. The bar renders its buttons
+// itself, so adding a tab is two things: one panel element in edit.html
+// (`<div class="tabpanel hidden" id="panel-NAME" role="tabpanel"
+// aria-labelledby="tab-NAME">`) and one registration call:
+//
+//   tabs.register({ id: "git", label: "Git", panel: $("panel-git"),
+//                   onShow() { ... } });
+//
+// - id: the tab's name and its URL hash, "#git" or "#git/anything". The hash's
+//   first segment picks the tab; an unknown or empty one, and "#dir=...",
+//   pick "live". "#analytics..." is reserved for a tab with id "analytics".
+//   A tab owns the rest of its hash (it may replaceState within "#id/...").
+// - onShow: runs on EVERY showing, including the first from the hash at page
+//   load. Only the active tab's onShow runs at load; a tab decides itself
+//   whether to reload. Not called for a tab that is not shown.
+// - hash (optional): a function returning the hash to restore when the tab
+//   is shown by a click ("#id" by default). Live uses it for "#dir=...".
+//
+// Register before unlock() runs (it calls tabs.start()); a tab registered
+// later is added and shown at once if the hash names it. The bar is
+// hidden while only one tab exists. tabs.show(id, {push}) switches (push
+// adds a history entry, false replaces the current one; without opts the URL
+// is left alone), tabs.fromHash() follows the URL (back/forward).
+// Keyboard: Left/Right/Home/End move focus along the bar, Enter or Space
+// activates the focused tab; aria-selected and tabindex follow the active one.
+const tabs = {
+  list: [],
+  active: "",
+  started: false,
+
+  register(t) {
+    this.list.push(t);
+    this.render();
+    if (this.started && this.idFromHash() === t.id) this.show(t.id);
+  },
+
+  // idFromHash is the registered tab the URL names, "live" when none.
+  idFromHash() {
+    const m = /^#([^\/=&?#]*)/.exec(location.hash);
+    const id = m ? m[1] : "";
+    return id && id !== "live" && this.list.some((t) => t.id === id) ? id : "live";
+  },
+
+  start() {
+    this.started = true;
+    this.fromHash();
+  },
+
+  fromHash() { this.show(this.idFromHash()); },
+
+  show(id, opts) {
+    const t = this.list.find((x) => x.id === id) || this.list[0];
+    if (!t) return;
+    const was = this.active;
+    this.active = t.id;
+    if (opts && typeof opts.push === "boolean" && was !== t.id) {
+      // Switching by click: the URL follows. Live puts back the folder it
+      // last showed; a tab already inside its own "#id/..." keeps that.
+      let hash = t.hash ? t.hash() : "#" + t.id;
+      if (!t.hash && (location.hash === hash || location.hash.startsWith(hash + "/"))) hash = location.hash;
+      if (location.hash !== hash) {
+        const url = location.pathname + location.search + hash;
+        if (opts.push) history.pushState(null, "", url); else history.replaceState(null, "", url);
+      }
+    }
+    for (const x of this.list) x.panel.classList.toggle("hidden", x.id !== t.id);
+    this.render();
+    if (t.onShow) t.onShow(t);
+  },
+
+  render() {
+    const bar = $("tabs");
+    const focused = bar.contains(document.activeElement) ? document.activeElement.id : "";
+    bar.classList.toggle("hidden", this.list.length < 2);
+    bar.textContent = "";
+    for (const t of this.list) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "tab";
+      b.id = "tab-" + t.id;
+      b.setAttribute("role", "tab");
+      b.setAttribute("aria-controls", t.panel.id);
+      b.setAttribute("aria-selected", String(t.id === this.active));
+      b.tabIndex = t.id === this.active ? 0 : -1;
+      b.textContent = t.label;
+      b.addEventListener("click", () => this.show(t.id, { push: true }));
+      b.addEventListener("keydown", (e) => {
+        const i = this.list.indexOf(t), n = this.list.length;
+        let j = -1;
+        if (e.key === "ArrowRight") j = (i + 1) % n;
+        else if (e.key === "ArrowLeft") j = (i + n - 1) % n;
+        else if (e.key === "Home") j = 0;
+        else if (e.key === "End") j = n - 1;
+        if (j < 0) return;
+        e.preventDefault();
+        bar.children[j].focus();
+      });
+      bar.appendChild(b);
+    }
+    if (focused && $(focused)) $(focused).focus(); // the bar is rebuilt; keep the keyboard's place
+  },
+};
+
+// Live is every card the page always had; it owns "#dir=..." (see dirFromHash).
+tabs.register({
+  id: "live", label: "Live", panel: $("panel-live"),
+  hash: () => dirHash(cwd),
+  onShow() {}, // renders as it always did
+});
+
 // ---- unlock flow ----
 
 function unlock() {
@@ -63,6 +175,12 @@ function unlock() {
   }
   $("app").classList.remove("hidden");
   render();
+  // The Git tab shows when Git works here, or when only the plan lacks it
+  // (the tab then carries the upgrade notice).
+  if (site.git_available && !tabs.list.some((t) => t.id === "git")) {
+    tabs.register({ id: "git", label: "Git", panel: $("panel-git"), onShow() {} });
+  }
+  tabs.start();
   loadDir(dirFromHash());
   loadForms();
 }
@@ -898,6 +1016,7 @@ function dirFromHash() {
 
 // syncHash makes the URL name the folder actually shown.
 function syncHash() {
+  if (tabs.active !== "live") return; // another tab owns the URL
   const hash = dirHash(cwd);
   if (location.hash !== hash) history.replaceState(null, "", location.pathname + location.search + hash);
 }
@@ -949,7 +1068,11 @@ function renderDropHint() {
 // the click.
 function refreshDir() { return loadDir(dirWanted); }
 
-window.addEventListener("popstate", () => { if (site) loadDir(dirFromHash()); });
+window.addEventListener("popstate", () => {
+  if (!site) return;
+  tabs.fromHash();
+  if (tabs.active === "live") loadDir(dirFromHash());
+});
 
 function renderFiles() {
   const total = site.usage.files;

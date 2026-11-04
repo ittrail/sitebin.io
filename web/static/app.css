@@ -453,6 +453,22 @@ input::placeholder { color: var(--ink-faint); }
 .pagehead .viewlink { font: 14px var(--mono); }
 .pagehead .meta { width: 100%; color: var(--ink-faint); font-size: 13px; }
 
+/* ---------- tabs (edit page; mechanism in edit.js "tabs") ---------- */
+
+.tabs { display: flex; gap: 6px; margin: 0 0 20px; border-bottom: 1px solid var(--line-soft); overflow-x: auto; }
+.tab {
+  appearance: none; background: transparent; border: 1px solid transparent; border-bottom: 0;
+  border-radius: 10px 10px 0 0; margin-bottom: -1px; cursor: pointer;
+  color: var(--ink-faint); padding: 9px 18px; font: 500 14.5px var(--body);
+  transition: color .15s ease, background .15s ease, border-color .15s ease;
+}
+.tab:hover { color: var(--ink); background: rgba(255,255,255,.03); }
+.tab[aria-selected="true"] {
+  color: var(--amber); font-weight: 650; background: var(--bg-card);
+  border-color: var(--line-soft); box-shadow: inset 0 2px 0 var(--amber);
+}
+.tab:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
 .card {
   background: linear-gradient(180deg, rgba(255,255,255,.025), rgba(255,255,255,0) 40%), var(--bg-card);
   border: 1px solid var(--line-soft);

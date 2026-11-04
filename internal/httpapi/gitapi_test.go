@@ -467,3 +467,26 @@ func TestGitCorruptRepoDoesNotLeakPaths(t *testing.T) {
 		t.Error("no route answered 500 on the corrupt repository; the fixture does not exercise the generic error")
 	}
 }
+
+func TestGetSiteGitAvailable(t *testing.T) {
+	read := func(e *env, edit, pw string) (bool, bool) {
+		t.Helper()
+		w := e.call(t, "GET", "/api/sites/"+edit, pw, nil)
+		if w.Code != 200 {
+			t.Fatalf("GET site = %d %s", w.Code, w.Body)
+		}
+		var raw map[string]json.RawMessage
+		json.Unmarshal(w.Body.Bytes(), &raw)
+		v, ok := raw["git_available"]
+		return ok, string(v) == "true"
+	}
+	e := newEnv(t, nil)
+	edit, pw := gitSite(t, e, nil)
+	if present, on := read(e, edit, pw); !present || !on {
+		t.Errorf("git_available present=%v value=%v, want true", present, on)
+	}
+	e.api.cfg.GitEnabled = false
+	if present, on := read(e, edit, pw); !present || on {
+		t.Errorf("with Git disabled: present=%v value=%v, want present and false", present, on)
+	}
+}

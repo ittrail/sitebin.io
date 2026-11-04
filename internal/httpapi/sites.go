@@ -549,6 +549,7 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 	if tags == nil {
 		tags = []string{}
 	}
+	gs := a.gitStateOf(site)
 	payload := map[string]any{
 		"views":                   stats.Views,
 		"last_seen":               stats.LastSeen,
@@ -584,12 +585,15 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		// once the owner sets a date of their own, uploads stop moving it.
 		"expiry_renews":    m.OwnerAccountID != "" && m.QuotaExpiryDays > 0 && m.ExpiresAt != nil && m.ExpiryFromTier,
 		"accounts_enabled": accountsEnabled,
-		"created_at":       m.CreatedAt,
-		"updated_at":       m.UpdatedAt,
-		"files":            files,
-		"files_truncated":  filesTruncated,
-		"base_domain":      a.cfg.BaseDomain,
-		"dns_target":       a.cfg.BaseDomain,
+		// The edit page's Git tab: shown when Git works, or when only the
+		// plan lacks it (the tab then carries the upgrade notice).
+		"git_available":   gs.Available || gs.Reason == gitReasonPlan,
+		"created_at":      m.CreatedAt,
+		"updated_at":      m.UpdatedAt,
+		"files":           files,
+		"files_truncated": filesTruncated,
+		"base_domain":     a.cfg.BaseDomain,
+		"dns_target":      a.cfg.BaseDomain,
 		"usage": map[string]any{
 			"bytes":     usage.Bytes(), // files + repository, the figure the cap is checked against
 			"git_bytes": usage.GitBytes,
