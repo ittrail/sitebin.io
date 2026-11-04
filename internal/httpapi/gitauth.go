@@ -32,6 +32,10 @@ const gitBasicChallenge = `Basic realm="Sitebin"`
 // placeholder is the instance's account page (apiAccountHint).
 const msgGitConsent = "sign in once at %s and accept the updated terms, then push again"
 
+// msgGitUnavailable answers a valid token the stack could not vouch for right
+// now: the consent check failed closed, and the same token may work shortly.
+const msgGitUnavailable = "the sign-in service cannot be reached right now; try again in a minute"
+
 // gitDenial is how the Git handler answers a refused request:
 //   - challenge: 401 with WWW-Authenticate: gitBasicChallenge — no credential,
 //     or one that failed. Git asks its credential helper again.
@@ -50,6 +54,10 @@ func gitChallenge() *gitDenial {
 	return &gitDenial{status: http.StatusUnauthorized, msg: "authentication required", challenge: true}
 }
 
+func gitRefusal(msg string) *gitDenial {
+	return &gitDenial{status: http.StatusOK, msg: msg, refusal: true}
+}
+
 // gitAuth decides who a Git request's Basic credential is, for site, and
 // whether it may do what the request asks (write: a push). The username is
 // never checked. It returns the actor to record, or why not:
@@ -57,14 +65,15 @@ func gitChallenge() *gitDenial {
 //  1. no Basic password: a challenge;
 //  2. an upload token (anywhere on the request): 403 — it opens only its own
 //     routes, and is never tried as a password;
-//  3. an account token (sbp_): its account must stand on the site
-//     (accountStands); anything else is a challenge;
+//  3. an account token (sbp_): tokenAccount, the JSON API's own rule — its
+//     account must stand on the site, and an OAuth credential never counts;
+//     anything else is a challenge;
 //  4. a compact JWS (three base64url segments): an OAuth access token, asked
 //     about with the Git marker — the only way the extension verifies one
 //     here. Its account must stand on the site and it must hold the scope
 //     (read to fetch, write to push: a 403 otherwise). A refusal the verifier
-//     notes as consent outstanding is the readable refusal; any other is a
-//     challenge;
+//     notes — consent outstanding, or the stack unavailable — is a readable
+//     refusal; any other is a challenge;
 //  5. anything else: the site's edit password, through verifyEdit (its rate
 //     limits and verify cache): 429 when throttled, a challenge when wrong.
 //
@@ -82,18 +91,21 @@ func (a *API) gitAuth(r *http.Request, site *store.Site, write bool) (actor, *gi
 
 	switch {
 	case strings.HasPrefix(pw, ids.APITokenPrefix):
-		cred, ok := gitBearer(r.Context(), r, pw)
-		if !ok || cred.OAuth || !a.accountStands(site, cred.AccountID) {
+		account, ok := a.tokenAccount(gitBearerRequest(r.Context(), r, pw), site)
+		if !ok {
 			return actor{}, gitChallenge()
 		}
-		return actor{surface: provenance.SurfaceGit, auth: provenance.AuthToken, account: cred.AccountID}, nil
+		return actor{surface: provenance.SurfaceGit, auth: provenance.AuthToken, account: account}, nil
 
 	case jwsShaped(pw):
 		ctx := ext.WithRefusalNote(ext.WithGitCaller(r.Context()))
-		cred, ok := gitBearer(ctx, r, pw)
+		cred, ok := bearerCredential(gitBearerRequest(ctx, r, pw))
 		if !ok {
-			if ext.RefusalFrom(ctx) == ext.RefusalConsent {
-				return actor{}, &gitDenial{status: http.StatusOK, msg: a.gitConsentMessage(), refusal: true}
+			switch ext.RefusalFrom(ctx) {
+			case ext.RefusalConsent:
+				return actor{}, gitRefusal(a.gitConsentMessage())
+			case ext.RefusalUnavailable:
+				return actor{}, gitRefusal(msgGitUnavailable)
 			}
 			return actor{}, gitChallenge()
 		}
@@ -120,20 +132,16 @@ func (a *API) gitAuth(r *http.Request, site *store.Site, write bool) (actor, *gi
 	}
 }
 
-// gitBearer asks the extension what secret is, on a copy of r that carries
-// ctx, presents secret as its bearer and has no cookies: whatever the
-// extension does with the request, a browser session is not part of it. The
-// copy is the extension's alone — the marker in ctx never reaches the
-// request the handler serves. Without a provider nothing is a token.
-func gitBearer(ctx context.Context, r *http.Request, secret string) (ext.Credential, bool) {
-	p, ok := ext.Get()
-	if !ok {
-		return ext.Credential{}, false
-	}
+// gitBearerRequest is the copy of r the extension is asked about: it carries
+// ctx, presents secret as its bearer and has no cookies, so whatever the
+// extension does with it, a browser session is not part of it. The copy is
+// the extension's alone — a marker in ctx never reaches the request the
+// handler serves.
+func gitBearerRequest(ctx context.Context, r *http.Request, secret string) *http.Request {
 	r2 := r.Clone(ctx)
 	r2.Header.Del("Cookie")
 	r2.Header.Set("Authorization", "Bearer "+secret)
-	return p.BearerCredential(r2)
+	return r2
 }
 
 // gitConsentMessage is the readable refusal for a token whose subject has a

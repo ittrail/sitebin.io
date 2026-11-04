@@ -244,10 +244,19 @@ const (
 	// RefusalNone: nothing was noted — the credential passed, or it failed
 	// for a reason that is not explained.
 	RefusalNone Refusal = iota
-	// RefusalConsent: the token is valid, but its subject has a document the
-	// platform requires outstanding. Signing in once in a browser passes the
-	// consent gate; a Git credential helper never opens one on a 401.
+	// RefusalConsent: the token is valid, and the stack ANSWERED that its
+	// subject has a required document outstanding. It is noted on that
+	// answer and on nothing else — never when the stack could not be asked
+	// or gave no verdict (that is RefusalUnavailable, or nothing). Signing in
+	// once in a browser passes the consent gate; a Git credential helper
+	// never opens one on a 401.
 	RefusalConsent
+	// RefusalUnavailable: the token is valid, but the stack could not say
+	// whether the person may use it right now — it did not answer in time,
+	// answered with an error status, or answered without a verdict. The
+	// token was refused (the check fails closed), and the same token may
+	// work a minute later.
+	RefusalUnavailable
 )
 
 // WithRefusalNote installs an empty refusal slot in ctx. NoteRefusal on ctx,

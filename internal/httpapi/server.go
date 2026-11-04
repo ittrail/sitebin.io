@@ -325,35 +325,58 @@ func storeError(w http.ResponseWriter, err error) {
 // accountStands reports whether accountID may act on site the way its owner
 // does — manage it, write to it, push to its repository.
 //
-// THIS IS THE ONE PLACE the "who may act on this site" comparison lives. Every
-// gate that has resolved a credential to an account asks it: tokenOwns (an
-// account token on the JSON API), sessionOwns (the owner's browser session),
-// MCP's openSite (the connection's account) and gitAuth (an account or OAuth
-// token on the Git endpoint). None of them compares an account with the owner
-// itself, so when site ownership grows admins, this function is the only
-// check that changes. Today it is the owner alone; an anonymous site (no
-// owner) has nobody standing on it.
+// It is the one place the core's ACCESS GATES compare an account with a
+// site: tokenOwns/tokenAccount (an account token, on the JSON API and the Git
+// endpoint), sessionOwns (the owner's browser session), MCP's openSite (the
+// connection's account) and gitAuth's OAuth branch. None of them compares an
+// account with the owner itself. Today it is the owner alone; an anonymous
+// site (no owner) has nobody standing on it.
+//
+// Two other standing decisions exist and do NOT go through it — when site
+// ownership grows admins, they change with it:
+//   - mcpActor (internal/httpapi/provenance.go): attribution, which credential
+//     and account an MCP action is recorded under. OpenUpload also uses it to
+//     decide whose upload token it issues.
+//   - the enterprise dashboard's provider.owns (ee/provider.go), which reads
+//     the account's own site list.
 func (a *API) accountStands(site *store.Site, accountID string) bool {
 	return accountID != "" && accountID == site.Meta.OwnerAccountID
 }
 
 // tokenOwns reports whether the request carries an account API token whose
-// account stands on this site (accountStands). The check lives here, in the
-// core, because the core is the side that holds the site's metadata; the
-// extension only says which account the token belongs to.
+// account stands on this site. See tokenAccount.
+func (a *API) tokenOwns(r *http.Request, site *store.Site) bool {
+	_, ok := a.tokenAccount(r, site)
+	return ok
+}
+
+// tokenAccount resolves the request's account API token (Authorization:
+// Bearer) to the account it acts for, when that account stands on site
+// (accountStands). The check lives here, in the core, because the core is the
+// side that holds the site's metadata; the extension only says which account
+// the token belongs to.
 //
 // An OAuth access token never counts, whatever the extension hands back. Its
-// audience is the MCP resource, and this API has no scope check to hold it
-// to what it was granted: honoured here, a read-only grant could overwrite
-// and delete sites. MCP reads its credentials in mcpOps.Authenticate and the
-// Git endpoint in gitAuth, never through this.
-func (a *API) tokenOwns(r *http.Request, site *store.Site) bool {
+// audience is the MCP resource, and the JSON API has no scope check to hold
+// it to what it was granted: honoured here, a read-only grant could overwrite
+// and delete sites. MCP reads its OAuth credentials in mcpOps.Authenticate and
+// the Git endpoint in gitAuth's own OAuth branch, never through this.
+func (a *API) tokenAccount(r *http.Request, site *store.Site) (string, bool) {
+	cred, ok := bearerCredential(r)
+	if !ok || cred.OAuth || !a.accountStands(site, cred.AccountID) {
+		return "", false
+	}
+	return cred.AccountID, true
+}
+
+// bearerCredential asks the extension what the request's bearer is. Without a
+// provider nothing is a credential.
+func bearerCredential(r *http.Request) (ext.Credential, bool) {
 	p, ok := ext.Get()
 	if !ok {
-		return false
+		return ext.Credential{}, false
 	}
-	cred, ok := p.BearerCredential(r)
-	return ok && !cred.OAuth && a.accountStands(site, cred.AccountID)
+	return p.BearerCredential(r)
 }
 
 // sessionHeader marks a request from Sitebin's own edit page that asks for

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ittrail/sitebin.io/ee/eeconfig"
+	"github.com/ittrail/sitebin.io/internal/ext"
 )
 
 // consentStack stands in for the stack's consent-status endpoint. It answers
@@ -66,10 +67,18 @@ func (cs *consentStack) checker() *stackConsent {
 	return newStackConsent(&eeconfig.StackConfig{URL: cs.srv.URL, AppID: "sitebin", AdminKey: "stack-admin-key"})
 }
 
+// noted runs complete with a refusal slot and returns its verdict and what
+// it noted: why it refused, for the one caller that asks (the Git gate).
+func noted(c *stackConsent, subject string) (bool, ext.Refusal) {
+	ctx := ext.WithRefusalNote(context.Background())
+	ok := c.complete(ctx, subject)
+	return ok, ext.RefusalFrom(ctx)
+}
+
 func TestConsentCompleteAllows(t *testing.T) {
 	cs := newConsentStack(t)
-	if !cs.checker().complete(context.Background(), testSubject) {
-		t.Fatal("complete consent was refused")
+	if ok, why := noted(cs.checker(), testSubject); !ok || why != ext.RefusalNone {
+		t.Fatalf("complete consent = %v, noted %v", ok, why)
 	}
 	if want := "/api/v1/apps/sitebin/users/" + testSubject + "/consent/status"; len(cs.paths) != 1 || cs.paths[0] != want {
 		t.Errorf("asked %v, want %s", cs.paths, want)
@@ -82,13 +91,20 @@ func TestConsentCompleteAllows(t *testing.T) {
 func TestConsentOutstandingRefuses(t *testing.T) {
 	cs := newConsentStack(t)
 	cs.answer(200, outstandingBody)
-	if cs.checker().complete(context.Background(), testSubject) {
+	ok, why := noted(cs.checker(), testSubject)
+	if ok {
 		t.Fatal("a person with outstanding documents was let through")
+	}
+	// The one refusal the stack ANSWERED: the person can act on it.
+	if why != ext.RefusalConsent {
+		t.Errorf("noted %v, want RefusalConsent", why)
 	}
 }
 
 // Fails closed: a stack that cannot answer means Sitebin cannot know, and a
-// token is refused rather than waved through.
+// token is refused rather than waved through. Each such refusal is noted as
+// unavailable, never as consent outstanding: during a stack outage nobody is
+// told to accept terms they already accepted.
 func TestConsentFailsClosed(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -106,8 +122,12 @@ func TestConsentFailsClosed(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			cs := newConsentStack(t)
 			cs.answer(c.status, c.body)
-			if cs.checker().complete(context.Background(), testSubject) {
+			ok, why := noted(cs.checker(), testSubject)
+			if ok {
 				t.Fatal("an unusable answer let the token through")
+			}
+			if why != ext.RefusalUnavailable {
+				t.Errorf("noted %v, want RefusalUnavailable", why)
 			}
 		})
 	}
@@ -116,8 +136,12 @@ func TestConsentFailsClosed(t *testing.T) {
 		cs := newConsentStack(t)
 		c := cs.checker()
 		cs.srv.Close()
-		if c.complete(context.Background(), testSubject) {
+		ok, why := noted(c, testSubject)
+		if ok {
 			t.Fatal("an unreachable stack let the token through")
+		}
+		if why != ext.RefusalUnavailable {
+			t.Errorf("noted %v, want RefusalUnavailable", why)
 		}
 	})
 
@@ -129,8 +153,12 @@ func TestConsentFailsClosed(t *testing.T) {
 		c := cs.checker()
 		c.timeout = 100 * time.Millisecond
 		start := time.Now()
-		if c.complete(context.Background(), testSubject) {
+		ok, why := noted(c, testSubject)
+		if ok {
 			t.Fatal("a stack that did not answer in time let the token through")
+		}
+		if why != ext.RefusalUnavailable {
+			t.Errorf("noted %v, want RefusalUnavailable", why)
 		}
 		if waited := time.Since(start); waited > 1500*time.Millisecond {
 			t.Errorf("waited %v for a stack past its timeout", waited)
@@ -153,8 +181,12 @@ func TestConsentFailsClosed(t *testing.T) {
 		}))
 		t.Cleanup(redirecting.Close)
 		c := newStackConsent(&eeconfig.StackConfig{URL: redirecting.URL, AppID: "sitebin", AdminKey: "stack-admin-key"})
-		if c.complete(context.Background(), testSubject) {
+		ok, why := noted(c, testSubject)
+		if ok {
 			t.Error("a redirect was followed to a verdict")
+		}
+		if why != ext.RefusalUnavailable {
+			t.Errorf("noted %v, want RefusalUnavailable", why)
 		}
 		if leaked.Load() {
 			t.Error("the admin key was sent to the redirect target")
@@ -168,8 +200,13 @@ func TestConsentRefusesASubjectThatIsNotAUUID(t *testing.T) {
 	cs := newConsentStack(t)
 	c := cs.checker()
 	for _, sub := range []string{"", "auth0|12345", "../../../apps/other", testSubject + "/../x", "7c9e6679742540de944be07fc1f90ae7"} {
-		if c.complete(context.Background(), sub) {
+		ok, why := noted(c, sub)
+		if ok {
 			t.Errorf("subject %q was let through", sub)
+		}
+		// Not transient, and not the person's to fix: nothing is noted.
+		if why != ext.RefusalNone {
+			t.Errorf("subject %q noted %v, want nothing", sub, why)
 		}
 	}
 	if n := cs.requests.Load(); n != 0 {

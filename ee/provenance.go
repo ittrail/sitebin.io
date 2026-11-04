@@ -176,13 +176,18 @@ func withReqInfo(ctx context.Context, r *http.Request) context.Context {
 }
 
 // recordTokenSignup records the sign-up of an account the MCP verifier just
-// created from an access token.
+// created from an access token — on the surface the token came through: the
+// Git gate's when the request carried its marker, MCP's otherwise.
 func (p *provider) recordTokenSignup(ctx context.Context, accountID string) {
 	info, _ := ctx.Value(reqInfoKey{}).(reqInfo)
+	surface := provenance.SurfaceMCP
+	if ext.IsGitCaller(ctx) {
+		surface = provenance.SurfaceGit
+	}
 	p.RecordAccountProvenance(accountID, provenance.Entry{
 		Time:    time.Now().UTC(),
 		Action:  provenance.ActionSignup,
-		Surface: provenance.SurfaceMCP,
+		Surface: surface,
 		Auth:    provenance.AuthOAuth,
 		Account: accountID,
 		IP:      info.ip,

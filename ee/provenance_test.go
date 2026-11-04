@@ -273,6 +273,27 @@ func TestTokenProvisioningRecordsTheSignup(t *testing.T) {
 	}
 }
 
+// An account first created through the Git gate says so: the surface is the
+// one the person actually used, not MCP's.
+func TestTokenProvisioningThroughGitRecordsGit(t *testing.T) {
+	ti := newTestIssuer(t)
+	consent := newConsentStack(t)
+	p, _ := setupMCPOAuthInstance(t, ti, stackStub(consent))
+	tok := ti.sign(t, nil, nil)
+
+	req := from(bearerRequest(tok, false), "192.0.2.46", "git/2.49.0")
+	req = req.WithContext(ext.WithGitCaller(req.Context()))
+	cred, ok := p.BearerCredential(req)
+	if !ok {
+		t.Fatal("a newcomer with complete consent was refused on Git")
+	}
+	es := accountLog(t, p, cred.AccountID)
+	if len(es) != 1 || es[0].Action != provenance.ActionSignup || es[0].Surface != provenance.SurfaceGit ||
+		es[0].Auth != provenance.AuthOAuth || es[0].IP != "192.0.2.46" || es[0].UA != "git/2.49.0" {
+		t.Fatalf("token sign-up through Git: %+v", es)
+	}
+}
+
 // The browser sign-in through the identity provider: the first is the
 // sign-up, every later one a sign-in.
 func TestOIDCCallbackRecordsSignupThenSignin(t *testing.T) {

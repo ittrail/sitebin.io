@@ -103,54 +103,85 @@ func TestVerifierDoesNotDialAtConstruction(t *testing.T) {
 	}
 }
 
-// Verify says why it refused in exactly one case, consent outstanding, and
-// only to a caller that installed a slot for it: the Git gate turns that one
-// refusal into a readable message, because a credential helper never opens a
-// browser on a 401. Every other refusal stays silent, and what /mcp answers
-// does not change.
+// Verify says why it refused only through the consent check, and only to a
+// caller that installed a slot (the Git gate, whose credential helper never
+// opens a browser on a 401): consent outstanding when the stack ANSWERED so,
+// unavailable when the stack could not say. Verify itself notes nothing — a
+// consent check that refuses without saying why notes nothing either — and
+// every other refusal stays silent. What /mcp answers does not change.
 func TestVerifyNotesConsentRefusal(t *testing.T) {
 	ti := newTestIssuer(t)
+	cs := newConsentStack(t)
 	m := newMCPOAuth(ti.URL(), testResource, knownSubject(testSubject, "acct-1"))
-	complete := false
-	m.consent = func(context.Context, string) bool { return complete }
+	m.consent = cs.checker().complete
 	tok := ti.sign(t, nil, nil)
-
-	ctx := ext.WithRefusalNote(context.Background())
-	if _, ok := m.Verify(ctx, tok); ok {
-		t.Fatal("a token was accepted with consent outstanding")
+	verify := func(raw string) (bool, ext.Refusal) {
+		ctx := ext.WithRefusalNote(context.Background())
+		_, ok := m.Verify(ctx, raw)
+		return ok, ext.RefusalFrom(ctx)
 	}
-	if got := ext.RefusalFrom(ctx); got != ext.RefusalConsent {
-		t.Fatalf("RefusalFrom = %v, want RefusalConsent", got)
+
+	cs.answer(200, outstandingBody)
+	if ok, why := verify(tok); ok || why != ext.RefusalConsent {
+		t.Fatalf("consent outstanding: accepted=%v noted %v, want refused with RefusalConsent", ok, why)
 	}
 	// Without a slot the refusal is the same refusal, and nothing breaks.
 	if _, ok := m.Verify(context.Background(), tok); ok {
 		t.Fatal("a token was accepted with consent outstanding and no slot")
 	}
 
-	// Every other refusal notes nothing.
+	// The stack could not say: refused, and noted as unavailable — never as
+	// consent outstanding.
+	for name, answer := range map[string][2]any{
+		"stack 500":       {500, `{"error":"db down"}`},
+		"stack no answer": {200, `{"gate":"enabled"}`},
+	} {
+		cs.answer(answer[0].(int), answer[1].(string))
+		if ok, why := verify(tok); ok || why != ext.RefusalUnavailable {
+			t.Errorf("%s: accepted=%v noted %v, want refused with RefusalUnavailable", name, ok, why)
+		}
+	}
+	down := newConsentStack(t)
+	unreachable := down.checker()
+	down.srv.Close()
+	m.consent = unreachable.complete
+	if ok, why := verify(tok); ok || why != ext.RefusalUnavailable {
+		t.Errorf("stack unreachable: accepted=%v noted %v, want refused with RefusalUnavailable", ok, why)
+	}
+	m.consent = cs.checker().complete
+
+	// A subject that is not a stack user id is refused without a note: it is
+	// neither the person's to fix nor transient.
+	m.accounts = knownSubject("auth0|12345", "acct-1")
+	if ok, why := verify(ti.sign(t, func(c map[string]any) { c["sub"] = "auth0|12345" }, nil)); ok || why != ext.RefusalNone {
+		t.Errorf("non-UUID subject: accepted=%v noted %v, want refused with nothing noted", ok, why)
+	}
+	m.accounts = knownSubject(testSubject, "acct-1")
+
+	// Verify adds no note of its own to a consent check's refusal.
+	m.consent = func(context.Context, string) bool { return false }
+	if ok, why := verify(tok); ok || why != ext.RefusalNone {
+		t.Errorf("a silent consent refusal: accepted=%v noted %v, want refused with nothing noted", ok, why)
+	}
+	m.consent = cs.checker().complete
+
+	// Every refusal before the consent check notes nothing.
 	others := map[string]string{
 		"wrong audience": ti.sign(t, func(c map[string]any) { c["aud"] = []string{"https://other.example/mcp"} }, nil),
 		"expired":        ti.sign(t, func(c map[string]any) { c["exp"] = time.Now().Add(-time.Minute).Unix() }, nil),
 		"ID token":       ti.sign(t, func(c map[string]any) { c["typ"] = "ID" }, nil),
 		"not a JWS":      "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4In0.c2ln",
 	}
+	cs.answer(200, outstandingBody) // would note, if it were ever asked
 	for name, raw := range others {
-		ctx := ext.WithRefusalNote(context.Background())
-		if _, ok := m.Verify(ctx, raw); ok {
-			t.Fatalf("%s: accepted", name)
-		}
-		if got := ext.RefusalFrom(ctx); got != ext.RefusalNone {
-			t.Errorf("%s: RefusalFrom = %v, want RefusalNone", name, got)
+		if ok, why := verify(raw); ok || why != ext.RefusalNone {
+			t.Errorf("%s: accepted=%v noted %v, want refused with nothing noted", name, ok, why)
 		}
 	}
 
 	// Consent complete: accepted, nothing noted.
-	complete = true
-	ctx = ext.WithRefusalNote(context.Background())
-	if _, ok := m.Verify(ctx, tok); !ok {
-		t.Fatal("a token was refused with consent complete")
-	}
-	if got := ext.RefusalFrom(ctx); got != ext.RefusalNone {
-		t.Errorf("an accepted token noted %v", got)
+	cs.answer(200, completeBody)
+	if ok, why := verify(tok); !ok || why != ext.RefusalNone {
+		t.Fatalf("consent complete: accepted=%v noted %v", ok, why)
 	}
 }

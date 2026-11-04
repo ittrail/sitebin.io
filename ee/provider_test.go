@@ -637,21 +637,39 @@ func TestBearerCredentialHonoursGitCaller(t *testing.T) {
 }
 
 // Through the provider, a consent refusal on a Git request is noted in the
-// request's slot, and the token is refused as before.
+// request's slot — outstanding when the stack said so, unavailable when it
+// could not say — and the token is refused as before. On /mcp, which installs
+// no slot, the answer is the same refusal it always was.
 func TestBearerCredentialNotesConsentOnGit(t *testing.T) {
 	ti := newTestIssuer(t)
 	consent := newConsentStack(t)
-	consent.answer(200, outstandingBody)
 	p, _ := setupMCPOAuthInstance(t, ti, stackStub(consent))
 	if _, err := p.accounts.CreateOAuth(account.OIDCProv, testSubject, "agent-owner@example.com", true, ""); err != nil {
 		t.Fatal(err)
 	}
-	r := bearerRequest(ti.sign(t, nil, nil), false)
-	ctx := ext.WithRefusalNote(ext.WithGitCaller(r.Context()))
-	if _, ok := p.BearerCredential(r.WithContext(ctx)); ok {
-		t.Fatal("a token was honoured with consent outstanding")
+	tok := ti.sign(t, nil, nil)
+	onGit := func() (bool, ext.Refusal) {
+		r := bearerRequest(tok, false)
+		ctx := ext.WithRefusalNote(ext.WithGitCaller(r.Context()))
+		_, ok := p.BearerCredential(r.WithContext(ctx))
+		return ok, ext.RefusalFrom(ctx)
 	}
-	if got := ext.RefusalFrom(ctx); got != ext.RefusalConsent {
-		t.Fatalf("RefusalFrom = %v, want RefusalConsent", got)
+	for _, c := range []struct {
+		name   string
+		status int
+		body   string
+		want   ext.Refusal
+	}{
+		{"outstanding", 200, outstandingBody, ext.RefusalConsent},
+		{"stack 500", 500, `{}`, ext.RefusalUnavailable},
+	} {
+		consent.answer(c.status, c.body)
+		ok, why := onGit()
+		if ok || why != c.want {
+			t.Errorf("%s: honoured=%v noted %v, want refused with %v", c.name, ok, why, c.want)
+		}
+		if _, ok := p.BearerCredential(bearerRequest(tok, true)); ok {
+			t.Errorf("%s: /mcp honoured the token", c.name)
+		}
 	}
 }

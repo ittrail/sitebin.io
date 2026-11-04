@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ittrail/sitebin.io/ee/eeconfig"
+	"github.com/ittrail/sitebin.io/internal/ext"
 )
 
 // The consent lock.
@@ -91,6 +92,12 @@ func newStackConsent(reg *eeconfig.StackConfig) *stackConsent {
 // know, and a token is refused rather than waved through. Only a "complete"
 // answer is cached: the first request after the person accepts must succeed,
 // so a refusal is never remembered.
+//
+// For a caller that installed a slot (ext.WithRefusalNote: the Git gate) it
+// notes why: ext.RefusalConsent only when the stack ANSWERED that a document
+// is outstanding, ext.RefusalUnavailable when the stack could not say. A
+// subject that is not a stack user id, or a request that cannot be built, is
+// neither the person's to fix nor transient, and notes nothing.
 func (c *stackConsent) complete(ctx context.Context, subject string) bool {
 	if !stackUserID.MatchString(subject) {
 		slog.Warn("mcp oauth: consent: the token's subject is not a stack user id; refused", "subject", subject)
@@ -113,11 +120,13 @@ func (c *stackConsent) complete(ctx context.Context, subject string) bool {
 	res, err := c.client.Do(req)
 	if err != nil {
 		slog.Warn("mcp oauth: consent: the stack did not answer; refused", "subject", subject, "err", err)
+		ext.NoteRefusal(ctx, ext.RefusalUnavailable)
 		return false
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		slog.Warn("mcp oauth: consent: the stack refused the question; refused", "subject", subject, "status", res.StatusCode)
+		ext.NoteRefusal(ctx, ext.RefusalUnavailable)
 		return false
 	}
 	var status struct {
@@ -132,6 +141,7 @@ func (c *stackConsent) complete(ctx context.Context, subject string) bool {
 	}
 	if err := json.NewDecoder(io.LimitReader(res.Body, 64<<10)).Decode(&status); err != nil || status.Complete == nil {
 		slog.Warn("mcp oauth: consent: the stack's answer has no verdict; refused", "subject", subject, "err", err)
+		ext.NoteRefusal(ctx, ext.RefusalUnavailable)
 		return false
 	}
 	if !*status.Complete {
@@ -141,6 +151,7 @@ func (c *stackConsent) complete(ctx context.Context, subject string) bool {
 		}
 		slog.Info("mcp oauth: consent outstanding; token refused until it is accepted",
 			"subject", subject, "outstanding", strings.Join(keys, ","))
+		ext.NoteRefusal(ctx, ext.RefusalConsent)
 		return false
 	}
 	c.remember(subject)

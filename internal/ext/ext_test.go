@@ -76,6 +76,14 @@ func TestRefusalNote(t *testing.T) {
 	if got := RefusalFrom(ctx); got != RefusalConsent {
 		t.Fatalf("RefusalFrom = %v, want RefusalConsent", got)
 	}
+	// The last note stands, and the reasons are distinct values.
+	NoteRefusal(ctx, RefusalUnavailable)
+	if got := RefusalFrom(ctx); got != RefusalUnavailable {
+		t.Fatalf("RefusalFrom = %v, want RefusalUnavailable", got)
+	}
+	if RefusalNone == RefusalConsent || RefusalConsent == RefusalUnavailable || RefusalNone == RefusalUnavailable {
+		t.Fatal("refusal reasons collide")
+	}
 	// Each slot is its own: a second request's note is not this one's.
 	if got := RefusalFrom(WithRefusalNote(bare)); got != RefusalNone {
 		t.Errorf("a new slot inherited a note: %v", got)

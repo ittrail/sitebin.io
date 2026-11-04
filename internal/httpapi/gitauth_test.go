@@ -30,6 +30,7 @@ const (
 	jwtNone    = "eyJhbGciOiJSUzI1NiJ9.eyJzY29wZSI6IiJ9.sig-none"
 	jwtOther   = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJvdGhlciJ9.sig-other"
 	jwtConsent = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJsYXRlIn0.sig-consent"
+	jwtDown    = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJkb3duIn0.sig-down"
 	// jwtAcct is JWS-shaped but resolves as an account token: no scopes,
 	// which for anything but OAuth means unrestricted.
 	jwtAcct = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJhY2N0In0.sig-acct"
@@ -38,7 +39,8 @@ const (
 // gitFake is the extension as the Git gate meets it, shaped like
 // ee.BearerCredential: an account token anywhere; an OAuth access token only
 // on a request carrying an OAuth surface marker; a subject with a document
-// outstanding refused with the refusal noted, as ee's mcpOAuth.Verify does.
+// outstanding refused with the refusal noted, and one whose consent the stack
+// could not answer refused as unavailable — as ee's consent check does.
 // It has sessions too ("owner-cookie" is acct-1), so a test can show the
 // gate never reads them.
 type gitFake struct {
@@ -50,6 +52,9 @@ type gitFake struct {
 	// consentOutstanding marks an OAuth secret whose subject has a required
 	// document outstanding.
 	consentOutstanding map[string]bool
+	// stackDown marks an OAuth secret whose consent the stack could not
+	// answer for.
+	stackDown map[string]bool
 
 	mu        sync.Mutex
 	sawCookie bool
@@ -72,6 +77,10 @@ func (g *gitFake) BearerCredential(r *http.Request) (ext.Credential, bool) {
 			ext.NoteRefusal(r.Context(), ext.RefusalConsent)
 			return ext.Credential{}, false
 		}
+		if g.stackDown[secret] {
+			ext.NoteRefusal(r.Context(), ext.RefusalUnavailable)
+			return ext.Credential{}, false
+		}
 	}
 	return g.sessionProvider.BearerCredential(r)
 }
@@ -85,7 +94,7 @@ func newGitFake(t *testing.T) *gitFake {
 				bearer: map[string]string{
 					"sbp_owner": "acct-1", "sbp_other": "acct-2", "sbp_oauthish": "acct-1",
 					jwtRead: "acct-1", jwtWrite: "acct-1", jwtNone: "acct-1", jwtOther: "acct-2", jwtConsent: "acct-1",
-					jwtAcct: "acct-1",
+					jwtAcct: "acct-1", jwtDown: "acct-1",
 				},
 				scopes: map[string][]string{
 					jwtRead:    {mcp.ScopeRead},
@@ -93,12 +102,14 @@ func newGitFake(t *testing.T) *gitFake {
 					jwtNone:    nil,
 					jwtOther:   {mcp.ScopeRead, mcp.ScopeWrite},
 					jwtConsent: {mcp.ScopeRead, mcp.ScopeWrite},
+					jwtDown:    {mcp.ScopeRead, mcp.ScopeWrite},
 				},
-				oauth: map[string]bool{jwtRead: true, jwtWrite: true, jwtNone: true, jwtOther: true, jwtConsent: true, "sbp_oauthish": true},
+				oauth: map[string]bool{jwtRead: true, jwtWrite: true, jwtNone: true, jwtOther: true, jwtConsent: true, jwtDown: true, "sbp_oauthish": true},
 			},
 			sessions: map[string]string{"owner-cookie": "acct-1"},
 		},
 		consentOutstanding: map[string]bool{jwtConsent: true},
+		stackDown:          map[string]bool{jwtDown: true},
 	}
 	registerProvider(t, g)
 	return g
@@ -467,6 +478,47 @@ func TestGitAuthOAuthConsentIsReadableRefusal(t *testing.T) {
 	// challenge again.
 	_, d := e.api.gitAuth(gitReq("OAUTH-USER", jwtOther), site, false)
 	wantChallenge(t, d, "a refusal for another reason after a consent refusal")
+}
+
+// A stack that cannot say whether the person may use the token is a refusal
+// Git prints, and one that says to wait — never "accept the updated terms",
+// which the person may long have done.
+func TestGitAuthOAuthUnavailableIsReadableRefusal(t *testing.T) {
+	e := newEnv(t, oauthEnv())
+	newGitFake(t)
+	edit, _ := ownedSiteWithPassword(t, e)
+	site := siteByEdit(t, e, edit)
+
+	const want = "the sign-in service cannot be reached right now; try again in a minute"
+	for _, write := range []bool{false, true} {
+		_, d := e.api.gitAuth(gitReq("OAUTH-USER", jwtDown), site, write)
+		if d == nil || !d.refusal || d.challenge || d.msg != want {
+			t.Fatalf("stack unavailable (write=%v): %+v, want the readable refusal %q", write, d, want)
+		}
+	}
+	_, d := e.api.gitAuth(gitReq("OAUTH-USER", jwtOther), site, false)
+	wantChallenge(t, d, "a refusal for another reason after an unavailable one")
+}
+
+// /mcp installs no refusal slot: a token the verifier refuses for consent or
+// for an unavailable stack is answered exactly like any other bad bearer.
+func TestMCPAnswersNotedRefusalsAsBefore(t *testing.T) {
+	e := newEnv(t, oauthEnv())
+	newGitFake(t)
+	editID, pw := ownedSiteWithPassword(t, e)
+	body := toolCall(t, "get_site", map[string]any{"edit_id": editID, "edit_password": pw})
+
+	plain := mcpRaw(t, e, body, bearerHeader("expired-or-forged"))
+	if plain.Code != 401 || !strings.Contains(plain.Header().Get("WWW-Authenticate"), `error="invalid_token"`) {
+		t.Fatalf("baseline bad bearer = %d %q", plain.Code, plain.Header().Get("WWW-Authenticate"))
+	}
+	for _, tok := range []string{jwtConsent, jwtDown} {
+		rec := mcpRaw(t, e, body, bearerHeader(tok))
+		if rec.Code != plain.Code || rec.Header().Get("WWW-Authenticate") != plain.Header().Get("WWW-Authenticate") || rec.Body.String() != plain.Body.String() {
+			t.Errorf("a noted refusal on /mcp = %d %q %q, want the bad-bearer answer %d %q %q",
+				rec.Code, rec.Header().Get("WWW-Authenticate"), rec.Body, plain.Code, plain.Header().Get("WWW-Authenticate"), plain.Body)
+		}
+	}
 }
 
 // The REST API still refuses an OAuth token, the very token the Git gate

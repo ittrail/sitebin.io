@@ -185,13 +185,13 @@ func (m *mcpOAuth) Verify(ctx context.Context, raw string) (ext.Credential, bool
 	// here or not. The refusal is a 401, so the client signs in again, is
 	// steered through the gate, and the next token works.
 	//
-	// This one refusal is also noted, for a caller that installed a slot
-	// (ext.WithRefusalNote): the Git gate, whose credential helper keeps its
-	// refresh token on a 401 and never opens a browser, answers it with a
-	// readable "sign in once" instead. /mcp installs no slot and answers as
-	// it always has.
+	// The consent check itself says why it refused, to a caller that
+	// installed a slot (ext.WithRefusalNote): the Git gate, whose credential
+	// helper keeps its refresh token on a 401 and never opens a browser,
+	// answers "consent outstanding" and "stack unavailable" readably. Verify
+	// adds no note of its own — only the check knows whether the stack
+	// answered. /mcp installs no slot and answers as it always has.
 	if m.consent != nil && !m.consent(ctx, tok.Subject) {
-		ext.NoteRefusal(ctx, ext.RefusalConsent)
 		return ext.Credential{}, false
 	}
 
