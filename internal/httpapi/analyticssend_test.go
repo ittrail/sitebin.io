@@ -79,8 +79,6 @@ func TestSendRecordsEventInServerMode(t *testing.T) {
 	since := time.Now()
 	e, site := collectSite(t)
 	collecting(t, e, site, store.Analytics{})
-	var logs bytes.Buffer
-	e.api.log = slog.New(slog.NewTextHandler(&logs, nil))
 
 	page := "http://" + viewHost(site) + "/about.html?utm_campaign=herbst&gclid=abc123&email=a%40b.c#top"
 	e.sent(t, sendReq(viewHost(site), beacon(page, map[string]any{
@@ -116,15 +114,46 @@ func TestSendRecordsEventInServerMode(t *testing.T) {
 			t.Errorf("the day file holds %q:\n%s", leak, raw)
 		}
 	}
-	// The access log names the route, never the visitor's address or what
-	// the page sent.
-	if !strings.Contains(logs.String(), "/_sitebin/analytics/send") {
-		t.Fatalf("no access line:\n%s", logs.String())
+}
+
+func TestAnalyticsAccessLogCarriesNoIP(t *testing.T) {
+	e, site := scriptEnv(t)
+	collecting(t, e, site, store.Analytics{})
+	var logs bytes.Buffer
+	e.api.log = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	visitor := map[string]string{"X-Forwarded-For": "203.0.113.7", "User-Agent": navUA, "Sec-Fetch-Site": "same-origin"}
+	page := "http://" + viewHost(site) + "/about.html"
+
+	// Every route a visitor reaches through analytics, the opt-out page's
+	// own script with its version query included.
+	e.sent(t, sendReq(viewHost(site), beacon(page, map[string]any{"name": "anfrage"})))
+	get(t, e, viewHost(site), "/_sitebin/analytics.js", visitor)
+	get(t, e, viewHost(site), "/_sitebin/analytics/opt-out", visitor)
+	post(t, e, viewHost(site), "/_sitebin/analytics/opt-out", urlenc, strings.NewReader("action=out"), visitor)
+	get(t, e, viewHost(site), "/_sitebin/assets/static/analytics-optout.js?v="+e.api.assetVersion(), visitor)
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	if len(lines) != 5 {
+		t.Fatalf("log lines = %d, want 5:\n%s", len(lines), logs.String())
 	}
-	for _, leak := range []string{"203.0.113.7", "anfrage", "Mozilla"} {
+	for _, leak := range []string{"203.0.113.7", "anfrage", "Mozilla", "ip="} {
 		if strings.Contains(logs.String(), leak) {
 			t.Errorf("the log holds %q:\n%s", leak, logs.String())
 		}
+	}
+	// The beacon comes once per page view: its line is debug, the rest info.
+	if !strings.Contains(lines[0], "level=DEBUG") || !strings.Contains(lines[0], "path=/_sitebin/analytics/send") {
+		t.Errorf("the beacon's line = %q, want a debug line", lines[0])
+	}
+	for _, l := range lines[1:] {
+		if !strings.Contains(l, "level=INFO") {
+			t.Errorf("line = %q, want info", l)
+		}
+	}
+	// Every other route keeps the address, as before.
+	logs.Reset()
+	get(t, e, viewHost(site), "/_sitebin/assets/static/app.css", visitor)
+	if !strings.Contains(logs.String(), "ip=203.0.113.7") {
+		t.Errorf("another asset's line lost its address:\n%s", logs.String())
 	}
 }
 
@@ -230,7 +259,11 @@ func TestSendRejectsGarbage(t *testing.T) {
 		{name: "an event name over 50 characters", extra: map[string]any{"name": strings.Repeat("n", 51)}},
 		{name: "a cross-site page", hdr: map[string]string{"Sec-Fetch-Site": "cross-site"}},
 		{name: "a same-site page", hdr: map[string]string{"Sec-Fetch-Site": "same-site"}},
-		{name: "a client that is no browser", hdr: map[string]string{"Sec-Fetch-Site": "", "Sec-Fetch-Mode": "", "Sec-Fetch-Dest": ""}, n: 1},
+		{name: "a client that sends no fetch metadata", hdr: map[string]string{"Sec-Fetch-Site": "", "Sec-Fetch-Mode": "", "Sec-Fetch-Dest": ""}, n: 1},
+		{name: "a bot", hdr: map[string]string{"User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"}},
+		{name: "a headless browser", hdr: map[string]string{"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/130.0.0.0 Safari/537.36"}},
+		{name: "a user agent without the Mozilla token", hdr: map[string]string{"User-Agent": "Opera/9.80 (Windows NT 6.1; U; en) Presto/2.12.388 Version/12.18"}},
+		{name: "no user agent", hdr: map[string]string{"User-Agent": ""}},
 		{name: "the opt-out cookie", hdr: map[string]string{"Cookie": "a=b; " + analyticsOptOutCookie + "=1"}},
 		{name: "an excluded path", url: "http://{host}/kinder/spiel.html", setup: func(t *testing.T, e *env, site *store.Site) {
 			collecting(t, e, site, store.Analytics{Mode: "script", Exclude: []string{"/kinder/**"}})
@@ -382,8 +415,11 @@ func getScriptAt(t *testing.T, e *env, addr, target string) string {
 	return w.Body.String()
 }
 
+// isStub: umami.track and umami.identify resolve at once and send nothing.
 func isStub(body string) bool {
-	return strings.Contains(body, "track(){}") && !strings.Contains(body, "/_sitebin/analytics/send")
+	return strings.Contains(body, "track() { return Promise.resolve(); }") &&
+		strings.Contains(body, "identify() { return Promise.resolve(); }") &&
+		!strings.Contains(body, "/_sitebin/analytics/send") && !strings.Contains(body, "fetch(")
 }
 
 func isFull(body string) bool {
@@ -528,7 +564,8 @@ func TestOptOutSetsAndClearsCookie(t *testing.T) {
 		t.Errorf("mounted page:\n%s", body)
 	}
 
-	// Refused: another site's page, an action that is neither, no site.
+	// Refused: another site's page, an action that is neither, no site. A
+	// browser without fetch metadata (Safari before 16.4) still sends Origin.
 	for _, c := range []struct {
 		name, host, action string
 		hdr                map[string]string
@@ -536,6 +573,10 @@ func TestOptOutSetsAndClearsCookie(t *testing.T) {
 	}{
 		{"cross-site", viewHost(site), "out", map[string]string{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate"}, 403},
 		{"same-site", viewHost(site), "out", map[string]string{"Sec-Fetch-Site": "same-site", "Sec-Fetch-Mode": "navigate"}, 403},
+		{"another origin, no fetch metadata", viewHost(site), "out", map[string]string{"Origin": "http://evil.example"}, 403},
+		{"a sibling site's origin, no fetch metadata", viewHost(site), "out", map[string]string{"Origin": "http://other.sitebin.example"}, 403},
+		{"this host on another scheme, no fetch metadata", viewHost(site), "out", map[string]string{"Origin": "https://" + viewHost(site)}, 403},
+		{"an opaque origin, no fetch metadata", viewHost(site), "out", map[string]string{"Origin": "null"}, 403},
 		{"no action", viewHost(site), "maybe", form, 400},
 		{"no site", "nobody.example", "out", form, 404},
 	} {
@@ -543,11 +584,49 @@ func TestOptOutSetsAndClearsCookie(t *testing.T) {
 			t.Errorf("%s = %d, cookie %v; want %d and none", c.name, w.Code, optOutCookieOf(w), c.want)
 		}
 	}
+	// Its own origin, or no word at all (not a browser), is let through.
+	for _, hdr := range []map[string]string{
+		{"Origin": "http://" + viewHost(site)},
+		{"Origin": "HTTP://" + strings.ToUpper(viewHost(site))},
+		{},
+	} {
+		if w := optOut(viewHost(site), "", "out", hdr); w.Code != 200 || optOutCookieOf(w) == nil {
+			t.Errorf("%v = %d, cookie %v; want 200 and the cookie", hdr, w.Code, optOutCookieOf(w))
+		}
+	}
+	if w := optOut("example.org", "/blog", "out", map[string]string{"Origin": "http://example.org"}); w.Code != 200 || optOutCookieOf(w) == nil {
+		t.Errorf("mounted, own origin = %d, cookie %v", w.Code, optOutCookieOf(w))
+	}
 
-	// On a TLS instance the cookie is Secure.
+	// On a TLS instance the cookie is Secure, and the own origin is https.
 	e.api.cfg.HTTPOnly = false
 	if c := optOutCookieOf(optOut(viewHost(site), "", "out", form)); c == nil || !c.Secure {
 		t.Errorf("TLS cookie = %+v", c)
+	}
+	if w := optOut(viewHost(site), "", "out", map[string]string{"Origin": "https://" + viewHost(site)}); w.Code != 200 {
+		t.Errorf("TLS, own origin = %d", w.Code)
+	}
+	if w := optOut(viewHost(site), "", "out", map[string]string{"Origin": "http://" + viewHost(site)}); w.Code != 403 {
+		t.Errorf("TLS, plain-http origin = %d, want 403", w.Code)
+	}
+}
+
+func TestOptOutPageIsNeverFramed(t *testing.T) {
+	e, site := scriptEnv(t)
+	form := map[string]string{"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"}
+	for name, w := range map[string]*httptest.ResponseRecorder{
+		"the page":         get(t, e, viewHost(site), "/_sitebin/analytics/opt-out", nil),
+		"the out page":     post(t, e, viewHost(site), "/_sitebin/analytics/opt-out", urlenc, strings.NewReader("action=out"), form),
+		"the in page":      post(t, e, viewHost(site), "/_sitebin/analytics/opt-out", urlenc, strings.NewReader("action=in"), form),
+		"a refusal":        post(t, e, viewHost(site), "/_sitebin/analytics/opt-out", urlenc, strings.NewReader("action=out"), map[string]string{"Origin": "http://evil.example"}),
+		"the mounted page": get(t, e, "example.org", "/_sitebin/analytics/opt-out", map[string]string{mountHeader: "/blog"}),
+	} {
+		if got := w.Header().Get("Content-Security-Policy"); got != "frame-ancestors 'none'" {
+			t.Errorf("%s: Content-Security-Policy = %q", name, got)
+		}
+		if got := w.Header().Get("X-Frame-Options"); got != "DENY" {
+			t.Errorf("%s: X-Frame-Options = %q", name, got)
+		}
 	}
 }
 

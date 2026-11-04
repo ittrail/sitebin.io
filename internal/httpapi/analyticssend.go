@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ittrail/sitebin.io/internal/analytics"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
@@ -91,6 +92,11 @@ func (a *API) analyticsSend(w http.ResponseWriter, r *http.Request) {
 func (a *API) collectBeacon(w http.ResponseWriter, r *http.Request) {
 	site, addr, mount, ok := a.analyticsTarget(r)
 	if !ok || optedOut(r) {
+		return
+	}
+	// The browser rule server mode applies: a script that runs is no proof
+	// of a browser (headless ones run it too).
+	if ua := r.UserAgent(); !strings.Contains(ua, "Mozilla/") || analytics.IsBot(ua) {
 		return
 	}
 	// Not a security boundary (anything but a browser can send it): it only
@@ -189,6 +195,7 @@ func clientNet(ip string) string {
 // "don't count me", on every address that serves a site, whether or not the
 // site collects (the page never says which).
 func (a *API) analyticsOptOutPage(w http.ResponseWriter, r *http.Request) {
+	noFraming(w)
 	_, mount, err := a.servingSiteByAddress(r)
 	if err != nil {
 		a.msgPage(w, 404, "Site not found", "There is no site at this address.")
@@ -213,13 +220,14 @@ func (a *API) analyticsOptOutPage(w http.ResponseWriter, r *http.Request) {
 // from the script's own fetch, which mirrors that flag into the cookie, it
 // answers 204. Only the site's own pages may post here.
 func (a *API) analyticsOptOut(w http.ResponseWriter, r *http.Request) {
+	noFraming(w)
 	_, mount, err := a.servingSiteByAddress(r)
 	if err != nil {
 		a.msgPage(w, 404, "Site not found", "There is no site at this address.")
 		return
 	}
 	page := mount + "/_sitebin/analytics/opt-out"
-	if s := r.Header.Get("Sec-Fetch-Site"); s != "" && s != "same-origin" {
+	if a.fromAnotherSite(r) {
 		a.renderPage(w, 403, pageData{Title: "Nothing changed", Code: "403",
 			Message: "This request came from another site. Use the buttons on this site's own page instead.", Back: page})
 		return
@@ -250,6 +258,32 @@ func (a *API) analyticsOptOut(w http.ResponseWriter, r *http.Request) {
 		d.Message = "Visits from this browser to " + optOutAddress(r, mount) + " are no longer counted. The choice is kept in this browser for a year."
 	}
 	a.renderOptOut(w, mount, out, d)
+}
+
+// fromAnotherSite reports whether a browser says the POST comes from a page
+// that is not this address's own: Sec-Fetch-Site other than same-origin, or
+// — from a browser that sends no Sec-Fetch-Site (Safari before 16.4) — an
+// Origin other than this request's scheme and host ("null" included).
+func (a *API) fromAnotherSite(r *http.Request) bool {
+	if s := r.Header.Get("Sec-Fetch-Site"); s != "" {
+		return s != "same-origin"
+	}
+	o := r.Header.Get("Origin")
+	if o == "" {
+		return false
+	}
+	scheme := "https" // the scheme the instance's own URLs carry (config.SiteURL)
+	if a.cfg.HTTPOnly {
+		scheme = "http"
+	}
+	return !strings.EqualFold(o, scheme+"://"+r.Host)
+}
+
+// noFraming keeps the opt-out page out of other sites' frames, where a
+// visitor could be made to press its buttons unseen.
+func noFraming(w http.ResponseWriter) {
+	w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+	w.Header().Set("X-Frame-Options", "DENY")
 }
 
 // renderOptOut shows d with the page's two buttons, the one that would

@@ -127,8 +127,10 @@
       }, () => undefined);
   };
 
+  // Event data is an object of properties, or none at all (as Umami's).
+  const asData = (d) => (typeof d === 'object' && d !== null && !Array.isArray(d) ? d : undefined);
   const track = (name, data) => {
-    if (typeof name === 'string') return send({ ...defaults(), name, data });
+    if (typeof name === 'string') return send({ ...defaults(), name, data: asData(data) });
     if (typeof name === 'object' && name) return send({ ...name });
     if (typeof name === 'function') return send(name(defaults()));
     return send(defaults());

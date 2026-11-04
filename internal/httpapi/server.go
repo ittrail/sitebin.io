@@ -287,13 +287,25 @@ func (a *API) logMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(sw, r)
 		attrs := []any{"method", r.Method, "host", r.Host, "path", r.URL.Path,
 			"status", sw.code, "ms", time.Since(start).Milliseconds()}
-		// Analytics stores no visitor's address, and its script sends one
-		// request per page view: those lines carry none either.
-		if !strings.HasPrefix(r.URL.Path, "/_sitebin/analytics") {
+		// Analytics stores no visitor's address, so its routes' lines carry
+		// none either; and its beacon comes once per page view, so that line
+		// is debug, not info.
+		if !analyticsRoute(r.URL.Path) {
 			attrs = append(attrs, "ip", clientIP(r))
 		}
-		a.log.Info("http", attrs...)
+		level := slog.LevelInfo
+		if r.URL.Path == "/_sitebin/analytics/send" {
+			level = slog.LevelDebug
+		}
+		a.log.Log(r.Context(), level, "http", attrs...)
 	})
+}
+
+// analyticsRoute reports whether path is one of the routes a site's visitors
+// reach through analytics: the script, the beacon, the opt-out page and the
+// opt-out page's own script.
+func analyticsRoute(path string) bool {
+	return strings.HasPrefix(path, "/_sitebin/analytics") || path == "/_sitebin/assets/static/analytics-optout.js"
 }
 
 type statusWriter struct {
