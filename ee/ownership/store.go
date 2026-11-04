@@ -88,6 +88,10 @@ type Offer struct {
 	Created       time.Time  `json:"created"`
 	State         string     `json:"state"`
 	Done          []string   `json:"done,omitempty"`
+	// AcceptedBy is the account that accepted the offer, set together with
+	// the state accepting. The forward completion moves the remaining sites
+	// to this account, never to whoever holds the address by then.
+	AcceptedBy string `json:"accepted_by,omitempty"`
 	// NotifiedAt is when the recipient was first mailed (best effort, only to
 	// a verified account). nil: not yet, so the background loop mails once the
 	// available-from date has passed.

@@ -52,6 +52,7 @@ func (p *provider) transferRoutes(routes map[string]http.Handler) {
 	routes["POST "+transferPath+"/{id}/cancel"] = http.HandlerFunc(p.handleTransferCancel)
 	routes["POST "+transferPath+"/{id}/dates"] = http.HandlerFunc(p.handleTransferDates)
 	routes["POST "+transferPath+"/{id}/sites"] = http.HandlerFunc(p.handleTransferSites)
+	p.takeoverRoutes(routes)
 }
 
 // Narrow seams over the core's ext.OwnershipSites, asserted one by one.

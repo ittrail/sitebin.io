@@ -126,3 +126,94 @@ func sitesWord(n int) string {
 
 // dateText is a date as the pages and mails write it.
 func dateText(t time.Time) string { return t.UTC().Format("2006-01-02") }
+
+// writeSites lists sites in a mail, one per line, by their labels.
+func (p *provider) writeSites(b *strings.Builder, ids []string) {
+	for _, id := range ids {
+		fmt.Fprintf(b, "  - %s\n", p.labelOf(id))
+	}
+}
+
+// mailAccepted tells both sides how an accepted offer ended: the sites that
+// moved (o.Done) and, when the rest could not move, the ones that stay with
+// the sender and why. The sender is named by their account's address, the
+// recipient by the address the offer was made to.
+func (p *provider) mailAccepted(o ownership.Offer, stayed []string, reason string) {
+	senderEmail := p.emailOf(o.From)
+	recipientEmail := p.emailOf(o.AcceptedBy)
+	if recipientEmail == "" {
+		recipientEmail = o.ToEmail
+	}
+	other := senderEmail
+	if other == "" {
+		other = "the sender"
+	}
+	subject, body := p.acceptedMail(o, stayed, reason, o.ToEmail, true)
+	p.mailVerified(senderEmail, subject, body)
+	subject, body = p.acceptedMail(o, stayed, reason, other, false)
+	p.mailVerified(recipientEmail, subject, body)
+}
+
+// acceptedMail is "a transfer was accepted", for one side (toSender), naming
+// the other party's address (other), the sites that moved and, when some
+// could not, the ones that stay with the sender and why. Never a password:
+// the recipient saw the new ones once, on the result page.
+func (p *provider) acceptedMail(o ownership.Offer, stayed []string, reason, other string, toSender bool) (subject, body string) {
+	var b strings.Builder
+	holder := "you"
+	if !toSender {
+		holder = other
+	}
+	switch {
+	case len(o.Done) == 0:
+		subject = "A Sitebin transfer could not be completed"
+		if toSender {
+			fmt.Fprintf(&b, "%s accepted your transfer, but none of its sites could be moved (%s). They stay with you:\n\n", other, reason)
+		} else {
+			fmt.Fprintf(&b, "You accepted the transfer from %s, but none of its sites could be moved (%s). They stay with %s:\n\n", other, reason, other)
+		}
+		p.writeSites(&b, stayed)
+		stayed = nil
+	case toSender:
+		subject = "Your Sitebin transfer was accepted"
+		fmt.Fprintf(&b, "%s accepted your transfer. These sites belong to their account now:\n\n", other)
+		p.writeSites(&b, o.Done)
+		b.WriteString("\nYou no longer manage them: each has a new edit password, and your tags, admins and upload links on them have ended.\n")
+	default:
+		subject = "You took over Sitebin sites"
+		fmt.Fprintf(&b, "You accepted the transfer from %s. These sites belong to your account now:\n\n", other)
+		p.writeSites(&b, o.Done)
+		b.WriteString("\nEach has a new edit password. Those moved while you accepted were shown to you once, then; for any other, rotate the password on your dashboard to get a new one.\n")
+	}
+	if len(stayed) > 0 {
+		fmt.Fprintf(&b, "\nThese sites could not be moved (%s) and stay with %s:\n\n", reason, holder)
+		p.writeSites(&b, stayed)
+	}
+	fmt.Fprintf(&b, "\nYour account: %s/account\n", p.baseURL())
+	return subject, b.String()
+}
+
+// declinedMail is "your transfer was declined", to the sender, naming the
+// address the offer was made to and its sites.
+func (p *provider) declinedMail(o ownership.Offer) (subject, body string) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s declined your transfer of %s:\n\n", o.ToEmail, sitesWord(len(o.Sites)))
+	p.writeSites(&b, o.Sites)
+	fmt.Fprintf(&b, "\nNothing has moved: the sites stay with you.\n\nYour transfers: %s%s\n", p.baseURL(), transferPath)
+	return "Your Sitebin transfer was declined", b.String()
+}
+
+// pausedMail is "your transfer is paused", to the sender: why (reason, a
+// sentence offerPause or acceptCheck gave, safe for the sender), what to do
+// about it (advice, may be empty), and that the accept-by date still runs.
+func (p *provider) pausedMail(o ownership.Offer, reason, advice string) (subject, body string) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Your transfer to %s is paused, so it cannot be accepted right now: %s.\n\n", o.ToEmail, reason)
+	p.writeSites(&b, o.Sites)
+	b.WriteString("\nNothing has moved.")
+	if advice != "" {
+		b.WriteString(" " + advice)
+	}
+	fmt.Fprintf(&b, " The accept-by date (%s, UTC) still runs while the offer is paused.\n\nYour transfers: %s%s\n", dateText(o.AcceptBy), p.baseURL(), transferPath)
+	return "Your Sitebin transfer is paused", b.String()
+}

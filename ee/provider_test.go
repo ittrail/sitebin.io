@@ -61,6 +61,8 @@ type fakeSites struct {
 	containers []ext.ContainerSite
 	// adopt is the state of the OwnershipSites methods adopt_test.go fakes.
 	adopt *adoptFake
+	// xfer is the state of the fake TransferSite (transfer_accept_test.go).
+	xfer *xferFake
 }
 
 func (s *fakeSites) Info(id string) (ext.SiteInfo, bool) {

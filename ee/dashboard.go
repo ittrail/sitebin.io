@@ -745,6 +745,10 @@ type dashView struct {
 	// that is the credential it needs, and a user should not have to read the
 	// README to find the URL.
 	MCPEndpoint string
+	// Takeovers are the "Ready to take over" cards: transfers offered to the
+	// account's verified address that are open or paused and within their
+	// dates (transfer_accept.go).
+	Takeovers []takeoverCard
 }
 
 func (p *provider) renderDashboard(w http.ResponseWriter, r *http.Request, acc *account.Account, flash string) {
@@ -819,11 +823,12 @@ func (p *provider) renderDashboard(w http.ResponseWriter, r *http.Request, acc *
 		Filter: tags.filter, TagOptions: tags.options, Groups: tags.groups, Back: tags.back,
 		SelfSelect: p.cfg.SelfSelect, Checkout: checkout, Portal: portal, Tiers: opts,
 		AccountURL: accountURL, StackDeletion: p.stackDeletion(acc), DeletionURL: deletionURL, CancelURL: cancelURL,
-		IsAdmin:  p.isAdmin(acc),
-		Tokens:   p.tokenRows(acc, token),
-		Zones:    p.zoneRows(acc, token),
-		ZonesMax: current.MaxZones,
-		License:  p.licenseNotice(),
+		IsAdmin:   p.isAdmin(acc),
+		Tokens:    p.tokenRows(acc, token),
+		Zones:     p.zoneRows(acc, token),
+		ZonesMax:  current.MaxZones,
+		License:   p.licenseNotice(),
+		Takeovers: p.takeoverCards(acc),
 	})
 }
 

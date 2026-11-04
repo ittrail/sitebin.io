@@ -206,6 +206,33 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
   </div>
   {{end}}
 
+  {{range .Takeovers}}
+  <div class="card" id="takeover-{{.ID}}">
+    <h3>Ready to take over</h3>
+    <p class="muted">{{.From}} offers you {{.Count}}. Accept by {{.AcceptBy}} (UTC). Accepting takes all of them at once; declining leaves them with the sender.</p>
+    <ul style="margin:10px 0 0 18px">{{range .Sites}}<li style="overflow-wrap:anywhere">{{.Label}}{{range .Domains}} &middot; {{.}}{{end}}{{if .Forms}}<div class="u">Its forms send their submissions to {{range $i, $f := .Forms}}{{if $i}}, {{end}}{{$f}}{{end}}; you can change that once the site is yours.</div>{{end}}</li>{{end}}</ul>
+    {{if .Unavailable}}
+    <div class="inline-status err" role="status" style="margin-top:12px">This offer is not available right now.</div>
+    {{else}}
+    {{if .NeedsPlan}}<div class="inline-status err" role="alert" style="margin-top:12px">Your plan cannot take over sites. <a href="/account#plan">See the plans</a></div>{{end}}
+    <ul style="margin:10px 0 0;list-style:none;padding:0">{{range .Lines}}<li style="overflow-wrap:anywhere">{{if .OK}}&#10003;{{else}}&#10007;{{end}} <strong>{{.Label}}</strong>{{if .Site}} &middot; {{.Site}}{{end}}: {{.Detail}}</li>{{end}}</ul>
+    {{end}}
+    <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+      {{if .CanAccept}}
+      <form class="inline" method="post" action="/account/transfer/{{.ID}}/accept">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        {{range .Sites}}<input type="hidden" name="site" value="{{.ID}}">{{end}}
+        <button class="btn small primary" type="submit">Accept all {{len .Sites}}</button>
+      </form>
+      {{end}}
+      <form class="inline" method="post" action="/account/transfer/{{.ID}}/decline">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <button class="btn small" type="submit">Decline</button>
+      </form>
+    </div>
+  </div>
+  {{end}}
+
   <div class="card">
     {{/* The publish link is always here: with a front door, "/" sends a
          signed-in visitor straight back to this page. */}}
@@ -1131,4 +1158,39 @@ var transferAddConfirmTmpl = template.Must(template.New("transferaddconfirm").Pa
     <a class="btn" href="/account/transfer">Back</a>
   </form>
 </div></div></main>
+` + pageFoot))
+
+// ---- transfer (the recipient's side) ----
+
+// takeoverRefusedTmpl answers an accept the plan or its limits refuse. Each
+// line names what stands in the way and, for a per-site cap, the site.
+var takeoverRefusedTmpl = template.Must(template.New("takeoverrefused").Parse(pageHead + `
+<main class="acct"><div class="authwrap"><div class="card">
+  <h1>{{.Title}}</h1>
+  <p class="muted">{{.Body}}</p>
+  {{if .Lines}}<ul class="muted" style="margin:10px 0 0 18px">{{range .Lines}}<li style="overflow-wrap:anywhere"><strong>{{.Label}}</strong>{{if .Site}} &middot; {{.Site}}{{end}}: {{.Detail}}</li>{{end}}</ul>{{end}}
+  <div style="margin-top:18px">{{if .Plan}}<a class="btn primary" href="/account#plan">See the plans</a> {{end}}<a class="btn" href="/account">Back</a></div>
+</div></div></main>
+` + pageFoot))
+
+// takeoverResultTmpl is the result of an accept: every site that moved, with
+// its new edit password when this very response moved it (shown once, never
+// stored), and who its forms mail. No script.
+var takeoverResultTmpl = template.Must(template.New("takeoverresult").Parse(pageHead + `
+<main class="acct"><div class="card">
+  <h1>{{.Title}}</h1>
+  <p class="muted">{{.Lede}}</p>
+  {{range .Sites}}
+  <div class="sitecard"><div class="grow">
+    <span class="sname">{{.Label}}</span>
+    {{if .Password}}<div class="secretout"><span class="muted">New edit password</span> <code class="val">{{.Password}}</code></div>{{else}}<div class="u">{{$.NoPassword}}</div>{{end}}
+    {{if .Forms}}<div class="u">Its forms send their submissions to {{range $i, $f := .Forms}}{{if $i}}, {{end}}{{$f}}{{end}}. <a href="{{.EditURL}}">Change the recipients</a></div>{{end}}
+  </div></div>
+  {{end}}
+  {{if .Pending}}<div class="inline-status" role="note" style="margin-top:12px"><strong>Still to move:</strong>
+    <ul style="margin:6px 0 0 18px">{{range .Pending}}<li style="overflow-wrap:anywhere">{{.}}</li>{{end}}</ul></div>{{end}}
+  {{if .Stayed}}<div class="inline-status err" role="note" style="margin-top:12px"><strong>These stay with the sender:</strong>
+    <ul style="margin:6px 0 0 18px">{{range .Stayed}}<li style="overflow-wrap:anywhere">{{.}}</li>{{end}}</ul></div>{{end}}
+  <div style="margin-top:18px"><a class="btn" href="/account">Back to your account</a></div>
+</div></main>
 ` + pageFoot))
