@@ -669,6 +669,19 @@ func (m *Manager) usedByOthers(owner, except string) (int, error) {
 	return n, nil
 }
 
+// ServicesOf is how many services owner runs across all of their projects:
+// the figure the plan cap counts. On an error it answers 0 and logs, so a
+// caller that only warns (a limits check before a transfer) never blocks on
+// a Docker or site-listing hiccup.
+func (m *Manager) ServicesOf(owner string) int {
+	n, err := m.usedByOthers(owner, "")
+	if err != nil {
+		slog.Warn("containers: could not count an owner's services", "err", err)
+		return 0
+	}
+	return n
+}
+
 // counts reports whether a site's services count against its owner's cap.
 func counts(s ext.ContainerSite) bool {
 	return s.Container && s.Enabled && !s.Expired && !s.Locked &&

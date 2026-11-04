@@ -584,6 +584,27 @@ func TestPlanCapCountsEveryProject(t *testing.T) {
 	}
 }
 
+func TestServicesOfCountsAcrossProjects(t *testing.T) {
+	r := newRig(t)
+	const siteC = "cccccccccccccccccccccccccc"
+	r.caps["acct"], r.caps["other"] = 10, 10
+	r.sites.add(siteA, "acct", example) // 2 services
+	r.reconcile(t, siteA, true)
+	r.sites.add(siteB, "acct", example) // 2 more
+	r.reconcile(t, siteB, true)
+	r.sites.add(siteC, "other", example)
+	r.reconcile(t, siteC, true)
+	if got := r.m.ServicesOf("acct"); got != 4 {
+		t.Errorf("ServicesOf(acct) = %d, want 4 across two projects", got)
+	}
+	if got := r.m.ServicesOf("other"); got != 2 {
+		t.Errorf("ServicesOf(other) = %d, want 2", got)
+	}
+	if got := r.m.ServicesOf("nobody"); got != 0 {
+		t.Errorf("ServicesOf(nobody) = %d, want 0", got)
+	}
+}
+
 func TestUnknownPlanStartsNothingAndRetries(t *testing.T) {
 	r := newRig(t)
 	r.capErr = errors.New("paygate down")

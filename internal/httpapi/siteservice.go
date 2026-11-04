@@ -42,6 +42,7 @@ func (s siteService) infoOf(site *store.Site) ext.SiteInfo {
 		Mode:           site.Meta.Mode,
 		Name:           site.Meta.Name,
 		Tags:           append([]string(nil), site.Meta.Tags...),
+		Admins:         extAdmins(site.Meta.Admins),
 		Domains:        site.Meta.CustomDomains,
 		DomainLinks:    s.domainLinks(site),
 		Origin:         site.Meta.Origin,

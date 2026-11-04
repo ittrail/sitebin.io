@@ -36,6 +36,16 @@ var ErrSiteLocked = errors.New("ext: site is locked by the operator")
 // there would be nothing for it to hold.
 var ErrSiteNotLocked = errors.New("ext: site is not locked")
 
+// ErrNotOwner: the account named as the site's current owner is not it (a
+// transfer), or the recipient is empty.
+var ErrNotOwner = errors.New("ext: account does not own the site")
+
+// ErrNotAdoptable: only an anonymous, unlocked, unexpired site can be adopted.
+var ErrNotAdoptable = errors.New("ext: site cannot be adopted")
+
+// ErrTooManyAdmins: a site has at most store.MaxAdmins admins.
+var ErrTooManyAdmins = errors.New("ext: too many admins")
+
 // Who placed a lock (SiteLock.By). An operator lock replaces any lock; an
 // account lock, and the abuse guard's, is applied only to an unlocked site.
 const (
@@ -739,6 +749,9 @@ type SiteInfo struct {
 	// Tags are the owner's labels for the site, in stored order; nil when
 	// untagged. Private like Name: nothing served ever shows them.
 	Tags []string
+	// Admins are the accounts the site is shared with, in stored order; nil
+	// when it is shared with none.
+	Admins []SiteAdmin
 	// Domains are the site's VERIFIED custom domains, if any. The admin
 	// console lists and searches by them; with the name, they are the only
 	// human-memorable handles a site has.
@@ -787,6 +800,61 @@ type SiteInfo struct {
 	// Findings are the abuse guard's hits not yet reviewed, newest last. The
 	// register shows them; the owner never sees them.
 	Findings []ScanFinding
+}
+
+// SiteAdmin is one account a site is shared with; Until, when set, is when
+// the share ends. The seam twin of the core's store.SiteAdmin.
+type SiteAdmin struct {
+	Account string
+	Until   *time.Time
+}
+
+// OwnershipSites is the part of the core's site service that moves a site
+// between accounts, shares it and measures it. It is OPTIONAL: the core's
+// SiteService implements it and the extension asserts it, so a SiteService
+// without it (a fake, an older core) stays whole. Every method is inert for
+// an extension that never calls it, and the community build has no caller.
+//
+// Errors: a site that no longer exists is ErrSiteGone, a locked one
+// ErrSiteLocked, and the ownership refusals are ErrNotOwner, ErrNotAdoptable
+// and ErrTooManyAdmins.
+type OwnershipSites interface {
+	// TransferSite hands the site from account from to account to under one
+	// site lock. The core stamps the recipient's caps from g exactly as a
+	// creation does, detaches every address in detach, clears the tags and
+	// the admins, sets a fresh edit password (returned once), cancels a push
+	// that is running, drops the verify cache and revokes the site's upload
+	// tokens. It does not relink the extension's own account indexes. An
+	// empty to is ErrNotOwner.
+	TransferSite(viewID, from, to string, g CreateGrant, detach []string) (newPassword string, err error)
+	// AdoptSite gives an anonymous, unlocked, unexpired site to account to
+	// and stamps g onto it as a creation does.
+	AdoptSite(viewID, to string, g CreateGrant) error
+	// SetAdmins edits the site's admins under the site lock: edit receives
+	// the stored list and returns the one to store (de-duplicated by
+	// account, at most store.MaxAdmins). An error from edit is returned
+	// unchanged, with nothing written.
+	SetAdmins(viewID string, edit func([]SiteAdmin) ([]SiteAdmin, error)) error
+	// CheckEditPassword verifies a site's edit password through the same
+	// per-address and per-site limits as every other surface. retryAfter is
+	// set when the call was throttled (ok is then false).
+	CheckEditPassword(viewID, password, ip string) (ok bool, retryAfter time.Duration)
+	// ResolveSite maps a view URL, an edit URL, a view id or an edit id to
+	// the site's view id.
+	ResolveSite(urlOrID string) (viewID string, ok bool)
+	// WillNotMove lists the site's addresses whose proof depends on the
+	// sender's account (a name in the sender's zone, an operator zone, an
+	// address held through its host) and would not survive a transfer.
+	WillNotMove(viewID, sender string) []string
+	// HostConflicts maps each host used by the bundle to the sender's OTHER
+	// sites (outside viewIDs) that have an address on that host.
+	HostConflicts(viewIDs []string, sender string) map[string][]string
+	// FormRecipients lists the recipients of the site's active or pending
+	// forms, each once.
+	FormRecipients(viewID string) []string
+	// SiteBytes is the site's central byte count (files plus its Git
+	// repository) and its file count.
+	SiteBytes(viewID string) (bytes int64, files int, err error)
 }
 
 // DomainLink is one custom domain of a site as the dashboard shows it. A

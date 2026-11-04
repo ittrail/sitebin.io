@@ -78,6 +78,9 @@ const (
 	ActionTags           = "tags"       // the account dashboard changed tags: one site's, or an account-wide rename or delete
 	ActionGitPush        = "git-push"   // a push changed refs of the site's repository
 	ActionGitDelete      = "git-delete" // the owner deleted the site's repository
+	ActionTransfer       = "transfer"   // the site changed hands; the detail names both accounts
+	ActionAdopt          = "adopt"      // an anonymous drop was given to an account
+	ActionAdmins         = "admins"     // the site's admins changed
 
 	ActionSignup     = "signup"
 	ActionSignin     = "signin"
@@ -157,7 +160,7 @@ func origin(action string) bool { return action == ActionCreate || action == Act
 // push's would be folded into the first's detail.
 func standalone(action string) bool {
 	switch action {
-	case ActionCreate, ActionSignup, ActionTokenMint, ActionSiteCreate, ActionSiteDelete, ActionOpenUpload, ActionRotatePassword, ActionGitPush:
+	case ActionCreate, ActionSignup, ActionTokenMint, ActionSiteCreate, ActionSiteDelete, ActionOpenUpload, ActionRotatePassword, ActionGitPush, ActionTransfer, ActionAdopt:
 		return true
 	}
 	return false
