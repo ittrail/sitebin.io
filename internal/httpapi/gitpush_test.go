@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -52,6 +53,12 @@ func TestGitPushUnverifiedRecordsRequested(t *testing.T) {
 	first := pushed(t, cl, wd, remote, "a.txt", []byte("a"))
 
 	e.api.gitInspect = flakyInspector{r: e.api.git, refsErr: gitrepo.ErrBusy}
+	// The first push marked the repository: move that mark an hour back,
+	// so only the second push can bring it to now.
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(filepath.Join(site.GitDir(), "sitebin-pushed"), old, old); err != nil {
+		t.Fatal(err)
+	}
 	marked := time.Now()
 	second := cl.commit(wd, "b.txt", []byte("b"))
 	cl.mustGit(wd, "-c", "http.userAgent=unverified", "push", "-q", remote, "HEAD:main", "HEAD:refs/heads/side")
@@ -69,8 +76,8 @@ func TestGitPushUnverifiedRecordsRequested(t *testing.T) {
 	if strings.Contains(en.Detail, "..") || strings.Contains(en.Detail, " created") {
 		t.Errorf("an unverified update in the applied form: %q", en.Detail)
 	}
-	if at, ok := gitrepo.LastPush(site.GitDir()); !ok || at.Before(marked.Add(-time.Second)) {
-		t.Errorf("LastPush = %v, %v: an unverified push is still marked", at, ok)
+	if at, ok := gitrepo.LastPush(site.GitDir()); !ok || at.Before(marked.Truncate(time.Millisecond)) {
+		t.Errorf("LastPush = %v, %v, want at or after %v: an unverified push is still marked", at, ok, marked)
 	}
 }
 
@@ -93,6 +100,82 @@ func TestGitPushForcedUnknown(t *testing.T) {
 	want := "refs/heads/main " + first[:7] + ".." + second[:7] + " (forced: unknown)"
 	if en.UA != "unknown" || !strings.Contains(en.Detail, want) {
 		t.Errorf("entry = %+v, want detail with %q", en, want)
+	}
+}
+
+// countingInspector is flakyInspector that also notes each query's
+// deadline and how often the force check ran.
+type countingInspector struct {
+	flakyInspector
+	mu        sync.Mutex
+	deadlines []time.Time
+	ancestors int
+}
+
+func (c *countingInspector) note(ctx context.Context) {
+	d, ok := ctx.Deadline()
+	if !ok {
+		d = time.Time{}
+	}
+	c.mu.Lock()
+	c.deadlines = append(c.deadlines, d)
+	c.mu.Unlock()
+}
+
+func (c *countingInspector) RefTargets(ctx context.Context, dir string) (map[string]string, error) {
+	c.note(ctx)
+	return c.flakyInspector.RefTargets(ctx, dir)
+}
+
+func (c *countingInspector) IsAncestor(ctx context.Context, dir, old, new string) (bool, error) {
+	c.note(ctx)
+	c.mu.Lock()
+	c.ancestors++
+	c.mu.Unlock()
+	return c.flakyInspector.IsAncestor(ctx, dir, old, new)
+}
+
+// The bookkeeping after a push has one deadline for all its queries, and
+// stops asking for a slot after the first force check that found none: the
+// refs after it are "(forced: unknown)" without waiting again.
+func TestGitPushBookkeepingHasOneDeadline(t *testing.T) {
+	e := newEnv(t, nil)
+	g := newGitServer(t, e)
+	edit, pw := gitSite(t, e, nil)
+	site := siteByEdit(t, e, edit)
+	cl := newGitClient(t)
+	remote := g.remote(edit, pw)
+	wd := cl.work()
+	first := cl.commit(wd, "a.txt", []byte("a"))
+	cl.mustGit(wd, "push", "-q", remote, "HEAD:main", "HEAD:refs/heads/side", "HEAD:refs/heads/third")
+
+	ins := &countingInspector{flakyInspector: flakyInspector{r: e.api.git, ancestorErr: gitrepo.ErrBusy}}
+	e.api.gitInspect = ins
+	second := cl.commit(wd, "b.txt", []byte("b"))
+	start := time.Now()
+	cl.mustGit(wd, "-c", "http.userAgent=busy", "push", "-q", remote, "HEAD:main", "HEAD:refs/heads/side", "HEAD:refs/heads/third")
+
+	if ins.ancestors != 1 {
+		t.Errorf("force checks = %d after the first found no slot, want 1", ins.ancestors)
+	}
+	if len(ins.deadlines) < 2 {
+		t.Fatalf("queries = %d", len(ins.deadlines))
+	}
+	for i, d := range ins.deadlines {
+		if d.IsZero() || d != ins.deadlines[0] {
+			t.Errorf("query %d has deadline %v, want the bookkeeping's one %v", i, d, ins.deadlines[0])
+		}
+	}
+	if d := ins.deadlines[0]; d.After(start.Add(postPushBookkeeping + 5*time.Second)) {
+		t.Errorf("deadline %v is more than %v after the push began (%v)", d, postPushBookkeeping, start)
+	}
+	ps := gitPushes(t, e, site)
+	en := ps[len(ps)-1]
+	if en.UA != "busy" {
+		t.Fatalf("no entry for the push: %+v", ps)
+	}
+	for _, ref := range []string{"main", "side", "third"} {
+		wantOutput(t, en.Detail, "refs/heads/"+ref+" "+first[:7]+".."+second[:7]+" (forced: unknown)", ref)
 	}
 }
 

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -23,14 +24,21 @@ import (
 // nothing and is not marked for the sweep's collection.
 //
 // The queries for that wait up to postPushSlotWait for a git process slot,
-// not a request's five seconds. Should they still fail after git said it
-// finished, the record says what was asked and that it is not verified —
-// never in the form of what happened — and the repository is still marked,
-// since the push's bytes may have landed.
+// not a request's five seconds, and all of them together get one deadline
+// (postPushBookkeeping). Should they still fail after git said it finished,
+// the record says what was asked and that it is not verified — never in the
+// form of what happened — and the repository is still marked, since the
+// push's bytes may have landed. A force check that found no slot is not
+// tried again for the next ref: the rest say "(forced: unknown)".
 
-// postPushSlotWait bounds how long the bookkeeping after a push waits for a
-// git process slot.
+// postPushSlotWait bounds how long one query of the bookkeeping after a push
+// waits for a git process slot.
 const postPushSlotWait = 30 * time.Second
+
+// postPushBookkeeping bounds the whole bookkeeping after a push: one slot
+// wait and one read. It holds the push's registration, which a delete or a
+// lock waits for, so it must not add up query by query.
+const postPushBookkeeping = postPushSlotWait + gitrepo.ReadTimeout
 
 // pushInspector is what the bookkeeping asks of the repository: the runner,
 // or a test's stand-in for one that cannot answer.
@@ -99,12 +107,13 @@ func isZeroSHA(s string) bool { return strings.Trim(s, "0") == "" }
 //
 // It runs inside the push's registration, so the site folder is still there.
 // ctx is not the request's (a client may hang up as soon as it has git's
-// report) but is cancelled with the registration's, by a delete or a lock,
-// and carries the longer slot wait.
+// report) but is cancelled with the registration's, by a delete or a lock.
 func (a *API) recordPush(ctx context.Context, r *http.Request, site *store.Site, act actor, before map[string]string, res gitrepo.RPCResult, gitOK bool) {
 	if len(res.Updates) == 0 {
 		return
 	}
+	ctx, cancel := context.WithTimeout(gitrepo.WithSlotWait(ctx, postPushSlotWait), postPushBookkeeping)
+	defer cancel()
 	ins := a.pushInspect()
 	dir := site.GitDir()
 	after, err := ins.RefTargets(ctx, dir)
@@ -127,16 +136,24 @@ func (a *API) recordPush(ctx context.Context, r *http.Request, site *store.Site,
 		return
 	}
 	a.markPushed(site)
-	// Only the refs the record names are checked for a force push.
+	// Only the refs the record names are checked for a force push, and none
+	// once a check found no slot or the deadline passed: the next would wait
+	// as long again for the same answer.
+	gaveUp := false
 	for i := range changed[:min(len(changed), maxNotedPaths)] {
 		p := &changed[i]
 		if p.old == "" || p.new == "" {
+			continue
+		}
+		if gaveUp {
+			p.forcedUnknown = true
 			continue
 		}
 		switch ff, err := ins.IsAncestor(ctx, dir, p.old, p.new); {
 		case err != nil:
 			a.log.Warn("git: could not tell a force push", "id", site.ViewID, "ref", p.ref, "err", err)
 			p.forcedUnknown = true
+			gaveUp = errors.Is(err, gitrepo.ErrBusy) || ctx.Err() != nil
 		case !ff:
 			p.forced = true
 		}

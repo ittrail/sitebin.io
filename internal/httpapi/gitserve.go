@@ -397,8 +397,9 @@ func (a *API) gitPush(w http.ResponseWriter, r *http.Request, site *store.Site, 
 	defer cancel()
 	// The bookkeeping after git outlives the request — a client may hang up
 	// as soon as it has git's report — but not the registration: a delete
-	// or a lock cancels it with the push.
-	bctx, bcancel := context.WithCancel(gitrepo.WithSlotWait(context.Background(), postPushSlotWait))
+	// or a lock cancels it with the push. Its deadline starts once git is
+	// done (recordPush).
+	bctx, bcancel := context.WithCancel(context.Background())
 	defer bcancel()
 	end, err := a.st.BeginGitWrite(site, func() { cancel(); bcancel() })
 	if err != nil {
