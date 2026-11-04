@@ -3,6 +3,7 @@ package gitrepo
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -132,4 +133,40 @@ func TestNewWithoutGit(t *testing.T) {
 	if _, err := New(Options{Bin: "definitely-not-git", StateDir: t.TempDir()}); !errors.Is(err, ErrNoGit) {
 		t.Errorf("err = %v, want ErrNoGit", err)
 	}
+}
+
+// A fresh repository holds no copy of git's default template (about 21 KB of
+// sample hooks, and info/exclude, description): the bytes count against the
+// site's quota.
+func TestInitCopiesNoTemplate(t *testing.T) {
+	r, _ := newRunner(t, 2)
+	dir := filepath.Join(t.TempDir(), "git")
+	if err := r.Init(dir); err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if strings.HasSuffix(p, ".sample") {
+			t.Errorf("template file copied: %s", p)
+		}
+		if !d.IsDir() {
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+			total += info.Size()
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total > 4<<10 {
+		t.Errorf("a fresh repository is %d bytes, want under 4 KiB", total)
+	}
+	// Still a working repository.
+	gitOut(t, r, dir, "hash-object", "-t", "tree", "-w", "--stdin")
 }

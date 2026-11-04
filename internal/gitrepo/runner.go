@@ -51,7 +51,7 @@ func New(o Options) (*Runner, error) {
 	if o.MaxProcesses < 1 {
 		o.MaxProcesses = 4
 	}
-	for _, d := range []string{o.StateDir, filepath.Join(o.StateDir, "home"), filepath.Join(o.StateDir, "empty-hooks")} {
+	for _, d := range []string{o.StateDir, filepath.Join(o.StateDir, "home"), filepath.Join(o.StateDir, "empty-hooks"), filepath.Join(o.StateDir, "empty-template")} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return nil, fmt.Errorf("gitrepo: %w", err)
 		}
@@ -154,7 +154,7 @@ func (r *Runner) Init(dir string) error {
 		return err
 	}
 	defer release()
-	if out, err := r.command(context.Background(), dir, "init", "--bare", "--initial-branch=main", ".").CombinedOutput(); err != nil {
+	if out, err := r.command(context.Background(), dir, "init", "--bare", "--initial-branch=main", "--template="+filepath.Join(r.state, "empty-template"), ".").CombinedOutput(); err != nil {
 		return fmt.Errorf("gitrepo: init: %w: %s", err, out)
 	}
 	return nil

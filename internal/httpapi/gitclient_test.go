@@ -192,3 +192,22 @@ func (g *gitServer) remote(edit, pw string) string {
 
 // url is path on the server, without credentials.
 func (g *gitServer) url(path string) string { return g.srv.URL + path }
+
+// stdoutGit is mustGit for a command whose answer is read: stdout only.
+// git 2.54 (Alpine 3.22's) prints "warning: redirecting to <url>/" on stderr
+// for a remote command whose URL carries a password and whose first request
+// is answered 401 (TestGitNeverRedirects shows the server sends no 3xx; a
+// GIT_TRACE_CURL run shows only 401 then 200), and CombinedOutput would put
+// that line in front of the answer.
+func (c *gitClient) stdoutGit(dir string, args ...string) string {
+	c.t.Helper()
+	full := append([]string{"-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main", "-c", "credential.helper="}, args...)
+	cmd := exec.Command("git", full...)
+	cmd.Dir = dir
+	cmd.Env = c.env
+	out, err := cmd.Output()
+	if err != nil {
+		c.t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}

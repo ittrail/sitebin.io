@@ -220,7 +220,7 @@ func TestGitLockedSiteRefusedReadsIncluded(t *testing.T) {
 	if _, err := e.st.SetLock(site, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := cl.mustGit(tmp, "ls-remote", remote, "refs/heads/main"); !strings.HasPrefix(got, sha) {
+	if got := cl.stdoutGit(tmp, "ls-remote", remote, "refs/heads/main"); !strings.HasPrefix(got, sha) {
 		t.Errorf("after the lock: main = %q, want %s", got, sha)
 	}
 }
@@ -250,7 +250,7 @@ func TestGitPlanWithoutGitReadOnly(t *testing.T) {
 	out := cl.failGit(wd, "push", remote, "HEAD:main")
 	wantOutput(t, out, "fatal: remote error:", "push on a plan without Git")
 	wantOutput(t, out, hint, "push on a plan without Git")
-	if got := cl.mustGit(tmp, "ls-remote", remote, "refs/heads/main"); !strings.HasPrefix(got, sha) {
+	if got := cl.stdoutGit(tmp, "ls-remote", remote, "refs/heads/main"); !strings.HasPrefix(got, sha) {
 		t.Errorf("after the refused push: main = %q, want %s", got, sha)
 	}
 
@@ -303,7 +303,7 @@ func TestGitAllowanceIsRemainingQuota(t *testing.T) {
 	cl.commit(wd, "big.bin", randomBytes(t, 300<<10))
 	out := cl.failGit(wd, "push", remote, "HEAD:main")
 	wantOutput(t, out, "maximum allowed size", "a push larger than the quota left")
-	if got := cl.mustGit(wd, "ls-remote", remote); got != "" {
+	if got := cl.stdoutGit(wd, "ls-remote", remote); got != "" {
 		t.Errorf("refs after the refused push: %q", got)
 	}
 	if n := len(gitPushes(t, e, site)); n != 0 {
@@ -989,5 +989,45 @@ func TestGitBodyBoundsHoldNoWriter(t *testing.T) {
 	outer := &boundedBody{r: wire, left: 100}
 	if _, err := io.Copy(io.Discard, outer); !errors.Is(err, errBodyTooLarge) || !outer.over.Load() || outer.failed.Load() {
 		t.Errorf("a bound beneath: %v, over %v, failed %v", err, outer.over.Load(), outer.failed.Load())
+	}
+}
+
+// A Git endpoint never redirects: git 2.54 prints "warning: redirecting to"
+// after a 401 retry, but the server must answer no 3xx for anything a client
+// may ask, dumb-protocol probes and the bare repository URL included.
+func TestGitNeverRedirects(t *testing.T) {
+	e := newEnv(t, nil)
+	g := newGitServer(t, e)
+	edit, pw := gitSite(t, e, nil)
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	base := g.srv.URL + "/git/" + edit + ".git"
+	for _, tc := range []struct{ method, path string }{
+		{"GET", "/info/refs?service=git-upload-pack"},
+		{"GET", "/info/refs?service=git-receive-pack"},
+		{"GET", "/info/refs"},
+		{"GET", "/HEAD"},
+		{"GET", "/objects/info/packs"},
+		{"GET", ""},
+		{"GET", "/"},
+		{"POST", "/git-upload-pack"},
+		{"POST", "/git-receive-pack"},
+	} {
+		for _, auth := range []bool{false, true} {
+			req, err := http.NewRequest(tc.method, base+tc.path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if auth {
+				req.SetBasicAuth("drop", pw)
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+				t.Errorf("%s %s (auth %v) = %d, Location %q; a Git endpoint must not redirect", tc.method, tc.path, auth, resp.StatusCode, resp.Header.Get("Location"))
+			}
+		}
 	}
 }
