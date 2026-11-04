@@ -111,14 +111,20 @@ func collectDue(pushed, collected time.Time, haveGC bool, now time.Time) bool {
 	return collected.Before(settled) && !now.Before(settled)
 }
 
-// Leftovers of a push that did not end: receive-pack's quarantine
-// (objects/tmp_objdir-incoming-*, and objects/incoming-* from older git)
-// and half-written packs (objects/pack/tmp_*). Git removes them itself when
-// it ends normally, and a killed git cannot.
+// Leftovers of a git that did not end: receive-pack's quarantine
+// (objects/tmp_objdir-incoming-*, and objects/incoming-* from older git),
+// half-written packs (objects/pack/tmp_*) and a killed repack's packs
+// (objects/pack/.tmp-<pid>-pack-*). Git removes them itself when it ends
+// normally, and a killed git cannot.
 var (
 	objectLeftovers = []string{"tmp_objdir-", "incoming-"}
-	packLeftovers   = []string{"tmp_"}
+	packLeftovers   = []string{"tmp_", ".tmp-"}
 )
+
+// pushKeep starts the .keep file receive-pack holds on a pushed pack until
+// its refs are updated. A receive-pack killed in between leaves the pack kept,
+// and gc never repacks or prunes a kept pack.
+const pushKeep = "receive-pack "
 
 // RemoveLeftovers deletes what a push that was killed left in dir's object
 // store, and reports how many entries it removed. They count against the
@@ -154,6 +160,41 @@ func RemoveLeftovers(dir string) (removed int, err error) {
 		if err != nil {
 			return removed, err
 		}
+	}
+	n, err := unkeepPushes(root, pack)
+	return removed + n, err
+}
+
+// unkeepPushes removes the .keep files a killed receive-pack left in root's
+// pack directory, so gc can collect their packs again. A .keep anyone else
+// wrote (an operator's, say) is left alone.
+func unkeepPushes(root *os.Root, pack string) (int, error) {
+	f, err := root.Open(pack)
+	if err != nil {
+		return 0, err
+	}
+	names, err := f.Readdirnames(-1)
+	f.Close()
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, name := range names {
+		if !strings.HasPrefix(name, "pack-") || !strings.HasSuffix(name, ".keep") {
+			continue
+		}
+		p := filepath.Join(pack, name)
+		if fi, err := root.Lstat(p); err != nil || !fi.Mode().IsRegular() {
+			continue
+		}
+		b, err := root.ReadFile(p)
+		if err != nil || !strings.HasPrefix(string(b), pushKeep) {
+			continue
+		}
+		if err := root.Remove(p); err != nil {
+			return removed, err
+		}
+		removed++
 	}
 	return removed, nil
 }

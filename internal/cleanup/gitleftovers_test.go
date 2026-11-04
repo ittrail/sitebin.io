@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -76,13 +75,9 @@ func TestCollectGitRemovesLeftovers(t *testing.T) {
 
 // A push killed while it streams its pack (a client hanging up, a delete,
 // a lock, the read timeout): git cannot remove its quarantine, and the next
-// collection does. The leftovers exist where the kill reaches git's whole
-// process group, which is Linux (the image); on Windows only receive-pack
-// dies and its index-pack ends by itself.
+// collection does. The kill reaches git's whole process tree: its process
+// group on Linux (the image), taskkill /T on Windows.
 func TestCollectGitRemovesAKilledPushsLeftovers(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("a killed git leaves its children running on Windows")
-	}
 	st, r := collectFixture(t)
 	site := gitSite(t, st, r)
 	CollectGit(context.Background(), st, r)

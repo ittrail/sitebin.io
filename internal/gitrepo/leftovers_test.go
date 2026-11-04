@@ -30,12 +30,13 @@ func TestRemoveLeftovers(t *testing.T) {
 	plant("objects/incoming-Q1w2E3/pack/tmp_pack_q", 1<<20)
 	plant("objects/pack/tmp_pack_Zz9", 2<<20)
 	plant("objects/pack/tmp_idx_Zz9", 10)
+	plant("objects/pack/.tmp-4242-pack-0123abcd.pack", 1<<20) // a killed repack's
 	n, err := RemoveLeftovers(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 4 {
-		t.Errorf("removed %d entries, want 4", n)
+	if n != 5 {
+		t.Errorf("removed %d entries, want 5", n)
 	}
 	if after, names := dirSize(t, dir); after != before {
 		t.Errorf("repository is %d bytes after the removal, want %d as before: %v", after, before, names)
@@ -87,5 +88,34 @@ func TestRemoveLeftoversNeverFollowsLinks(t *testing.T) {
 	}
 	if _, err := os.Stat(keep); err != nil {
 		t.Fatalf("a file behind a linked objects/pack was removed: %v", err)
+	}
+}
+
+// A pack a killed receive-pack left kept is released for gc; a .keep anyone
+// else wrote stays.
+func TestRemoveLeftoversReleasesAKilledPushsPack(t *testing.T) {
+	NeedGit(t)
+	_, dir := newBare(t)
+	pack := filepath.Join(dir, "objects", "pack")
+	if err := os.MkdirAll(pack, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	push := filepath.Join(pack, "pack-1111111111111111111111111111111111111111.keep")
+	mine := filepath.Join(pack, "pack-2222222222222222222222222222222222222222.keep")
+	if err := os.WriteFile(push, []byte("receive-pack 4242 on host\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mine, []byte("kept by the operator\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	n, err := RemoveLeftovers(dir)
+	if err != nil || n != 1 {
+		t.Fatalf("RemoveLeftovers = %d, %v; want 1", n, err)
+	}
+	if _, err := os.Stat(push); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the killed push's .keep is still there: %v", err)
+	}
+	if _, err := os.Stat(mine); err != nil {
+		t.Errorf("the operator's .keep is gone: %v", err)
 	}
 }
