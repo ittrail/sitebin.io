@@ -164,6 +164,8 @@ var basePageTmpl = template.Must(template.New("page").Parse(`<!doctype html>
   }
   button:hover { transform: translateY(-1px); filter: brightness(1.05); box-shadow: 0 12px 30px rgba(217,154,38,.42), inset 0 1px 0 rgba(255,255,255,.35); }
   button:active { transform: none; box-shadow: 0 8px 22px rgba(217,154,38,.3); }
+  button.quiet { background: transparent; color: #eceff7; border: 1px solid rgba(255,255,255,.18); box-shadow: none; font-weight: 600; }
+  button.quiet:hover { filter: none; border-color: rgba(255,255,255,.34); box-shadow: none; }
   .err { color: #ff9d9d; font-size: 14px; }
   .code { font: 700 46px/1 ui-monospace, monospace; color: #f5b84d; margin-bottom: 12px; text-shadow: 0 0 32px rgba(245,184,77,.4); }
   .back { display: inline-block; margin-top: 20px; color: #f5b84d; font-size: 14px; text-decoration: none; }
@@ -201,9 +203,16 @@ var basePageTmpl = template.Must(template.New("page").Parse(`<!doctype html>
     <button type="submit">{{.Button}}</button>
   </form>
   {{end}}
+  {{if .Choices}}
+  <form method="post" action="{{.ChoiceAction}}">
+    {{range .Choices}}<button type="submit" name="action" value="{{.Value}}"{{if .Quiet}} class="quiet"{{end}}>{{.Label}}</button>
+    {{end}}
+  </form>
+  {{end}}
   {{if .Back}}<a class="back" href="{{.Back}}">&larr; Back</a>{{end}}
   {{if .Home}}<a class="back" href="{{.Home}}">{{.HomeLabel}} &rarr;</a>{{end}}
 </main>
+{{if .Script}}<script src="{{.Script}}" data-state="{{.ScriptState}}"></script>{{end}}
 </body>
 </html>
 `))
@@ -226,6 +235,14 @@ type pageData struct {
 	Action string
 	Token  string
 	Button string
+	// Choices render one form that POSTs action=<Value> to ChoiceAction, a
+	// button each: the analytics opt-out page.
+	ChoiceAction string
+	Choices      []pageChoice
+	// Script is a same-origin script the page loads, with ScriptState as its
+	// data-state. Never inline: a site's origin may refuse inline scripts.
+	Script      string
+	ScriptState string
 	// More are further paragraphs, Abuse where to report abuse, Home a link
 	// onward to the operator's site: the view domain's info page, and the
 	// "site suspended" page.
@@ -233,6 +250,13 @@ type pageData struct {
 	Abuse     *abuseLinks
 	Home      string
 	HomeLabel string
+}
+
+// pageChoice is one button of a page's Choices; Quiet is the plainer style,
+// for the choice that would change nothing.
+type pageChoice struct {
+	Value, Label string
+	Quiet        bool
 }
 
 func (a *API) renderPage(w http.ResponseWriter, status int, d pageData) {

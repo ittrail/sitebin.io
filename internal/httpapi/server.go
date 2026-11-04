@@ -71,6 +71,8 @@ type API struct {
 	sharingWarn    *auth.Limiter   // one "plan unknown" log line per account a minute
 	analytics      *analytics.Recorder
 	analyticsSalts *analytics.Salts // the one salt store: the recorder hashes with it, the sweep prunes it
+
+	analyticsLimiter *auth.Limiter // the script's records per (site, client network)
 }
 
 // New wires the API. secret signs view-session cookies; webFS provides the
@@ -103,6 +105,8 @@ func New(cfg config.Config, st *store.Store, secret []byte, webFS fs.FS) (*API, 
 		tripSlots:      make(chan struct{}, tripSlots),
 		reportKey:      reportTicketKey(secret),
 		sharingWarn:    auth.NewLimiter(60, 1),
+
+		analyticsLimiter: auth.NewLimiter(analyticsSendPerHour, analyticsSendBurst),
 	}
 	var send forms.Sender
 	if s := cfg.FormsSMTP; s != nil {
@@ -240,6 +244,10 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("GET /_sitebin/forms/{key}/challenge", a.formChallenge)
 	mux.HandleFunc("GET /_sitebin/forms/{key}/thanks", a.formThanks)
 	mux.HandleFunc("GET /_sitebin/altcha.js", a.altchaScript)
+	mux.HandleFunc("GET /_sitebin/analytics.js", a.analyticsScript)
+	mux.HandleFunc("POST /_sitebin/analytics/send", a.analyticsSend)
+	mux.HandleFunc("GET /_sitebin/analytics/opt-out", a.analyticsOptOutPage)
+	mux.HandleFunc("POST /_sitebin/analytics/opt-out", a.analyticsOptOut)
 
 	mux.HandleFunc("GET /forms/confirm", a.formConfirmPage)
 	mux.HandleFunc("POST /forms/confirm", a.formConfirm)
@@ -277,9 +285,14 @@ func (a *API) logMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, code: 200}
 		next.ServeHTTP(sw, r)
-		a.log.Info("http",
-			"method", r.Method, "host", r.Host, "path", r.URL.Path,
-			"status", sw.code, "ms", time.Since(start).Milliseconds(), "ip", clientIP(r))
+		attrs := []any{"method", r.Method, "host", r.Host, "path", r.URL.Path,
+			"status", sw.code, "ms", time.Since(start).Milliseconds()}
+		// Analytics stores no visitor's address, and its script sends one
+		// request per page view: those lines carry none either.
+		if !strings.HasPrefix(r.URL.Path, "/_sitebin/analytics") {
+			attrs = append(attrs, "ip", clientIP(r))
+		}
+		a.log.Info("http", attrs...)
 	})
 }
 
