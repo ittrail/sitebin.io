@@ -63,20 +63,41 @@ func protoEnv(protocol string) []string {
 	return nil
 }
 
-// flushWriter copies git's output to the client as it comes.
+// flushWriter copies git's output to the client as it comes, and keeps a
+// client that stops reading from holding the git process (and its slot):
+// every write gets a deadline — idle from its start, never past end — and a
+// write that fails cancels git through fail.
 type flushWriter struct {
-	w  http.ResponseWriter
-	rc *http.ResponseController
+	w    http.ResponseWriter
+	rc   *http.ResponseController
+	idle time.Duration
+	end  time.Time
+	fail context.CancelFunc
 }
 
-func newFlushWriter(w http.ResponseWriter) flushWriter {
-	return flushWriter{w, http.NewResponseController(w)}
+// newFlushWriter writes the response of a git process that fail cancels.
+// Call the returned done once nothing writes any more: it lifts the write
+// deadline from the connection, which outlives the response.
+func (r *Runner) newFlushWriter(w http.ResponseWriter, fail context.CancelFunc) (fw *flushWriter, done func()) {
+	fw = &flushWriter{w: w, rc: http.NewResponseController(w), idle: r.responseIdle, end: time.Now().Add(r.responseMax), fail: fail}
+	return fw, func() { _ = fw.rc.SetWriteDeadline(time.Time{}) }
 }
 
-func (f flushWriter) Write(p []byte) (int, error) {
+func (f *flushWriter) Write(p []byte) (int, error) {
+	d := time.Now().Add(f.idle)
+	if d.After(f.end) {
+		d = f.end
+	}
+	// A writer without deadlines (a test recorder) cannot block either.
+	_ = f.rc.SetWriteDeadline(d)
 	n, err := f.w.Write(p)
 	if err == nil {
-		_ = f.rc.Flush()
+		if ferr := f.rc.Flush(); ferr != nil && !errors.Is(ferr, http.ErrNotSupported) {
+			err = ferr
+		}
+	}
+	if err != nil {
+		f.fail()
 	}
 	return n, err
 }
@@ -120,9 +141,12 @@ func (r *Runner) AdvertiseRefs(ctx context.Context, dir string, svc Service, pro
 		return err
 	}
 	defer release()
+	ctx, cancel := context.WithTimeout(ctx, r.responseMax)
+	defer cancel()
 	w.Header().Set("Content-Type", "application/x-"+string(svc)+"-advertisement")
 	w.Header().Set("Cache-Control", "no-cache")
-	fw := newFlushWriter(w)
+	fw, done := r.newFlushWriter(w, cancel)
+	defer done()
 	if protocol != "version=2" {
 		if err := writePkt(fw, "# service="+string(svc)+"\n"); err != nil {
 			return err
@@ -193,6 +217,8 @@ func (r *Runner) ServeRPC(ctx context.Context, dir string, svc Service, body io.
 		return res, err
 	}
 	defer release()
+	ctx, cancel := context.WithTimeout(ctx, r.responseMax)
+	defer cancel()
 
 	// On HTTP/1.x the request body may become unreadable once the response
 	// starts, and we stream git's output while still feeding its stdin. The
@@ -252,7 +278,9 @@ func (r *Runner) ServeRPC(ctx context.Context, dir string, svc Service, body io.
 	cmd := r.commandWith(ctx, dir, extraC, protoEnv(o.Protocol), svc.sub(), "--stateless-rpc", ".")
 	guardProcess(cmd)
 	errBuf := &capWriter{max: maxStderr}
-	cmd.Stdout, cmd.Stderr = newFlushWriter(w), errBuf
+	fw, done := r.newFlushWriter(w, cancel)
+	defer done()
+	cmd.Stdout, cmd.Stderr = fw, errBuf
 	// Feed stdin ourselves instead of through cmd.Stdin: exec's own copier
 	// cannot be interrupted while it blocks on the client's request body, so
 	// a git that exits early (refusal, bad pack, size limit) would keep this

@@ -38,11 +38,24 @@ const (
 	BigFileThreshold = "64m"
 )
 
+// The bounds of one smart HTTP response (Options.ResponseIdle and
+// ResponseMax): a client that stops reading never holds a process slot for
+// longer than ResponseIdle, and none holds one for longer than ResponseMax.
+const (
+	DefaultResponseIdle = 2 * time.Minute
+	DefaultResponseMax  = 30 * time.Minute
+)
+
 // Options configure a Runner.
 type Options struct {
 	Bin          string // git binary name or path; empty means "git"
 	StateDir     string // <data>/gitstate: empty config, home, empty hooks
 	MaxProcesses int    // git processes at once; below 1 means 4
+	// ResponseIdle is how long one write of a smart HTTP response may wait
+	// for the client; ResponseMax bounds the whole response. Zero means
+	// DefaultResponseIdle and DefaultResponseMax; tests shorten them.
+	ResponseIdle time.Duration
+	ResponseMax  time.Duration
 }
 
 // Runner starts git processes.
@@ -51,6 +64,8 @@ type Runner struct {
 	state string
 	slots chan struct{}
 
+	responseIdle time.Duration
+	responseMax  time.Duration
 	// now is the clock Collect decides by and prunes from; a test moves it.
 	now func() time.Time
 }
@@ -75,7 +90,16 @@ func New(o Options) (*Runner, error) {
 	if err := os.WriteFile(filepath.Join(o.StateDir, "empty.gitconfig"), nil, 0o644); err != nil {
 		return nil, fmt.Errorf("gitrepo: %w", err)
 	}
-	return &Runner{bin: bin, state: o.StateDir, slots: make(chan struct{}, o.MaxProcesses), now: time.Now}, nil
+	if o.ResponseIdle <= 0 {
+		o.ResponseIdle = DefaultResponseIdle
+	}
+	if o.ResponseMax <= 0 {
+		o.ResponseMax = DefaultResponseMax
+	}
+	return &Runner{
+		bin: bin, state: o.StateDir, slots: make(chan struct{}, o.MaxProcesses),
+		responseIdle: o.ResponseIdle, responseMax: o.ResponseMax, now: time.Now,
+	}, nil
 }
 
 // command builds a git process for the repository dir, running in it. Its
