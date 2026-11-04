@@ -1,6 +1,7 @@
 package analytics
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -57,6 +58,28 @@ func (e *recorderEnv) recorder(dailyCap int) *Recorder {
 		WithSite: e.withSite,
 		Log:      slog.New(slog.DiscardHandler),
 	})
+}
+
+// startRun starts the writer and waits until it is active, so a Flush goes
+// through the writer loop rather than draining on the test's goroutine.
+// done closes when Run returns; stop ends Run and waits for it.
+func startRun(t *testing.T, r *Recorder) (done <-chan struct{}, stop func()) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := make(chan struct{})
+	go func() { r.Run(ctx); close(ch) }()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		r.runMu.Lock()
+		active := r.runDone != nil
+		r.runMu.Unlock()
+		if active {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Run did not start")
+		}
+	}
+	return ch, func() { cancel(); <-ch }
 }
 
 func pageHit() Hit {
@@ -471,9 +494,7 @@ func TestRecorderConcurrentAdd(t *testing.T) {
 	e := newRecorderEnv(t)
 	dir := e.site(t, testView)
 	r := e.recorder(100000)
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() { r.Run(ctx); close(done) }()
+	_, stop := startRun(t, r)
 
 	const workers, each = 8, 250
 	var wg sync.WaitGroup
@@ -494,12 +515,109 @@ func TestRecorderConcurrentAdd(t *testing.T) {
 	if n := len(readLines(t, DayFile(dir, "2026-11-04"))); n != workers*each {
 		t.Fatalf("lines = %d, want %d (dropped %d)", n, workers*each, r.Dropped())
 	}
-	cancel()
-	<-done
+	stop()
 	// Flush after Run has ended drains directly.
 	r.Add(pageHit())
 	r.Flush()
 	if n := len(readLines(t, DayFile(dir, "2026-11-04"))); n != workers*each+1 {
 		t.Fatalf("lines after Run ended = %d", n)
+	}
+}
+
+// A panic while recording one hit (here the caller's page check) drops that
+// hit; the writer keeps running and records the next one.
+func TestRecorderSurvivesAPanickingHit(t *testing.T) {
+	e := newRecorderEnv(t)
+	dir := e.site(t, testView)
+	var logs bytes.Buffer
+	r := NewRecorder(RecorderConfig{
+		DailyCap: 100, Salts: NewSalts(e.data), WithSite: e.withSite,
+		Log: slog.New(slog.NewTextHandler(&logs, nil)),
+	})
+	done, stop := startRun(t, r)
+	defer stop()
+
+	bad := pageHit()
+	bad.RawPath = "/boom"
+	bad.PageCheck = func() bool { panic("page check exploded") }
+	r.Add(bad)
+	r.Add(pageHit())
+	r.Flush()
+	recs, err := ReadDay(dir, "2026-11-04")
+	if err != nil || len(recs) != 1 || recs[0].P != "/pricing" {
+		t.Fatalf("after a panicking hit: %+v, %v", recs, err)
+	}
+	select {
+	case <-done:
+		t.Fatal("the writer stopped")
+	default:
+	}
+	// The log names the site and the panic, never the hit's IP or UA.
+	if l := logs.String(); !strings.Contains(l, "panicked") || !strings.Contains(l, testView) || !strings.Contains(l, "page check exploded") ||
+		strings.Contains(l, testIP) || strings.Contains(l, "RecorderTestAgent") {
+		t.Fatalf("log = %s", l)
+	}
+	r.Add(pageHit())
+	r.Flush()
+	if recs, _ := ReadDay(dir, "2026-11-04"); len(recs) != 2 {
+		t.Fatalf("the writer did not go on: %d records", len(recs))
+	}
+}
+
+// A panic while writing one batch drops that batch; other sites' batches in
+// the same flush are written, and the writer keeps running.
+func TestRecorderSurvivesAPanickingBatchWrite(t *testing.T) {
+	e := newRecorderEnv(t)
+	dir := e.site(t, testView)
+	const boom = "cccccccccccccccccccccccccc"
+	e.site(t, boom)
+	r := NewRecorder(RecorderConfig{
+		DailyCap: 100, Salts: NewSalts(e.data), Log: slog.New(slog.DiscardHandler),
+		WithSite: func(viewID string, fn func(string) error) (bool, error) {
+			if viewID == boom {
+				panic("disk exploded")
+			}
+			return e.withSite(viewID, fn)
+		},
+	})
+	done, stop := startRun(t, r)
+	defer stop()
+
+	h := pageHit()
+	h.ViewID = boom
+	r.Add(h)
+	r.Add(pageHit())
+	r.Flush()
+	if recs, _ := ReadDay(dir, "2026-11-04"); len(recs) != 1 {
+		t.Fatalf("the healthy site's batch: %d records", len(recs))
+	}
+	select {
+	case <-done:
+		t.Fatal("the writer stopped")
+	default:
+	}
+	r.Add(h)
+	r.Add(pageHit())
+	r.Flush()
+	if recs, _ := ReadDay(dir, "2026-11-04"); len(recs) != 2 {
+		t.Fatalf("the writer did not go on: %d records", len(recs))
+	}
+}
+
+// Missing wiring is a startup error, never a panic at request time.
+func TestNewRecorderRefusesMissingWiring(t *testing.T) {
+	e := newRecorderEnv(t)
+	for name, c := range map[string]RecorderConfig{
+		"no salts":    {WithSite: e.withSite},
+		"no WithSite": {Salts: NewSalts(e.data)},
+	} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("%s: NewRecorder did not panic", name)
+				}
+			}()
+			NewRecorder(c)
+		}()
 	}
 }

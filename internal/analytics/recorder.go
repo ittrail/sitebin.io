@@ -25,6 +25,11 @@ const (
 
 // Hit is what a request hands the recorder: raw request facts, never
 // sanitized and never stored as they are. The writer turns it into a Record.
+//
+// Add takes ownership of the hit: the writer reads it later, on its own
+// goroutine. After Add the caller must not change Data, Own or ExtraQuery,
+// and PageCheck must not capture the *http.Request or its headers (the
+// request is over by the time it runs); give it the values it needs.
 type Hit struct {
 	Time                 time.Time // zero: the recorder's Now
 	ViewID, Kind, Source string    // Kind "p"|"e"; Source "srv"|"js"
@@ -92,8 +97,13 @@ type dayCount struct {
 }
 
 // NewRecorder returns a recorder; it records nothing until Run is started
-// (or Flush is called).
+// (or Flush is called). It panics when Salts or WithSite is nil: that is a
+// wiring mistake, and it must stop the server at startup rather than
+// surface on the first visit.
 func NewRecorder(c RecorderConfig) *Recorder {
+	if c.Salts == nil || c.WithSite == nil {
+		panic("analytics: NewRecorder needs Salts and WithSite")
+	}
 	if c.DailyCap <= 0 {
 		c.DailyCap = defaultDailyCap
 	}
@@ -232,7 +242,18 @@ func (r *Recorder) take(h Hit) {
 // record is the whole way from request facts to a stored line: the page
 // check, the site's local date, sanitizing, parsing, the location and the
 // visitor id. The IP and the user agent are used here and go no further.
+//
+// The facts are the visitor's, so a panic anywhere in here (a parser, the
+// caller's page check) drops this one hit instead of the writer and with it
+// the whole server.
 func (r *Recorder) record(h Hit) (date string, line []byte, ok bool) {
+	defer func() {
+		if p := recover(); p != nil {
+			// Only the site and the panic value: the hit holds the IP and the UA.
+			r.c.Log.Error("analytics: recording a hit panicked, hit dropped", "site", h.ViewID, "panic", fmt.Sprint(p))
+			date, line, ok = "", nil, false
+		}
+	}()
 	if h.Kind != "p" && h.Kind != "e" {
 		return "", nil, false
 	}
@@ -286,18 +307,31 @@ func (r *Recorder) record(h Hit) (date string, line []byte, ok bool) {
 // writeAll writes every batch and empties them.
 func (r *Recorder) writeAll() {
 	for k, lines := range r.batches {
-		found, err := r.c.WithSite(k.viewID, func(siteDir string) error {
-			return r.appendDay(k.viewID, siteDir, k.date, lines)
-		})
-		if err != nil {
-			r.c.Log.Warn("analytics: writing records", "site", k.viewID, "date", k.date, "records", len(lines), "err", err)
-		}
-		if !found { // the site is gone: drop its batch, create nothing
-			delete(r.days, k.viewID)
-		}
+		r.writeBatch(k, lines)
 	}
 	clear(r.batches)
 	r.pending = 0
+}
+
+// writeBatch writes one (site, day) batch under the site's stats lock. A
+// panic drops this batch only; the lock is released by WithSite's own
+// deferred unlock as the panic passes through it.
+func (r *Recorder) writeBatch(k batchKey, lines [][]byte) {
+	defer func() {
+		if p := recover(); p != nil {
+			delete(r.days, k.viewID) // the count may be off: read the file again next time
+			r.c.Log.Error("analytics: writing records panicked, batch dropped", "site", k.viewID, "date", k.date, "records", len(lines), "panic", fmt.Sprint(p))
+		}
+	}()
+	found, err := r.c.WithSite(k.viewID, func(siteDir string) error {
+		return r.appendDay(k.viewID, siteDir, k.date, lines)
+	})
+	if err != nil {
+		r.c.Log.Warn("analytics: writing records", "site", k.viewID, "date", k.date, "records", len(lines), "err", err)
+	}
+	if !found { // the site is gone: drop its batch, create nothing
+		delete(r.days, k.viewID)
+	}
 }
 
 // appendDay runs under the site's stats lock, so the site folder exists
