@@ -77,24 +77,46 @@ func TestCommandEnvIsFixed(t *testing.T) {
 	r, state := newRunner(t, 1)
 	t.Setenv("GIT_DIR", "/evil")
 	t.Setenv("GIT_CONFIG_PARAMETERS", "'core.hooksPath'='/x'")
-	cmd := r.command(context.Background(), t.TempDir(), "status")
+	t.Setenv("GIT_ALLOC_LIMIT", "0")
+	dir := t.TempDir()
+	cmd := r.command(context.Background(), dir, "status")
 	for _, e := range cmd.Env {
-		if strings.HasPrefix(e, "GIT_DIR=") || strings.HasPrefix(e, "GIT_CONFIG_PARAMETERS=") {
+		if strings.HasPrefix(e, "GIT_CONFIG_PARAMETERS=") || e == "GIT_DIR=/evil" || e == "GIT_ALLOC_LIMIT=0" {
 			t.Errorf("environment leaks %q", e)
 		}
 	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := []string{"GIT_CONFIG_NOSYSTEM=1", "GIT_ATTR_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0",
 		"GIT_CONFIG_GLOBAL=" + filepath.Join(state, "empty.gitconfig"),
-		"HOME=" + filepath.Join(state, "home")}
+		"HOME=" + filepath.Join(state, "home"),
+		// git never searches above the repository for one
+		"GIT_DIR=" + abs,
+		// no single allocation above it: a delta claiming gigabytes dies
+		"GIT_ALLOC_LIMIT=256m"}
 	for _, w := range want {
-		found := false
+		found := 0
 		for _, e := range cmd.Env {
 			if e == w {
-				found = true
+				found++
 			}
 		}
-		if !found {
-			t.Errorf("environment lacks %q: %v", w, cmd.Env)
+		if found != 1 {
+			t.Errorf("environment holds %q %d times, want once: %v", w, found, cmd.Env)
+		}
+	}
+}
+
+// A relative repository path is made absolute in GIT_DIR: git resolves
+// GIT_DIR against its working directory, which is the repository itself.
+func TestCommandGitDirIsAbsolute(t *testing.T) {
+	r, _ := newRunner(t, 1)
+	cmd := r.command(context.Background(), filepath.Join("some", "repo"), "status")
+	for _, e := range cmd.Env {
+		if v, ok := strings.CutPrefix(e, "GIT_DIR="); ok && !filepath.IsAbs(v) {
+			t.Errorf("GIT_DIR = %q, want an absolute path", v)
 		}
 	}
 }
@@ -103,8 +125,14 @@ func TestCommandArgsCarryServerConfig(t *testing.T) {
 	r, state := newRunner(t, 1)
 	cmd := r.command(context.Background(), t.TempDir(), "status")
 	args := strings.Join(cmd.Args, "\x00")
-	for _, w := range []string{"core.hooksPath=" + filepath.Join(state, "empty-hooks"), "receive.fsckObjects=true"} {
-		i := strings.Index(args, "-c\x00"+w)
+	for _, w := range []string{
+		"core.hooksPath=" + filepath.Join(state, "empty-hooks"),
+		"receive.fsckObjects=true",
+		"core.bigFileThreshold=64m",
+		"transfer.unpackLimit=1",
+		"receive.unpackLimit=1",
+	} {
+		i := strings.Index(args, "-c\x00"+w+"\x00")
 		if i < 0 {
 			t.Errorf("args lack -c %s: %v", w, cmd.Args)
 			continue
@@ -113,6 +141,43 @@ func TestCommandArgsCarryServerConfig(t *testing.T) {
 			t.Errorf("-c %s comes after the subcommand", w)
 		}
 	}
+}
+
+// Every git command the runner starts works with GIT_DIR set: init (which
+// resolves its "." against the working directory), the read commands,
+// upload-pack and receive-pack, gc.
+func TestGitDirWorksForEveryCommand(t *testing.T) {
+	r, _ := newRunner(t, 2)
+	dir := filepath.Join(t.TempDir(), "git")
+	if err := r.Init(dir); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitOut(t, r, dir, "rev-parse", "--is-bare-repository"); got != "true" {
+		t.Fatalf("--is-bare-repository = %q", got)
+	}
+	if got, want := gitOut(t, r, dir, "rev-parse", "--absolute-git-dir"), mustAbs(t, dir); filepath.ToSlash(got) != filepath.ToSlash(want) {
+		t.Fatalf("--absolute-git-dir = %q, want %q", got, want)
+	}
+	for _, svc := range []string{"upload-pack", "receive-pack"} {
+		if out := gitOut(t, r, dir, svc, "--stateless-rpc", "--advertise-refs", "."); !strings.Contains(out, "capabilities^{}") {
+			t.Errorf("%s advertisement = %q", svc, out)
+		}
+	}
+	if err := MarkPushed(dir); err != nil {
+		t.Fatal(err)
+	}
+	if ran, err := r.Collect(context.Background(), dir); err != nil || !ran {
+		t.Fatalf("Collect: ran=%v err=%v", ran, err)
+	}
+}
+
+func mustAbs(t *testing.T, p string) string {
+	t.Helper()
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return abs
 }
 
 func TestAcquireBusyAfterWait(t *testing.T) {

@@ -25,6 +25,19 @@ var (
 // acquireWait bounds how long acquire waits for a free slot.
 const acquireWait = 5 * time.Second
 
+// The memory bounds of every git process, beside the -c ones in commandWith.
+const (
+	// AllocLimit is GIT_ALLOC_LIMIT: git dies rather than make any single
+	// allocation above it. A pack is attacker-controlled, and a delta a few
+	// bytes long can claim a result of gigabytes, which index-pack would
+	// otherwise allocate in one piece.
+	AllocLimit = "256m"
+	// BigFileThreshold is core.bigFileThreshold: a blob above it is stored
+	// and streamed whole, never deltified or read into memory in one piece,
+	// so a single file larger than AllocLimit still pushes and clones.
+	BigFileThreshold = "64m"
+)
+
 // Options configure a Runner.
 type Options struct {
 	Bin          string // git binary name or path; empty means "git"
@@ -62,8 +75,9 @@ func New(o Options) (*Runner, error) {
 	return &Runner{bin: bin, state: o.StateDir, slots: make(chan struct{}, o.MaxProcesses)}, nil
 }
 
-// command builds a git process running in dir. Its environment starts empty
-// (only PATH is copied in) and the server's -c settings precede args.
+// command builds a git process for the repository dir, running in it. Its
+// environment starts empty (only PATH is copied in) and the server's -c
+// settings precede args.
 func (r *Runner) command(ctx context.Context, dir string, args ...string) *exec.Cmd {
 	return r.commandWith(ctx, dir, nil, nil, args...)
 }
@@ -81,6 +95,13 @@ func (r *Runner) commandWith(ctx context.Context, dir string, extraC, extraEnv [
 		"-c", "pack.threads=1",
 		"-c", "pack.windowMemory=64m",
 		"-c", "core.packedGitLimit=128m",
+		"-c", "core.bigFileThreshold=" + BigFileThreshold,
+		// A push is always kept as the pack it came in (index-pack), never
+		// exploded into one loose, separately compressed file per object
+		// (unpack-objects), which can take many times the pack's bytes. The
+		// receive.* name is set too: it would outrank transfer.*.
+		"-c", "transfer.unpackLimit=1",
+		"-c", "receive.unpackLimit=1",
 	}
 	for _, c := range extraC {
 		full = append(full, "-c", c)
@@ -88,13 +109,23 @@ func (r *Runner) commandWith(ctx context.Context, dir string, extraC, extraEnv [
 	full = append(full, args...)
 	cmd := exec.CommandContext(ctx, r.bin, full...)
 	cmd.Dir = dir
+	// GIT_DIR names the repository outright, so git never searches the
+	// directories above dir for one (a damaged repository would otherwise
+	// send it up the data tree). cmd.Dir stays: init --bare . resolves its
+	// "." against it.
+	gitDir := dir
+	if abs, err := filepath.Abs(dir); err == nil {
+		gitDir = abs
+	}
 	cmd.Env = []string{
 		"PATH=" + os.Getenv("PATH"),
+		"GIT_DIR=" + gitDir,
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_ATTR_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL=" + filepath.Join(r.state, "empty.gitconfig"),
 		"HOME=" + filepath.Join(r.state, "home"),
 		"GIT_TERMINAL_PROMPT=0",
+		"GIT_ALLOC_LIMIT=" + AllocLimit,
 	}
 	cmd.Env = append(cmd.Env, extraEnv...)
 	return cmd
