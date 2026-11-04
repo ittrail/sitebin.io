@@ -94,26 +94,34 @@ Corollaries worth stating, because they have been violated before:
 API route. In order: an upload token is refused (it opens only its own route);
 an account API token whose account stands on the site (never an MCP OAuth
 token); the owner's or an admin's **browser session** (`sessionStanding`, via
-the optional `ext.SessionAccounts`); the edit password. Standing is
-`accountStanding` (server.go), the one rule: the owner, or an admin listed in
-`Meta.Admins` (`Until` nil or ahead) while `ext.SharingAccounts.SharingAllowed`
-says BOTH the owner's and the admin's plan share — no provider, no admins. An
-unknown plan (a lookup error) is a 503 for that one request, never a pass and
-never an ended share. An admin may do all the owner may except the owner-only
-actions (`refuseUnlessOwner`, `ownerOnly` in `internal/httpapi/sharing.go`:
-delete the site, set/clear `expires_at` — checked per field in the settings
-write — rotate the edit password, transfer, invite or end others' shares,
-`DELETE …/git`). They are refused to role `admin` ONLY: a password actor stays
-owner-equivalent, as before. An admin's upload token re-checks the standing on
-every use (`uploadTokenStands`; WebDAV and the files POST), and a git push
-re-checks it from `meta.json` after `BeginGitWrite` (`gitStandingHolds`;
-`WriteRPCRefusal` prints the refusal on the POST). The `tags` an API or MCP
-caller sees are the caller's own: the owner's `Meta.Tags`, or the admin's
-private list (`AdminTags`) — never the owner's. See "Ownership" below. The
-edit password keeps every owner right. `sessionStanding` is a real CSRF boundary — the session counts only with
-`X-Sitebin-Session: 1` and a same-origin `Sec-Fetch-Site` when one is sent —
-and must never be loosened into `fromOwnBrowser`, which is a forgeable plan
-heuristic. MCP never reads the session, and the dashboard never reads a token.
+the optional `ext.SessionAccounts`); the edit password.
+
+- **Standing** is `accountStanding` (server.go), the one rule: the owner, or an
+  admin listed in `Meta.Admins` (`Until` nil or ahead) while
+  `ext.SharingAccounts.SharingAllowed` says BOTH the owner's and the admin's
+  plan share. No provider, no admins. An unknown plan (a lookup error) is a 503
+  for that one request, never a pass and never an ended share.
+- **An admin may do all the owner may** except the owner-only actions. In the
+  core, `refuseUnlessOwner` / `ownerOnly` (`internal/httpapi/sharing.go`) refuse
+  role `admin` ONLY, for: delete the site, set/clear `expires_at` (checked per
+  field in the settings write) and `DELETE …/git`. A password actor stays
+  owner-equivalent, as before.
+- **Rotate, transfer and share management are refused by the extension**, not by
+  `refuseUnlessOwner`: the dashboard's rotate and delete check `p.owns`, and
+  the offer and invitation routes check the owner by meta
+  (`ownedSiteIDs`, `ownsByMeta`). An admin reaches them as a stranger.
+- **An admin's upload token** re-checks the standing on every use
+  (`uploadTokenStands`; WebDAV and the files POST). A git push re-checks it from
+  `meta.json` after `BeginGitWrite` (`gitStandingHolds`; `WriteRPCRefusal` prints
+  the refusal on the POST).
+- **`tags`** an API or MCP caller sees are the caller's own: the owner's
+  `Meta.Tags`, or the admin's private list (`AdminTags`), never the owner's. See
+  "Ownership" below.
+- **`sessionStanding` is a real CSRF boundary**: the session counts only with
+  `X-Sitebin-Session: 1` and a same-origin `Sec-Fetch-Site` when one is sent. It
+  must never be loosened into `fromOwnBrowser`, which is a forgeable plan
+  heuristic. MCP never reads the session, and the dashboard never reads a token.
+
 See `docs/superpowers/specs/2026-09-25-owner-session-edit-design.md`.
 
 **Creation has the same rule.** A cross-origin browser request's session counts
@@ -144,14 +152,17 @@ the plan flag `sharing`. Read
   them. The loop (`ownership_loop.go`) reconciles hourly, both ways: a stray or
   dangling marker is unlinked, a missing one linked — but only past a 10-minute
   grace (`markerGrace`), because a transfer links the new owner first.
-- **Each move is ONE operation under the site lock, in core.**
-  `TransferSite`, `AdoptSite`, `SetAdmins(viewID, expectedOwner, by, edit)`
-  and `DeleteSiteIfOwner` (seam, `ext.OwnershipSites`; store: `TransferOwner`,
-  `AdoptOwner`, `UpdateAdmins`) check the owner under the lock and refuse with
-  `ErrNotOwner` otherwise; never check-then-write across two calls, and never
-  delete on a read error. They take `ext.ChangeBy` so the site's provenance
-  names the actor. The addresses that will not move are computed UNDER the
-  lock from fresh meta (`detach`), never from a list the caller read earlier.
+- **Each move is ONE operation under the site lock, in core**
+  (`ext.OwnershipSites`; store: `TransferOwner`, `AdoptOwner`, `UpdateAdmins`).
+  `TransferSite`, `SetAdmins(viewID, expectedOwner, by, edit)` and
+  `DeleteSiteIfOwner(viewID, owner)` check the owner under the lock and refuse
+  with `ErrNotOwner`; `AdoptSite` has no owner to check and refuses with
+  `ErrNotAdoptable` (not anonymous, locked or expired). Never check-then-write
+  across two calls, and never delete on a read error. The writers that record
+  (`TransferSite`, `AdoptSite`, `SetAdmins`) take `ext.ChangeBy`, so the site's
+  provenance names the actor; `DeleteSiteIfOwner` does not. The addresses that
+  will not move are computed UNDER the lock from fresh meta (`detach`), never
+  from a list the caller read earlier.
 - **A transfer is stamped like a creation, from the strict tier**
   (`effectiveTierStrict`: an unknown plan refuses the move, never fails open),
   through `stampGrant`, the one function creation uses. Only an expiry the owner

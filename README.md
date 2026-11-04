@@ -1653,7 +1653,7 @@ a `404`.
 
 ### Site ownership *(Enterprise)*
 
-A signed-in account can take an anonymous drop into its account, hand sites to
+On an instance running open, with no accounts, none of this exists. A signed-in account can take an anonymous drop into its account, hand sites to
 another account, and share a site with other accounts as admins. All three need
 the plan flag `sharing` (see [Enterprise configuration](#enterprise-configuration-all-startup-env-vars)):
 a tier that forgets the field gets nothing, like `custom_domains`. With
@@ -1666,8 +1666,8 @@ password, at `/account/adopt`. The password is never put in a URL. The site
 must be anonymous, not locked and not expired, and the account's plan and limits
 must hold it. It is then stamped as if the account had created it: caps, forms,
 trust and tier expiry. The edit password is kept, so existing deploys go on
-working. Every failure answers the same text, and attempts are rate limited per
-account and per IP.
+working. Every failure answers the same text, and attempts are limited to 10 an
+hour per account and per IP.
 
 **Transfer.** "Transfer" on the dashboard offers a **bundle of 1 to 50 sites**
 to an email address, with an *accept by* date (required, at most 365 days ahead)
@@ -1705,7 +1705,7 @@ keeps running. It ends on decline, cancel, accept-by, or when either account is
 deleted. Both parties are mailed.
 
 **Share.** The owner invites an account by email, with an optional *until*
-date, from the site's row on the dashboard. At most 10 admins per site; an invitation lapses
+date, from the site's row on the dashboard. At most 10 admins per site, counting open invitations too; an invitation lapses
 after 30 days. The invitee accepts on their dashboard, where the site then
 appears marked "shared by". An admin may do everything the owner may, on the edit
 page, through their own account API token and through their own MCP connection,

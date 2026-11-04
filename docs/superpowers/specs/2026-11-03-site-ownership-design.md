@@ -627,10 +627,16 @@ content is in the rows above and below.)
   host rules; closing it would need a multi-site lock.
 - **P29, `SetAdmins`.** `SetAdmins(viewID, expectedOwner, by, edit)` refuses
   with `ErrNotOwner` when the owner changed, which closes accept-after-transfer.
-- **P30, P31, loop.** The loop reconciles the account index both ways, hourly
-  (links a missing marker, unlinks a stray or dangling one), and reconciles
-  share markers and admin tags. Invitations lapse silently; expired admin
-  entries go through `SetAdmins`.
+- **P30, loop.** Hourly, the loop reconciles both kinds of marker against
+  meta: account markers (links a missing one, unlinks a stray or dangling one)
+  and share markers (against `Meta.Admins`). It also prunes an admin's registry
+  tags for sites they no longer administer.
+- **P31, mail and lapses.** The "offer available" mail goes out only while the
+  offer is not paused; `NotifiedAt` stays nil until then. The accept-by date
+  keeps running while paused. Invitations lapse silently (no mail); expired
+  admin entries are removed through `SetAdmins`.
+- **P36.** Local account deletion still cancels the subscription first, then
+  deletes; only the message changed.
 - **P32.** `HostConflicts` returns an error; an error is treated as unknown.
 - **P33.** The "transfer expired" mail skips a recipient who was never
   notified.
@@ -650,8 +656,8 @@ content is in the rows above and below.)
 - After a transfer, the old owner's provenance entries on the site leave their
   GDPR export (they are the site's data now) and are not erased with their
   account; only the 90-day retention ends them.
-- Adopting through a public view URL spends that site's target limiter (the
-  attempts are bounded: 10 an hour per account and IP, paid plan only).
+- Adopting through a public view URL spends that site's target limiter (attempts
+  are bounded: 10 an hour per account and per IP, burst and sustained, paid plan only).
 - `/account/tags` and the bulk tag operations do not yet cover an admin's
   shared-site tags; an admin sets them per site.
 - `gitrepo.WriteRPCRefusal` exists for refusals on a git RPC POST, where the
