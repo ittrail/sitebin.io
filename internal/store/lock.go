@@ -148,6 +148,11 @@ func (s *Store) SetLock(site *Site, lock *SiteLock) (changed bool, err error) {
 		changed = true
 		return nil
 	})
+	if err == nil {
+		// A locked site's repository is evidence: a push still writing
+		// into it is cancelled and waited for (gitwrite.go).
+		s.stopGitWriteIfLocked(site)
+	}
 	return changed, err
 }
 
@@ -189,6 +194,11 @@ func (s *Store) ReleaseLock(site *Site, by string) (released bool, err error) {
 		released = unlockMeta(m)
 		return nil
 	})
+	if err == nil {
+		// The lock that stays — the operator's, or a scanner's in place of
+		// the account's — stops a push like any lock.
+		s.stopGitWriteIfLocked(site)
+	}
 	return released, err
 }
 

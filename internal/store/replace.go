@@ -49,8 +49,8 @@ var (
 
 // Replacement stages a replace-all upload. What is written to it counts
 // against the site's caps on its own — the content it replaces is going away —
-// and nothing the site serves changes until Commit. A failed upload is Aborted
-// and the site stays exactly as it was.
+// beside the site's repository, and nothing the site serves changes until
+// Commit. A failed upload is Aborted and the site stays exactly as it was.
 type Replacement struct {
 	s        *Store
 	site     *Site
@@ -124,6 +124,14 @@ func (s *Store) BeginReplace(site *Site) (*Replacement, error) {
 			s.releaseReplace(site.ViewID)
 		}
 	}()
+	// The content being replaced counts for nothing; the repository stays and
+	// shares the byte cap, so the budget is the cap minus its bytes now.
+	// Commit checks no bytes: a push that lands while this upload streams can
+	// leave the site over its cap, which then refuses the next write.
+	u, err := s.SiteUsage(site)
+	if err != nil {
+		return nil, err
+	}
 	tmp := s.tmpDir()
 	if err := os.MkdirAll(tmp, 0o755); err != nil {
 		return nil, err
@@ -145,7 +153,7 @@ func (s *Store) BeginReplace(site *Site) (*Replacement, error) {
 	}
 	rep := &Replacement{
 		s: s, site: site, dir: dir, root: root,
-		maxBytes: s.EffMaxBytes(site), maxFiles: s.EffMaxFiles(site),
+		maxBytes: s.EffMaxBytes(site) - u.GitBytes, maxFiles: s.EffMaxFiles(site),
 	}
 	begun = true
 	return rep, nil

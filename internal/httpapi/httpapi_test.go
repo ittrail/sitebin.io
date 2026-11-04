@@ -2276,3 +2276,13 @@ func TestCSPReportCountsDistinctSourcesAndLimitsEach(t *testing.T) {
 		t.Errorf("distinct sources = %d, want at least 3", st.CSPSources)
 	}
 }
+
+// A second push to a site while one runs is a conflict, like a second
+// replace, on every route that reaches the store's git write registry.
+func TestStoreErrorGitBusyIsConflict(t *testing.T) {
+	w := httptest.NewRecorder()
+	storeError(w, fmt.Errorf("delete repository: %w", store.ErrGitBusy))
+	if w.Code != 409 || !strings.Contains(w.Body.String(), store.ErrGitBusy.Error()) {
+		t.Fatalf("ErrGitBusy = %d %s, want 409 with the reason", w.Code, w.Body.String())
+	}
+}

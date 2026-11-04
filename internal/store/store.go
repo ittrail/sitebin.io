@@ -48,6 +48,7 @@ const (
 	domainIndex   = "domain-index"
 	addressIndex  = "address-index"
 	rawDirName    = "_raw"
+	gitDirName    = "git"
 
 	// SPAMarker is an empty file in a webserver site's files/ that a Caddy
 	// file-matcher keys on to enable index.html fallback for unknown paths.
@@ -154,6 +155,14 @@ type Store struct {
 	// mu: one per site at a time. See BeginReplace.
 	replacing map[string]bool
 
+	// gitMu guards the git write registry, apart from mu and from every site
+	// lock (a push never holds one): the push running on each site, by view
+	// id, and the sites a delete is removing, where none may begin. See
+	// gitwrite.go.
+	gitMu      sync.Mutex
+	gitRunning map[string]*gitWrite
+	gitBarred  map[string]error
+
 	// scanner serves the abuse rules every write is scanned with, and
 	// scanHook hears every decision. See guard.go.
 	scanner  *abuse.Loader
@@ -180,6 +189,12 @@ type Site struct {
 func (s *Site) Dir() string      { return s.dir }
 func (s *Site) FilesDir() string { return filepath.Join(s.dir, "files") }
 
+// GitDir is the site's Git repository: a bare repository beside files/, so
+// it is never served, listed, zipped, mounted or scanned as content, and it
+// goes with the site folder. It exists once the first Git request made it.
+// Its bytes count against the site's cap (SiteUsage).
+func (s *Site) GitDir() string { return filepath.Join(s.dir, gitDirName) }
+
 // ContentDir is where the user's own files live: files/ in webserver mode,
 // files/_raw in viewer mode (files/ then holds the generated wrapper).
 func (s *Site) ContentDir() string {
@@ -201,6 +216,8 @@ func New(dataDir, baseDomain string, maxSiteBytes int64, maxFiles int) (*Store, 
 		locks:        make(map[string]*sync.Mutex),
 		statsLocks:   make(map[string]*sync.Mutex),
 		replacing:    make(map[string]bool),
+		gitRunning:   make(map[string]*gitWrite),
+		gitBarred:    make(map[string]error),
 		scanner:      abuse.NewLoader(filepath.Join(dataDir, AbuseRulesFile)),
 	}
 	for _, d := range []string{s.sitesDir(), s.editIndexDir(), s.domainIndexDir(), s.pathIndexDir(), s.addressIndexDir()} {
@@ -413,11 +430,6 @@ func (s *Store) deleteChecked(site *Site, check func(*Meta) error) error {
 	l := s.lockSite(site.ViewID)
 	l.Lock()
 	defer l.Unlock()
-	// The stats lock too: a view counted mid-delete would write stats.json
-	// into a folder being removed.
-	sl := s.lockStats(site.ViewID)
-	sl.Lock()
-	defer sl.Unlock()
 
 	meta, err := readMeta(site.dir)
 	var m *Meta
@@ -427,6 +439,20 @@ func (s *Store) deleteChecked(site *Site, check func(*Meta) error) error {
 	if err := check(m); err != nil {
 		return err
 	}
+	// A push writes into git/ without the site lock: it is cancelled, and
+	// its git process waited for, before the folder goes — otherwise git,
+	// finishing, recreates sites/<id>/git/objects/xx after the removal. No
+	// push may begin until the folder is gone. See gitwrite.go.
+	unbar := s.barGitWrites(site.ViewID, ErrNotFound)
+	defer unbar()
+	s.stopGitWrite(site.ViewID)
+	// The stats lock too: a view counted mid-delete would write stats.json
+	// into a folder being removed. Taken once the push has ended — a push
+	// records its provenance, under this lock, before it ends.
+	sl := s.lockStats(site.ViewID)
+	sl.Lock()
+	defer sl.Unlock()
+
 	if m != nil {
 		for _, d := range meta.CustomDomains {
 			s.removeLink(d)

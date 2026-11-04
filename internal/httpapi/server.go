@@ -305,6 +305,8 @@ func storeError(w http.ResponseWriter, err error) {
 		writeError(w, 410, err.Error())
 	case errors.Is(err, store.ErrReplaceBusy):
 		writeError(w, 409, msgReplaceBusy)
+	case errors.Is(err, store.ErrGitBusy):
+		writeError(w, 409, store.ErrGitBusy.Error())
 	case errors.As(err, new(*store.HeldError)):
 		// The abuse guard locked the site on this very write.
 		var held *store.HeldError

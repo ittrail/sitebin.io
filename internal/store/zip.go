@@ -34,7 +34,8 @@ func (s *Store) ExtractZip(site *Site, r io.ReaderAt, size int64) error {
 	if err := s.CheckUnlocked(site); err != nil {
 		return err
 	}
-	used, count, err := usage(site.ContentDir())
+	// Files and repository share the byte cap (SiteUsage).
+	u, err := s.SiteUsage(site)
 	if err != nil {
 		return err
 	}
@@ -43,7 +44,7 @@ func (s *Store) ExtractZip(site *Site, r io.ReaderAt, size int64) error {
 		return err
 	}
 	defer root.Close()
-	if _, _, err := extractEntries(root, entries, used, count, maxBytes, maxFiles, liveGuard{s: s, site: site}); err != nil {
+	if _, _, err := extractEntries(root, entries, u.Bytes(), u.Files, maxBytes, maxFiles, liveGuard{s: s, site: site}); err != nil {
 		return err
 	}
 	return s.renewExpiryLocked(site)

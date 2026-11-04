@@ -184,11 +184,12 @@ func (s *Store) saveFileLocked(site *Site, rel string, r io.Reader) error {
 	if err := s.CheckUnlocked(site); err != nil {
 		return err
 	}
-	used, count, err := usage(site.ContentDir())
+	// Files and repository share the byte cap (SiteUsage).
+	u, err := s.SiteUsage(site)
 	if err != nil {
 		return err
 	}
-	if _, _, err := s.writeFileLocked(site, rel, r, used, count, s.EffMaxBytes(site), s.EffMaxFiles(site)); err != nil {
+	if _, _, err := s.writeFileLocked(site, rel, r, u.Bytes(), u.Files, s.EffMaxBytes(site), s.EffMaxFiles(site)); err != nil {
 		return err
 	}
 	return s.renewExpiryLocked(site)

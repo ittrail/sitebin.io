@@ -347,6 +347,10 @@ func (s *Store) settleLocked(site *Site, results []abuse.Result, source, blocked
 		site.Meta = meta
 	}
 	if ev.Held() {
+		// The hold is a lock: a push writing into the repository is
+		// cancelled and waited for, like for any lock (gitwrite.go). A push
+		// never takes the site lock, which the caller holds.
+		s.stopGitWrite(site.ViewID)
 		return ev, &HeldError{Lock: meta.Locked}
 	}
 	return ev, nil

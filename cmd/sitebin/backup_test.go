@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -481,5 +482,53 @@ func TestBackupSkipsAFolderSwappedWhileInsideIt(t *testing.T) {
 				t.Errorf("the other site was not backed up: %q %v", b, err)
 			}
 		})
+	}
+}
+
+// A site's Git repository lives in its folder beside files/ (sites/<id>/git/),
+// and the backup walks the whole data root: it is in every backup.
+func TestBackupIncludesRepository(t *testing.T) {
+	src := t.TempDir()
+	site := filepath.Join(src, "sites", "abc")
+	pack := filepath.Join(site, "git", "objects", "pack", "pack-1.pack")
+	os.MkdirAll(filepath.Join(site, "files"), 0o755)
+	os.MkdirAll(filepath.Dir(pack), 0o755)
+	os.WriteFile(filepath.Join(site, "meta.json"), []byte(`{"id":"abc"}`), 0o644)
+	os.WriteFile(filepath.Join(site, "git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644)
+	os.WriteFile(pack, []byte("PACK"), 0o644)
+
+	archive := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if err := backupData(src, archive); err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	f, err := os.Open(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := tar.NewReader(gz)
+	got := map[string]string{}
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(tr)
+		got[h.Name] = string(b)
+	}
+	for name, want := range map[string]string{
+		"sites/abc/git/HEAD":                     "ref: refs/heads/main\n",
+		"sites/abc/git/objects/pack/pack-1.pack": "PACK",
+	} {
+		if got[name] != want {
+			t.Errorf("%s in the archive: %q, want %q (archive holds %d entries)", name, got[name], want, len(got))
+		}
 	}
 }

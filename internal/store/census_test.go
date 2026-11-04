@@ -19,6 +19,12 @@ import (
 // see guard.go) and added a row to TestEveryWriteSurfaceIsScanned in
 // internal/httpapi. A row whose call is gone fails too, so the list stays
 // true.
+//
+// Removals are not writes and are not counted here. The one that touches a
+// site folder outside files/ is classified all the same:
+//   - gitwrite.go:Store.DeleteGitRepo:RemoveAll — the site's repository
+//     (sites/<id>/git/), not served content; under the site lock, refused on
+//     a locked site, after the running push stopped.
 var writeCensus = map[string]string{
 	// the guarded paths themselves
 	"internal/store/files.go:writeFileIn:OpenFile":              "the temp file of every guarded write",
