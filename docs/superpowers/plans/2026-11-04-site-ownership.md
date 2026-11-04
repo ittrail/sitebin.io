@@ -788,3 +788,25 @@ check.
   `store.Quota.Git` (in `ApplyQuota`) and `ext.CreateGrant.Git *bool`.
 - **Sweep:** `reconcileGit` writes only `quota_git` back, through
   `Store.SetQuotaGit`, like `reconcileTrust`.
+
+## Git handoff notes (from `sitebin-project-c6`, 2026-11-04, branch e0644c2)
+
+Git lands on main first; this branch rebases onto it. The names above are
+confirmed unchanged. Three additions follow from c6's gate notes:
+
+- **Task 1:** `TransferOwner` calls `s.stopGitWrite(site.ViewID)` under the
+  site lock after its write, as `Delete` and `DeleteGitRepo` do
+  (`internal/store/gitwrite.go`). A push the old owner started never
+  finishes into the new owner's site.
+- **Task 3:**
+  - `gitPush` (`internal/httpapi/gitserve.go`, right after `BeginGitWrite`)
+    re-reads meta and refuses when the owner or the edit-password hash
+    changed since `gitAuth`. This closes the window between auth and
+    registration; it does not run the password hash again.
+  - Standing covers every place that decides it: `editAuth` (whose actor
+    is `OwnerAccountID`), `accountStands` (also used by `mcpops.go`'s
+    actor and `gitAuth`), and ee `p.owns` (`dashboard.go`, `dashtags.go`).
+- **Credentials:** git resolves the credential from its shape (`sbp_` is a
+  token, a JWS is OAuth with the git marker, anything else is the edit
+  password, `sbu_` is refused). Rotating the password and moving the owner
+  therefore cut git access with no extra hook.
