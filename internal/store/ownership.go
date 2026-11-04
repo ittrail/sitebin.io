@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"log/slog"
 	"os"
 	"time"
 
@@ -35,24 +36,39 @@ func ownershipMeta(site *Site) (Meta, error) {
 	return m, nil
 }
 
-// commitOwnership writes m and, when stamped, applies the trust marker the
-// stamp decided, still under the site lock.
-func (s *Store) commitOwnership(site *Site, m Meta, trusted bool) error {
+// commitOwnership writes m, still under the site lock. The caller applies
+// the trust marker (applyMarker) after whatever must follow the write at once.
+func (s *Store) commitOwnership(site *Site, m Meta) error {
 	m.UpdatedAt = time.Now().UTC()
 	if err := writeMeta(site.dir, m); err != nil {
 		return err
 	}
 	site.Meta = m
-	return s.SetTrusted(site, trusted)
+	return nil
+}
+
+// applyMarker applies the trust marker the stamp decided. The ownership
+// change is already written, so a failure is logged, not returned: the
+// sweep's reconcileTrust corrects the marker later, and failing the call
+// would lose the new password that meta already holds the hash of.
+func (s *Store) applyMarker(site *Site, trusted bool) {
+	if err := s.SetTrusted(site, trusted); err != nil {
+		slog.Warn("ownership: could not apply the trust marker; the sweep will correct it", "site", site.ViewID, "err", err)
+	}
 }
 
 // TransferOwner hands the site from account from to account to, under one
 // site lock. It refuses unless from owns the site (ErrNotOwner) and the site
-// is not locked (ErrLocked). Each address in detach is detached; Tags and
-// Admins are cleared; stamp restamps the new owner's caps (and says whether
-// the site is trusted); and a fresh edit password is set, returned once, so
-// the old owner's password stops working. A push the old owner started is
-// cancelled before the site changes hands.
+// is not locked (ErrLocked), and refuses an empty recipient (ErrNotOwner: it
+// would leave an anonymous, adoptable site). Every address in detach is
+// normalized first, so a bad one refuses the whole call with nothing
+// detached; then each is detached. Tags and Admins are cleared; stamp
+// restamps the new owner's caps (and says whether the site is trusted); and
+// a fresh edit password is set, returned once, so the old owner's password
+// stops working. A push the old owner started is cancelled right after the
+// write, still under the lock. A trust-marker failure is logged, not
+// returned (the sweep corrects the marker), so the new password always
+// reaches the caller once meta holds it.
 func (s *Store) TransferOwner(site *Site, from, to string, detach []string, stamp func(*Meta, time.Time) bool) (newPassword string, err error) {
 	l := s.lockSite(site.ViewID)
 	l.Lock()
@@ -62,17 +78,21 @@ func (s *Store) TransferOwner(site *Site, from, to string, detach []string, stam
 	if err != nil {
 		return "", err
 	}
-	if from == "" || m.OwnerAccountID != from {
+	if to == "" || from == "" || m.OwnerAccountID != from {
 		return "", ErrNotOwner
 	}
 	if m.Locked != nil {
 		return "", ErrLocked
 	}
+	addrs := make([]string, 0, len(detach))
 	for _, a := range detach {
 		d, err := normalizeAddress(a)
 		if err != nil {
 			return "", err
 		}
+		addrs = append(addrs, d)
+	}
+	for _, d := range addrs {
 		if err := s.removeDomainLocked(site, &m, d); err != nil && !errors.Is(err, ErrNotFound) {
 			return "", err
 		}
@@ -87,10 +107,11 @@ func (s *Store) TransferOwner(site *Site, from, to string, detach []string, stam
 	}
 	pw := ids.NewEditPassword()
 	m.EditPasswordHash = auth.HashPassword(pw)
-	if err := s.commitOwnership(site, m, trusted); err != nil {
+	if err := s.commitOwnership(site, m); err != nil {
 		return "", err
 	}
 	s.stopGitWrite(site.ViewID)
+	s.applyMarker(site, trusted)
 	return pw, nil
 }
 
@@ -107,7 +128,7 @@ func (s *Store) AdoptOwner(site *Site, to string, stamp func(*Meta, time.Time) b
 		return err
 	}
 	now := time.Now().UTC()
-	if m.OwnerAccountID != "" || m.Locked != nil || m.Expired(now) {
+	if to == "" || m.OwnerAccountID != "" || m.Locked != nil || m.Expired(now) {
 		return ErrNotAdoptable
 	}
 	m.OwnerAccountID = to
@@ -115,7 +136,11 @@ func (s *Store) AdoptOwner(site *Site, to string, stamp func(*Meta, time.Time) b
 	if stamp != nil {
 		trusted = stamp(&m, now)
 	}
-	return s.commitOwnership(site, m, trusted)
+	if err := s.commitOwnership(site, m); err != nil {
+		return err
+	}
+	s.applyMarker(site, trusted)
+	return nil
 }
 
 // UpdateAdmins edits the site's admins under the site lock. The result is

@@ -2,6 +2,8 @@ package store
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -205,4 +207,58 @@ func TestUpdateAdmins(t *testing.T) {
 	if err := s.UpdateAdmins(site, add("z")); !errors.Is(err, ErrLocked) {
 		t.Errorf("locked: %v", err)
 	}
+}
+
+func TestTransferOwnerRefusesEmptyRecipient(t *testing.T) {
+	s := newTestStore(t)
+	site := ownSite(t, s, "a")
+	if _, err := s.TransferOwner(site, "a", "", nil, nil); !errors.Is(err, ErrNotOwner) {
+		t.Fatalf("transfer to nobody: %v", err)
+	}
+	if got, _ := s.ByViewID(site.ViewID); got.Meta.OwnerAccountID != "a" {
+		t.Errorf("owner became %q", got.Meta.OwnerAccountID)
+	}
+	anon := ownSite(t, s, "")
+	if err := s.AdoptOwner(anon, "", nil); !errors.Is(err, ErrNotAdoptable) {
+		t.Fatalf("adopt for nobody: %v", err)
+	}
+}
+
+func TestTransferOwnerBadDetachAddressDetachesNothing(t *testing.T) {
+	s, site := redirectSite(t, "a.example", "b.example")
+	if err := s.Update(site, func(m *Meta) error { m.OwnerAccountID = "a"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.TransferOwner(site, "a", "b", []string{"a.example", "not a domain!"}, nil); err == nil {
+		t.Fatal("a bad address did not refuse the call")
+	}
+	got, _ := s.ByViewID(site.ViewID)
+	if got.Meta.OwnerAccountID != "a" || len(got.Meta.CustomDomains) != 2 {
+		t.Fatalf("partly done: owner %q, domains %v", got.Meta.OwnerAccountID, got.Meta.CustomDomains)
+	}
+	if _, err := s.ByDomain("a.example"); err != nil {
+		t.Errorf("a.example was detached: %v", err)
+	}
+}
+
+func TestTransferOwnerMarkerFailureStillCompletes(t *testing.T) {
+	s := newTestStore(t)
+	site := ownSite(t, s, "a")
+	p := startFakePush(t, s, site)
+	// A directory where the trust marker belongs makes SetTrusted(true) fail.
+	if err := os.MkdirAll(filepath.Join(site.FilesDir(), TrustedMarker), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pw, err := s.TransferOwner(site, "a", "b", nil, func(*Meta, time.Time) bool { return true })
+	if err != nil || pw == "" {
+		t.Fatalf("a marker failure lost the password: %q, %v", pw, err)
+	}
+	got, _ := s.ByViewID(site.ViewID)
+	if got.Meta.OwnerAccountID != "b" || !auth.VerifyPassword(got.Meta.EditPasswordHash, pw) {
+		t.Fatal("meta does not hold the new owner and the returned password")
+	}
+	if !p.wasCancelled() {
+		t.Fatal("the old owner's push survived")
+	}
+	p.wait(t)
 }
