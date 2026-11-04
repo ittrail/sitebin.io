@@ -756,8 +756,11 @@ func TestTakeoverConcurrentAccepts(t *testing.T) {
 }
 
 func TestTakeoverAcceptVersusCancel(t *testing.T) {
-	e := newTakeEnv(t, "pro", true)
 	for round := 0; round < 6; round++ {
+		// A fresh pair of accounts each round: the test tier holds 3 sites,
+		// so after three won accepts a shared recipient would be full and the
+		// next accept refused by its plan (403), whoever wins the race.
+		e := newTakeEnv(t, "pro", true)
 		id := tid(10 + round)
 		e.site(id)
 		o := e.offer(id)
