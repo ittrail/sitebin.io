@@ -254,9 +254,14 @@ function render() {
 
   const pct = Math.min(100, (site.usage.bytes / site.usage.max_bytes) * 100);
   $("usage-fill").style.width = pct + "%";
+  // bytes counts the files and the Git repository together (they share the
+  // cap); with a repository, the note names both parts.
+  const gitB = site.usage.git_bytes || 0;
+  const used = gitB > 0
+    ? "Files " + fmtBytes(Math.max(0, site.usage.bytes - gitB)) + " · Git " + fmtBytes(gitB) + " · of " + fmtBytes(site.usage.max_bytes)
+    : fmtBytes(site.usage.bytes) + " of " + fmtBytes(site.usage.max_bytes);
   $("usage-note").textContent =
-    fmtBytes(site.usage.bytes) + " of " + fmtBytes(site.usage.max_bytes) +
-    " · " + site.usage.files + (site.usage.max_files ? "/" + site.usage.max_files : "") + " files";
+    used + " · " + site.usage.files + (site.usage.max_files ? "/" + site.usage.max_files : "") + " files";
 
   // name: never overwrite what is being typed (a container site re-renders
   // on a timer while it starts)

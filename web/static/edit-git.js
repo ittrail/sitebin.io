@@ -8,6 +8,24 @@
 // never through innerHTML, and a link's href is never built from it unencoded.
 "use strict";
 
+// gitCredentialLines are the `git config` lines that make the Git Credential
+// Manager sign in with the account (OAuth), for the repository at repoURL.
+// Git hands a credential helper only the scheme and host of a remote, unless
+// credential.useHttpPath is set, so the lines are scoped to the instance's
+// origin: lines keyed to the repository's URL would never be read. README.md
+// and the website's /docs/git/ show the same lines.
+function gitCredentialLines(repoURL, o) {
+  const base = new URL(repoURL).origin;
+  return [
+    "git config --global credential." + base + ".provider generic",
+    "git config --global credential." + base + ".oauthClientId " + o.client_id,
+    "git config --global credential." + base + ".oauthAuthorizeEndpoint " + o.authorize_endpoint,
+    "git config --global credential." + base + ".oauthTokenEndpoint " + o.token_endpoint,
+    "git config --global credential." + base + ".oauthDeviceEndpoint " + o.device_endpoint,
+    "git config --global credential." + base + ".oauthScopes \"" + (o.scopes || []).join(" ") + "\"",
+  ];
+}
+
 const gitTab = (() => {
   // Highlighting runs on text up to this size; the API returns at most
   // 512 KiB, and highlight.js on all of that is visibly slow, so a larger
@@ -35,6 +53,7 @@ const gitTab = (() => {
     path: "",
     logGen: 0,
     filesGen: 0,
+    commitGen: 0,  // the newest commit asked for; an older answer is dropped
     loadedAt: 0,
   };
 
@@ -142,18 +161,11 @@ const gitTab = (() => {
 
     const o = info.credentials && info.credentials.oauth;
     if (o) {
-      const base = info.url;
-      const lines = [
-        "git config --global credential." + base + ".provider generic",
-        "git config --global credential." + base + ".oauthClientId " + o.client_id,
-        "git config --global credential." + base + ".oauthAuthorizeEndpoint " + o.authorize_endpoint,
-        "git config --global credential." + base + ".oauthTokenEndpoint " + o.token_endpoint,
-        "git config --global credential." + base + ".oauthDeviceEndpoint " + o.device_endpoint,
-        "git config --global credential." + base + ".oauthScopes \"" + (o.scopes || []).join(" ") + "\"",
-      ];
       const sec = el("div", "gitoauth");
       sec.appendChild(el("strong", "", "Sign in with your account (OAuth)"));
-      sec.appendChild(cmdBlock(lines, "Copy all"));
+      sec.appendChild(cmdBlock(gitCredentialLines(info.url, o), "Copy all"));
+      sec.appendChild(el("p", "sub", "These lines make the account sign-in the way in for every repository on " +
+        new URL(info.url).host + ", on this machine: Git asks its credential manager per host, not per repository."));
       const note = el("p", "sub", "Git Credential Manager comes with Git for Windows; on macOS and Linux install it first: ");
       const a = el("a", "", "installation docs");
       a.href = "https://github.com/git-ecosystem/git-credential-manager/blob/release/docs/install.md";
@@ -171,6 +183,21 @@ const gitTab = (() => {
     const info = S.info;
     const box = q("git-status");
     box.textContent = "";
+
+    // A plan without Git and no repository: there is nothing to connect to,
+    // read or keep, only the upgrade.
+    const upgradeOnly = info.reason === "plan" && !info.exists;
+    q("git-sec-connect").classList.toggle("hidden", upgradeOnly);
+    q("git-lifecycle").classList.toggle("hidden", upgradeOnly);
+    if (upgradeOnly) {
+      const p = el("p", "gitplan", "Your plan does not include Git. ");
+      const a = el("a", "", "Upgrade your plan");
+      a.href = "/account";
+      p.appendChild(a);
+      p.appendChild(document.createTextNode(" to keep this site's source in a Git repository beside it."));
+      box.appendChild(p);
+      return;
+    }
 
     const u = site.usage;
     const gitB = u.git_bytes || 0;
@@ -194,6 +221,10 @@ const gitTab = (() => {
         : "none yet");
     }
     box.appendChild(dl);
+    if (info.exists) {
+      box.appendChild(el("p", "sub", "Force pushes are fine: the bytes of history one replaces come back " +
+        "within a day or two. “Delete repository” below frees all of them at once."));
+    }
 
     const life = q("git-expiry");
     life.textContent = info.expires_at ? "The site expires on " + fmtDay(info.expires_at) + "; the repository goes with it." : "";
@@ -235,6 +266,7 @@ const gitTab = (() => {
   }
 
   function selectRef(name) {
+    S.commitGen++; // a commit still loading must not open over this ref
     S.ref = name;
     S.commit = null;
     S.treeRef = name;
@@ -288,15 +320,19 @@ const gitTab = (() => {
   }
 
   async function openCommit(sha) {
+    // Only the newest click counts: a slow answer to an earlier one must
+    // neither show its commit nor point the Files section at it.
+    const gen = ++S.commitGen;
     try {
       const d = await api("GET", "/git/commit/" + encodeURIComponent(sha));
+      if (gen !== S.commitGen) return;
       S.commit = d;
       S.treeRef = d.sha;
       S.path = "";
       renderRefs();
       renderCommit();
       loadFiles();
-    } catch (err) { toast(err.message, true); }
+    } catch (err) { if (gen === S.commitGen) toast(err.message, true); }
   }
 
   function renderCommit() {
@@ -376,14 +412,21 @@ const gitTab = (() => {
       const t = await api("GET", "/git/tree" + qs({ ref: S.treeRef, path: S.path }));
       if (gen !== S.filesGen) return;
       renderTree(box, t);
-    } catch {
-      // The path may be a file (a deep link from nowhere); try as one.
+    } catch (err) {
+      if (gen !== S.filesGen) return;
+      // A path that is a file is "not found" as a folder: then, and only
+      // then, it is read as a file. Any other failure (no access, busy, the
+      // network) is shown as what it is.
+      if (err.status !== 404 || !S.path) {
+        box.appendChild(el("p", "inline-status err", err.message));
+        return;
+      }
       try {
         const b = await api("GET", "/git/blob" + qs({ ref: S.treeRef, path: S.path }));
         if (gen !== S.filesGen) return;
         renderBlob(box, b);
-      } catch (err) {
-        if (gen === S.filesGen) box.appendChild(el("p", "inline-status err", err.message));
+      } catch (err2) {
+        if (gen === S.filesGen) box.appendChild(el("p", "inline-status err", err2.message));
       }
     }
   }
@@ -509,17 +552,32 @@ const gitTab = (() => {
 
   // ---- the tab ----
 
-  async function show(force) {
+  // showError says why the tab could not load, in one place: showing the
+  // tab again replaces the message (or clears it), never adds another.
+  function showError(msg) {
     const panel = q("panel-git");
+    let p = q("git-error");
+    if (!p) {
+      p = el("p", "inline-status err");
+      p.id = "git-error";
+      panel.insertBefore(p, panel.firstChild);
+    }
+    p.textContent = msg;
+    p.classList.toggle("hidden", !msg);
+  }
+
+  async function show(force) {
     // Re-showing the tab keeps what the visitor was reading, unless a
     // minute has passed (a push may have landed since).
     if (!force && S.info && Date.now() - S.loadedAt < 60000) return;
     try {
       S.info = await api("GET", "/git");
     } catch (err) {
-      panel.appendChild(el("p", "inline-status err", err.message));
+      showError(err.message);
       return;
     }
+    showError("");
+    S.commitGen++;
     S.loadedAt = Date.now();
     renderConnect();
     renderStatus();
