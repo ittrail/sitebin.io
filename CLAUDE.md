@@ -517,7 +517,8 @@ second copy of the rule.
   (`ext.WithMCPCaller`) and the Git gate marks its credential question
   (`ext.WithGitCaller`); `ext.OAuthSurface` is true for either.
   `ext.Credential.OAuth` is honoured nowhere without a marker — `tokenOwns`
-  never, `accountForAPI` and `BearerCredential` in ee only with one. The Git
+  never; in ee, `accountForAPI` only with the MCP marker (`ext.IsMCPCaller`)
+  and `BearerCredential` with either (`ext.OAuthSurface`). The Git
   marker holds the token to its scopes like MCP does (`mcp.Allows`). A read-only token once could `DELETE /api/sites/{id}`. The
   verified credential rides to the tools in the context (`ext.WithCredential`),
   so a bearer is verified once per request.
@@ -574,14 +575,36 @@ deploys or restarts anything. Read
 
 - **One runner, one environment.** Every git process goes through
   `internal/gitrepo.Runner`. Its environment is built from an empty slice with
-  only `PATH` copied in (never `os.Environ()`): `GIT_CONFIG_NOSYSTEM`,
+  only `PATH` copied in (never `os.Environ()`): `GIT_DIR` = the repository,
+  absolute (git never searches the directories above it), `GIT_CONFIG_NOSYSTEM`,
   `GIT_ATTR_NOSYSTEM`, `GIT_CONFIG_GLOBAL` = an empty file under
   `<data>/gitstate/` (never `/dev/null`: Windows test hosts), `HOME`,
-  `GIT_TERMINAL_PROMPT=0`, `GIT_PROTOCOL` only when the client sent exactly
-  `version=2`. Settings travel as `-c` (empty `core.hooksPath`, fsck on,
-  `receive.autogc=false`, memory bounds, `receive.maxInputSize` for a push), so
-  the repository's own `config` cannot weaken them. Never add a way to run git
-  with anything else, and never run anything from a repository.
+  `GIT_TERMINAL_PROMPT=0`, `GIT_ALLOC_LIMIT=256m`, `GIT_PROTOCOL` only when
+  the client sent exactly `version=2`. Settings travel as `-c` (empty
+  `core.hooksPath`, fsck on with three benign legacy ids ignored —
+  `zeroPaddedFilemode`, `badTimezone`, `missingSpaceBeforeDate` — and nothing
+  else, `receive.autogc=false`, memory bounds, `core.bigFileThreshold=64m`,
+  `transfer.unpackLimit=1` and `receive.unpackLimit=1`, `receive.maxInputSize`
+  for a push), so the repository's own `config` cannot weaken them. Never add
+  a way to run git with anything else, and never run anything from a
+  repository.
+- **A pack is attacker-controlled; the bounds are why it cannot hurt.**
+  `GIT_ALLOC_LIMIT` makes a delta that claims gigabytes die at once (a few
+  kilobytes of pack once took a gigabyte of RSS); `bigFileThreshold` keeps a
+  single large file streaming whole, so it still pushes (a file over 256 MiB
+  sent as a delta of itself is refused; the docs give the client-side
+  `git -c core.bigFileThreshold=64m push`); `unpackLimit=1` keeps a
+  push the pack it came in, never exploded into loose objects. A cancelled
+  git dies with its whole process group (Linux; `taskkill /T` on Windows test
+  hosts), or its index-pack would hold the repository open.
+- **A response cannot hold a slot.** Every write of a smart HTTP answer gets a
+  deadline (`ResponseIdle`, 2 min, from the write's start) never past
+  `ResponseMax` (30 min from the response's start), which also bounds the git
+  command; a failed write cancels git, and the deadline is lifted when the
+  answer is done (the connection outlives it). Both are `gitrepo.Options`, so
+  tests use milliseconds. An RPC POST must carry
+  `application/x-git-<svc>-request` (else 415, before any credential work),
+  and every answer of the endpoint carries `nosniff` and `CSP: sandbox`.
 - **The gate is the password's shape** (`gitAuth`, `internal/httpapi/gitauth.go`):
   `sbu_` refused; `sbp_` through the same `tokenAccount`/`accountStands` the
   API uses; a compact JWS is an OAuth token; anything else is the edit
@@ -614,8 +637,19 @@ deploys or restarts anything. Read
   outside it. Otherwise a racing delete leaves an orphan folder. gc
   (`cleanup.CollectGit`, in the sweep, one repository at a time) registers
   through `BeginGitWrite` too and skips a busy or locked repository; it runs a
-  full `gc --prune=1.day.ago` on a repository pushed to since the
-  `sitebin-gc` marker (`gitrepo/gc.go`), because `gc --auto` never fires.
+  full `gc` pruning what nothing reached for a day (`--prune=<start − 24 h>`
+  from the runner's clock, so tests move time, not objects) on a repository
+  pushed to since the `sitebin-gc` marker (`gitrepo/gc.go`), because
+  `gc --auto` never fires — and ONCE MORE when the last collection began
+  within a day of the last push and that day has passed (`collectDue`): the
+  sweep runs minutes after a push, when what a force push replaced is still
+  too young to prune, and without the follow-up those bytes never came back.
+  Inside the same registration (no push runs) it first removes what a killed
+  push left in the object store (`RemoveLeftovers`: `objects/tmp_objdir-*`,
+  `objects/incoming-*`, `objects/pack/tmp_*`, never through a link); a push
+  whose git started and did not end cleanly marks the repository. The
+  bookkeeping after a push has ONE deadline (slot wait + one read), and stops
+  force checks after the first busy answer.
 - **The plan flag is stamped.** `Meta.QuotaGit` (`*bool`; nil is off with
   accounts, on without) follows the `Forms` rules: every `store.Quota`
   constructor passes `Git`, or `ApplyQuota` resets it. `reconcileGit` in the
@@ -625,9 +659,17 @@ deploys or restarts anything. Read
   tier-id change would. A plan without Git makes the repository read-only
   (`gitReasonPlan`), never deleted. A push does not renew a tier expiry.
 - **Provenance:** a push is recorded at the gate (`git-push`, refs changed,
-  bytes, credential kind); an update that could not be verified is labelled
-  "requested, not verified", never recorded as applied. "Delete repository" is
-  owner-only.
+  bytes, credential kind), one entry per push — `git-push` is standalone,
+  never merged, so each keeps its refs and the tab's last push is the newest;
+  an update that could not be verified is labelled "requested, not verified",
+  never recorded as applied. "Delete repository" is owner-only.
+- **The account sign-in lines are keyed to the origin** (`gitCredentialLines`
+  in `edit-git.js`): Git hands a credential helper only scheme and host, so
+  lines keyed to a repository's URL are never read. The tab, README and the
+  website's `/docs/git/` show the same lines. Their discovery
+  (`gitoauth.go`) runs one at a time on its own context, never the caller's,
+  outside the cache's mutex; the document must name the configured issuer,
+  and its endpoints must be https unless the issuer is http.
 
 ## Billing: three backends, one seam
 

@@ -666,3 +666,38 @@ now, ahead of it. So:
   gate today (the edit password, the owner's token, the owner's session),
   because today every one of them is the owner.
 - The plan is written against `main` at `462c0f9`.
+
+## Corrections (post-implementation, final review 2026-11-04)
+
+The final whole-branch review changed these rules; the sections above are
+left as designed.
+
+- **gc runs once more after the prune window.** A collection minutes after a
+  push (the sweep's interval) kept what the push replaced, which was younger
+  than a day, and then never ran again. A repository is now also collected
+  when its last collection began within a day of its last push and that day
+  has passed. gc prunes from the runner's clock (`--prune=<start - 24 h>`,
+  the same cutoff as `1.day.ago`). What an interrupted push left in the object
+  store (`tmp_objdir-*`, `incoming-*`, `pack/tmp_*`) is removed by the sweep
+  inside the site's registration, and such a push marks the repository.
+- **Memory bounds are fixed values:** `GIT_ALLOC_LIMIT=256m`,
+  `core.bigFileThreshold=64m`, `transfer.unpackLimit=1` (and
+  `receive.unpackLimit=1`). A pushed delta that claims gigabytes dies at once;
+  a push stays a pack. A single file above 256 MiB pushes whole but is refused
+  when Git sends it as a delta against an older version of itself (checked in
+  the Alpine image: 100 MiB pushes, clones, collects and zips; 300 MiB pushes
+  whole, its changed version is refused, and
+  `git -c core.bigFileThreshold=64m push` sends it whole and passes).
+- **`GIT_DIR`** names the repository in every git process's environment.
+- **Benign fsck messages** are ignored on push: `zeroPaddedFilemode`,
+  `badTimezone`, `missingSpaceBeforeDate`.
+- **Responses have write deadlines:** 2 minutes without progress per write,
+  30 minutes per answer; then git is cancelled and its slot freed.
+- **RPC requests** must carry `application/x-git-<svc>-request` (else 415), and
+  every answer carries `X-Content-Type-Options: nosniff` and
+  `Content-Security-Policy: sandbox`.
+- **Provenance:** `git-push` entries are never merged.
+- **The GCM lines are scoped to the instance's origin** (Git passes a
+  credential helper only scheme and host), as the example lines above show;
+  the tab, README and the website's `/docs/git/` print the same lines and say
+  they apply to every repository on the host, on that machine.

@@ -717,6 +717,11 @@ fails is refused, never retried as a weaker kind:
   git config --global credential.https://sitebin.example.com.oauthScopes "<scopes>"
   ```
 
+  The lines are keyed to the instance's address, not to one repository: Git
+  hands a credential helper only the scheme and host, so they make the
+  account sign-in the way in for **every repository on that host, on that
+  machine**.
+
   The sign-in is held to its scopes (`sitebin:sites:read` to fetch,
   `sitebin:sites:write` to push) and to the stack's consent gate: someone who
   has not accepted the current terms is told to sign in once in the browser.
@@ -744,10 +749,18 @@ stop rule counts files only).
 **Limits.** 512 MiB per push (`SITEBIN_GIT_MAX_PUSH_BYTES`); **one push per
 site at a time** (a second is refused); at most `SITEBIN_GIT_MAX_PROCESSES` Git
 processes on the instance; and a request is bounded by the server's 10-minute
-read timeout, so a very large first push may need to go in parts. Force pushes
-and branch deletion are allowed. Git LFS objects are not stored (pointer files
-push like any file). The server runs no hooks and no repository-supplied
-configuration.
+read timeout, so a very large first push may need to go in parts. An answer
+(a clone, a fetch, a push's report) is cut off when the client takes more than
+2 minutes to accept the next piece of it, or when it runs past 30 minutes. Git
+on the server makes no single allocation above 256 MiB: a file above 64 MiB is
+stored and streamed whole, so a single large file pushes and clones, but a file
+over 256 MiB that Git sends as a change against an older version of itself is
+refused (`remote unpack failed`); push that change with
+`git -c core.bigFileThreshold=64m push`, which sends the file whole. A push is
+kept as the pack it came in, and an RPC must carry Git's
+own content type. Force pushes and branch deletion are allowed. Git LFS
+objects are not stored (pointer files push like any file). The server runs no
+hooks and no repository-supplied configuration.
 
 **Plans.** On an instance with tiers, a tier's `"git": true` (absent = false)
 switches Git on for the sites it owns. It is stamped onto each site, and the
@@ -765,9 +778,12 @@ evidence until the lock is purged. "Delete repository" on the Git tab, or
 `DELETE /api/sites/{id}/git`, removes only the repository and frees its bytes
 at once; only the site's owner may. A push does not renew a tier-imposed
 expiry. History a force push replaced is collected by the cleanup sweep
-(`git gc --prune=1.day.ago` on a repository changed since its last
-collection), so its bytes come back within a day or two. Every push is
-recorded in the site's provenance (refs changed, bytes, credential kind).
+(`git gc` pruning what nothing has reached for a day, on a repository changed
+since its last collection, and once more a day after a push), so its bytes
+come back within a day or two. What an interrupted push (a client that hung
+up, a delete or a lock during the push) leaves in the repository is removed by
+the next sweep. Every push is recorded in the site's provenance (refs changed,
+bytes, credential kind), one entry per push.
 
 The edit page's **Git tab** shows the connect lines for this instance, the
 size inside the usage bar ("Files X · Git Y"), branches and tags, the history
