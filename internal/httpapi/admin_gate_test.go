@@ -610,3 +610,33 @@ func TestProvenanceRecordsAdmin(t *testing.T) {
 	}
 	want(t, last(t), provenance.SurfaceUploadToken, provenance.AuthUploadToken, "acct-2", provenance.RoleAdmin)
 }
+
+// The plan is asked only for an account the site's meta lists as an admin:
+// an owner, a stranger and an unshared site cost no lookup.
+func TestStandingAsksThePlanOnlyForListedAdmins(t *testing.T) {
+	e := newEnv(t, nil)
+	f := registerSharing(t, ext.CreateGrant{Trusted: true})
+	edit, _, _ := sharedSite(t, e, f)
+	calls := func() int {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.planCalls
+	}
+	for _, c := range []struct {
+		token string
+		code  int
+		asks  int
+	}{
+		{"sbp_owner", 200, 0},
+		{"sbp_other", 401, 0},
+		{"sbp_admin", 200, 2}, // the owner's plan and the admin's
+	} {
+		before := calls()
+		if w := e.public(t, bearer(bodyReq("GET", "/api/sites/"+edit, nil), c.token)); w.Code != c.code {
+			t.Fatalf("%s: %d, want %d", c.token, w.Code, c.code)
+		}
+		if got := calls() - before; got != c.asks {
+			t.Errorf("%s: SharingAllowed asked %d times, want %d", c.token, got, c.asks)
+		}
+	}
+}
