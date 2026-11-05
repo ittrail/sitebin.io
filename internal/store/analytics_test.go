@@ -69,6 +69,16 @@ func TestAnalyticsValidate(t *testing.T) {
 		{"funnel name 100", func(a *Analytics) { a.Funnels[0].Name = strings.Repeat("n", 100) }, ""},
 		{"goal id space", func(a *Analytics) { a.Goals[0].ID = "a b" }, "goals"},
 		{"goal name 101", func(a *Analytics) { a.Goals[0].Name = strings.Repeat("n", 101) }, "goals"},
+		// Event names count in characters, as the recorder counts them: a
+		// German name of 50 characters (more bytes, for the umlauts) is fine,
+		// 51 is not.
+		{"goal event of 50 characters with umlauts", func(a *Analytics) {
+			a.Goals[0].Value = strings.Repeat("Ä", 10) + strings.Repeat("ü", 10) + strings.Repeat("anfrage-", 3) + "größe!"
+		}, ""},
+		{"funnel event of 50 characters with umlauts", func(a *Analytics) {
+			a.Funnels[0].Steps[1].Value = "Bestellbestätigung für Größenänderung übermittelt!"
+		}, ""},
+		{"goal event of 51 characters", func(a *Analytics) { a.Goals[0].Value = strings.Repeat("ö", 51) }, "goals"},
 		{"dup funnel id", func(a *Analytics) { a.Funnels = append(a.Funnels, a.Funnels[0]) }, "funnels"},
 		{"dup goal id", func(a *Analytics) { a.Goals = append(a.Goals, a.Goals[0]) }, "goals"},
 	}

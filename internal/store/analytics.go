@@ -165,7 +165,7 @@ func analyticsTarget(typ, value string) error {
 			return fmt.Errorf("path %q must start with / and be at most %d characters", value, maxGlobLen)
 		}
 	case "event":
-		if value == "" || len(value) > maxEventName {
+		if value == "" || utf8.RuneCountInString(value) > maxEventName { // characters, as the recorder counts them
 			return fmt.Errorf("an event name is 1 to %d characters", maxEventName)
 		}
 	default:
