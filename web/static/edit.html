@@ -146,7 +146,7 @@
           <label><input type="radio" name="emode" value="viewer"><span>File viewer</span></label>
           <label class="hidden" id="mode-container"><input type="radio" name="emode" value="container"><span>Container</span></label>
         </div>
-        <span class="sub" id="mode-sub">Web server serves files as-is. File viewer renders one document in the browser.</span>
+        <span class="sub" id="mode-sub">Web server serves files as-is. File viewer lists the files by folder and shows each one in the browser.</span>
       </div>
       <div class="startnote hidden" id="startpage-note" role="status">
         <span>This site has files but no <code>index.html</code> at its root, so visitors see a 404 there.
@@ -158,6 +158,8 @@
         <div class="row">
           <select id="entry-file"></select>
         </div>
+        <span class="sub">The file list lets visitors browse every folder; a chosen file opens first,
+          with the list one click away.</span>
       </div>
       <div class="opt hidden" id="spawrap" style="margin-top:16px">
         <label class="switch">

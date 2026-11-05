@@ -303,7 +303,7 @@ function render() {
   // mode + entry
   const ct = site.container || {};
   $("mode-container").classList.toggle("hidden", !ct.available && site.mode !== "container");
-  $("mode-sub").textContent = "Web server serves files as-is. File viewer renders one document in the browser." +
+  $("mode-sub").textContent = "Web server serves files as-is. File viewer lists the files by folder and shows each one in the browser." +
     (ct.available ? " Container runs the project that sitebin-container-compose.yaml declares." : "");
   document.querySelector(`input[name=emode][value=${site.mode}]`).checked = true;
   $("card-container").classList.toggle("hidden", site.mode !== "container");
@@ -328,6 +328,12 @@ function render() {
   if (site.mode === "viewer") {
     const sel = $("entry-file");
     sel.innerHTML = "";
+    // "" opens the viewer on its file list; a file opens first otherwise.
+    const list = document.createElement("option");
+    list.value = "";
+    list.textContent = "File list (all files)";
+    if (!site.entry_file) list.selected = true;
+    sel.appendChild(list);
     for (const f of site.files) {
       const opt = document.createElement("option");
       opt.value = f.path;
@@ -1390,7 +1396,9 @@ document.querySelectorAll("input[name=emode]").forEach((r) =>
   r.addEventListener("change", () => put({ mode: r.value }, "Mode switched to " + r.value)));
 
 $("entry-file").addEventListener("change", (e) =>
-  put({ entry_file: e.target.value }, "Viewer now shows " + e.target.value));
+  put({ entry_file: e.target.value }, e.target.value
+    ? "Viewer now opens " + e.target.value
+    : "Viewer now opens on the file list"));
 
 $("set-viewpw").addEventListener("click", () => {
   const v = $("e-viewpw").value;

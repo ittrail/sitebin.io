@@ -481,8 +481,8 @@ input::placeholder { color: var(--ink-faint); }
           <label><input type="radio" name="mode" value="viewer"><span>File viewer</span></label>
         </div>
         <span class="sub">Web server serves your files as-is (index.html is the front door).
-          File viewer renders documents — PDF, Markdown, DOCX, images, code — right in the browser,
-          and offers everything else (installers, archives) as a download.</span>
+          File viewer lists your files by folder and shows them right in the browser — PDF, Markdown,
+          DOCX, images, code — with everything else (installers, archives) as a download.</span>
       </div>
 
       <div class="opt hidden" id="opt-unzip">
