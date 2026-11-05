@@ -161,11 +161,13 @@ export function fileHash(path) {
 
 // parseRoute reads the fragment: "" is the start page, "#/" the top folder,
 // "#/a/b/" a folder, "#/a/b.pdf" a file (or a folder written without its
-// slash — the caller decides). Anything else, or bad percent-encoding, is
-// "missing".
+// slash — the caller decides). A fragment that does not start with "#/" is
+// "other": an anchor inside the shown document (a table of contents,
+// #install) or an old #page=3 link, never an address of the list. A "#/"
+// address with bad percent-encoding or a "." / ".." segment is "missing".
 export function parseRoute(hash) {
   if (!hash || hash === "#") return { type: "start" };
-  if (!hash.startsWith("#/")) return { type: "missing" };
+  if (!hash.startsWith("#/")) return { type: "other" };
   let rest = hash.slice(2);
   const folder = rest === "" || rest.endsWith("/");
   if (folder) rest = rest.replace(/\/+$/, "");

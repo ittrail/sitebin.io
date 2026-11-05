@@ -85,17 +85,22 @@ export function icon(name, cls) {
 // ---- previews ----
 
 // Previews load only for tiles on screen. PDF first pages render two at a
-// time and are kept for the page's lifetime.
-const pdfPreviews = new Map(); // path -> Promise<string|null> (blob: URL)
+// time and are kept for the page's lifetime; a queued one whose tiles have
+// all left the page (scrolled past in a folder that was left, a new filter)
+// is dropped before it fetches anything.
+const pdfPreviews = new Map(); // path -> { promise, thumbs: Set<Element> }
 let pdfWorker = null;
 let pdfRunning = 0;
 const pdfQueue = [];
 
-function pdfjsLib() {
+// loadPdfjs loads the vendored pdf.js once, with ONE worker for the whole
+// page: the file view and the previews share it, so stepping through a
+// folder of PDFs never starts a worker per file.
+export function loadPdfjs() {
   return import(ASSETS + "/vendor/pdf.min.mjs").then((pdfjs) => {
     pdfjs.GlobalWorkerOptions.workerSrc = ASSETS + "/vendor/pdf.worker.min.mjs";
     if (!pdfWorker) pdfWorker = new pdfjs.PDFWorker();
-    return pdfjs;
+    return { pdfjs, worker: pdfWorker };
   });
 }
 
@@ -107,16 +112,27 @@ function runPdfQueue() {
   }
 }
 
-function pdfPreview(url, path, width) {
-  if (pdfPreviews.has(path)) return pdfPreviews.get(path);
-  const p = new Promise((resolve) => {
+function pdfPreview(url, path, width, thumb) {
+  const known = pdfPreviews.get(path);
+  if (known) {
+    known.thumbs.add(thumb);
+    return known.promise;
+  }
+  const entry = { promise: null, thumbs: new Set([thumb]) };
+  entry.promise = new Promise((resolve) => {
     pdfQueue.push(async () => {
+      if (![...entry.thumbs].some((t) => t.isConnected)) {
+        // Nobody is looking any more: drop it, and let a later tile ask again.
+        pdfPreviews.delete(path);
+        resolve(null);
+        return;
+      }
       let doc = null;
       try {
-        const pdfjs = await pdfjsLib();
+        const { pdfjs, worker } = await loadPdfjs();
         // Range requests only: a large PDF is never fetched whole for a tile.
         doc = await pdfjs.getDocument({
-          url, worker: pdfWorker, disableAutoFetch: true, disableStream: true,
+          url, worker, disableAutoFetch: true, disableStream: true,
         }).promise;
         const page = await doc.getPage(1);
         const base = page.getViewport({ scale: 1 });
@@ -135,8 +151,8 @@ function pdfPreview(url, path, width) {
     });
     runPdfQueue();
   });
-  pdfPreviews.set(path, p);
-  return p;
+  pdfPreviews.set(path, entry);
+  return entry.promise;
 }
 
 function showPreview(thumb, media) {
@@ -162,7 +178,7 @@ function loadPreview(thumb, file, rawURL) {
     v.src = rawURL(file.path) + "#t=0.5";
   } else if (kind === "pdf" && file.size <= PDF_PREVIEW_MAX) {
     const width = Math.min(480, Math.round(TILE_MAX * Math.min(window.devicePixelRatio || 1, 2)));
-    pdfPreview(rawURL(file.path), file.path, width).then((url) => {
+    pdfPreview(rawURL(file.path), file.path, width, thumb).then((url) => {
       if (!url || !thumb.isConnected) return;
       const img = new Image();
       img.alt = "";

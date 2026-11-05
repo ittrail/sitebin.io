@@ -9,7 +9,7 @@ import {
   rendererFor, buildTree, findFolder, parseRoute, folderHash, fileHash,
   baseName, dirName, resolveRelative, fmtBytes,
 } from "./files.js";
-import { renderFolderView, loadPrefs, savePrefs, orderedFiles, icon } from "./browser.js";
+import { renderFolderView, loadPrefs, savePrefs, orderedFiles, icon, loadPdfjs } from "./browser.js";
 
 const ASSETS = "/_sitebin/assets";
 const cfg = JSON.parse(document.getElementById("sitebin-config").textContent);
@@ -147,15 +147,22 @@ function folderChrome(path) {
 
 // ---- renderers ----
 
+// renderPDF draws every page. It stops, and frees the document, as soon as
+// the visitor has moved on: stepping through a folder of large PDFs must not
+// leave each one downloading and rendering into a page nobody sees.
 async function renderPDF(stage, path) {
-  const pdfjs = await import(ASSETS + "/vendor/pdf.min.mjs");
-  pdfjs.GlobalWorkerOptions.workerSrc = ASSETS + "/vendor/pdf.worker.min.mjs";
-  const doc = await pdfjs.getDocument(rawURL(path)).promise;
+  const { pdfjs, worker } = await loadPdfjs();
+  if (!stage.isConnected) return;
+  const task = pdfjs.getDocument({ url: rawURL(path), worker });
+  onLeave(() => task.destroy());
+  const doc = await task.promise;
+  if (!stage.isConnected) return;
   const wrap = el("div", "v-pdf");
   stage.appendChild(wrap);
   const maxWidth = Math.min(stage.clientWidth - 8, 900);
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   for (let i = 1; i <= doc.numPages; i++) {
+    if (!stage.isConnected) return;
     const page = await doc.getPage(i);
     const base = page.getViewport({ scale: 1 });
     const scale = maxWidth / base.width;
@@ -416,10 +423,21 @@ function loadCSS(href) {
 let current = { kind: "", path: "" };
 let folderView = null;
 const scrollByFolder = new Map();
+let leaving = [];
+
+// onLeave registers work to stop when the visitor leaves the current view.
+function onLeave(fn) {
+  leaving.push(fn);
+}
 
 function leave() {
   if (current.kind === "folder") scrollByFolder.set(current.path, window.scrollY);
   if (folderView) { folderView.cleanup(); folderView = null; }
+  const fns = leaving;
+  leaving = [];
+  for (const fn of fns) {
+    try { fn(); } catch { /* already gone */ }
+  }
 }
 
 function showFolder(path) {
@@ -463,7 +481,9 @@ async function showFile(path) {
     else if (kind === "download") renderDownload(target, path);
     else await renderText(target, path);
     loading.remove();
+    scrollToAnchor();
   } catch (err) {
+    if (!stage.isConnected) return; // the visitor moved on
     loading.className = "v-msg err";
     loading.textContent = "Could not display this file — " + err.message + ". Try the download button instead.";
   }
@@ -485,11 +505,24 @@ function showMissing() {
   stage.appendChild(box);
 }
 
+// scrollToAnchor follows a link that arrived with an anchor of the document
+// itself (#install): the browser looked for it before the file was rendered.
+function scrollToAnchor() {
+  if (parseRoute(location.hash).type !== "other") return;
+  let id;
+  try { id = decodeURIComponent(location.hash.slice(1)); } catch { return; }
+  const target = document.getElementById(id);
+  if (target) target.scrollIntoView();
+}
+
 // route shows what the fragment names. No fragment: the start page — the
-// chosen file, or the list.
+// chosen file, or the list. An anchor inside the shown document (a table of
+// contents, #install) leaves the view alone; arriving with one opens the
+// start page.
 function route() {
   const r = parseRoute(location.hash);
-  if (r.type === "start") {
+  if (r.type === "other" && current.kind) return;
+  if (r.type === "start" || r.type === "other") {
     if (cfg.entry) return showFile(cfg.entry);
     return showFolder("");
   }
@@ -503,9 +536,11 @@ function route() {
 
 // Keys: left/right step through a folder's files, Escape goes up to the
 // folder, "/" finds a file. Never while typing or while a control or player
-// has the focus.
+// has the focus, never as a held key's repeats, and the arrows not on a
+// table, text or notebook, which scroll sideways with them.
+const SCROLLS_SIDEWAYS = new Set(["table", "text", "notebook"]);
 document.addEventListener("keydown", (e) => {
-  if (e.altKey || e.ctrlKey || e.metaKey || e.defaultPrevented) return;
+  if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.defaultPrevented) return;
   const t = e.target;
   if (t && (t.isContentEditable || /^(INPUT|SELECT|TEXTAREA|VIDEO|AUDIO|BUTTON)$/.test(t.tagName))) return;
   if (current.kind === "file") {
@@ -514,6 +549,7 @@ document.addEventListener("keydown", (e) => {
     const r = parseRoute(location.hash);
     const here = r.type === "file" && fileIndex.has(r.path) ? r.path : current.path;
     if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      if (e.repeat || SCROLLS_SIDEWAYS.has(rendererFor(here))) return;
       const n = neighbours(here);
       const to = n && (e.key === "ArrowLeft" ? n.prev : n.next);
       if (to) { e.preventDefault(); location.hash = fileHash(to.path); }

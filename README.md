@@ -252,8 +252,9 @@ colours.
   the browser (PDF, Markdown, DOCX, CSV, notebooks, images, video, audio,
   code/text with highlighting); one it cannot show (an installer, an
   archive, a font) gets a download view. Every folder and file has its own
-  address (`#/docs/`, `#/docs/report.pdf`), ← → step through a folder,
-  Escape goes back to it. Dotfiles and `__MACOSX`, `Thumbs.db` and
+  address (`#/docs/`, `#/docs/report.pdf`); ‹ › step through a folder (so
+  do ← →, except in a table, text or notebook, where they scroll), Escape
+  goes back to it. Dotfiles and `__MACOSX`, `Thumbs.db` and
   `desktop.ini` are left out of the list. The raw files stay available under
   `/_raw/…`. Switching modes back and forth is lossless.
 - **Container** *(Enterprise)* — the site runs the project its
