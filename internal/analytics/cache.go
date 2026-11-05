@@ -9,15 +9,18 @@ import (
 	"reflect"
 	"slices"
 	"sync"
+	"time"
 )
 
 // Engine answers analytics queries from a site's day files. It keeps parsed
 // days in an LRU bounded by an estimate of their size in memory. A day is
 // keyed by its file's path, size and mtime, so an appended record (today's
 // file grows every second) or a rewritten file is never answered from an
-// older parse. It is safe for concurrent use.
+// older parse. Closed days also have a summary on disk, keyed the same way
+// (summary.go). It is safe for concurrent use.
 type Engine struct {
 	max int64
+	now func() time.Time // says which days are closed
 
 	mu      sync.Mutex
 	used    int64
@@ -29,13 +32,18 @@ type Engine struct {
 // NewEngine returns an engine whose parsed-day cache holds at most
 // maxBytes (estimated). A day bigger than that is parsed for each query.
 func NewEngine(maxBytes int64) *Engine {
-	return &Engine{max: maxBytes, items: map[string]*list.Element{}, loading: map[string]*dayLoad{}}
+	return &Engine{max: maxBytes, now: time.Now, items: map[string]*list.Element{}, loading: map[string]*dayLoad{}}
 }
 
-// Invalidate drops a day's parse, for a writer that rewrites a day file
-// (an import): a rewrite could keep the size and land in the same mtime
-// tick.
-func (e *Engine) Invalidate(siteDir, date string) { e.drop(DayFile(siteDir, date)) }
+// Invalidate drops a day's parse and deletes its summary, for a writer that
+// rewrites a day file (an import): a rewrite could keep the size and land in
+// the same mtime tick, and both are keyed by them. Deleting is best effort;
+// a summary left behind is still rebuilt once the file's size or mtime
+// differs.
+func (e *Engine) Invalidate(siteDir, date string) {
+	e.drop(DayFile(siteDir, date))
+	os.Remove(summaryFile(siteDir, date))
+}
 
 // parsedDay is a day file ready to query: its records sorted by time, and
 // for each record its visitor and its visit, both numbered within the day.
@@ -71,19 +79,20 @@ type dayLoad struct {
 	err  error
 }
 
-// day returns the parsed day file of date, nil when there is none.
+// day returns the parsed day file of date, nil when there is none, and the
+// key it was read under.
 //
 // The key is taken before the file is read, so a parse is never older than
 // its key: a file that changes in between is parsed again by the next query.
-func (e *Engine) day(siteDir, date string) (*parsedDay, error) {
+func (e *Engine) day(siteDir, date string) (*parsedDay, fileKey, error) {
 	path := DayFile(siteDir, date)
 	fi, err := os.Stat(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		e.drop(path)
-		return nil, nil
+		return nil, fileKey{}, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, fileKey{}, err
 	}
 	key := fileKey{fi.Size(), fi.ModTime().UnixNano()}
 
@@ -92,14 +101,14 @@ func (e *Engine) day(siteDir, date string) (*parsedDay, error) {
 		if ent := el.Value.(*cacheEntry); ent.key == key {
 			e.lru.MoveToFront(el)
 			e.mu.Unlock()
-			return ent.day, nil
+			return ent.day, key, nil
 		}
 		e.removeLocked(el)
 	}
 	if l, ok := e.loading[path]; ok && l.key == key {
 		e.mu.Unlock()
 		<-l.done
-		return l.day, l.err
+		return l.day, key, l.err
 	}
 	l := &dayLoad{key: key, done: make(chan struct{})}
 	e.loading[path] = l
@@ -115,7 +124,7 @@ func (e *Engine) day(siteDir, date string) (*parsedDay, error) {
 	}
 	e.mu.Unlock()
 	close(l.done)
-	return l.day, l.err
+	return l.day, key, l.err
 }
 
 func (e *Engine) putLocked(path string, key fileKey, d *parsedDay) {

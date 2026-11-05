@@ -144,7 +144,7 @@ func (e *Engine) Overview(siteDir string, q Query, compare bool) (Overview, erro
 		return Overview{}, err
 	}
 	acc := newOverviewAcc(starts)
-	if err := e.scan(siteDir, c, acc.add); err != nil {
+	if err := e.scan(siteDir, c, acc.add, acc.addSummary); err != nil {
 		return Overview{}, err
 	}
 	ov := Overview{Totals: acc.totals(), Series: acc.points(), Unit: unit}
@@ -158,7 +158,7 @@ func (e *Engine) Overview(siteDir string, q Query, compare bool) (Overview, erro
 			return Overview{}, err
 		}
 		prev := newOverviewAcc(nil)
-		if err := e.scan(siteDir, pc, prev.add); err != nil {
+		if err := e.scan(siteDir, pc, prev.add, prev.addSummary); err != nil {
 			return Overview{}, err
 		}
 		t := prev.totals()
@@ -169,7 +169,8 @@ func (e *Engine) Overview(siteDir string, q Query, compare bool) (Overview, erro
 
 // Table answers one dimension's rows over q, most first: the event table
 // by count, then visitors, every other by visitors, then views; ties by
-// value. total is the number of values. A limit of 0 or less is no limit.
+// value. Other, the values a day summary left out, comes last. total is the
+// number of rows. A limit of 0 or less is no limit.
 //
 // A visit-level dimension counts each visit holding a kept record under
 // its value: its visitor, and its kept page views ("click_id" a visit under
@@ -189,7 +190,7 @@ func (e *Engine) Table(siteDir string, q Query, dimName string, limit, offset in
 		return nil, 0, err
 	}
 	acc := newTableAcc(d)
-	if err := e.scan(siteDir, c, acc.add); err != nil {
+	if err := e.scan(siteDir, c, acc.add, acc.addSummary); err != nil {
 		return nil, 0, err
 	}
 	rows = acc.sorted()
@@ -204,61 +205,27 @@ func (e *Engine) Table(siteDir string, q Query, dimName string, limit, offset in
 
 // EventData answers the data properties of the kept events named name: for
 // each key (sorted), its values by the number of events carrying them.
+// Other, what a day summary left out, comes last in both.
 func (e *Engine) EventData(siteDir string, q Query, name string) ([]KeyValues, error) {
 	c, err := compile(q.From, q.To, q.Loc, q.Filters)
 	if err != nil {
 		return nil, err
 	}
-	keys := map[string]map[string]*int{}
-	var buf []byte
+	acc := newDataAcc()
 	err = e.scan(siteDir, c, func(s *dayScan) {
 		for i := s.lo; i < s.hi; i++ {
-			r := &s.d.recs[i]
-			if r.K != "e" || r.N != name || !s.selected(i) {
-				continue
-			}
-			for k, v := range r.D {
-				vals := keys[k]
-				if vals == nil {
-					vals = map[string]*int{}
-					keys[k] = vals
-				}
-				var n *int
-				if str, ok := v.(string); ok {
-					if n = vals[str]; n == nil {
-						n = new(int)
-						vals[str] = n
-					}
-				} else {
-					buf = appendData(buf[:0], v)
-					if n = vals[string(buf)]; n == nil {
-						n = new(int)
-						vals[string(buf)] = n
-					}
-				}
-				*n++
+			if r := &s.d.recs[i]; r.K == "e" && r.N == name && s.selected(i) {
+				acc.add(r)
 			}
 		}
+	}, func(s *Summary, _, _ int64) bool {
+		acc.addKeyValues(s.EventData[name])
+		return true
 	})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]KeyValues, 0, len(keys))
-	for k, vals := range keys {
-		kv := KeyValues{Key: k, Values: make([]ValueCount, 0, len(vals))}
-		for v, n := range vals {
-			kv.Values = append(kv.Values, ValueCount{Value: v, Count: *n})
-		}
-		slices.SortFunc(kv.Values, func(a, b ValueCount) int {
-			if c := cmp.Compare(b.Count, a.Count); c != 0 {
-				return c
-			}
-			return strings.Compare(a.Value, b.Value)
-		})
-		out = append(out, kv)
-	}
-	slices.SortFunc(out, func(a, b KeyValues) int { return strings.Compare(a.Key, b.Key) })
-	return out, nil
+	return acc.result(), nil
 }
 
 // Realtime answers the records of [now-30m, now], read in loc: the
@@ -300,7 +267,7 @@ func (e *Engine) Realtime(siteDir string, now time.Time, loc *time.Location) (Re
 		for i := max(s.lo, s.hi-realtimeLatest); i < s.hi; i++ {
 			latest = append(latest, &s.d.recs[i])
 		}
-	})
+	}, nil)
 	if err != nil {
 		return Realtime{}, err
 	}
@@ -391,10 +358,24 @@ func localDates(from, to time.Time, loc *time.Location, pad int) []string {
 
 // scan calls fn for each day of c that has records in range, prepared
 // under c's filters. Days come in date order and records in time order.
-func (e *Engine) scan(siteDir string, c *compiled, fn func(*dayScan)) error {
+//
+// A closed day, before today in c's zone, may instead be answered from its
+// summary (fromSummary): skipped when it holds no record in range, or
+// handed whole to whole, when whole is set.
+func (e *Engine) scan(siteDir string, c *compiled, fn func(*dayScan), whole wholeDay) error {
 	var s dayScan
+	today := LocalDate(e.now(), c.loc)
 	for _, date := range c.files {
-		d, err := e.day(siteDir, date)
+		if date < today {
+			done, err := e.fromSummary(siteDir, date, c, whole)
+			if err != nil {
+				return err
+			}
+			if done {
+				continue
+			}
+		}
+		d, _, err := e.day(siteDir, date)
 		if err != nil {
 			return err
 		}
@@ -694,7 +675,7 @@ func (a *tableAcc) add(s *dayScan) {
 
 // sorted returns the rows most first, then by value: events by count and
 // visitors, as Umami's events table sorts them, the rest by visitors and
-// views.
+// views. Other comes last.
 func (a *tableAcc) sorted() []Row {
 	rows := append(make([]Row, 0, len(a.rows)), a.rows...)
 	first, second := func(r Row) int { return r.Visitors }, func(r Row) int { return r.Views }
@@ -702,6 +683,9 @@ func (a *tableAcc) sorted() []Row {
 		first, second = func(r Row) int { return r.Count }, func(r Row) int { return r.Visitors }
 	}
 	slices.SortFunc(rows, func(x, y Row) int {
+		if c := otherLast(x.Value, y.Value); c != 0 {
+			return c
+		}
 		if c := cmp.Compare(first(y), first(x)); c != 0 {
 			return c
 		}
@@ -711,4 +695,86 @@ func (a *tableAcc) sorted() []Row {
 		return strings.Compare(x.Value, y.Value)
 	})
 	return rows
+}
+
+// dataAcc counts event data values by key, as EventData answers them.
+type dataAcc struct {
+	keys map[string]map[string]*int
+	buf  []byte
+}
+
+func newDataAcc() *dataAcc { return &dataAcc{keys: map[string]map[string]*int{}} }
+
+func (a *dataAcc) values(key string) map[string]*int {
+	vals := a.keys[key]
+	if vals == nil {
+		vals = map[string]*int{}
+		a.keys[key] = vals
+	}
+	return vals
+}
+
+// add counts an event's data properties, each value as tables show it.
+func (a *dataAcc) add(r *Record) {
+	for k, v := range r.D {
+		vals := a.values(k)
+		var n *int
+		if str, ok := v.(string); ok {
+			if n = vals[str]; n == nil {
+				n = new(int)
+				vals[str] = n
+			}
+		} else {
+			a.buf = appendData(a.buf[:0], v)
+			if n = vals[string(a.buf)]; n == nil {
+				n = new(int)
+				vals[string(a.buf)] = n
+			}
+		}
+		*n++
+	}
+}
+
+// addKeyValues adds counts already made, a day summary's.
+func (a *dataAcc) addKeyValues(kvs []KeyValues) {
+	for _, kv := range kvs {
+		vals := a.values(kv.Key)
+		for _, vc := range kv.Values {
+			n := vals[vc.Value]
+			if n == nil {
+				n = new(int)
+				vals[vc.Value] = n
+			}
+			*n += vc.Count
+		}
+	}
+}
+
+// result returns the keys sorted, each with its values most first, then by
+// value; Other comes last in both.
+func (a *dataAcc) result() []KeyValues {
+	out := make([]KeyValues, 0, len(a.keys))
+	for k, vals := range a.keys {
+		kv := KeyValues{Key: k, Values: make([]ValueCount, 0, len(vals))}
+		for v, n := range vals {
+			kv.Values = append(kv.Values, ValueCount{Value: v, Count: *n})
+		}
+		slices.SortFunc(kv.Values, func(x, y ValueCount) int {
+			if c := otherLast(x.Value, y.Value); c != 0 {
+				return c
+			}
+			if c := cmp.Compare(y.Count, x.Count); c != 0 {
+				return c
+			}
+			return strings.Compare(x.Value, y.Value)
+		})
+		out = append(out, kv)
+	}
+	slices.SortFunc(out, func(x, y KeyValues) int {
+		if c := otherLast(x.Key, y.Key); c != 0 {
+			return c
+		}
+		return strings.Compare(x.Key, y.Key)
+	})
+	return out
 }

@@ -101,17 +101,41 @@ func days(loc *time.Location, first, last string, filters ...Filter) Query {
 	return Query{From: f, To: time.Date(l.Year(), l.Month(), l.Day()+1, 0, 0, 0, 0, loc), Loc: loc, Filters: filters}
 }
 
-func newTestEngine() *Engine { return NewEngine(64 << 20) }
+// newTestEngine's today is after every fixture day, so it answers whole
+// days of unfiltered queries from day summaries.
+func newTestEngine() *Engine {
+	e := NewEngine(64 << 20)
+	e.now = func() time.Time { return tm("2027-01-01T12:00:00Z") }
+	return e
+}
 
+// rawEngine never summarises: before the year 1 no day is closed.
+func rawEngine(maxBytes int64) *Engine {
+	e := NewEngine(maxBytes)
+	e.now = func() time.Time { return time.Time{} }
+	return e
+}
+
+// overview answers qu through day summaries, and requires the raw scan's
+// answer to be the same.
 func overview(t *testing.T, dir string, qu Query, compare bool) Overview {
 	t.Helper()
 	ov, err := newTestEngine().Overview(dir, qu, compare)
 	if err != nil {
 		t.Fatal(err)
 	}
+	raw, err := rawEngine(64<<20).Overview(dir, qu, compare)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(ov, raw) {
+		t.Fatalf("summaries answer\n %+v\nthe raw scan\n %+v", ov, raw)
+	}
 	return ov
 }
 
+// table answers qu's dim through day summaries, and requires the raw
+// scan's answer to be the same.
 func table(t *testing.T, dir string, qu Query, dim string) []Row {
 	t.Helper()
 	rows, total, err := newTestEngine().Table(dir, qu, dim, 0, 0)
@@ -121,6 +145,11 @@ func table(t *testing.T, dir string, qu Query, dim string) []Row {
 	if total != len(rows) {
 		t.Fatalf("%s: total %d with %d rows and no limit", dim, total, len(rows))
 	}
+	raw, _, err := rawEngine(64<<20).Table(dir, qu, dim, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameRows(t, dim+" (summaries vs raw)", rows, raw)
 	return rows
 }
 
@@ -820,7 +849,7 @@ func TestVisitLevel(t *testing.T) {
 
 func TestEngineCacheSeesChanges(t *testing.T) {
 	dir := t.TempDir()
-	e := newTestEngine()
+	e := rawEngine(64 << 20)
 	qu := days(time.UTC, "2026-11-02", "2026-11-02")
 	writeDay(t, dir, "2026-11-02", []Record{pv("2026-11-02T10:00:00Z", "a", "/a")})
 	path := DayFile(dir, "2026-11-02")
@@ -886,11 +915,11 @@ func TestEngineCacheIsBounded(t *testing.T) {
 		}
 	}
 	writeRecords(t, dir, time.UTC, recs)
-	one, err := NewEngine(64<<20).day(dir, "2026-11-01")
+	one, _, err := rawEngine(64<<20).day(dir, "2026-11-01")
 	if err != nil || one == nil {
 		t.Fatal(err)
 	}
-	e := NewEngine(one.size*2 + one.size/2) // room for two days
+	e := rawEngine(one.size*2 + one.size/2) // room for two days
 	qu := days(time.UTC, "2026-11-01", "2026-11-04")
 	for range 2 {
 		ov, err := e.Overview(dir, qu, false)
@@ -905,7 +934,7 @@ func TestEngineCacheIsBounded(t *testing.T) {
 		t.Fatalf("cache holds %d days in %d bytes, max %d", n, used, e.max)
 	}
 
-	tiny := NewEngine(1) // nothing fits: every query parses, and is still right
+	tiny := rawEngine(1) // nothing fits: every query parses, and is still right
 	if ov, err := tiny.Overview(dir, qu, false); err != nil || ov.Totals.Views != 800 {
 		t.Fatalf("tiny cache: %+v, %v", ov.Totals, err)
 	}
@@ -921,18 +950,22 @@ func TestEngineConcurrentQueries(t *testing.T) {
 		recs = append(recs, pv(fmt.Sprintf("2026-11-02T10:%02d:%02dZ", i/60, i%60), fmt.Sprint("v", i%40), fmt.Sprint("/p", i%7)))
 	}
 	writeRecords(t, dir, time.UTC, recs)
-	e := NewEngine(64 << 20)
+	raw, summarising := rawEngine(64<<20), newTestEngine()
 	qu := days(time.UTC, "2026-11-02", "2026-11-02")
 	var wg sync.WaitGroup
 	errs := make(chan error, 32)
-	for i := 0; i < 16; i++ {
+	for i := 0; i < 32; i++ {
+		e := raw
+		if i%2 == 1 { // Invalidate deletes the summary others read and write
+			e = summarising
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if i%4 == 0 {
+			if i%3 == 0 {
 				e.Invalidate(dir, "2026-11-02")
 			}
-			ov, err := e.Overview(dir, qu, i%2 == 0)
+			ov, err := e.Overview(dir, qu, i%4 < 2)
 			if err == nil && (ov.Totals.Views != 500 || ov.Totals.Visitors != 40) {
 				err = fmt.Errorf("totals %+v", ov.Totals)
 			}
