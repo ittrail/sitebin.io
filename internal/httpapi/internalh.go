@@ -149,6 +149,10 @@ func (a *API) admit(w http.ResponseWriter, r *http.Request, site *store.Site, pa
 	if v := a.cacheValue(site, r.Header.Get("X-Forwarded-Uri"), prefix); v != "" {
 		w.Header().Set(cacheHeader, v)
 	}
+	// The page Caddy shows for a 404 when the site has it.
+	if t := site.Meta.NotFoundTarget(); t != "" {
+		w.Header().Set(notFoundHeader, t)
+	}
 	// The folder Caddy serves on a custom domain, and the path it strips.
 	if !pathMode {
 		w.Header().Set(siteHeader, site.ViewID)

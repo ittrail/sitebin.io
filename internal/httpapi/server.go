@@ -266,6 +266,7 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("GET /_sitebin/qrcode.min.js", a.qrScript)
 	mux.HandleFunc("POST /_sitebin/unlock", a.unlock)
 	mux.HandleFunc("POST /_sitebin/csp-report", a.handleCSPReport)
+	mux.HandleFunc("GET /_sitebin/not-found", a.siteNotFound)
 	mux.HandleFunc("POST /_sitebin/forms/{key}", a.submitForm)
 	mux.HandleFunc("GET /_sitebin/forms/{key}/challenge", a.formChallenge)
 	mux.HandleFunc("GET /_sitebin/forms/{key}/thanks", a.formThanks)

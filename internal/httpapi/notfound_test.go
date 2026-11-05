@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ittrail/sitebin.io/internal/ext"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
@@ -195,5 +196,74 @@ func TestMCPNotFoundPage(t *testing.T) {
 	m, _ = res.StructuredContent.(map[string]any)
 	if slices.Contains(warningsOf(m), startPageWarning) {
 		t.Errorf("create_site with index.html: warnings = %v", warningsOf(m))
+	}
+}
+
+func TestAuthzNamesNotFoundPage(t *testing.T) {
+	e := newEnv(t, nil)
+	host := func(c createResp) string { return c.ID + ".sitebin.example" }
+
+	web := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	if w := e.internal(t, authzReq(host(web), "/missing", "")); w.Code != 200 || w.Header().Get(notFoundHeader) != "/404.html" {
+		t.Errorf("web server: %d %q, want /404.html", w.Code, w.Header().Get(notFoundHeader))
+	}
+
+	named := e.createSite(t, map[string]string{"not_found_page": "e/m.html"}, map[string]string{"index.html": "x"})
+	if w := e.internal(t, authzReq(host(named), "/missing", "")); w.Header().Get(notFoundHeader) != "/e/m.html" {
+		t.Errorf("named page: %q, want /e/m.html", w.Header().Get(notFoundHeader))
+	}
+
+	spa := e.createSite(t, map[string]string{"spa": "true"}, map[string]string{"index.html": "x"})
+	if w := e.internal(t, authzReq(host(spa), "/missing", "")); w.Code != 200 || w.Header().Get(notFoundHeader) != "" {
+		t.Errorf("SPA: %d %q, want no header", w.Code, w.Header().Get(notFoundHeader))
+	}
+
+	viewer := e.createSite(t, map[string]string{"mode": "viewer"}, map[string]string{"a.md": "# a"})
+	if w := e.internal(t, authzReq(host(viewer), "/_raw/", "")); w.Code != 200 || w.Header().Get(notFoundHeader) != "" {
+		t.Errorf("viewer: %d %q, want no header", w.Code, w.Header().Get(notFoundHeader))
+	}
+
+	// A path view names it too: the page is relative to the site's root.
+	req := authzReq("sitebin.example", "/v/"+web.ID+"/missing", "")
+	req.Header.Set("X-Sitebin-View", web.ID)
+	if w := e.internal(t, req); w.Header().Get(notFoundHeader) != "/404.html" {
+		t.Errorf("path view: %q, want /404.html", w.Header().Get(notFoundHeader))
+	}
+}
+
+func TestAuthzNamesNoNotFoundPageForAContainer(t *testing.T) {
+	withContainers(t, &fakeRuntime{})
+	e := newEnv(t, nil)
+	c := e.createSite(t, map[string]string{"mode": "container"}, nil)
+	running(t, e, c.ID, ext.ContainerService{Name: "app", Host: "sb-" + c.ID + "-app", Ports: []int{3000}})
+	if err := e.api.SiteService().SyncContainerEndpoints(c.ID, []string{"app:3000"}); err != nil {
+		t.Fatal(err)
+	}
+	w := authzFor(t, e, c.ID+"."+e.cfg.ViewDomain, nil)
+	if w.Code != 200 || w.Header().Get(upstreamHeader) == "" {
+		t.Fatalf("container not routed: %d %q", w.Code, w.Header().Get(upstreamHeader))
+	}
+	if got := w.Header().Get(notFoundHeader); got != "" {
+		t.Errorf("container: %s = %q, want none (the app answers its own 404s)", notFoundHeader, got)
+	}
+}
+
+func TestSiteNotFoundRoute(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	for _, method := range []string{"GET", "HEAD"} {
+		req := httptest.NewRequest(method, "/_sitebin/not-found", nil)
+		req.Host = c.ID + ".sitebin.example"
+		w := httptest.NewRecorder()
+		e.api.Public().ServeHTTP(w, req)
+		if w.Code != 404 {
+			t.Errorf("%s: status %d, want 404", method, w.Code)
+		}
+		if got := w.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("%s: Cache-Control %q, want no-store", method, got)
+		}
+		if method == "GET" && !strings.Contains(w.Body.String(), "Page not found") {
+			t.Errorf("GET body does not say Page not found: %s", w.Body)
+		}
 	}
 }
