@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ittrail/sitebin.io/internal/store"
 )
@@ -151,6 +152,16 @@ func TestConvertUmamiMapsNames(t *testing.T) {
 		t.Errorf("event = k %q n %q d %v", er.K, er.N, er.D)
 	}
 
+	// Fields with no Clean function of their own are bounded too.
+	long := ev
+	long.Hostname = strings.Repeat("h", 300)
+	long.VisitID = strings.Repeat("v", 100)
+	long.Region, long.City = strings.Repeat("ö", 150), strings.Repeat("ß", 150)
+	if _, r := ConvertUmami(long, vienna, nil, nil); len(r.A) != 253 || len(r.Vi) != 64 ||
+		utf8.RuneCountInString(r.Rg) != 100 || utf8.RuneCountInString(r.Ct) != 100 || !utf8.ValidString(r.Rg+r.Ct) {
+		t.Errorf("bounded: a %d, vi %d, rg %d runes, ct %d runes", len(r.A), len(r.Vi), utf8.RuneCountInString(r.Rg), utf8.RuneCountInString(r.Ct))
+	}
+
 	// Neither a page view nor a named event: nothing to import.
 	for _, bad := range []UmamiEvent{{EventType: 3, SessionID: "s"}, {EventType: 2, SessionID: "s"}} {
 		bad.CreatedAt = ev.CreatedAt
@@ -280,9 +291,9 @@ func TestImportKeepsOwnRecordsAndCutsAtFirstOwn(t *testing.T) {
 	// A later day's own record is not the first.
 	touch(t, DayFile(dir, "2026-03-06"), `{"t":`+ms(at(30, 0))+`,"k":"p","s":"srv","v":"own3"}`+"\n", now)
 
-	first, ok := FirstOwnRecord(dir)
-	if !ok || !first.Equal(at(12, 0)) {
-		t.Fatalf("FirstOwnRecord = %v %v, want %v", first, ok, at(12, 0))
+	first, ok, err := FirstOwnRecord(dir)
+	if err != nil || !ok || !first.Equal(at(12, 0)) {
+		t.Fatalf("FirstOwnRecord = %v %v %v, want %v", first, ok, err, at(12, 0))
 	}
 
 	export := umamiLine(t, umamiView(at(-14, 0), "a", "/eins")) +
@@ -315,12 +326,105 @@ func TestImportKeepsOwnRecordsAndCutsAtFirstOwn(t *testing.T) {
 
 	// No own record yet: no cut from them.
 	empty := e.site(t, "bbbbbbbbbbbbbbbbbbbbbbbbbb")
-	if _, ok := FirstOwnRecord(empty); ok {
-		t.Error("a site with no day file has a first own record")
+	if _, ok, err := FirstOwnRecord(empty); ok || err != nil {
+		t.Errorf("a site with no day file: %v %v", ok, err)
 	}
 	touch(t, DayFile(empty, "2026-03-01"), `{"t":1,"k":"p","s":"um"}`+"\n", now)
-	if _, ok := FirstOwnRecord(empty); ok {
-		t.Error("an imported record counted as the site's own")
+	if _, ok, err := FirstOwnRecord(empty); ok || err != nil {
+		t.Errorf("an imported record counted as the site's own: %v %v", ok, err)
+	}
+}
+
+// What cannot be read is an error, never "no own records": the import would
+// then run past the site's first own record and count twice.
+func TestFirstOwnRecordRefusesWhatItCannotRead(t *testing.T) {
+	e := newRecorderEnv(t)
+	now := umamiAt(t, "2026-03-10T12:00:00Z")
+
+	// A day file that cannot be read (a folder where the file should be).
+	dir := e.site(t, testView)
+	if err := os.MkdirAll(DayFile(dir, "2026-03-04"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	touch(t, DayFile(dir, "2026-03-05"), `{"t":5,"k":"p","s":"srv"}`+"\n", now)
+	if _, ok, err := FirstOwnRecord(dir); err == nil || ok {
+		t.Errorf("an unreadable day file: ok %v, err %v", ok, err)
+	}
+
+	// A link where a day file should be is not followed (no file surface
+	// follows a link out of a site).
+	linked := e.site(t, "dddddddddddddddddddddddddd")
+	target := filepath.Join(t.TempDir(), "elsewhere.jsonl")
+	touch(t, target, `{"t":5,"k":"p","s":"srv"}`+"\n", now)
+	if err := os.MkdirAll(eventsDir(linked), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, DayFile(linked, "2026-03-04")); err != nil {
+		t.Logf("no symlink on this system (%v): the link case is not checked", err)
+	} else if _, ok, err := FirstOwnRecord(linked); err == nil || ok {
+		t.Errorf("a linked day file: ok %v, err %v", ok, err)
+	}
+
+	// An events folder that cannot be listed.
+	other := e.site(t, "bbbbbbbbbbbbbbbbbbbbbbbbbb")
+	touch(t, eventsDir(other), "not a folder", now)
+	if _, ok, err := FirstOwnRecord(other); err == nil || ok {
+		t.Errorf("an unlistable events folder: ok %v, err %v", ok, err)
+	}
+
+	// A day file that is not regular, but past the first own record, is
+	// never read: the scan stops before it.
+	late := e.site(t, "cccccccccccccccccccccccccc")
+	touch(t, DayFile(late, "2026-03-01"), `{"t":`+itoa(umamiAt(t, "2026-03-01T09:00:00Z").UnixMilli())+`,"k":"p","s":"srv"}`+"\n", now)
+	if err := os.MkdirAll(DayFile(late, "2026-03-09"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := FirstOwnRecord(late); err != nil || !ok {
+		t.Errorf("a folder after the first own record: ok %v, err %v", ok, err)
+	}
+}
+
+// The recorder and an import share a day: the recorder's lines survive the
+// rewrite as they were, imported lines count against neither cap, and the
+// recorder counts its own lines right after the file changed under it.
+func TestRecorderAndImportShareADay(t *testing.T) {
+	e := newRecorderEnv(t)
+	dir := e.site(t, testView)
+	r := e.recorder(3)
+	for range 2 {
+		r.Add(pageHit())
+	}
+	r.Flush()
+	day := "2026-11-04"
+	before := readLines(t, DayFile(dir, day))
+
+	var export strings.Builder
+	at := umamiAt(t, "2026-11-04T08:00:00Z")
+	for i := range 5 {
+		export.WriteString(umamiLine(t, umamiView(at.Add(time.Duration(i)*time.Minute), "u", "/import")))
+	}
+	if _, err := importInto(t, e, dir, export.String(), time.Time{}, 0, umamiAt(t, "2026-11-05T00:00:00Z")); err != nil {
+		t.Fatal(err)
+	}
+	if srv, js, _, err := countDay(DayFile(dir, day)); err != nil || srv != 2 || js != 0 {
+		t.Fatalf("after the import: srv %d, js %d, %v; want 2, 0", srv, js, err)
+	}
+
+	for range 2 {
+		r.Add(pageHit())
+	}
+	r.Flush()
+	if n := sourceCounts(t, dir, day); n["srv"] != 3 || n["um"] != 5 {
+		t.Errorf("records = %v; want srv 3 (the cap), um 5", n)
+	}
+	got := strings.Join(readLines(t, DayFile(dir, day)), "\n")
+	for _, l := range before {
+		if !strings.Contains(got, l) {
+			t.Errorf("a recorded line did not survive the import: %s", l)
+		}
+	}
+	if b, err := os.ReadFile(overFile(dir, day)); err != nil || strings.TrimSpace(string(b)) != "1" {
+		t.Errorf("over the cap = %q %v, want 1", b, err)
 	}
 }
 
@@ -335,8 +439,8 @@ func TestFirstOwnRecordAcrossAZoneChange(t *testing.T) {
 	touch(t, DayFile(dir, "2026-03-05"), `{"t":`+itoa(late.UnixMilli())+`,"k":"p","s":"srv"}`+"\n", now)
 	touch(t, DayFile(dir, "2026-03-06"), `{"t":`+itoa(early.UnixMilli())+`,"k":"p","s":"js"}`+"\n", now)
 	touch(t, DayFile(dir, "2026-03-08"), `{"t":`+itoa(early.Add(-time.Hour).UnixMilli())+`,"k":"p","s":"srv"}`+"\n", now) // cannot be: past any zone
-	if got, ok := FirstOwnRecord(dir); !ok || !got.Equal(early) {
-		t.Errorf("FirstOwnRecord = %v %v, want %v", got, ok, early)
+	if got, ok, err := FirstOwnRecord(dir); err != nil || !ok || !got.Equal(early) {
+		t.Errorf("FirstOwnRecord = %v %v %v, want %v", got, ok, err, early)
 	}
 }
 

@@ -62,6 +62,13 @@ type UmamiEvent struct {
 	Data           map[string]any `json:"event_data"`
 }
 
+// Bounds on the export's fields that have no Clean function of their own.
+const (
+	maxUmamiHost    = 253 // a DNS name
+	maxUmamiVisitID = 64  // Umami's are UUIDs
+	maxUmamiPlace   = 100 // region and city
+)
+
 // ConvertUmami turns an export line into a record and the local date (in
 // loc, nil is UTC) whose day file it belongs in. own are the site's
 // addresses: a referrer from one of them, or from the host the event was
@@ -76,21 +83,21 @@ func ConvertUmami(ev UmamiEvent, loc *time.Location, own, extraQuery []string) (
 	rec = Record{
 		T:  ev.CreatedAt.UnixMilli(),
 		S:  "um",
-		A:  strings.ToLower(strings.TrimSpace(ev.Hostname)),
+		A:  cutRunes(strings.ToLower(strings.TrimSpace(ev.Hostname)), maxUmamiHost),
 		P:  CleanPath(ev.URLPath),
 		R:  umamiReferrer(ev.ReferrerDomain, ev.ReferrerPath, ev.Hostname, own),
 		Ti: CleanTitle(ev.PageTitle),
 		Tg: CleanTag(ev.Tag),
 		V:  umamiVisitor(ev.SessionID, date),
-		Vi: ev.VisitID,
+		Vi: cutRunes(ev.VisitID, maxUmamiVisitID),
 		B:  umamiBrowser(ev.Browser, ev.OS),
 		O:  umamiOS(ev.OS),
 		Dv: umamiDevice(ev.Device),
 		Sc: CleanScreen(ev.Screen),
 		L:  CleanLanguage(ev.Language),
 		C:  umamiCountry(ev.Country),
-		Rg: strings.TrimSpace(ev.Region),
-		Ct: strings.TrimSpace(ev.City),
+		Rg: cutRunes(strings.TrimSpace(ev.Region), maxUmamiPlace),
+		Ct: cutRunes(strings.TrimSpace(ev.City), maxUmamiPlace),
 	}
 	rec.Q, rec.Ck = umamiQuery(ev, extraQuery)
 	switch ev.EventType {
@@ -482,17 +489,27 @@ func eachDayLine(r io.Reader, fn func(l dayLine, source string)) error {
 
 // FirstOwnRecord is the time of the site's earliest record of its own (a
 // "srv" or "js" line) in any day file, and false when there is none. An
-// import stops there. A file that cannot be read is passed over.
-func FirstOwnRecord(siteDir string) (time.Time, bool) {
+// import stops there, so what cannot be read is an error, never "none": an
+// import that missed the site's first own record would count twice. A site
+// with no events folder has none, and so does a day file purged between the
+// listing and its reading.
+func FirstOwnRecord(siteDir string) (time.Time, bool, error) {
 	entries, err := os.ReadDir(eventsDir(siteDir)) // sorted by name, so by date
+	if errors.Is(err, fs.ErrNotExist) {
+		// Only when nothing is there: Windows reports a file in the folder's
+		// place as a path not found.
+		if _, lerr := os.Lstat(eventsDir(siteDir)); errors.Is(lerr, fs.ErrNotExist) {
+			return time.Time{}, false, nil
+		}
+	}
 	if err != nil {
-		return time.Time{}, false
+		return time.Time{}, false, err
 	}
 	var first int64
 	found := false
 	for _, e := range entries {
 		date, ok := strings.CutSuffix(e.Name(), ".jsonl")
-		if !ok || !saltDateRe.MatchString(date) || !e.Type().IsRegular() {
+		if !ok || !saltDateRe.MatchString(date) {
 			continue
 		}
 		if found {
@@ -504,32 +521,42 @@ func FirstOwnRecord(siteDir string) (time.Time, bool) {
 				break
 			}
 		}
-		if t, ok := firstOwnIn(DayFile(siteDir, date)); ok && (!found || t < first) {
+		if !e.Type().IsRegular() {
+			return time.Time{}, false, fmt.Errorf("analytics: the day file %s is not a regular file", e.Name())
+		}
+		t, ok, err := firstOwnIn(DayFile(siteDir, date))
+		if err != nil {
+			return time.Time{}, false, err
+		}
+		if ok && (!found || t < first) {
 			first, found = t, true
 		}
 	}
 	if !found {
-		return time.Time{}, false
+		return time.Time{}, false, nil
 	}
-	return time.UnixMilli(first), true
+	return time.UnixMilli(first), true, nil
 }
 
-// firstOwnIn is the earliest time of a "srv" or "js" line in a day file.
-func firstOwnIn(path string) (int64, bool) {
+// firstOwnIn is the earliest time of a "srv" or "js" line in a day file. A
+// file gone meanwhile (the retention purged it) has none.
+func firstOwnIn(path string) (int64, bool, error) {
 	f, err := os.Open(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, false, nil
+	}
 	if err != nil {
-		return 0, false
+		return 0, false, err
 	}
 	defer f.Close()
 	var first int64
 	found := false
-	// What was read before an error still counts.
-	_ = eachDayLine(f, func(l dayLine, source string) {
+	err = eachDayLine(f, func(l dayLine, source string) {
 		if (source == "srv" || source == "js") && (!found || l.t < first) {
 			first, found = l.t, true
 		}
 	})
-	return first, found
+	return first, found, err
 }
 
 // UmamiReport is a row of Umami's report table, as the runbook exports it.

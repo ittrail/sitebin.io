@@ -26,6 +26,12 @@ What the import does:
 - Imported visitors are counted per day, like Sitebin's own: an Umami
   session becomes one visitor per local day. Umami's visit ids are kept, so
   visits are Umami's.
+- Imported referrers are stored without `www.`, as Umami stores them
+  (`google.com/`), while Sitebin's own records keep it (`www.google.com/`).
+  The referrer table can list both for the same source.
+- It is refused (409) for a locked site and when analytics is off on the
+  instance (`SITEBIN_ANALYTICS=false`). A site whose plan lacks analytics
+  may be imported into: what is stored stays readable.
 
 The export holds per-visit data (session and visit ids, city, referrers).
 Keep the copies only as long as these steps need them, and delete them at
@@ -38,18 +44,21 @@ the end (step 6).
    the same deploy. The import then ends exactly where Sitebin's own
    records begin. If Umami kept counting for a while after that (a page
    with the old script, a cache), pass `--until` with the moment it stopped.
-2. Note the site's **view id** (`sitebin list`, or the view address
-   `https://<view-id>.sitebin.app`).
+2. Note the site's **view id** (`docker exec sitebin sitebin list` on the
+   Sitebin host, or the view address `https://<view-id>.sitebin.app`), and
+   the **switch-over day**: the local date its analytics was turned on.
 3. Work from a machine that can SSH to the Proxmox host srv03 and to the
    Sitebin host. The commands below are POSIX shell (Git Bash works) and
    need nothing else locally: the decoding runs on srv03.
 
-Set the two hosts once. srv03's address is in the operator's notes, not in
-this public repository.
+Set the two hosts once. Their real addresses are in the operator's private
+notes, not in this public repository; give each as an SSH destination your
+SSH config resolves (an alias carrying user, host and port, or
+`user@host`).
 
 ```sh
-PVE='root@<srv03>'    # the Proxmox host srv03, where Umami runs as VM 103
-SB='root@sitebin.io'  # the Sitebin host, SSH on port 22113
+PVE='<srv03>'         # the Proxmox host srv03, where Umami runs as VM 103
+SB='<sitebin-host>'   # the host running the sitebin container
 ```
 
 Every query goes to Umami's Postgres (container `0007-1-umami-db-1` in VM
@@ -177,15 +186,18 @@ cut: the guest agent's answer is printed with it.
 
 ## 3. Copy the files into the Sitebin container
 
+The files go to the SSH user's home on the Sitebin host, and from there
+into the container:
+
 ```sh
-scp -P 22113 umami-events.jsonl umami-reports.json "$SB":/root/
-ssh -p 22113 "$SB" 'docker cp /root/umami-events.jsonl sitebin:/tmp/umami-events.jsonl && docker cp /root/umami-reports.json sitebin:/tmp/umami-reports.json'
+scp umami-events.jsonl umami-reports.json "$SB":
+ssh "$SB" 'docker cp umami-events.jsonl sitebin:/tmp/umami-events.jsonl && docker cp umami-reports.json sitebin:/tmp/umami-reports.json'
 ```
 
 ## 4. Import
 
 ```sh
-ssh -p 22113 "$SB" 'docker exec sitebin sitebin analytics import-umami <view-id> /tmp/umami-events.jsonl --reports /tmp/umami-reports.json'
+ssh "$SB" 'docker exec sitebin sitebin analytics import-umami <view-id> /tmp/umami-events.jsonl --reports /tmp/umami-reports.json'
 ```
 
 Add `--until 2026-11-05T10:00:00+01:00` to end the import earlier (see
@@ -222,29 +234,45 @@ What a failure answers:
 | "could not reach the running Sitebin server" | the server is not running in the container, or `SITEBIN_INTERNAL_ADDR` is not what the command reads |
 | 400 | a line of the export is not usable (the message names it), or a part of the request is missing or malformed |
 | 404 | no site with that view id, or it was deleted during the import |
-| 409 | the site is locked (an evidence hold: nothing is imported into it), or another import into it is running |
+| 409, `reason: locked` | the site is locked: an evidence hold, nothing is imported into it. A lock that came during the import leaves the records written (the report says so) but adds no funnel or goal |
+| 409, `reason: instance` | analytics is off on the instance (`SITEBIN_ANALYTICS=false`) |
+| 409, no reason | another import into the site is running |
+| 500 | nothing imported: the site's day files could not be read to find its first own record (the message says which); or a write failed |
 
 An import that stops part way keeps the days it wrote (the report counts
 them) and records their range; fix the cause and run it again.
 
 ## 5. Verify
 
-Compare the dashboard with Umami for a few **single days**: Sitebin counts
-visitors per day, so a range's visitors are a sum of days, while Umami
-counts distinct sessions over the range. Views and events must match
-exactly, visitors per day too. Umami's numbers per local day (put in the
-site's zone, the tab's Settings show it):
+Compare the dashboard with Umami for a few **single days before the
+switch-over day**. From the switch-over on, Sitebin measured itself and the
+import skipped Umami's events by design (`skipped_after_cut`), so that day
+and the ones after it differ. Compare single days, because Sitebin counts
+visitors per day (a range's visitors are a sum of days) while Umami counts
+distinct sessions over the range. Views and events must match exactly, and
+visitors per day too.
+
+The query lists Umami's numbers for the 14 days before the switch-over,
+oldest first. Before running it, replace three things in its first lines:
+
+- `<website-id>`;
+- `Europe/Vienna` with the site's zone (the tab's Settings show the zone in
+  effect);
+- `<switch-over-day>` with that date (YYYY-MM-DD).
 
 ```sh
 cat > umami-days.sql <<'EOF'
 \set site '<website-id>'
-select (e.created_at at time zone 'Europe/Vienna')::date as day,
+\set zone 'Europe/Vienna'
+\set switch '<switch-over-day>'
+select (e.created_at at time zone :'zone')::date as day,
        count(*) filter (where e.event_type = 1) as views,
        count(distinct e.session_id) as visitors,
        count(*) filter (where e.event_type = 2) as events
 from website_event e
 where e.website_id = :'site' and e.event_type in (1, 2)
-group by 1 order by 1 desc limit 14;
+  and (e.created_at at time zone :'zone')::date between :'switch'::date - 14 and :'switch'::date - 1
+group by 1 order by 1;
 EOF
 ssh "$PVE" "$UMAMI" < umami-days.sql
 ```
@@ -257,7 +285,7 @@ against Umami's reports for the same day.
 ## 6. Delete the copies
 
 ```sh
-ssh -p 22113 "$SB" 'docker exec -u 0 sitebin rm -f /tmp/umami-events.jsonl /tmp/umami-reports.json && rm -f /root/umami-events.jsonl /root/umami-reports.json'
+ssh "$SB" 'docker exec -u 0 sitebin rm -f /tmp/umami-events.jsonl /tmp/umami-reports.json && rm -f umami-events.jsonl umami-reports.json'
 rm -f umami-events.jsonl umami-reports.json umami-events.sql umami-reports.sql umami-days.sql
 ```
 

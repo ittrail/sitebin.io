@@ -73,8 +73,10 @@ func (a *API) analyticsImport(w http.ResponseWriter, r *http.Request) {
 				writeError(w, 500, "could not read the site")
 				return
 			}
-			if site.Meta.IsLocked() {
-				writeError(w, 409, "the site is locked: it is an evidence hold, and nothing is imported into it")
+			// A site whose plan lacks analytics may be imported into: the
+			// operator moves sites, and what is stored stays readable.
+			if reason := a.analyticsReason(site); reason == analyticsReasonInstance || reason == analyticsReasonLocked {
+				writeImportRefusal(w, reason, nil)
 				return
 			}
 		case "until":
@@ -117,8 +119,16 @@ func (a *API) importUmami(w http.ResponseWriter, site *store.Site, until time.Ti
 	}
 	defer a.imports.Delete(site.ViewID)
 
+	// Where Sitebin's own records begin must be known: an import past it
+	// counts twice, so a day file that cannot be read stops it here.
 	cut := until
-	if first, ok := analytics.FirstOwnRecord(site.Dir()); ok && (cut.IsZero() || first.Before(cut)) {
+	first, ok, err := analytics.FirstOwnRecord(site.Dir())
+	if err != nil {
+		a.log.Error("analytics import: finding the site's first own record", "id", site.ViewID, "err", err)
+		writeError(w, 500, "nothing imported: the site's day files could not be read to find its first own record: "+strings.TrimPrefix(err.Error(), "analytics: "))
+		return
+	}
+	if ok && (cut.IsZero() || first.Before(cut)) {
 		cut = first
 	}
 	var extra []string
@@ -149,7 +159,12 @@ func (a *API) importUmami(w http.ResponseWriter, site *store.Site, until time.Ti
 		return
 	}
 	if len(reports) > 0 {
-		if err := a.st.Update(site, func(m *store.Meta) error {
+		err := a.st.Update(site, func(m *store.Meta) error {
+			// The lock is read again where meta is written: one that came
+			// during the import freezes the settings.
+			if m.IsLocked() {
+				return errImportLocked
+			}
 			var s store.Analytics
 			if m.Analytics != nil {
 				s = *m.Analytics
@@ -161,7 +176,12 @@ func (a *API) importUmami(w http.ResponseWriter, site *store.Site, until time.Ti
 			}
 			m.Analytics = &merged
 			return nil
-		}); err != nil && !errors.Is(err, errNothingToMerge) {
+		})
+		switch {
+		case errors.Is(err, errImportLocked):
+			writeImportRefusal(w, analyticsReasonLocked, &rep)
+			return
+		case err != nil && !errors.Is(err, errNothingToMerge):
 			a.log.Error("analytics import: adding the reports", "id", site.ViewID, "err", err)
 			writeJSON(w, 500, map[string]any{"error": "the records are imported, but the reports could not be added", "report": withLists(rep)})
 			return
@@ -173,8 +193,29 @@ func (a *API) importUmami(w http.ResponseWriter, site *store.Site, until time.Ti
 	writeJSON(w, 200, withLists(rep))
 }
 
-// errNothingToMerge leaves meta.json unwritten when no report was added.
-var errNothingToMerge = errors.New("no report added")
+// errNothingToMerge leaves meta.json unwritten when no report was added;
+// errImportLocked when the site was locked meanwhile.
+var (
+	errNothingToMerge = errors.New("no report added")
+	errImportLocked   = errors.New("the site is locked")
+)
+
+// writeImportRefusal answers an import refused for reason (an
+// analyticsReason): 409 with the reason. rep is the report of a site locked
+// during the import, whose records were written before the lock was seen.
+func writeImportRefusal(w http.ResponseWriter, reason string, rep *analytics.ImportReport) {
+	body := map[string]any{"reason": reason}
+	switch {
+	case rep != nil:
+		body["error"] = "the records are imported, but the site was locked during the import, so its funnels and goals were not added"
+		body["report"] = withLists(*rep)
+	case reason == analyticsReasonInstance:
+		body["error"] = "analytics is turned off on this instance (SITEBIN_ANALYTICS=false)"
+	default:
+		body["error"] = "the site is locked: it is an evidence hold, and nothing is imported into it"
+	}
+	writeJSON(w, 409, body)
+}
 
 // invalidateDays drops every local date from..to (inclusive) from the
 // engine: the days an import rewrote are among them, and a rewrite could

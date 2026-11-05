@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"mime/multipart"
 	"net/http/httptest"
 	"os"
@@ -200,15 +201,15 @@ func TestInternalImportRefusals(t *testing.T) {
 		parts [][2]string
 		code  int
 	}{
-		"bad id":         {[][2]string{{"site", "../../etc"}, {"events", export}}, 400},
-		"unknown site":   {[][2]string{{"site", strings.Repeat("a", 26)}, {"events", export}}, 404},
-		"no events":      {[][2]string{{"site", site.ViewID}}, 400},
-		"events first":   {[][2]string{{"events", export}, {"site", site.ViewID}}, 400},
-		"bad until":      {[][2]string{{"site", site.ViewID}, {"until", "yesterday"}, {"events", export}}, 400},
-		"bad reports":    {[][2]string{{"site", site.ViewID}, {"reports", "{"}, {"events", export}}, 400},
-		"bad export":     {[][2]string{{"site", site.ViewID}, {"events", export + "{nope\n"}}, 400},
-		"unknown field":  {[][2]string{{"site", site.ViewID}, {"force", "1"}, {"events", export}}, 400},
-		"not multipart?": {nil, 400},
+		"bad id":        {[][2]string{{"site", "../../etc"}, {"events", export}}, 400},
+		"unknown site":  {[][2]string{{"site", strings.Repeat("a", 26)}, {"events", export}}, 404},
+		"no events":     {[][2]string{{"site", site.ViewID}}, 400},
+		"events first":  {[][2]string{{"events", export}, {"site", site.ViewID}}, 400},
+		"bad until":     {[][2]string{{"site", site.ViewID}, {"until", "yesterday"}, {"events", export}}, 400},
+		"bad reports":   {[][2]string{{"site", site.ViewID}, {"reports", "{"}, {"events", export}}, 400},
+		"bad export":    {[][2]string{{"site", site.ViewID}, {"events", export + "{nope\n"}}, 400},
+		"unknown field": {[][2]string{{"site", site.ViewID}, {"force", "1"}, {"events", export}}, 400},
+		"not multipart": {nil, 400},
 	} {
 		var w *httptest.ResponseRecorder
 		if tc.parts == nil {
@@ -235,11 +236,119 @@ func TestInternalImportRefusals(t *testing.T) {
 	if _, err := e.st.SetLock(site, &store.SiteLock{By: store.LockByAdmin}); err != nil {
 		t.Fatal(err)
 	}
-	if w := e.importPost(t, [2]string{"site", site.ViewID}, [2]string{"events", export}); w.Code != 409 {
-		t.Errorf("locked site: %d %s, want 409", w.Code, w.Body)
+	w := e.importPost(t, [2]string{"site", site.ViewID}, [2]string{"events", export})
+	if w.Code != 409 || refusalReason(t, w) != "locked" {
+		t.Errorf("locked site: %d %s, want 409 locked", w.Code, w.Body)
 	}
 	if _, err := os.Stat(filepath.Join(site.Dir(), "analytics")); err == nil {
 		t.Error("an import wrote into a locked site")
+	}
+}
+
+func refusalReason(t *testing.T, w *httptest.ResponseRecorder) string {
+	t.Helper()
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &body)
+	return body.Reason
+}
+
+// The instance switch off refuses an import; a plan without analytics does
+// not, since the operator moves sites and what is stored stays readable.
+func TestInternalImportGate(t *testing.T) {
+	off := newEnv(t, map[string]string{"SITEBIN_ANALYTICS": "false"})
+	c := off.createSite(t, nil, map[string]string{"index.html": "x"})
+	site, _ := off.st.ByViewID(c.ID)
+	export := umamiExport(t, umamiPage(daysAgo(time.Now(), 3, 9, 0), "a", "/"))
+	w := off.importPost(t, [2]string{"site", site.ViewID}, [2]string{"events", export})
+	if w.Code != 409 || refusalReason(t, w) != "instance" {
+		t.Errorf("instance off: %d %s, want 409 instance", w.Code, w.Body)
+	}
+	if _, err := os.Stat(filepath.Join(site.Dir(), "analytics")); err == nil {
+		t.Error("an import wrote with the instance switch off")
+	}
+
+	e := newEnv(t, nil)
+	c = e.createSite(t, nil, map[string]string{"index.html": "x"})
+	site, _ = e.st.ByViewID(c.ID)
+	no := false
+	if err := e.st.SetQuotaAnalytics(site, &no); err != nil {
+		t.Fatal(err)
+	}
+	if reason := e.api.analyticsReason(site); reason != analyticsReasonPlan {
+		t.Fatalf("reason = %q, want plan", reason)
+	}
+	var rep analytics.ImportReport
+	decodeInto(t, e.importPost(t, [2]string{"site", site.ViewID}, [2]string{"events", export}), &rep)
+	if rep.Records != 1 {
+		t.Errorf("plan without analytics: report %+v, want the record imported", rep)
+	}
+}
+
+// A day file that cannot be read hides where Sitebin's own records begin:
+// nothing is imported.
+func TestInternalImportStopsWhenTheFirstOwnRecordIsUnknown(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	site, _ := e.st.ByViewID(c.ID)
+	now := time.Now()
+	if err := os.MkdirAll(analytics.DayFile(site.Dir(), dateOf(daysAgo(now, 5, 0, 0))), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	at := daysAgo(now, 3, 9, 0)
+	w := e.importPost(t, [2]string{"site", site.ViewID}, [2]string{"events", umamiExport(t, umamiPage(at, "a", "/"))})
+	if w.Code != 500 || !strings.Contains(w.Body.String(), "nothing imported") {
+		t.Errorf("unreadable day file: %d %s, want 500", w.Code, w.Body)
+	}
+	if _, err := os.Stat(analytics.DayFile(site.Dir(), dateOf(at))); err == nil {
+		t.Error("a day was imported although the first own record was unknown")
+	}
+	if imported, _ := analytics.Imported(site.Dir()); len(imported) != 0 {
+		t.Errorf("imported = %v", imported)
+	}
+}
+
+// A lock that comes while the export streams is seen where meta is written:
+// the funnels and goals are not added.
+func TestInternalImportLockedDuringTheImport(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	site, _ := e.st.ByViewID(c.ID)
+	pr, pw := io.Pipe()
+	mw := multipart.NewWriter(pw)
+	req := httptest.NewRequest("POST", "/internal/analytics/import", pr)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	done := make(chan *httptest.ResponseRecorder)
+	go func() {
+		w := httptest.NewRecorder()
+		e.api.Internal().ServeHTTP(w, req)
+		pr.CloseWithError(io.ErrUnexpectedEOF) // ends a body the handler stopped reading
+		done <- w
+	}()
+
+	mw.WriteField("site", site.ViewID)
+	rw, _ := mw.CreateFormFile("reports", "reports.json")
+	rw.Write([]byte(operatorReportsJSON))
+	ew, _ := mw.CreateFormFile("events", "events.jsonl")
+	line := umamiExport(t, umamiPage(daysAgo(time.Now(), 3, 9, 0), "a", "/"))
+	// Far more than any buffer holds: once this is written, the handler is
+	// importing.
+	if _, err := io.WriteString(ew, strings.Repeat(line, 20000)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.SetLock(site, &store.SiteLock{By: store.LockByAdmin}); err != nil {
+		t.Fatal(err)
+	}
+	mw.Close()
+	pw.Close()
+	w := <-done
+
+	if w.Code != 409 || refusalReason(t, w) != "locked" {
+		t.Errorf("locked during the import: %d %s, want 409 locked", w.Code, w.Body)
+	}
+	if got, _ := e.st.ByViewID(c.ID); got.Meta.Analytics != nil {
+		t.Errorf("settings were written into a locked site: %+v", got.Meta.Analytics)
 	}
 }
 
