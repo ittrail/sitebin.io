@@ -7,11 +7,11 @@
 # tracker and records a page view and an event sent to /_sitebin/analytics/send;
 # the visitor's opt-out keeps a browser out of the count; a funnel answers; and
 # with analytics off the script is a stub. A host/path (mounted) address is an
-# enterprise feature, so the beacon under a mount is covered by the Go suite
-# and not here.
+# enterprise feature, so the beacon under a mount is checked by e2e\mounts.ps1
+# (enterprise image) and not here.
 param(
     [string]$Image = "sitebin:dev",
-    [int]$Port = 8092
+    [int]$Port = 8095
 )
 
 $ErrorActionPreference = "Continue"

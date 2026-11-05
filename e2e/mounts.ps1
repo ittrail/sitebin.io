@@ -20,6 +20,9 @@
 #   client-sent internal headers change nothing
 #   an address with a slash is removed through the API
 #   a host with only paths has no root
+#   analytics under a path: the real tracker is served at <mount>/_sitebin/,
+#   and a script page view posted to <mount>/_sitebin/analytics/send is
+#   recorded with the full path the visitor saw
 #   a container port under a path gets the full path and X-Forwarded-Prefix,
 #   its root port keeps /foo/_sitebin/x, and a static site mounted beside it
 #   is served by Sitebin, not by the app
@@ -40,7 +43,7 @@ New-Item -ItemType Directory -Force $work | Out-Null
 
 # Every assertion must run; the count is checked at the end. Update it when
 # you add or remove one.
-$ExpectedAssertions = 29
+$ExpectedAssertions = 33
 if (-not $NoContainers) { $ExpectedAssertions += 11 }
 
 $script:pass = 0; $script:fail = 0
@@ -94,7 +97,7 @@ function Cleanup {
     docker volume rm $vol 2>$null | Out-Null
 }
 
-$tiers = '[{"id":"pro","label":"Pro","max_site_bytes":1073741824,"max_files":5000,"max_sites":20,"webdav":true,"custom_domains":10,"max_expiry_days":0,"max_containers":3,"trusted":true}]'
+$tiers = '[{"id":"pro","label":"Pro","max_site_bytes":1073741824,"max_files":5000,"max_sites":20,"webdav":true,"custom_domains":10,"max_expiry_days":0,"max_containers":3,"trusted":true,"analytics":true}]'
 [IO.File]::WriteAllText((Join-Path $work "mt-tiers.json"), $tiers)
 $workDocker = ($work -replace '\\', '/')
 
@@ -206,6 +209,28 @@ $r = Visit "p.e2e.test" "/"
 Assert "the host's empty root answers 404" ($r.code -eq 404) "got $($r.code)"
 $r = Visit "p.e2e.test" "/a/"
 Assert "its path serves" ($r.code -eq 200 -and $r.body -eq "only-a") "got $($r.code): $($r.body)"
+
+Write-Host "== analytics on a mounted address" -ForegroundColor Cyan
+$chrome = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+$r = Api $only "PUT" "/analytics" '{"enabled":true,"mode":"script"}'
+Assert "analytics turned on for the mounted site, in script mode (200)" ($r.code -eq 200) "got $($r.code): $($r.body)"
+$r = Visit "p.e2e.test" "/a/_sitebin/analytics.js"
+Assert "the tracker under the mount is the real one, not the stub" ($r.code -eq 200 -and $r.body.Contains("/_sitebin/analytics/send")) "got $($r.code): $($r.body.Substring(0, [Math]::Min(200, $r.body.Length)))"
+$beacon = '{"type":"event","payload":{"hostname":"p.e2e.test","url":"http://p.e2e.test/a/mounted-page","title":"Mounted","language":"en","screen":"1920x1080"}}'
+$r = Req "POST" "http://127.0.0.1:$Port/a/_sitebin/analytics/send" @("-H", "Host: p.e2e.test", "-H", "User-Agent: $chrome",
+    "-H", "Content-Type: text/plain", "-H", "Sec-Fetch-Site: same-origin", "--data-binary", (JsonBody $beacon))
+Assert "a page view beacon under the mount answers 204" ($r.code -eq 204) "got $($r.code): $($r.body)"
+$seen = $null
+$deadline = (Get-Date).AddSeconds(15)
+while ((Get-Date) -lt $deadline) {
+    Start-Sleep -Seconds 1
+    $r = Api $only "GET" "/analytics/table?dim=path&range=last24h"
+    if ($r.code -eq 200) {
+        $seen = @(($r.body | ConvertFrom-Json).rows) | Where-Object { $_.value -eq "/a/mounted-page" }
+        if ($seen) { break }
+    }
+}
+Assert "the beacon is recorded under the full path the visitor saw" ($null -ne $seen -and $seen.views -eq 1) "got $($r.code): $($r.body)"
 
 Write-Host "== removing an address with a slash" -ForegroundColor Cyan
 $r = Api $k1 "DELETE" "/domains/m.e2e.test%2Fdemos%2Fk1"
