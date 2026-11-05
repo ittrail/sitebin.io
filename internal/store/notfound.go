@@ -65,10 +65,11 @@ func (m Meta) NotFoundTarget() string {
 // NotFoundServes is the site's own page a 404 shows right now, without the
 // leading slash, or "" when Sitebin's page answers. For the edit page — it
 // looks at the files, which the serving path never does (Caddy checks the
-// file only when a 404 happens).
+// file only when a 404 happens). A locked site names nothing: its file names
+// stay out of reach like its files.
 func NotFoundServes(site *Site) string {
 	t := site.Meta.NotFoundTarget()
-	if t == "" {
+	if t == "" || site.Meta.IsLocked() {
 		return ""
 	}
 	rel := strings.TrimPrefix(t, "/")

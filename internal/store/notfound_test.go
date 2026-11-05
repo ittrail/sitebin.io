@@ -98,6 +98,20 @@ func TestNotFoundServes(t *testing.T) {
 	}
 }
 
+// A locked site's file names stay out of reach, the not-found page's too.
+func TestNotFoundServesNothingOnALockedSite(t *testing.T) {
+	s := newTestStore(t)
+	site, _, err := s.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSiteFile(t, site, "404.html", "own")
+	site.Meta.Locked = &SiteLock{By: "operator"}
+	if got := NotFoundServes(site); got != "" {
+		t.Errorf("locked: NotFoundServes = %q, want empty", got)
+	}
+}
+
 func TestMissingStartPage(t *testing.T) {
 	s := newTestStore(t)
 	cases := []struct {
