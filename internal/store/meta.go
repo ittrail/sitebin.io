@@ -42,7 +42,11 @@ type Meta struct {
 	SPAFallback   bool              `json:"spa_fallback"` // webserver mode: serve index.html for unknown paths
 	// Cache is the owner's browser-cache policy (CleanCachePolicy); "" is
 	// auto, the default. See cache.go.
-	Cache          string `json:"cache,omitempty"`
+	Cache string `json:"cache,omitempty"`
+	// NotFoundPage is the owner's page for an address that does not exist
+	// (CleanNotFoundPage); "" is the convention, DefaultNotFoundPage. See
+	// notfound.go.
+	NotFoundPage   string `json:"not_found_page,omitempty"`
 	OwnerAccountID string `json:"owner_account_id,omitempty"` // enterprise: owning account (empty = anonymous)
 
 	// Name is the owner's optional label for the site, validated by
