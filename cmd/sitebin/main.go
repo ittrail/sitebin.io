@@ -13,6 +13,8 @@
 //	sitebin unhold <id|domain>            release the evidence hold
 //	sitebin delete [--force] <id|domain>  operator takedown of a site (--force for a locked one)
 //	sitebin scan <id|domain>|--all [--lock]  run the abuse rules over sites on disk
+//	sitebin analytics import-umami <view-id> <events.jsonl> [--reports <file>] [--until <RFC3339>]
+//	                            import a site's Umami history through the running server
 //	sitebin backup [file]       write a tar.gz of the data dir
 //	sitebin restore <file>      restore the data dir from a backup
 package main
@@ -134,6 +136,17 @@ func main() {
 		}
 		if err := scanSites(mustStore(mustConfig()), os.Stdout, key, all, lock); err != nil {
 			fmt.Fprintln(os.Stderr, "scan failed:", err)
+			os.Exit(1)
+		}
+	case "analytics":
+		args, err := parseImportUmami(os.Args[2:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			fmt.Fprintln(os.Stderr, importUmamiUsage)
+			os.Exit(2)
+		}
+		if err := importUmami(internalURL(mustConfig().InternalAddr), args, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "import failed:", err)
 			os.Exit(1)
 		}
 	case "list":
@@ -450,13 +463,18 @@ func newInternalServer(addr string, h http.Handler) *http.Server {
 	}
 }
 
-func healthcheck(cfg config.Config) error {
-	addr := cfg.InternalAddr
+// internalURL is the base URL of the internal listener at addr, as a
+// command in the same container reaches it: a bare port is loopback's.
+func internalURL(addr string) string {
 	if strings.HasPrefix(addr, ":") {
 		addr = "127.0.0.1" + addr
 	}
+	return "http://" + addr
+}
+
+func healthcheck(cfg config.Config) error {
 	client := &http.Client{Timeout: 3 * time.Second}
-	res, err := client.Get("http://" + addr + "/internal/health")
+	res, err := client.Get(internalURL(cfg.InternalAddr) + "/internal/health")
 	if err != nil {
 		return err
 	}

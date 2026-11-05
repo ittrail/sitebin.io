@@ -50,6 +50,48 @@ func Imported(siteDir string) ([]ImportedRange, error) {
 	return out, nil
 }
 
+// AddImported records an import's range in imported.json. The ranges it
+// overlaps are merged into it, so the same import run twice is listed once,
+// and the result goes last. The caller holds the site's stats lock; the file
+// is written through a temp file and a rename.
+func AddImported(siteDir string, r ImportedRange) error {
+	ranges, err := Imported(siteDir)
+	if err != nil {
+		return err
+	}
+	out := make([]ImportedRange, 0, len(ranges)+1)
+	for _, x := range ranges {
+		if x.From <= r.To && r.From <= x.To {
+			r.From, r.To = min(r.From, x.From), max(r.To, x.To)
+			continue
+		}
+		out = append(out, x)
+	}
+	b, err := json.Marshal(append(out, r))
+	if err != nil {
+		return err
+	}
+	path := importedFile(siteDir)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "imported.json.tmp*")
+	if err != nil {
+		return err
+	}
+	_, werr := tmp.Write(b)
+	cerr := tmp.Close()
+	if err := errors.Join(werr, cerr, os.Chmod(tmp.Name(), 0o644)); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	return nil
+}
+
 // Storage is what a site's analytics takes on disk: the bytes of the regular
 // files under <siteDir>/analytics, and the earliest date that has a day file
 // ("" when none has). It follows no link.

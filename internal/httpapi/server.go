@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ittrail/sitebin.io/internal/analytics"
@@ -73,6 +74,7 @@ type API struct {
 	analyticsSalts *analytics.Salts  // the one salt store: the recorder hashes with it, the sweep prunes it
 	analyticsGeo   *analytics.Geo    // nil: no GeoIP database
 	engine         *analytics.Engine // answers the analytics API from the day files
+	imports        sync.Map          // view id → struct{}: the sites an Umami import is running into
 
 	analyticsLimiter *auth.Limiter // the script's records per (site, client network)
 }
@@ -292,13 +294,15 @@ func (a *API) Public() http.Handler {
 	return a.logMiddleware(a.viewApexGuard(mux))
 }
 
-// Internal returns the handler for Caddy's subrequests plus health checks.
+// Internal returns the handler for Caddy's subrequests plus health checks,
+// and the operator's Umami import (`sitebin analytics import-umami`).
 // It must never be exposed publicly; it binds its own listener.
 func (a *API) Internal() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /internal/authz", a.authz)
 	mux.HandleFunc("GET /internal/tls-check", a.tlsCheck)
 	mux.HandleFunc("GET /internal/health", a.health)
+	mux.HandleFunc("POST /internal/analytics/import", a.analyticsImport)
 	return mux
 }
 
