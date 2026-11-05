@@ -485,7 +485,9 @@ The third site mode (`store.ModeContainer`) runs the project its
   links out of the data root, and walks each site's `files/` through an
   `os.Root` of its own. Any new code that touches site files must go
   through `store.OpenContentRoot` or the store — never `os.Open` on a joined
-  path.
+  path. `OpenContentRoot` creates a missing folder, so a reader that may run
+  after a delete (authz's checks) uses `store.OpenServedRoot`, which never
+  does.
 
 ## Browser caching
 

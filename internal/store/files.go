@@ -110,8 +110,8 @@ func OpenContentRoot(site *Site) (*os.Root, error) { return openContent(site) }
 // OpenServedRoot opens the folder the file server serves — files/, which in
 // viewer mode holds the generated wrapper beside _raw/ — as an os.Root. Unlike
 // OpenContentRoot it never creates the folder: it is for a reader that may run
-// after the site was deleted (the analytics page check), which must not bring
-// the folder back. The caller closes it.
+// after the site was deleted (authz's cache and analytics page checks), which
+// must not bring the folder back. The caller closes it.
 func OpenServedRoot(site *Site) (*os.Root, error) { return os.OpenRoot(site.FilesDir()) }
 
 // usage returns the current byte and file count under dir (0s if missing).

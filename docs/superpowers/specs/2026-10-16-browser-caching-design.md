@@ -97,6 +97,15 @@ tree is asked. A plain Vite site keeps its output in `/assets/`, which a
 hand-made site uses too, so it is not a tree: its digit-less hashes revalidate
 under `auto` (safe, just not optimal), and `year` is the owner's choice there.
 
+**2026-11-05 — the `Stat` asks the served folder, and never creates it.** It
+went through `store.OpenContentRoot`, which creates the content folder when it
+is missing: a site deleted between authz loading it and the check came back as
+a folder without `meta.json`. It also asked the wrong folder in viewer mode,
+where the content folder is `files/_raw` but the wrapper fetches `/_raw/<name>`
+from `files/`: every viewer file revalidated, even a hashed one. It now goes
+through `store.OpenServedRoot` (`files/`, never created), the root the
+analytics page check uses for the same question.
+
 ## Testing
 
 `cache_test.go` for the rules (each policy, documents, fingerprints and the

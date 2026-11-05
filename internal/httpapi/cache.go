@@ -152,7 +152,10 @@ func hashSegment(s string) bool {
 // cacheValue is what authz answers for a file site's request: the policy
 // applied to the path the visitor asked for, after the /v/<id> prefix of a
 // path view. Whether that path is an existing regular file is asked of the
-// site's own os.Root, so no path can look outside it.
+// folder the file server serves (files/, which in viewer mode holds _raw/),
+// through its own os.Root, so no path can look outside it. That root is
+// never created: a site deleted after authz loaded it must not come back
+// as a folder without meta.json.
 func (a *API) cacheValue(site *store.Site, rawURI, prefix string) string {
 	if site.Meta.Cache == store.CacheOff {
 		return ""
@@ -166,7 +169,7 @@ func (a *API) cacheValue(site *store.Site, rawURI, prefix string) string {
 	}
 	isFile := false
 	if rel := strings.TrimPrefix(path.Clean("/"+p), "/"); rel != "" && !strings.HasSuffix(p, "/") {
-		if root, err := store.OpenContentRoot(site); err == nil {
+		if root, err := store.OpenServedRoot(site); err == nil {
 			if fi, err := root.Stat(rel); err == nil && fi.Mode().Type() == 0 {
 				isFile = true
 			} else if err != nil && !errors.Is(err, fs.ErrNotExist) {

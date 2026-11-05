@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -163,6 +164,50 @@ func TestAuthzSendsCacheControl(t *testing.T) {
 	req.Header.Set("X-Forwarded-Uri", "/v/"+c2.ID+"/assets/index-BqCz7v8e.js")
 	if got := e2.internal(t, req).Header().Get(cacheHeader); got != immutable {
 		t.Errorf("path view: %q", got)
+	}
+}
+
+// TestCacheValueNeverBringsADeletedSiteBack: authz loaded the site, then a
+// delete removed its folder before the cache check ran. Asking whether the
+// path is a file must not create the folder again — a folder without
+// meta.json is an orphan nothing cleans up.
+func TestCacheValueNeverBringsADeletedSiteBack(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"assets/index-BqCz7v8e.js": "js"})
+	site, err := e.st.ByViewID(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.Delete(site); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.api.cacheValue(site, "/assets/index-BqCz7v8e.js", ""); got != revalidate {
+		t.Errorf("a deleted site's file: %q, want a page's value", got)
+	}
+	if _, err := os.Stat(site.FilesDir()); !os.IsNotExist(err) {
+		t.Fatalf("the deleted site's folder is back (stat: %v)", err)
+	}
+}
+
+// TestCacheValueAsksTheServedFolder: in viewer mode files/ holds the
+// generated wrapper and the owner's files under _raw/, and the wrapper
+// fetches /_raw/<name> — the path the file server sees is under files/.
+func TestCacheValueAsksTheServedFolder(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, map[string]string{"mode": "viewer"}, map[string]string{"report-BqCz7v8e.js": "js"})
+	host := c.ID + ".sitebin.example"
+	get := func(uri string) string {
+		w := e.internal(t, authzReq(host, uri, ""))
+		if w.Code != 200 {
+			t.Fatalf("authz %s: %d", uri, w.Code)
+		}
+		return w.Header().Get(cacheHeader)
+	}
+	if got := get("/_raw/report-BqCz7v8e.js"); got != immutable {
+		t.Errorf("a hashed file the viewer fetches: %q", got)
+	}
+	if got := get("/report-BqCz7v8e.js"); got != revalidate {
+		t.Errorf("a name the file server does not serve: %q", got)
 	}
 }
 
