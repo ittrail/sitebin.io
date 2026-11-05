@@ -232,3 +232,37 @@ func TestSweepPrunesSalts(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The purge reads the lock from meta.json under the stats lock, never from
+// the sweep's snapshot: a site locked since (by the operator, or the CLI in
+// another process) keeps every day as evidence.
+func TestPurgeAnalyticsSkipsASiteLockedSinceTheSnapshot(t *testing.T) {
+	ext.Reset()
+	st, _ := store.New(t.TempDir(), "sitebin.example", 1<<20, 100)
+	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	snapshot, _, _ := st.Create()
+	dayFiles(t, snapshot, now, "2020-01-01.jsonl", "2026-11-05.jsonl")
+	handle, err := st.ByViewID(snapshot.ViewID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SetLock(handle, &store.SiteLock{At: now, By: store.LockByAdmin, Reason: "phishing"}); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Meta.IsLocked() {
+		t.Fatal("the snapshot must still read unlocked")
+	}
+	if n, err := PurgeAnalytics(st, snapshot, now, 10, "UTC"); err != nil || n != 0 {
+		t.Fatalf("purged %d, %v from a locked site", n, err)
+	}
+	if got := eventNames(t, snapshot); !reflect.DeepEqual(got, []string{"2020-01-01.jsonl", "2026-11-05.jsonl"}) {
+		t.Errorf("a locked site kept %v", got)
+	}
+	// Unlocked again, the same snapshot purges.
+	if _, err := st.SetLock(handle, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := PurgeAnalytics(st, snapshot, now, 10, "UTC"); err != nil || n != 1 {
+		t.Errorf("after the unlock: purged %d, %v; want 1", n, err)
+	}
+}

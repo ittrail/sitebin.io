@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -26,6 +27,7 @@ type analyticsStateResp struct {
 	Reason     string          `json:"reason"`
 	UpgradeURL string          `json:"upgrade_url"`
 	Settings   store.Analytics `json:"settings"`
+	Effective  string          `json:"effective_timezone"`
 	Addresses  []string        `json:"addresses"`
 	Geo        struct {
 		Present     bool   `json:"present"`
@@ -121,9 +123,11 @@ func event(at time.Time, v, name string, data map[string]any) analytics.Record {
 	return analytics.Record{T: at.UnixMilli(), K: "e", S: "js", V: v, N: name, D: data}
 }
 
-// daysAgo is hh:mm UTC on the day n days before today (UTC).
-func daysAgo(n, hh, mm int) time.Time {
-	d := time.Now().UTC().AddDate(0, 0, -n)
+// daysAgo is hh:mm UTC on the day n days before now's (UTC). Each test
+// takes now once, and seeds and asks from it, so a test that runs across
+// midnight still asks for the days it seeded.
+func daysAgo(now time.Time, n, hh, mm int) time.Time {
+	d := now.UTC().AddDate(0, 0, -n)
 	return time.Date(d.Year(), d.Month(), d.Day(), hh, mm, 0, 0, time.UTC)
 }
 
@@ -137,21 +141,21 @@ func dateOf(t time.Time) string { return analytics.LocalDate(t, time.UTC) }
 //
 // Over both days: 4 views, 3 visitors (2 + 1), 3 visits, two of them
 // bounces, and an average duration of 100 s (300, 0 and 0).
-func seededSite(t *testing.T, e *env) (site *store.Site, edit, pw string) {
+func seededSite(t *testing.T, e *env, now time.Time) (site *store.Site, edit, pw string) {
 	t.Helper()
 	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
 	site, err := e.st.ByViewID(c.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seedAnalytics(t, site, dateOf(daysAgo(3, 0, 0)),
-		pageView(daysAgo(3, 10, 0), "a", "/"),
-		pageView(daysAgo(3, 10, 5), "a", "/pricing"),
-		pageView(daysAgo(3, 11, 0), "b", "/"),
+	seedAnalytics(t, site, dateOf(daysAgo(now, 3, 0, 0)),
+		pageView(daysAgo(now, 3, 10, 0), "a", "/"),
+		pageView(daysAgo(now, 3, 10, 5), "a", "/pricing"),
+		pageView(daysAgo(now, 3, 11, 0), "b", "/"),
 	)
-	seedAnalytics(t, site, dateOf(daysAgo(2, 0, 0)),
-		pageView(daysAgo(2, 9, 0), "a", "/"),
-		event(daysAgo(2, 9, 1), "a", "signup", map[string]any{"plan": "pro"}),
+	seedAnalytics(t, site, dateOf(daysAgo(now, 2, 0, 0)),
+		pageView(daysAgo(now, 2, 9, 0), "a", "/"),
+		event(daysAgo(now, 2, 9, 1), "a", "signup", map[string]any{"plan": "pro"}),
 	)
 	if err := e.st.SetAnalytics(site, &store.Analytics{
 		Enabled: true,
@@ -164,9 +168,10 @@ func seededSite(t *testing.T, e *env) (site *store.Site, edit, pw string) {
 	return site, editIDFrom(t, c.EditURL), c.EditPassword
 }
 
-// rangeOf is the query of the local dates n and m days ago, inclusive.
-func rangeOf(n, m int) string {
-	return "from=" + dateOf(daysAgo(n, 0, 0)) + "&to=" + dateOf(daysAgo(m, 0, 0))
+// rangeOf is the query of the local dates n and m days before now's,
+// inclusive.
+func rangeOf(now time.Time, n, m int) string {
+	return "from=" + dateOf(daysAgo(now, n, 0, 0)) + "&to=" + dateOf(daysAgo(now, m, 0, 0))
 }
 
 func TestAnalyticsSettingsRoundTrip(t *testing.T) {
@@ -176,13 +181,14 @@ func TestAnalyticsSettingsRoundTrip(t *testing.T) {
 	site, _ := e.st.ByViewID(c.ID)
 	gen := e.api.generatedAddress(site)
 
-	// No settings yet: the defaults, with the zone in effect spelled out.
+	// No settings yet: the defaults. The zone is the instance's, so the
+	// settings name none and the zone in effect stands beside them.
 	s := e.analyticsState(t, edit, c.EditPassword)
 	if !s.Available || s.Reason != "" || s.UpgradeURL != "" {
 		t.Errorf("available %v, reason %q, upgrade %q", s.Available, s.Reason, s.UpgradeURL)
 	}
-	if s.Settings.Enabled || s.Settings.Mode != "server" || s.Settings.Timezone != "UTC" {
-		t.Errorf("default settings = %+v", s.Settings)
+	if s.Settings.Enabled || s.Settings.Mode != "server" || s.Settings.Timezone != "" || s.Effective != "UTC" {
+		t.Errorf("default settings = %+v, effective zone %q", s.Settings, s.Effective)
 	}
 	if !reflect.DeepEqual(s.Addresses, []string{gen}) || s.RetentionDays != 760 || s.DailyCap != 50000 || s.Geo.Present {
 		t.Errorf("addresses %v, retention %d, cap %d, geo %+v", s.Addresses, s.RetentionDays, s.DailyCap, s.Geo)
@@ -203,8 +209,8 @@ func TestAnalyticsSettingsRoundTrip(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("PUT = %d %s", w.Code, w.Body)
 	}
-	if got := decodeState(t, w); !reflect.DeepEqual(got.Settings, want) {
-		t.Errorf("PUT answered %+v, want %+v", got.Settings, want)
+	if got := decodeState(t, w); !reflect.DeepEqual(got.Settings, want) || got.Effective != "Europe/Vienna" {
+		t.Errorf("PUT answered %+v (effective %q), want %+v", got.Settings, got.Effective, want)
 	}
 	if got := e.analyticsState(t, edit, c.EditPassword); !reflect.DeepEqual(got.Settings, want) {
 		t.Errorf("GET after PUT = %+v", got.Settings)
@@ -220,12 +226,20 @@ func TestAnalyticsSettingsRoundTrip(t *testing.T) {
 
 	// Off again: the whole object replaces the old one.
 	w = e.analyticsCall(t, "PUT", edit, c.EditPassword, "", store.Analytics{})
-	if got := decodeState(t, w); w.Code != 200 || got.Settings.Enabled || len(got.Settings.Funnels) != 0 || got.Settings.Timezone != "UTC" {
-		t.Errorf("off: %d %+v", w.Code, got.Settings)
+	if got := decodeState(t, w); w.Code != 200 || got.Settings.Enabled || len(got.Settings.Funnels) != 0 || got.Settings.Timezone != "" || got.Effective != "UTC" {
+		t.Errorf("off: %d %+v, effective %q", w.Code, got.Settings, got.Effective)
 	}
 	// A second change within minutes joins the first entry's burst.
 	if last := lastEntry(t, e.trail(t, c.ID)); last.Action != provenance.ActionAnalyticsSettings || last.Detail != "on (script), off" {
 		t.Errorf("provenance after turning off = %+v", last)
+	}
+
+	// A site without a zone of its own follows the instance's default,
+	// and the state says which one that is without storing it.
+	hosted := newEnv(t, map[string]string{"SITEBIN_ANALYTICS_TIMEZONE": "Europe/Vienna"})
+	hc := hosted.createSite(t, nil, map[string]string{"index.html": "x"})
+	if got := hosted.analyticsState(t, editIDFrom(t, hc.EditURL), hc.EditPassword); got.Settings.Timezone != "" || got.Effective != "Europe/Vienna" {
+		t.Errorf("instance default: timezone %q, effective %q", got.Settings.Timezone, got.Effective)
 	}
 }
 
@@ -243,6 +257,9 @@ func TestAnalyticsSettings422(t *testing.T) {
 		{map[string]any{"addresses": []string{"elsewhere.example"}}, "addresses"},
 		{map[string]any{"exclude": []string{"no-slash"}}, "exclude"},
 		{map[string]any{"goals": []map[string]any{{"id": "g1", "name": "x", "type": "click", "value": "y"}}}, "goals"},
+		// A field the settings do not have is refused, not dropped.
+		{map[string]any{"enabled": true, "colour": "amber"}, "colour"},
+		{map[string]any{"goals": []map[string]any{{"id": "g1", "name": "x", "type": "event", "value": "y", "weight": 2}}}, "weight"},
 	} {
 		w := e.analyticsCall(t, "PUT", edit, c.EditPassword, "", tc.body)
 		var got struct{ Error, Field string }
@@ -255,6 +272,11 @@ func TestAnalyticsSettings422(t *testing.T) {
 	if w := e.public(t, req); w.Code != 400 {
 		t.Errorf("bad JSON = %d, want 400", w.Code)
 	}
+	big := `{"exclude":["/` + strings.Repeat("a", maxAnalyticsSettings) + `"]}`
+	req = authed(httptest.NewRequest("PUT", "/api/sites/"+edit+"/analytics", strings.NewReader(big)), c.EditPassword)
+	if w := e.public(t, req); w.Code != 413 {
+		t.Errorf("a body over 1 MiB = %d %s, want 413", w.Code, w.Body)
+	}
 	site, _ := e.st.ByViewID(c.ID)
 	if site.Meta.Analytics != nil {
 		t.Errorf("a refused PUT stored %+v", site.Meta.Analytics)
@@ -265,6 +287,7 @@ func TestAnalyticsSettings422(t *testing.T) {
 }
 
 func TestAnalyticsStateReasons(t *testing.T) {
+	now := time.Now()
 	no := false
 	available := func(t *testing.T, e *env, edit, pw string) bool {
 		t.Helper()
@@ -293,7 +316,7 @@ func TestAnalyticsStateReasons(t *testing.T) {
 
 	t.Run("instance", func(t *testing.T) {
 		e := newEnv(t, map[string]string{"SITEBIN_ANALYTICS": "false"})
-		_, edit, pw := seededSite(t, e)
+		_, edit, pw := seededSite(t, e, now)
 		s := e.analyticsState(t, edit, pw)
 		if s.Available || s.Reason != analyticsReasonInstance || s.UpgradeURL != "" {
 			t.Errorf("available %v, reason %q, upgrade %q", s.Available, s.Reason, s.UpgradeURL)
@@ -303,7 +326,7 @@ func TestAnalyticsStateReasons(t *testing.T) {
 		}
 		// What was collected stays readable all the same.
 		var ov analytics.Overview
-		decodeInto(t, e.analyticsCall(t, "GET", edit, pw, "/overview?"+rangeOf(3, 2), nil), &ov)
+		decodeInto(t, e.analyticsCall(t, "GET", edit, pw, "/overview?"+rangeOf(now, 3, 2), nil), &ov)
 		if ov.Totals.Views != 4 {
 			t.Errorf("views with the instance switch off = %d, want 4", ov.Totals.Views)
 		}
@@ -328,7 +351,7 @@ func TestAnalyticsStateReasons(t *testing.T) {
 
 	t.Run("locked", func(t *testing.T) {
 		e := newEnv(t, nil)
-		_, edit, pw := seededSite(t, e)
+		_, edit, pw := seededSite(t, e, now)
 		site, _ := e.st.ByEditID(edit)
 		lockSite(t, e, site.ViewID, "phishing")
 		s := e.analyticsState(t, edit, pw)
@@ -338,7 +361,7 @@ func TestAnalyticsStateReasons(t *testing.T) {
 		if available(t, e, edit, pw) {
 			t.Error("the tab is shown for a locked site")
 		}
-		for _, path := range []string{"/overview?" + rangeOf(3, 2), "/table?dim=path&" + rangeOf(3, 2), "/event-data?name=signup&" + rangeOf(3, 2), "/realtime", "/funnels?" + rangeOf(3, 2), "/goals?" + rangeOf(3, 2)} {
+		for _, path := range []string{"/overview?" + rangeOf(now, 3, 2), "/table?dim=path&" + rangeOf(now, 3, 2), "/event-data?name=signup&" + rangeOf(now, 3, 2), "/realtime", "/funnels?" + rangeOf(now, 3, 2), "/goals?" + rangeOf(now, 3, 2)} {
 			if w := e.analyticsCall(t, "GET", edit, pw, path, nil); w.Code != 403 || !strings.Contains(w.Body.String(), "locked") {
 				t.Errorf("GET %s on a locked site = %d %s, want 403", path, w.Code, w.Body)
 			}
@@ -393,8 +416,9 @@ func TestAnalyticsStateStorage(t *testing.T) {
 // shows what was collected, and its owner may still edit or turn off the
 // settings.
 func TestAnalyticsDowngradeKeepsData(t *testing.T) {
+	now := time.Now()
 	e := newEnv(t, nil)
-	site, edit, pw := seededSite(t, e)
+	site, edit, pw := seededSite(t, e, now)
 	no := false
 	if err := e.st.SetQuotaAnalytics(site, &no); err != nil {
 		t.Fatal(err)
@@ -405,12 +429,12 @@ func TestAnalyticsDowngradeKeepsData(t *testing.T) {
 	read := func(when string) {
 		t.Helper()
 		var ov analytics.Overview
-		decodeInto(t, e.analyticsCall(t, "GET", edit, pw, "/overview?"+rangeOf(3, 2), nil), &ov)
+		decodeInto(t, e.analyticsCall(t, "GET", edit, pw, "/overview?"+rangeOf(now, 3, 2), nil), &ov)
 		if ov.Totals.Views != 4 || ov.Totals.Visitors != 3 {
 			t.Errorf("%s: totals %+v", when, ov.Totals)
 		}
 		var fs struct{ Funnels []analytics.FunnelResult }
-		decodeInto(t, e.analyticsCall(t, "GET", edit, pw, "/funnels?"+rangeOf(3, 2), nil), &fs)
+		decodeInto(t, e.analyticsCall(t, "GET", edit, pw, "/funnels?"+rangeOf(now, 3, 2), nil), &fs)
 		if len(fs.Funnels) != 1 || fs.Funnels[0].Steps[1].Visitors != 1 {
 			t.Errorf("%s: funnels %+v", when, fs.Funnels)
 		}
@@ -422,19 +446,20 @@ func TestAnalyticsDowngradeKeepsData(t *testing.T) {
 		t.Fatalf("PUT after the downgrade = %d %s", w.Code, w.Body)
 	}
 	read("downgraded and turned off")
-	if _, err := os.Stat(analytics.DayFile(site.Dir(), dateOf(daysAgo(3, 0, 0)))); err != nil {
+	if _, err := os.Stat(analytics.DayFile(site.Dir(), dateOf(daysAgo(now, 3, 0, 0)))); err != nil {
 		t.Errorf("a day file went with the downgrade: %v", err)
 	}
 }
 
 func TestAnalyticsOverviewEndpoint(t *testing.T) {
+	now := time.Now()
 	e := newEnv(t, nil)
-	site, edit, pw := seededSite(t, e)
-	if err := os.WriteFile(filepath.Join(site.Dir(), "analytics", "events", dateOf(daysAgo(3, 0, 0))+".over"), []byte("7"), 0o644); err != nil {
+	site, edit, pw := seededSite(t, e, now)
+	if err := os.WriteFile(filepath.Join(site.Dir(), "analytics", "events", dateOf(daysAgo(now, 3, 0, 0))+".over"), []byte("7"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var ov analytics.Overview
-	decodeInto(t, e.analyticsCall(t, "GET", edit, pw, "/overview?"+rangeOf(4, 2)+"&compare=1", nil), &ov)
+	decodeInto(t, e.analyticsCall(t, "GET", edit, pw, "/overview?"+rangeOf(now, 4, 2)+"&compare=1", nil), &ov)
 	tot := ov.Totals
 	if tot.Views != 4 || tot.Visitors != 3 || tot.Visits != 3 || math.Abs(tot.BounceRate-2.0/3) > 1e-9 || math.Abs(tot.DurationS-100) > 1e-9 {
 		t.Errorf("totals = %+v", tot)
@@ -442,24 +467,24 @@ func TestAnalyticsOverviewEndpoint(t *testing.T) {
 	if ov.Unit != "day" || len(ov.Series) != 3 || ov.Series[0].Views != 0 || ov.Series[1].Views != 3 || ov.Series[2].Views != 1 || ov.Series[1].Visitors != 2 {
 		t.Errorf("unit %q, series %+v", ov.Unit, ov.Series)
 	}
-	if !ov.Series[0].T.Equal(daysAgo(4, 0, 0)) {
-		t.Errorf("the series starts at %v, want local midnight %v", ov.Series[0].T, daysAgo(4, 0, 0))
+	if !ov.Series[0].T.Equal(daysAgo(now, 4, 0, 0)) {
+		t.Errorf("the series starts at %v, want local midnight %v", ov.Series[0].T, daysAgo(now, 4, 0, 0))
 	}
 	if ov.Previous == nil || ov.Previous.Views != 0 || ov.OverCap != 7 {
 		t.Errorf("previous %+v, over cap %d", ov.Previous, ov.OverCap)
 	}
 	// Without compare=1 there is no previous period.
-	w := e.analyticsCall(t, "GET", edit, pw, "/overview?"+rangeOf(4, 2), nil)
+	w := e.analyticsCall(t, "GET", edit, pw, "/overview?"+rangeOf(now, 4, 2), nil)
 	if w.Code != 200 || strings.Contains(w.Body.String(), `"previous"`) {
 		t.Errorf("no compare: %d %s", w.Code, w.Body)
 	}
 	// A record-level filter keeps the page views it names.
-	decodeInto(t, e.analyticsCall(t, "GET", edit, pw, "/overview?"+rangeOf(3, 2)+"&filter=path:/pricing", nil), &ov)
+	decodeInto(t, e.analyticsCall(t, "GET", edit, pw, "/overview?"+rangeOf(now, 3, 2)+"&filter=path:/pricing", nil), &ov)
 	if ov.Totals.Views != 1 || ov.Totals.Visitors != 1 {
 		t.Errorf("filtered totals = %+v", ov.Totals)
 	}
 	// One day is its hours.
-	decodeInto(t, e.analyticsCall(t, "GET", edit, pw, "/overview?"+rangeOf(3, 3), nil), &ov)
+	decodeInto(t, e.analyticsCall(t, "GET", edit, pw, "/overview?"+rangeOf(now, 3, 3), nil), &ov)
 	if ov.Unit != "hour" || len(ov.Series) != 24 || ov.Totals.Views != 3 {
 		t.Errorf("one day: unit %q, %d points, %+v", ov.Unit, len(ov.Series), ov.Totals)
 	}
@@ -493,9 +518,10 @@ func TestAnalyticsDatesAreTheSitesLocalDays(t *testing.T) {
 }
 
 func TestAnalyticsReadRoutes(t *testing.T) {
+	now := time.Now()
 	e := newEnv(t, nil)
-	site, edit, pw := seededSite(t, e)
-	rg := rangeOf(3, 2)
+	site, edit, pw := seededSite(t, e, now)
+	rg := rangeOf(now, 3, 2)
 
 	type table struct {
 		Rows  []map[string]any `json:"rows"`
@@ -553,8 +579,8 @@ func TestAnalyticsReadRoutes(t *testing.T) {
 	}
 
 	// Realtime: the last 30 minutes, whatever the range parameters say.
-	now := time.Now().Add(-time.Minute)
-	seedAnalytics(t, site, dateOf(now), pageView(now, "c", "/live"))
+	live := time.Now().Add(-time.Minute)
+	seedAnalytics(t, site, dateOf(live), pageView(live, "c", "/live"))
 	var rt analytics.Realtime
 	decodeInto(t, e.analyticsCall(t, "GET", edit, pw, "/realtime", nil), &rt)
 	if rt.Active != 1 || len(rt.PerMinute) != 30 || len(rt.Latest) != 1 || rt.Latest[0].P != "/live" {
@@ -572,62 +598,79 @@ func TestAnalyticsReadRoutes(t *testing.T) {
 }
 
 func TestAnalyticsTableValidation(t *testing.T) {
+	now := time.Now()
 	e := newEnv(t, nil)
-	_, edit, pw := seededSite(t, e)
-	day := func(n int) string { return dateOf(daysAgo(n, 0, 0)) }
+	_, edit, pw := seededSite(t, e, now)
+	day := func(n int) string { return dateOf(daysAgo(now, n, 0, 0)) }
 	today := day(0)
 	long := strings.Repeat("x", 500)
 	for _, path := range []string{
-		"/table?" + rangeOf(3, 2),                                    // no dim
-		"/table?dim=nope&" + rangeOf(3, 2),                           // unknown dim
-		"/table?dim=data:plan&" + rangeOf(3, 2),                      // a filter, not a table
-		"/table?dim=path&limit=0&" + rangeOf(3, 2),                   // limit below 1
-		"/table?dim=path&limit=501&" + rangeOf(3, 2),                 // limit over 500
-		"/table?dim=path&limit=ten&" + rangeOf(3, 2),                 // not a number
-		"/table?dim=path&offset=-1&" + rangeOf(3, 2),                 // offset below 0
-		"/table?dim=path",                                            // no range
-		"/table?dim=path&from=" + today,                              // no end
-		"/table?dim=path&from=2026-13-01&to=2026-13-02",              // no such month
-		"/table?dim=path&from=26-11-01&to=26-11-02",                  // not a date
-		"/table?dim=path&from=" + day(2) + "&to=" + day(3),           // to before from
-		"/table?dim=path&from=" + day(760) + "&to=" + today,          // 761 days
-		"/table?dim=path&range=last7d",                               // no such range
-		"/table?dim=path&range=last24h&from=" + today,                // both
-		"/table?dim=path&filter=nope:x&" + rangeOf(3, 2),             // unknown filter dim
-		"/table?dim=path&filter=pathonly&" + rangeOf(3, 2),           // no value
-		"/table?dim=path&filter=path:/" + long + "&" + rangeOf(3, 2), // a filter of 506 characters
-		"/overview?filter=nope:x&" + rangeOf(3, 2),
+		"/table?" + rangeOf(now, 3, 2),                    // no dim
+		"/table?dim=nope&" + rangeOf(now, 3, 2),           // unknown dim
+		"/table?dim=data:plan&" + rangeOf(now, 3, 2),      // a filter, not a table
+		"/table?dim=path&limit=0&" + rangeOf(now, 3, 2),   // limit below 1
+		"/table?dim=path&limit=501&" + rangeOf(now, 3, 2), // limit over 500
+		"/table?dim=path&limit=ten&" + rangeOf(now, 3, 2), // not a number
+		"/table?dim=path&offset=-1&" + rangeOf(now, 3, 2), // offset below 0
+		"/table?dim=path",                                                 // no range
+		"/table?dim=path&from=" + today,                                   // no end
+		"/table?dim=path&from=2026-13-01&to=2026-13-02",                   // no such month
+		"/table?dim=path&from=26-11-01&to=26-11-02",                       // not a date
+		"/table?dim=path&from=" + day(2) + "&to=" + day(3),                // to before from
+		"/table?dim=path&from=" + day(760) + "&to=" + today,               // 761 days
+		"/table?dim=path&range=last7d",                                    // no such range
+		"/table?dim=path&range=last24h&from=" + today,                     // both
+		"/table?dim=path&filter=nope:x&" + rangeOf(now, 3, 2),             // unknown filter dim
+		"/table?dim=path&filter=pathonly&" + rangeOf(now, 3, 2),           // no value
+		"/table?dim=path&filter=path:/" + long + "&" + rangeOf(now, 3, 2), // a filter of 506 characters
+		"/table?dim=title&filter=" + url.QueryEscape("title:"+strings.Repeat("页", 495)) + "&" + rangeOf(now, 3, 2), // 501 characters
+		"/table?dim=path" + strings.Repeat("&filter=country:AT", 21) + "&" + rangeOf(now, 3, 2),                    // 21 filters
+		"/overview?filter=nope:x&" + rangeOf(now, 3, 2),
 		"/overview?from=" + day(2) + "&to=" + day(3),
-		"/event-data?" + rangeOf(3, 2), // no name
-		"/funnels?filter=nope:x&" + rangeOf(3, 2),
+		"/event-data?" + rangeOf(now, 3, 2), // no name
+		"/funnels?filter=nope:x&" + rangeOf(now, 3, 2),
 		"/goals?range=yesterday",
 	} {
 		w := e.analyticsCall(t, "GET", edit, pw, path, nil)
 		var got struct{ Error string }
 		json.Unmarshal(w.Body.Bytes(), &got)
 		if w.Code != 400 || got.Error == "" {
-			t.Errorf("GET %s = %d %s, want 400 with an error", path, w.Code, w.Body)
+			t.Errorf("GET %s = %d %s, want 400 with an error", shortPath(path), w.Code, w.Body)
 		}
 	}
 	for _, path := range []string{
-		"/table?dim=path&limit=500&" + rangeOf(3, 2),
-		"/table?dim=path&offset=99&" + rangeOf(3, 2),
-		"/table?dim=query:ref&" + rangeOf(3, 2),
+		"/table?dim=path&limit=500&" + rangeOf(now, 3, 2),
+		"/table?dim=path&offset=99&" + rangeOf(now, 3, 2),
+		"/table?dim=query:ref&" + rangeOf(now, 3, 2),
 		"/table?dim=utm_source&range=last30m",
-		"/table?dim=path&from=" + day(759) + "&to=" + today,                              // 760 days
-		"/table?dim=path&filter=path:/" + strings.Repeat("x", 494) + "&" + rangeOf(3, 2), // 500 characters
+		"/table?dim=path&from=" + day(759) + "&to=" + today,                                   // 760 days
+		"/table?dim=path&filter=path:/" + strings.Repeat("x", 494) + "&" + rangeOf(now, 3, 2), // 500 characters
+		// Characters, not bytes: a title in CJK is three bytes a character.
+		"/table?dim=title&filter=" + url.QueryEscape("title:"+strings.Repeat("页", 200)) + "&" + rangeOf(now, 3, 2),
+		"/table?dim=title&filter=" + url.QueryEscape("title:"+strings.Repeat("页", 494)) + "&" + rangeOf(now, 3, 2), // 500 characters
+		"/table?dim=path" + strings.Repeat("&filter=country:AT", 20) + "&" + rangeOf(now, 3, 2),                    // 20 filters
 		"/overview?range=last30m",
 	} {
 		if w := e.analyticsCall(t, "GET", edit, pw, path, nil); w.Code != 200 {
-			t.Errorf("GET %s = %d %s, want 200", path, w.Code, w.Body)
+			t.Errorf("GET %s = %d %s, want 200", shortPath(path), w.Code, w.Body)
 		}
 	}
+}
+
+// shortPath keeps a failure message readable when a path carries a long
+// filter.
+func shortPath(p string) string {
+	if len(p) > 120 {
+		return p[:120] + "…"
+	}
+	return p
 }
 
 // The longest range is the retention when that is shorter than 760 days; a
 // retention of 0 (keep every day) still caps it at 760.
 func TestAnalyticsSpanFollowsTheRetention(t *testing.T) {
-	day := func(n int) string { return dateOf(daysAgo(n, 0, 0)) }
+	now := time.Now()
+	day := func(n int) string { return dateOf(daysAgo(now, n, 0, 0)) }
 	for _, tc := range []struct {
 		retention  string
 		ok, tooBig int // the days back to the first date of a range ending today

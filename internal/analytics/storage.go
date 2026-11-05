@@ -104,6 +104,12 @@ func RetentionStart(now time.Time, loc *time.Location, days int) string {
 // crashed write's. It returns the number of files deleted. It never creates
 // or removes the events directory, and a site without one has nothing to
 // delete.
+//
+// The contract for every writer of events/: a temp file (a name with ".tmp"
+// in it) is either written and renamed while the writer holds the site's
+// stats lock, which the sweep's purge holds too, or renamed within an hour
+// of its last write. A temp file older than that is taken for a crash's and
+// deleted, even when its day is kept.
 func PurgeDays(siteDir, start string, now time.Time) (int, error) {
 	dir := eventsDir(siteDir)
 	entries, err := os.ReadDir(dir)

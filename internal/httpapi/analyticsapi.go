@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ittrail/sitebin.io/internal/analytics"
 	"github.com/ittrail/sitebin.io/internal/store"
@@ -37,7 +38,8 @@ const (
 	maxAnalyticsSpanDays  = 760     // the longest range, whatever the retention
 	defaultAnalyticsLimit = 10      // table rows when the caller names no limit
 	maxAnalyticsLimit     = 500     // table rows at most
-	maxAnalyticsFilter    = 500     // bytes of one filter parameter
+	maxAnalyticsFilter    = 500     // characters of one filter parameter
+	maxAnalyticsFilters   = 20      // filter parameters of one query
 	maxAnalyticsSettings  = 1 << 20 // bytes of a settings body
 )
 
@@ -47,20 +49,22 @@ type analyticsGeoState struct {
 }
 
 // analyticsStateBody is the tab's state: whether analytics is available and
-// why not, the settings (with the mode and zone in effect), every address
-// the site serves, the instance's limits, and what is stored.
+// why not, the settings as stored (the mode spelled out; a timezone of ""
+// follows the instance's default) with the zone in effect beside them,
+// every address the site serves, the instance's limits, and what is stored.
 type analyticsStateBody struct {
-	Available     bool                      `json:"available"`
-	Reason        string                    `json:"reason,omitempty"`
-	UpgradeURL    string                    `json:"upgrade_url,omitempty"`
-	Settings      store.Analytics           `json:"settings"`
-	Addresses     []string                  `json:"addresses"`
-	Geo           analyticsGeoState         `json:"geo"`
-	RetentionDays int                       `json:"retention_days"`
-	DailyCap      int                       `json:"daily_cap"`
-	Bytes         int64                     `json:"bytes"`
-	FirstDay      string                    `json:"first_day,omitempty"`
-	Imported      []analytics.ImportedRange `json:"imported"`
+	Available         bool                      `json:"available"`
+	Reason            string                    `json:"reason,omitempty"`
+	UpgradeURL        string                    `json:"upgrade_url,omitempty"`
+	Settings          store.Analytics           `json:"settings"`
+	EffectiveTimezone string                    `json:"effective_timezone"`
+	Addresses         []string                  `json:"addresses"`
+	Geo               analyticsGeoState         `json:"geo"`
+	RetentionDays     int                       `json:"retention_days"`
+	DailyCap          int                       `json:"daily_cap"`
+	Bytes             int64                     `json:"bytes"`
+	FirstDay          string                    `json:"first_day,omitempty"`
+	Imported          []analytics.ImportedRange `json:"imported"`
 }
 
 // analyticsEventRow is a row of the event table, which counts events, not
@@ -82,18 +86,16 @@ func (a *API) analyticsStateOf(site *store.Site) analyticsStateBody {
 	if s.Mode == "" {
 		s.Mode = "server"
 	}
-	if s.Timezone == "" {
-		s.Timezone = a.analyticsTZ(site).String()
-	}
 	out := analyticsStateBody{
-		Available:     reason == "",
-		Reason:        reason,
-		Settings:      s,
-		Addresses:     a.siteAddresses(site),
-		Geo:           analyticsGeoState{Present: a.analyticsGeo != nil, Attribution: a.analyticsGeo.Attribution()},
-		RetentionDays: a.cfg.AnalyticsRetentionDays,
-		DailyCap:      a.cfg.AnalyticsDailyCap,
-		Imported:      []analytics.ImportedRange{},
+		Available:         reason == "",
+		Reason:            reason,
+		Settings:          s,
+		EffectiveTimezone: a.analyticsTZ(site).String(),
+		Addresses:         a.siteAddresses(site),
+		Geo:               analyticsGeoState{Present: a.analyticsGeo != nil, Attribution: a.analyticsGeo.Attribution()},
+		RetentionDays:     a.cfg.AnalyticsRetentionDays,
+		DailyCap:          a.cfg.AnalyticsDailyCap,
+		Imported:          []analytics.ImportedRange{},
 	}
 	if reason == analyticsReasonPlan {
 		out.UpgradeURL = a.apiAccountHint()
@@ -115,14 +117,25 @@ func (a *API) getAnalytics(w http.ResponseWriter, r *http.Request, site *store.S
 }
 
 // putAnalytics replaces the site's settings with the body, whole, once they
-// validate; a bad value is a 422 naming its field. It is allowed when only
-// the plan lacks analytics, so a site downgraded can still be turned off or
-// have its funnels edited.
+// validate; a bad value, or a field the settings do not have, is a 422
+// naming its field, and a body over 1 MiB a 413. It is allowed when only the
+// plan lacks analytics, so a site downgraded can still be turned off or have
+// its funnels edited.
 func (a *API) putAnalytics(w http.ResponseWriter, r *http.Request, site *store.Site) {
 	var s store.Analytics
 	r.Body = http.MaxBytesReader(w, r.Body, maxAnalyticsSettings)
-	if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
-		writeError(w, 400, "invalid JSON body")
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&s); err != nil {
+		var tooBig *http.MaxBytesError
+		switch name, unknown := unknownJSONField(err); {
+		case errors.As(err, &tooBig):
+			writeError(w, 413, fmt.Sprintf("the settings are at most %d bytes", maxAnalyticsSettings))
+		case unknown:
+			writeJSON(w, 422, map[string]string{"error": fmt.Sprintf("unknown field %q", name), "field": name})
+		default:
+			writeError(w, 400, "invalid JSON body")
+		}
 		return
 	}
 	if field, err := s.Validate(a.siteAddresses(site)); err != nil {
@@ -135,6 +148,18 @@ func (a *API) putAnalytics(w http.ResponseWriter, r *http.Request, site *store.S
 		return
 	}
 	writeJSON(w, 200, a.analyticsStateOf(site))
+}
+
+// unknownJSONField names the field a decoder with DisallowUnknownFields
+// refused. encoding/json has no error type for it, only this message; a
+// field inside a funnel or a goal is named without its path.
+func unknownJSONField(err error) (string, bool) {
+	rest, ok := strings.CutPrefix(err.Error(), "json: unknown field ")
+	if !ok {
+		return "", false
+	}
+	name, err := strconv.Unquote(rest)
+	return name, err == nil
 }
 
 // analyticsDetail is a settings change as the site's log names it: "off", or
@@ -293,9 +318,9 @@ func (a *API) analyticsQueryOr400(w http.ResponseWriter, r *http.Request, site *
 // site's zone). The range is from and to, local dates (YYYY-MM-DD, both
 // inclusive): from's local midnight up to the one after to, built with
 // time.Date so a day of 23 or 25 hours is whole. Or it is range=last24h or
-// last30m, ending now. A range spans at most analyticsMaxSpan days. Each
-// filter parameter is dim:value; an unknown dimension is the engine's to
-// refuse.
+// last30m, ending now. A range spans at most analyticsMaxSpan days. There
+// are at most 20 filter parameters, each dim:value; an unknown dimension is
+// the engine's to refuse.
 func (a *API) analyticsQuery(v url.Values, loc *time.Location, now time.Time) (analytics.Query, error) {
 	q := analytics.Query{Loc: loc}
 	switch rng, from, to := v.Get("range"), v.Get("from"), v.Get("to"); {
@@ -326,6 +351,9 @@ func (a *API) analyticsQuery(v url.Values, loc *time.Location, now time.Time) (a
 		q.From = time.Date(f.Year(), f.Month(), f.Day(), 0, 0, 0, 0, loc)
 		q.To = time.Date(t.Year(), t.Month(), t.Day()+1, 0, 0, 0, 0, loc)
 	}
+	if len(v["filter"]) > maxAnalyticsFilters {
+		return q, fmt.Errorf("at most %d filters", maxAnalyticsFilters)
+	}
 	for _, raw := range v["filter"] {
 		f, err := parseAnalyticsFilter(raw)
 		if err != nil {
@@ -350,7 +378,7 @@ func (a *API) analyticsMaxSpan() int {
 // so its name ends at the second colon: a data key with a colon in it cannot
 // be filtered on.
 func parseAnalyticsFilter(s string) (analytics.Filter, error) {
-	if len(s) > maxAnalyticsFilter {
+	if utf8.RuneCountInString(s) > maxAnalyticsFilter {
 		return analytics.Filter{}, fmt.Errorf("a filter is at most %d characters", maxAnalyticsFilter)
 	}
 	dim, value, ok := strings.Cut(s, ":")
