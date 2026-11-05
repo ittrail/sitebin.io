@@ -1715,7 +1715,7 @@ const analyticsTab = (() => {
     const on = switchEl("Count this site's visits", set.enabled, dirty);
     const onInput = on.querySelector("input");
     c1.appendChild(on);
-    c1.appendChild(el("p", "sub", "No cookies, no IP addresses: a visitor is known for one day only, by an id that cannot be traced back."));
+    c1.appendChild(el("p", "sub", "No cookies (only one, if a visitor asks not to be counted), no IP addresses: a visitor is known for one day only, by an id that cannot be traced back."));
     const seg = el("div", "seg");
     seg.setAttribute("role", "radiogroup");
     seg.setAttribute("aria-label", "How visits are counted");
