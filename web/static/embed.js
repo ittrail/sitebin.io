@@ -133,6 +133,12 @@
   }
 
   const DOC_EXTS = /\.(pdf|md|markdown|docx|txt|png|jpe?g|gif|webp|svg|mp4|webm|mp3|wav|json|log|csv)$/i;
+  // Files the File viewer offers as a download (installers, archives, office
+  // files it cannot render). A drop of nothing but these and documents has no
+  // page to serve, so the form suggests the viewer for it too. Mirrors the
+  // viewer's "download" kind (internal/viewer/viewer.go; a test keeps them
+  // in step).
+  const DOWNLOAD_EXTS = /\.(exe|msi|dmg|pkg|app|apk|ipa|deb|rpm|appimage|zip|7z|rar|tar|gz|tgz|bz2|xz|zst|iso|img|bin|dll|so|dylib|jar|wasm|woff|woff2|ttf|otf|eot|psd|ai|sketch|fig|blend|xlsx|xls|pptx|ppt|doc|odt|ods|odp|epub|heic|tif|tiff|mkv|avi|wmv|flv|sqlite|db)$/i;
 
   const STYLE = `
 :host {
@@ -475,7 +481,8 @@ input::placeholder { color: var(--ink-faint); }
           <label><input type="radio" name="mode" value="viewer"><span>File viewer</span></label>
         </div>
         <span class="sub">Web server serves your files as-is (index.html is the front door).
-          File viewer renders documents — PDF, Markdown, DOCX, images, code — right in the browser.</span>
+          File viewer renders documents — PDF, Markdown, DOCX, images, code — right in the browser,
+          and offers everything else (installers, archives) as a download.</span>
       </div>
 
       <div class="opt hidden" id="opt-unzip">
@@ -683,7 +690,8 @@ input::placeholder { color: var(--ink-faint); }
       let viewer = false;
       if (!s.zip && s.files.length >= 1) {
         const hasIndex = s.files.some((f) => /(^|\/)index\.html?$/i.test(f.path));
-        const allDocs = s.files.every((f) => DOC_EXTS.test(f.path) && !/\.html?$/i.test(f.path));
+        const allDocs = s.files.every((f) =>
+          (DOC_EXTS.test(f.path) || DOWNLOAD_EXTS.test(f.path)) && !/\.html?$/i.test(f.path));
         viewer = !hasIndex && allDocs;
       }
       const target = viewer ? "viewer" : "webserver";

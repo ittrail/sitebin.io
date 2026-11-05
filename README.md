@@ -242,7 +242,7 @@ colours.
   entry point. A folder is never listed: an address that names no file —
   a missing page, a folder without an `index.html` — answers **404** with a
   [not-found page](#not-found-pages). A drop that is only files (PDFs, a
-  download) belongs in the File viewer.
+  download) belongs in the File viewer, and the drop form picks it for one.
 - **File viewer** — the site renders one document in the browser (PDF,
   Markdown, DOCX, images, video, audio, code/text with highlighting). A file
   it cannot show (an installer, an archive, a font, a binary) gets a download

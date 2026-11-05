@@ -180,3 +180,32 @@ func TestViewerJSMirrorsRenderers(t *testing.T) {
 		}
 	}
 }
+
+// The drop form suggests the File viewer when every file is a document or a
+// download (no page to serve). Its DOWNLOAD_EXTS list must name exactly the
+// extensions the viewer offers as a download, or a lone installer lands in
+// web server mode and its front page is a 404.
+func TestDropFormSuggestsViewerForEveryDownload(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "web", "static", "embed.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`const DOWNLOAD_EXTS = /\\.\(([a-z0-9|]+)\)\$/i;`).FindSubmatch(src)
+	if m == nil {
+		t.Fatal("no DOWNLOAD_EXTS list in embed.js")
+	}
+	js := map[string]bool{}
+	for _, ext := range strings.Split(string(m[1]), "|") {
+		js["."+ext] = true
+	}
+	for ext, kind := range rendererByExt {
+		if kind == "download" && !js[ext] {
+			t.Errorf("embed.js DOWNLOAD_EXTS lacks %s, which the viewer offers as a download", ext)
+		}
+	}
+	for ext := range js {
+		if rendererByExt[ext] != "download" {
+			t.Errorf("embed.js DOWNLOAD_EXTS has %s, which the viewer does not offer as a download (%q)", ext, rendererByExt[ext])
+		}
+	}
+}
