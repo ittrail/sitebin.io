@@ -243,12 +243,19 @@ colours.
   a missing page, a folder without an `index.html` — answers **404** with a
   [not-found page](#not-found-pages). A drop that is only files (PDFs, a
   download) belongs in the File viewer, and the drop form picks it for one.
-- **File viewer** — the site renders one document in the browser (PDF,
-  Markdown, DOCX, images, video, audio, code/text with highlighting). A file
-  it cannot show (an installer, an archive, a font, a binary) gets a download
-  view instead. The raw files stay available under `/_raw/…`, and the viewer
-  has a built-in file switcher + download button. Switching modes back and
-  forth is lossless.
+- **File viewer** — the site shows its files in the browser. Its start page
+  is the **file list**, or the file chosen under "Viewer shows"
+  (`entry_file`; a site with exactly one file opens it). The list browses
+  folders, in a details view (sortable by name, size, type and date) or a
+  grid with previews of images, videos and PDFs whose tile size can be
+  scaled, and a filter finds files in a folder and below. A file renders in
+  the browser (PDF, Markdown, DOCX, CSV, notebooks, images, video, audio,
+  code/text with highlighting); one it cannot show (an installer, an
+  archive, a font) gets a download view. Every folder and file has its own
+  address (`#/docs/`, `#/docs/report.pdf`), ← → step through a folder,
+  Escape goes back to it. Dotfiles and `__MACOSX`, `Thumbs.db` and
+  `desktop.ini` are left out of the list. The raw files stay available under
+  `/_raw/…`. Switching modes back and forth is lossless.
 - **Container** *(Enterprise)* — the site runs the project its
   `sitebin-container-compose.yaml` declares, and Caddy proxies to it. See
   [Container sites](#container-sites-enterprise).
@@ -344,7 +351,8 @@ curl -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID
 # name is a private label of up to 60 characters, "" removes it; tags replaces the
 # whole set of up to 10 private tags, [] clears it; cache is the
 # browser-cache policy: auto, revalidate, hour, day, week, year or off;
-# not_found_page is the .html file a 404 shows, "" returns to 404.html)
+# not_found_page is the .html file a 404 shows, "" returns to 404.html;
+# entry_file is the file the File viewer opens first, "" opens its file list)
 curl -X PUT -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
      -d '{"name":"Client docs","tags":["client","Q3"],"mode":"viewer","entry_file":"report.pdf","webdav_enabled":true}' \
      https://sitebin.example.com/api/sites/$EDIT_ID

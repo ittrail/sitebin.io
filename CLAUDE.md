@@ -535,6 +535,30 @@ must keep:
   carries it in `warnings` and `not_found_page` is `omitempty` in
   `SiteResult`: cached output schemas.
 
+## The File viewer
+
+Viewer mode moves a site's files into `files/_raw/` and writes a generated
+wrapper `files/index.html` (`internal/viewer`); everything else happens in the
+browser (`web/viewer/`: `viewer.js` routes and renders, `files.js` is the pure
+logic, `browser.js` the file list). Read
+`docs/superpowers/specs/2026-11-05-viewer-file-list-design.md`. Rules a change
+must keep:
+
+- **`entry_file` `""` is the file list**, the owner's choice, never replaced
+  by a fallback. A chosen file that is gone falls back to the only visible
+  file, else to `""` (`startPage`).
+- **Browsing is client-side, addressed in the fragment** (`#/docs/`,
+  `#/docs/a.pdf`): no Caddyfile, authz or routing change, and `/_raw/<path>`
+  stays the one URL of a file.
+- **The wrapper's config is the public list.** Hidden names (`isHiddenPath`:
+  dotfiles, `__MACOSX`, `Thumbs.db`, `desktop.ini`) are left out of the page,
+  not hidden by script; they are still served at `/_raw/`. Its file struct is
+  `wrapperFile`, never `store.FileInfo` (the API's and MCP's output shape).
+- **Two lists are mirrored by tests:** `rendererByExt` in `files.js`
+  (`TestViewerJSMirrorsRenderers`) and the drop form's `DOWNLOAD_EXTS`
+  (`TestDropFormSuggestsViewerForEveryDownload`).
+- File names are only ever text; previews load only on screen; no CSP change.
+
 ## Site forms
 
 A site's pages post plain HTML forms to `/_sitebin/forms/<key>` on their own
