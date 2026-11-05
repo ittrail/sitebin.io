@@ -663,7 +663,8 @@ func TestRegisterShowsAdminsAndOpenOffers(t *testing.T) {
 	t.Setenv("SITEBIN_ADMIN_ACCOUNTS", "boss@example.com")
 	e := newGDPREnv(t)
 	boss, _ := adminUser(t, e.p, e.mux, "boss@example.com", "admin")
-	e.shared(inDays(12))
+	until := inDays(12)
+	e.shared(until)
 	e.site(tid(44))
 	done := e.offerFrom(e.acc, "old@example.com", true, tid(44))
 	e.change(done, func(x *ownership.Offer) { x.State = ownership.StateCancelled })
@@ -675,7 +676,9 @@ func TestRegisterShowsAdminsAndOpenOffers(t *testing.T) {
 			t.Fatalf("%s = %d", name, w.Code)
 		}
 		body := w.Body.String()
-		for _, want := range []string{takerEmail, daysAhead(12)} {
+		// The register shows dates in the server's zone; daysAhead is UTC's,
+		// a day off from midnight to one o'clock in Vienna.
+		for _, want := range []string{takerEmail, until.Local().Format("2006-01-02")} {
 			if !strings.Contains(body, want) {
 				t.Errorf("the %s lacks the admin's %q", name, want)
 			}
