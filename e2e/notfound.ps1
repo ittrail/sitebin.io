@@ -36,7 +36,7 @@ $work = Join-Path $PSScriptRoot ".work"
 New-Item -ItemType Directory -Force $work | Out-Null
 
 # Every assertion must run; the count is checked at the end.
-$ExpectedAssertions = 29
+$ExpectedAssertions = 30
 
 $script:pass = 0; $script:fail = 0
 function Assert([string]$n, $c, [string]$d = "") {
@@ -114,8 +114,11 @@ $D = NewSite @{ "index.html" = "<h1>home-d</h1>"; "404.html" = $own; "errors/gon
 $E = NewSite @{ "a.pdf" = "%PDF-1.4 not really" } @{ "mode" = "viewer" }
 $F = NewSite @{ "index.html" = "<h1>home-f</h1>"; "404.html" = $own } @{ "view_password" = "sesame" }
 $S = NewSite @{ "index.html" = "<h1>spa-home</h1>" } @{ "spa" = "true" }
-# Community sites are trusted; B is made untrusted, as a free account's site is.
+$U = NewSite @{ "index.html" = "<h1>home-u</h1>"; "404.html" = "<h1>untrusted-404</h1>" }
+# Community sites are trusted; B and U are made untrusted, as a free
+# account's sites are.
 docker exec $name rm -f "/data/sites/$($B.id)/files/.sitebin-trusted" | Out-Null
+docker exec $name rm -f "/data/sites/$($U.id)/files/.sitebin-trusted" | Out-Null
 
 Write-Host "== the site's own 404.html" -ForegroundColor Cyan
 $r = Req "GET" "$($A.view)/missing"
@@ -139,6 +142,10 @@ Assert "a site without a page of its own gets Sitebin's" ($r.code -eq 404 -and $
 Assert "Sitebin's page is never cached" ((Header $r "Cache-Control") -eq "no-store") "got '$(Header $r 'Cache-Control')'"
 Assert "an untrusted site's 404 carries the untrusted policy" ((Header $r "Content-Security-Policy") -match "form-action 'none'") "got '$(Header $r 'Content-Security-Policy')'"
 Assert "a trusted site's 404 does not" ((Header (Req "GET" "$($A.view)/missing") "Content-Security-Policy") -notmatch "form-action 'none'")
+# The anti-goal itself: an untrusted site's OWN 404.html is user content and
+# must carry the untrusted policy, or it is the one page a kit may post from.
+$r = Req "GET" "$($U.view)/missing"
+Assert "an untrusted site's own 404.html carries the untrusted policy" ($r.code -eq 404 -and $r.body -eq "<h1>untrusted-404</h1>" -and (Header $r "Content-Security-Policy") -match "form-action 'none'") "got $($r.code) '$(Header $r 'Content-Security-Policy')': $($r.body)"
 
 Write-Host "== a web server site without a start page" -ForegroundColor Cyan
 Assert "creation warns and flags it" ($C.start_page_missing -eq $true -and (($C.warnings -join " ") -match "no index.html at its root")) "got start_page_missing=$($C.start_page_missing) warnings=$($C.warnings)"
