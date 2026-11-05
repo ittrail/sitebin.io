@@ -182,6 +182,11 @@ function unlock() {
   if (site.git_available && !tabs.list.some((t) => t.id === "git")) {
     tabs.register({ id: "git", label: "Git", panel: $("panel-git"), onShow() { gitTab.show(); } });
   }
+  // The Analytics tab likewise: shown when analytics works here, or when
+  // only the plan lacks it (stored data stays readable, with the notice).
+  if (site.analytics_available && !tabs.list.some((t) => t.id === "analytics")) {
+    tabs.register({ id: "analytics", label: "Analytics", panel: $("panel-analytics"), onShow() { analyticsTab.show(); } });
+  }
   tabs.start();
   loadDir(dirFromHash());
   loadForms();
