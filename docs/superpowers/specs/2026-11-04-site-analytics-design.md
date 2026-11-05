@@ -853,3 +853,60 @@ and how summaries are encoded.
   - Path views get server-mode counting only.
   - Regions are stored as a code where the database has one, else as a
     name.
+
+## Corrections (post-implementation)
+
+Decisions taken while building that change or sharpen the text above. Where
+they differ, this block wins.
+
+- **Daily cap per source.** `SITEBIN_ANALYTICS_DAILY_CAP` counts per site, per
+  local day and per source (server-counted, script-sent; imports are uncapped),
+  so forged script beacons cannot starve server-mode page views. The disk bound
+  per site-day is twice the cap.
+- **Visit duration** is the last page view minus the first (0 for 0 or 1
+  views); events never extend it. A bounce is a visit with one page view.
+  With a record-level filter, bounce and duration use only the visit's
+  selected page views (as Umami v2 does).
+- **Funnel and goal path values use Umami semantics**: `*` matches any
+  characters including `/`. Exclude globs keep segment semantics (`*` stops at
+  `/`). Steps keep strict order (`r < t`), and path steps match page views only.
+- **Zone changes.** The engine reads one extra local date on each side of a
+  range and filters by instant, so changing a site's timezone never drops
+  records near midnight.
+- **`effective_timezone`.** The state answer carries `effective_timezone`
+  (the zone in use) beside the stored `timezone`, which may be empty.
+- **Strict PUT.** `PUT /api/sites/{id}/analytics` takes the settings object
+  only; an unknown field is a 422 naming it, a body over 1 MiB a 413. It is
+  allowed after a downgrade (turn off, edit funnels).
+- **Filter caps.** At most 20 filter parameters per data request, and a range
+  spans a bounded number of days.
+- **Import refusals.** The import is refused for a switched-off instance and a
+  locked site (re-checked under the meta update); it is allowed when only the
+  plan lacks analytics. A failure to read the site's own records
+  (`FirstOwnRecord` returns an error) stops it, so nothing is counted twice.
+  The production SSH host never appears in the public docs.
+- **Access log.** The access log omits the client ip for
+  `/_sitebin/analytics*` (Docker logs count as disk).
+- **Opt-out page.** It carries `frame-ancestors 'none'`, and a POST from another
+  site (`Sec-Fetch-Site`, else `Origin`) is a 403. The opt-out mirror marker
+  lives in session and local storage per mount; `data-auto-track="false"` also
+  turns off `data-umami-event` clicks, as in Umami.
+- **Bot filter on script and send.** The send endpoint applies the same
+  browser/bot rule as server mode; a payload url that is only a path counts as
+  the request host.
+- **PageCheck** uses the non-creating `store.OpenServedRoot` on `files/`
+  (index files are Caddy's defaults `index.html`/`index.txt`; canonical-URI
+  redirects are not counted; exclude globs match the full and the in-site path;
+  a form event honours opt-out and exclude).
+- **Salt prune.** The salt of date D is deleted once UTC today is at least D+2.
+- **Retention** skips locked sites (evidence hold) and also runs when
+  `SITEBIN_ANALYTICS=false`.
+- **Data routes** stay readable after a downgrade or with analytics off,
+  whenever the site is not locked. The state read also answers a locked site,
+  without data.
+- **Summaries** (`.sum.json`) omit per-value visits; only closed, fully
+  in-range days of unfiltered overview/table/event-data use them. The event
+  table is sorted by count, other tables by visitors.
+- **Script cache.** The tracker and the stub are served `public, max-age=3600`.
+- **Referrer hosts** lose a leading `www.` (in `CleanReferrer` and the
+  importer, as Umami stores them), landing in the final fix wave.

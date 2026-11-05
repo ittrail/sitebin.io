@@ -21,9 +21,9 @@ docker build --build-arg EDITION=enterprise -t sitebin:latest-ee .   # enterpris
 ```
 
 **`e2e.ps1` is not the full E2E.** It is the core HTTP suite and references no
-other script; there is no aggregate entry point. A full pass is all seventeen run
+other script; there is no aggregate entry point. A full pass is all eighteen run
 by hand: `e2e.ps1`, `spa.ps1`, `paths.ps1`, `ftp.ps1`, `mcp.ps1`, `git.ps1` (community
-image), `forms.ps1` (community image; pulls `axllent/mailpit` as its SMTP
+image), `analytics.ps1` (community image), `forms.ps1` (community image; pulls `axllent/mailpit` as its SMTP
 server), `caching.ps1` (community image), `accounts.ps1`, `frontdoor.ps1`,
 `ownership.ps1` (runs `axllent/mailpit` as the account mailer's SMTP server),
 `tiers.ps1`, `redirects.ps1`, `mounts.ps1`, `containers.ps1`
@@ -32,7 +32,7 @@ drive the host's real Docker Engine and pull images), `license.ps1`, and
 `consent.ps1` -- the last of which is the only one that needs a **running SaaS
 Stack** (the stack's consent gate, the OIDC issuer/discovery split, and the
 `consents` declaration; see `docs/superpowers/specs/2026-09-01-consent-gate-through-the-stack-design.md`).
-`e2e/stack/verify.ps1` is the eighteenth, run against the compose container in
+`e2e/stack/verify.ps1` is the nineteenth, run against the compose container in
 `e2e/stack/` rather than one it starts itself: the registration the stack
 holds, the stack-hosted self-service links, and a signed GDPR export and
 deletion.
@@ -228,7 +228,8 @@ including its lock-retention addendum.
   methods. A new per-site route or tool gets this for free through those
   gates; one that bypasses them must call `refuseLocked` itself. Only the
   settings read (`withEditAuthEvenLocked`, `get_site`) answers a locked site,
-  without its files.
+  without its files; so does the analytics state read
+  `GET /api/sites/{id}/analytics` (without data).
 - **`store.Delete` refuses it; only `ForceDelete` does not**, and only the
   operator's takedowns call that (register, `sitebin delete --force`). The
   sweep does nothing to a locked site but the retention check, `ApplyQuota`
@@ -788,6 +789,34 @@ deploys or restarts anything. Read
   (`gitoauth.go`) runs one at a time on its own context, never the caller's,
   outside the cache's mutex; the document must name the configured issuer,
   and its endpoints must be https unless the issuer is http.
+
+## Site analytics
+
+Umami-style statistics per site, community feature (`internal/analytics`, the
+httpapi `analytics*.go` files, `web/static/analytics*.js`, `edit-analytics.js`).
+Read `docs/superpowers/specs/2026-11-04-site-analytics-design.md` with its
+"Corrections (post-implementation)", and the plan beside it. Rules a change
+must keep:
+
+- **Anti-goals.** Never an IP, user agent, referrer query, click-id value or
+  form value on disk or in logs (the access log omits the ip for
+  `/_sitebin/analytics*`). No CSP relaxation, no third-party request. Nothing
+  is collected unless the site's settings say `enabled` (and the instance
+  switch and plan allow it).
+- **authz only calls `Recorder.Add`**, which never blocks (a full channel
+  drops). No other analytics work on the serving path.
+- **The recorder writes only inside `store.WithStatsLock` and never creates a
+  site folder**, so a delete is never undone by a late flush. The daily cap
+  counts per source (server / script); imports are uncapped.
+- **`vr` is the A/B hook**, always `""` for now; do not fill it without the
+  design.
+- **The import runs in the server**: the CLI streams to the loopback
+  `POST /internal/analytics/import`, which writes days under the stats lock
+  (tmp + rename; `PurgeDays` deletes a stale `.tmp` after 1 h). Never write
+  day files from another process.
+- **Two glob syntaxes.** Exclude globs are segment globs (`*` stops at `/`).
+  Funnel and goal path values use Umami semantics (`*` crosses `/`). Do not
+  unify them.
 
 ## Billing: three backends, one seam
 

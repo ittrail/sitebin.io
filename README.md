@@ -131,7 +131,12 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | `SITEBIN_CLEANUP_INTERVAL` | `10m` | Expiry sweep interval. |
 | `SITEBIN_LOCK_RETENTION_DAYS` | `180` | How long a [lock](#locked-sites) keeps a site as evidence: the cleanup sweep purges a locked site whose lock is older, unless you placed an evidence hold on it (`sitebin hold`, or the register). It also bounds how long a suspended account's provenance outlives the 90 days. `0` keeps locked sites forever; a negative value or one above `36500` (a century) refuses to start. |
 | `SITEBIN_PUBLIC_ADDR` | `:8080` | Address of the Go backend listener that Caddy proxies. Change it only if `8080` is taken inside the container. |
-| `SITEBIN_INTERNAL_ADDR` | `:9000` | Address of the authz / `tls-check` / health listener. It is **never proxied publicly**; do not expose it. |
+| `SITEBIN_INTERNAL_ADDR` | `:9000` | Address of the authz / `tls-check` / health listener. It is **never proxied publicly**; do not expose it. It also carries the loopback-only write route `POST /internal/analytics/import` (the [Umami import](#analytics)); never expose it. |
+| `SITEBIN_ANALYTICS` | `true` | Instance switch for [site analytics](#analytics). A site still collects nothing until its owner enables it. `false` stops all collection and hides the tab; stored data is kept (and still purged by the retention). |
+| `SITEBIN_ANALYTICS_TIMEZONE` | `UTC` | IANA zone for day buckets when a site sets none. |
+| `SITEBIN_ANALYTICS_GEOIP` | — | Path to a DB-IP Lite City `.mmdb` file. Unset: no country, region or city. DB-IP's licence requires the attribution the Analytics tab then shows. |
+| `SITEBIN_ANALYTICS_DAILY_CAP` | `50000` | Records kept per site and local day, **per source**: server-counted and script-sent records each have their own cap, so forged script beacons cannot starve server-mode page views. Imports are uncapped. |
+| `SITEBIN_ANALYTICS_RETENTION_DAYS` | `760` | Days of records kept; older days are deleted by the sweep (locked sites are skipped). `0` keeps them forever. |
 | `SITEBIN_FORMS_SMTP_HOST` | — | SMTP server for [forms](#forms). Unset: the instance has no forms. Separate from the account mailer's `SITEBIN_SMTP_*`. |
 | `SITEBIN_FORMS_SMTP_PORT` | `587` | |
 | `SITEBIN_FORMS_SMTP_USER` / `SITEBIN_FORMS_SMTP_PASS` | — | Optional SMTP AUTH (PLAIN; sent only over TLS, or to localhost). |
@@ -901,6 +906,59 @@ submissions. Then paste its snippet into any page:
   Forms also need a tier with `"trusted": true` when accounts are enabled: an
   untrusted site is served with `form-action 'none'`, so it has no forms.
 
+### Analytics
+
+Every site can count its visits, anonymously and in the style of Umami: views,
+visitors, visits, bounce rate, duration, pages, referrers, channels, UTM
+campaigns, browsers, devices, countries, events, funnels and goals, in the
+**Analytics** tab of the edit page and under `/api/sites/{id}/analytics/...`.
+It is **off by default, per site**: nothing is collected until the owner
+enables it (`PUT /api/sites/{id}/analytics`, or the tab). The instance switch
+is `SITEBIN_ANALYTICS`.
+
+Two modes:
+
+- **Server** (default): the server counts page views itself, with no script
+  on the page. A request counts when it is a browser navigating to a page
+  (not a bot, a prefetch or an asset). Path views (`/v/<id>/`) get this mode only.
+- **Script**: the page loads Sitebin's own tracker, which is Umami-compatible
+  and served from the site's own origin (no third party, no CSP change):
+
+  ```html
+  <script defer src="/_sitebin/analytics.js"></script>
+  ```
+
+  It supports `umami.track(...)` and `umami.identify(...)`, `data-umami-event`
+  and `data-umami-event-*` attributes, `data-before-send`, `data-tag`,
+  `data-domains`, `data-exclude-search`, `data-exclude-hash`,
+  `data-do-not-track`, `data-auto-track` and the `umami.disabled` flag in
+  `localStorage`. `data-website-id` and `data-host-url` are ignored: the site is
+  the origin. Browsers may keep the previous script for up to an hour (it is
+  served `public, max-age=3600`). With analytics off the same URL serves a
+  stub whose `track` does nothing, so a page that calls it never breaks. Events
+  are posted to `/_sitebin/analytics/send`.
+
+**Privacy.** No IP address, user agent, referrer query string, click-id value
+or form value is stored or logged (the access log omits the address for
+`/_sitebin/analytics*`). A visitor is a hash of IP, user agent and site with a
+daily salt that is deleted after two days, so nobody can be followed across
+days or sites. No cookies are set, except the one a visitor asks for on the
+opt-out page `/_sitebin/analytics/opt-out`, which keeps that browser out of
+the count. Records live in the site's own folder and go with the site; they
+are purged after `SITEBIN_ANALYTICS_RETENTION_DAYS`.
+
+**Settings.** Besides the mode, a site chooses its timezone, the addresses to
+count, paths to exclude, extra query parameter names to keep, funnels and goals.
+Exclude patterns are segment globs (`*` does not cross `/`, `**` does).
+Funnel and goal path values follow Umami (`*` matches any characters, `/`
+included), so imported ones give the same numbers.
+
+**Countries** need `SITEBIN_ANALYTICS_GEOIP`, a DB-IP Lite database
+(attribution: "IP Geolocation by DB-IP", shown in the tab).
+
+**Import.** A site's Umami history can be imported once, through the running
+server: see [docs/analytics-umami-import.md](docs/analytics-umami-import.md).
+
 ### View access modes
 
 By default each site is served on its own random **subdomain**
@@ -1496,7 +1554,7 @@ a green build is a green suite.
 
 ### End-to-end tests *(Windows host, Docker required)*
 
-`e2e/` holds **ten independent scripts**, plus `e2e/stack/verify.ps1` for the
+`e2e/` holds **eleven independent scripts**, plus `e2e/stack/verify.ps1` for the
 compose container that runs against a live SaaS Stack. There is no "run
 everything" entry point: `e2e.ps1` is the core suite and calls none of the
 others, so a full pass means running them all.
@@ -1509,6 +1567,7 @@ others, so a full pass means running them all.
 | `paths.ps1` | `SITEBIN_VIEW_ACCESS=path` | `sitebin:dev` |
 | `ftp.ps1` | FTP/FTPS access | `sitebin:dev` |
 | `mcp.ps1` | the `/mcp` endpoint | `sitebin:dev` |
+| `analytics.ps1` | site analytics through Caddy: server-mode counts, the script, send, opt-out, funnels | `sitebin:dev` |
 | `accounts.ps1` | accounts mode *(enterprise)* | `sitebin:dev-ee` |
 | `tiers.ps1` | tiers and quotas *(enterprise)* | `sitebin:dev-ee` |
 | `redirects.ps1` | custom-domain redirects and the generated address through Caddy *(enterprise)* | `sitebin:e2e-redirects` |
@@ -1533,6 +1592,7 @@ powershell -File e2e\caching.ps1 -SkipBuild   # tag sitebin:e2e-caching first
 powershell -File e2e\paths.ps1
 powershell -File e2e\ftp.ps1
 powershell -File e2e\mcp.ps1
+powershell -File e2enalytics.ps1
 powershell -File e2e\accounts.ps1
 powershell -File e2e\tiers.ps1
 powershell -File e2e\redirects.ps1 -SkipBuild # tag sitebin:e2e-redirects (enterprise) first
