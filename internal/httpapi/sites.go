@@ -34,8 +34,9 @@ type updateSet struct {
 	WebDAV        *bool           `json:"webdav_enabled"`
 	FTP           *bool           `json:"ftp_enabled"`
 	SPA           *bool           `json:"spa_fallback"`
-	Cache         *string         `json:"cache"`      // auto, revalidate, hour, day, week, year or off
-	ExpiresAt     json.RawMessage `json:"expires_at"` // absent=keep, null=clear, string=set
+	Cache         *string         `json:"cache"`          // auto, revalidate, hour, day, week, year or off
+	NotFoundPage  *string         `json:"not_found_page"` // "" = the convention (404.html)
+	ExpiresAt     json.RawMessage `json:"expires_at"`     // absent=keep, null=clear, string=set
 	Domains       []string        `json:"custom_domains"`
 }
 
@@ -93,6 +94,10 @@ func settingsFromForm(fields url.Values) (updateSet, error) {
 	}
 	if v := fields.Get("cache"); v != "" {
 		set.Cache = strPtr(v)
+	}
+	// Present-but-empty returns to the convention, as for name.
+	if _, ok := fields["not_found_page"]; ok {
+		set.NotFoundPage = strPtr(fields.Get("not_found_page"))
 	}
 	set.Domains = fields["domain"]
 	return set, nil
@@ -247,6 +252,13 @@ func (a *API) writeSettings(site *store.Site, set updateSet, expires **time.Time
 				return &apiError{400, err.Error()}
 			}
 			m.Cache = policy
+		}
+		if set.NotFoundPage != nil {
+			page, err := store.CleanNotFoundPage(*set.NotFoundPage)
+			if err != nil {
+				return &apiError{400, err.Error()}
+			}
+			m.NotFoundPage = page
 		}
 		if expires != nil {
 			m.ExpiresAt = *expires
@@ -563,6 +575,9 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"entry_file":              m.EntryFile,
 		"spa_fallback":            m.SPAFallback,
 		"cache":                   m.CachePolicy(),
+		"not_found_page":          m.NotFoundPage,
+		"not_found_serves":        store.NotFoundServes(site),
+		"start_page_missing":      store.MissingStartPage(site),
 		"view_password_protected": m.ViewPasswordProtected,
 		"webdav_enabled":          m.WebDAVEnabled,
 		"webdav_available":        webdavAvailable,
@@ -893,6 +908,7 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 	// Whether the site went into an account, so an embed can tell an owned
 	// ticket from an anonymous one without asking again.
 	resp["owned"] = site.Meta.OwnerAccountID != ""
+	warnings = append(warnings, a.startPageWarnings(site)...)
 	if len(warnings) > 0 {
 		resp["warnings"] = warnings
 	}
@@ -1022,7 +1038,11 @@ func (a *API) uploadFiles(w http.ResponseWriter, r *http.Request, site *store.Si
 		respondErr(w, err)
 		return
 	}
-	writeJSON(w, 200, a.payloadFor(r, site))
+	resp := a.payloadFor(r, site)
+	if ws := a.startPageWarnings(site); len(ws) > 0 {
+		resp["warnings"] = ws
+	}
+	writeJSON(w, 200, resp)
 }
 
 func (a *API) deleteFile(w http.ResponseWriter, r *http.Request, site *store.Site) {

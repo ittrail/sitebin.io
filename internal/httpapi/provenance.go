@@ -309,6 +309,9 @@ func settingsDetail(set updateSet) string {
 	if set.Cache != nil {
 		parts = append(parts, "cache="+strings.ToLower(strings.TrimSpace(*set.Cache)))
 	}
+	if set.NotFoundPage != nil {
+		parts = append(parts, "not_found_page")
+	}
 	if len(set.ExpiresAt) > 0 {
 		parts = append(parts, "expires_at")
 	}

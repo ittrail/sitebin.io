@@ -201,6 +201,7 @@ func (o mcpOps) siteResult(site *store.Site, auth mcp.Auth, st standing) *mcp.Si
 		EntryFile:     m.EntryFile,
 		SPAFallback:   m.SPAFallback,
 		Cache:         m.Cache,
+		NotFoundPage:  m.NotFoundPage,
 		ViewProtected: m.ViewPasswordProtected,
 		WebDAVEnabled: m.WebDAVEnabled,
 		FTPEnabled:    m.FTPEnabled,
@@ -213,6 +214,9 @@ func (o mcpOps) siteResult(site *store.Site, auth mcp.Auth, st standing) *mcp.Si
 		MaxBytes:      o.a.st.EffMaxBytes(site),
 		MaxFiles:      o.a.st.EffMaxFiles(site),
 		Locked:        mcpLock(m.Locked),
+		// In warnings, an existing field: a client that cached the output
+		// schema rejects a result carrying a field it has not seen.
+		Warnings: o.a.startPageWarnings(site),
 	}
 	for _, f := range files {
 		out.Files = append(out.Files, mcp.FileInfo{Path: f.Path, Bytes: f.Size})
@@ -272,6 +276,7 @@ func settingsToUpdateSet(s mcp.Settings) updateSet {
 		FTP:          s.FTP,
 		SPA:          s.SPA,
 		Cache:        s.Cache,
+		NotFoundPage: s.NotFoundPage,
 	}
 	if s.ExpiresAt != nil {
 		if *s.ExpiresAt == "" {
@@ -313,7 +318,7 @@ func (o mcpOps) CreateSite(_ context.Context, auth mcp.Auth, in mcp.CreateInput)
 	}
 	res := o.siteResult(site, auth, standNone) // the creator: the owner, or nobody
 	res.EditPassword = editPassword
-	res.Warnings = warnings
+	res.Warnings = append(warnings, res.Warnings...)
 	return res, nil
 }
 

@@ -138,6 +138,7 @@ type Settings struct {
 	FTP          *bool     `json:"ftp_enabled,omitempty" jsonschema:"expose the site over FTP"`
 	SPA          *bool     `json:"spa_fallback,omitempty" jsonschema:"webserver mode: serve index.html for unknown paths, for single-page apps"`
 	Cache        *string   `json:"cache,omitempty" jsonschema:"browser caching: auto (the default — pages and data revalidate, content-hashed build files like index-BqCz7v8e.js are cached for a year), revalidate (every file is re-checked on every visit), hour, day, week or year (every file but pages and data is cached that long — only for files that never change under their name), or off (no Cache-Control header)"`
+	NotFoundPage *string   `json:"not_found_page,omitempty" jsonschema:"the page shown, with status 404, for an address that does not exist on a web server site: the path of an .html file inside the site; an empty string returns to the default (404.html when the site has one, otherwise Sitebin's own page)"`
 	ExpiresAt    *string   `json:"expires_at,omitempty" jsonschema:"RFC3339 timestamp when the site stops serving; the empty string clears it, where the plan allows"`
 }
 
@@ -179,7 +180,10 @@ type SiteResult struct {
 	// them, for the same reason Locked is omitempty: a result for any other
 	// site is exactly what it was before they existed.
 	// Cache is present only when the policy is not auto, for the same reason.
-	Cache           string           `json:"cache,omitempty" jsonschema:"the browser-cache policy, when it is not auto"`
+	Cache string `json:"cache,omitempty" jsonschema:"the browser-cache policy, when it is not auto"`
+	// NotFoundPage is present only when the owner named one, for the same
+	// reason.
+	NotFoundPage    string           `json:"not_found_page,omitempty" jsonschema:"the site's own not-found page, when one is set"`
 	DomainRedirects []DomainRedirect `json:"domain_redirects,omitempty" jsonschema:"custom domains that redirect to another of this site's custom domains instead of serving it"`
 	ViewAddress     *ViewAddress     `json:"view_address,omitempty" jsonschema:"present only when the generated address (view_url) does not serve the site: off, or a redirect to one of its custom domains"`
 	// Addresses and DomainTargets are present only on a container site, for
