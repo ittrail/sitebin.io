@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -34,6 +35,13 @@ const (
 )
 
 func (a *API) analyticsImport(w http.ResponseWriter, r *http.Request) {
+	// Loopback only, whatever address the internal listener is bound to: the
+	// CLI runs in the container, and nothing else may write a site's
+	// analytics.
+	if !fromLoopback(r) {
+		writeError(w, 403, "the import is accepted from a loopback address only: run sitebin analytics import-umami inside the container")
+		return
+	}
 	// The internal listener's read timeout is for Caddy's subrequests; a
 	// whole site's history takes longer to send.
 	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(analyticsImportTimeout))
@@ -105,6 +113,14 @@ func (a *API) analyticsImport(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// fromLoopback reports whether the request's peer is a loopback address
+// (127.0.0.0/8 or ::1, an IPv4-mapped one included). This is the TCP peer,
+// never a header a client could set.
+func fromLoopback(r *http.Request) bool {
+	ap, err := netip.ParseAddrPort(r.RemoteAddr)
+	return err == nil && ap.Addr().Unmap().IsLoopback()
 }
 
 // importUmami imports the events into site, then adds the reports to its

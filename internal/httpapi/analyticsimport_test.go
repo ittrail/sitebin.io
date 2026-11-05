@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"mime/multipart"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -38,9 +39,17 @@ func (e *env) importPost(t *testing.T, parts ...[2]string) *httptest.ResponseRec
 		mw.WriteField(p[0], p[1])
 	}
 	mw.Close()
-	req := httptest.NewRequest("POST", "/internal/analytics/import", &buf)
+	req := importRequest(&buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	return e.internal(t, req)
+}
+
+// importRequest is a POST to the import route from a loopback address, as
+// the CLI in the container sends it.
+func importRequest(body io.Reader) *http.Request {
+	req := httptest.NewRequest("POST", "/internal/analytics/import", body)
+	req.RemoteAddr = "127.0.0.1:40000"
+	return req
 }
 
 func umamiExport(t *testing.T, evs ...analytics.UmamiEvent) string {
@@ -191,6 +200,45 @@ func TestInternalImportUntil(t *testing.T) {
 	}
 }
 
+// The import route answers loopback only, whatever address the internal
+// listener is bound to: the CLI runs in the container, and nothing else may
+// write a site's analytics.
+func TestInternalImportOnlyFromLoopback(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	site, _ := e.st.ByViewID(c.ID)
+	export := umamiExport(t, umamiPage(daysAgo(time.Now(), 3, 9, 0), "a", "/"))
+	for addr, want := range map[string]int{
+		"192.0.2.1:1234":         403,
+		"10.0.0.5:1234":          403,
+		"172.17.0.1:1234":        403,
+		"[2001:db8::1]:1234":     403,
+		"[::ffff:192.0.2.1]:123": 403,
+		"":                       403,
+		"127.0.0.1:40000":        200,
+		"127.8.9.10:40000":       200,
+		"[::1]:40000":            200,
+		"[::ffff:127.0.0.1]:123": 200,
+	} {
+		var buf bytes.Buffer
+		mw := multipart.NewWriter(&buf)
+		mw.WriteField("site", site.ViewID)
+		fw, _ := mw.CreateFormFile("events", "events.jsonl")
+		fw.Write([]byte(export))
+		mw.Close()
+		req := httptest.NewRequest("POST", "/internal/analytics/import", &buf)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		req.RemoteAddr = addr
+		w := e.internal(t, req)
+		if w.Code != want {
+			t.Errorf("from %q: %d %s, want %d", addr, w.Code, w.Body, want)
+		}
+		if want == 403 && !strings.Contains(w.Body.String(), "loopback") {
+			t.Errorf("from %q: the refusal does not say why: %s", addr, w.Body)
+		}
+	}
+}
+
 func TestInternalImportRefusals(t *testing.T) {
 	e := newEnv(t, nil)
 	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
@@ -213,7 +261,7 @@ func TestInternalImportRefusals(t *testing.T) {
 	} {
 		var w *httptest.ResponseRecorder
 		if tc.parts == nil {
-			w = e.internal(t, httptest.NewRequest("POST", "/internal/analytics/import", strings.NewReader("{}")))
+			w = e.internal(t, importRequest(strings.NewReader("{}")))
 		} else {
 			w = e.importPost(t, tc.parts...)
 		}
@@ -317,7 +365,7 @@ func TestInternalImportLockedDuringTheImport(t *testing.T) {
 	site, _ := e.st.ByViewID(c.ID)
 	pr, pw := io.Pipe()
 	mw := multipart.NewWriter(pw)
-	req := httptest.NewRequest("POST", "/internal/analytics/import", pr)
+	req := importRequest(pr)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	done := make(chan *httptest.ResponseRecorder)
 	go func() {
