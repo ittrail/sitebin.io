@@ -30,8 +30,9 @@ type analyticsStateResp struct {
 	Effective  string          `json:"effective_timezone"`
 	Addresses  []string        `json:"addresses"`
 	Geo        struct {
-		Present     bool   `json:"present"`
-		Attribution string `json:"attribution"`
+		Present        bool   `json:"present"`
+		Attribution    string `json:"attribution"`
+		AttributionURL string `json:"attribution_url"`
 	} `json:"geo"`
 	RetentionDays int                       `json:"retention_days"`
 	DailyCap      int                       `json:"daily_cap"`
@@ -385,8 +386,8 @@ func TestAnalyticsStateStorage(t *testing.T) {
 	if s.Bytes != 0 || s.FirstDay != "" || s.Imported == nil || len(s.Imported) != 0 {
 		t.Errorf("nothing stored: bytes %d, first %q, imported %#v", s.Bytes, s.FirstDay, s.Imported)
 	}
-	if !s.Geo.Present || s.Geo.Attribution == "" {
-		t.Errorf("geo = %+v, want the test database and its description", s.Geo)
+	if !s.Geo.Present || s.Geo.Attribution == "" || s.Geo.AttributionURL != "" {
+		t.Errorf("geo = %+v, want the test database and its description, without a link", s.Geo)
 	}
 
 	seedAnalytics(t, site, "2026-10-02", pageView(time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC), "a", "/"))

@@ -24,8 +24,32 @@ func TestGeoLookupTestDB(t *testing.T) {
 	if c, _, _ := g.Lookup("not an ip"); c != "" {
 		t.Errorf("bad ip = %q", c)
 	}
-	if g.Attribution() == "" {
-		t.Error("attribution empty")
+	// MaxMind's test database is no DB-IP one: its own description, no link.
+	if text, link := g.Attribution(); text == "" || link != "" {
+		t.Errorf("attribution = %q %q", text, link)
+	}
+}
+
+// DB-IP Lite's licence (CC BY 4.0) asks for an attribution with a link, and
+// its metadata only says "DB-IP.com - IP to City": a DB-IP database gets the
+// fixed attribution and DB-IP's address; any other its own description.
+func TestGeoAttributionFor(t *testing.T) {
+	for _, c := range []struct {
+		typ        string
+		desc       map[string]string
+		text, link string
+	}{
+		{"DBIP-City-Lite", map[string]string{"en": "DB-IP.com - IP to City", "fr": "DB-IP.com - IP vers Ville"}, "IP geolocation by DB-IP", "https://db-ip.com"},
+		{"DBIP-Country-Lite", map[string]string{"en": "DB-IP.com - IP to Country"}, "IP geolocation by DB-IP", "https://db-ip.com"},
+		{"dbip-location", nil, "IP geolocation by DB-IP", "https://db-ip.com"},
+		{"Custom", map[string]string{"en": "Built from DB-IP data"}, "IP geolocation by DB-IP", "https://db-ip.com"},
+		{"GeoIP2-City", map[string]string{"en": "GeoIP2 City database"}, "GeoIP2 City database", ""},
+		{"GeoLite2-Country", map[string]string{"": "no language"}, "no language", ""},
+		{"Other", nil, "", ""},
+	} {
+		if text, link := attributionFor(c.typ, c.desc); text != c.text || link != c.link {
+			t.Errorf("%s %v: %q %q, want %q %q", c.typ, c.desc, text, link, c.text, c.link)
+		}
 	}
 }
 
@@ -37,7 +61,7 @@ func TestGeoNilSafe(t *testing.T) {
 	if c, rg, ct := g.Lookup("216.160.83.56"); c != "" || rg != "" || ct != "" {
 		t.Fatal("nil Geo must find nothing")
 	}
-	if g.Attribution() != "" {
+	if text, link := g.Attribution(); text != "" || link != "" {
 		t.Fatal("nil Geo attribution")
 	}
 }

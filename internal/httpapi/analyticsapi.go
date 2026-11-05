@@ -43,9 +43,13 @@ const (
 	maxAnalyticsSettings  = 1 << 20 // bytes of a settings body
 )
 
+// analyticsGeoState says whether a GeoIP database is open, and the
+// attribution the dashboard shows for it (with a link when its licence asks
+// for one).
 type analyticsGeoState struct {
-	Present     bool   `json:"present"`
-	Attribution string `json:"attribution,omitempty"`
+	Present        bool   `json:"present"`
+	Attribution    string `json:"attribution,omitempty"`
+	AttributionURL string `json:"attribution_url,omitempty"`
 }
 
 // analyticsStateBody is the tab's state: whether analytics is available and
@@ -92,11 +96,12 @@ func (a *API) analyticsStateOf(site *store.Site) analyticsStateBody {
 		Settings:          s,
 		EffectiveTimezone: a.analyticsTZ(site).String(),
 		Addresses:         a.siteAddresses(site),
-		Geo:               analyticsGeoState{Present: a.analyticsGeo != nil, Attribution: a.analyticsGeo.Attribution()},
+		Geo:               analyticsGeoState{Present: a.analyticsGeo != nil},
 		RetentionDays:     a.cfg.AnalyticsRetentionDays,
 		DailyCap:          a.cfg.AnalyticsDailyCap,
 		Imported:          []analytics.ImportedRange{},
 	}
+	out.Geo.Attribution, out.Geo.AttributionURL = a.analyticsGeo.Attribution()
 	if reason == analyticsReasonPlan {
 		out.UpgradeURL = a.apiAccountHint()
 	}
