@@ -9,7 +9,8 @@
 # What it proves:
 #
 #   auto: a page revalidates, a hashed bundle is immutable for a year, a
-#         hand-named file revalidates, and a 404 carries no Cache-Control
+#         hand-named file revalidates, and a 404 carries no-store, never the
+#         site's policy
 #   a conditional request (304) carries the header too
 #   a client cannot choose the header itself
 #   a fixed time applies to files, not to pages; off sends nothing
@@ -121,7 +122,7 @@ Assert "a 304 carries the header too" ($r.code -eq 304 -and (Header $r "Cache-Co
 $r = Req "GET" "$view/style.css"
 Assert "a hand-named file revalidates" ((Header $r "Cache-Control") -eq "public, max-age=0, must-revalidate") "got '$(Header $r 'Cache-Control')'"
 $r = Req "GET" "$view/missing-Zz9Yy8Xx.js"
-Assert "a 404 carries no Cache-Control" ($r.code -eq 404 -and (Header $r "Cache-Control") -eq "") "got $($r.code) '$(Header $r 'Cache-Control')'"
+Assert "a 404 carries no-store, never the site's policy" ($r.code -eq 404 -and (Header $r "Cache-Control") -eq "no-store") "got $($r.code) '$(Header $r 'Cache-Control')'"
 $r = Req "GET" "$view/style.css" @("-H", "X-Sitebin-Cache: public, max-age=99999999")
 Assert "a client cannot choose the header" ((Header $r "Cache-Control") -eq "public, max-age=0, must-revalidate") "got '$(Header $r 'Cache-Control')'"
 
