@@ -554,6 +554,15 @@ input::placeholder { color: var(--ink-faint); }
 .domainrow .rule select { width: auto; max-width: 260px; padding: 6px 10px; font: 13px var(--mono); border-radius: 8px; }
 .domainrow .rulenote { flex-basis: 100%; font: 12px var(--mono); color: var(--amber, #f5b84d); }
 
+/* A web server site without a start page: its root answers 404. */
+.startnote {
+  margin-top: 14px; padding: 12px 14px; border-radius: 10px;
+  display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+  border: 1px solid rgba(245, 184, 77, .45); background: rgba(245, 184, 77, .07);
+  font-size: 13px; color: var(--ink-dim);
+}
+.startnote > span { flex: 1 1 260px; }
+
 .dnshint {
   margin-top: 14px; padding: 12px 14px; border-radius: 10px;
   background: rgba(16, 23, 39, .8); border: 1px solid var(--line-soft);

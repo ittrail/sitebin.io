@@ -312,6 +312,16 @@ function render() {
   $("entrywrap").classList.toggle("hidden", site.mode !== "viewer");
   $("spawrap").classList.toggle("hidden", site.mode !== "webserver");
   $("e-spa").checked = !!site.spa_fallback;
+  // The not-found page: a web server site without the SPA fallback, which
+  // never answers 404 for a path.
+  $("startpage-note").classList.toggle("hidden", !site.start_page_missing);
+  $("notfoundwrap").classList.toggle("hidden", site.mode !== "webserver" || !!site.spa_fallback);
+  if (document.activeElement !== $("e-notfound")) $("e-notfound").value = site.not_found_page || "";
+  $("clear-notfound").classList.toggle("hidden", !site.not_found_page);
+  $("notfound-status").textContent = site.not_found_serves
+    ? "Visitors see " + site.not_found_serves + " for an address that does not exist."
+    : "Visitors see Sitebin's not-found page." +
+      (site.not_found_page ? " " + site.not_found_page + " does not exist yet." : "");
   // A container site's upstream sends its own cache headers.
   $("cachewrap").classList.toggle("hidden", site.mode === "container");
   if (document.activeElement !== $("e-cache")) $("e-cache").value = site.cache || "auto";
@@ -1398,6 +1408,21 @@ $("e-ftp").addEventListener("change", (e) =>
 
 $("e-spa").addEventListener("change", (e) =>
   put({ spa_fallback: e.target.checked }, e.target.checked ? "SPA fallback on" : "SPA fallback off"));
+
+function saveNotFound() {
+  const v = $("e-notfound").value.trim();
+  if (v === (site.not_found_page || "")) return;
+  put({ not_found_page: v }, v ? "Not-found page: " + v : "Not-found page: automatic");
+}
+$("save-notfound").addEventListener("click", saveNotFound);
+$("e-notfound").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); saveNotFound(); }
+});
+$("clear-notfound").addEventListener("click", () => {
+  $("e-notfound").value = "";
+  put({ not_found_page: "" }, "Not-found page: automatic");
+});
+$("startpage-viewer").addEventListener("click", () => put({ mode: "viewer" }, "Switched to File viewer"));
 
 $("e-cache").addEventListener("change", (e) =>
   put({ cache: e.target.value }, "Browser caching: " + e.target.selectedOptions[0].textContent.split(" — ")[0]));

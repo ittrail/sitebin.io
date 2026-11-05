@@ -148,6 +148,11 @@
         </div>
         <span class="sub" id="mode-sub">Web server serves files as-is. File viewer renders one document in the browser.</span>
       </div>
+      <div class="startnote hidden" id="startpage-note" role="status">
+        <span>This site has files but no <code>index.html</code> at its root, so visitors see a 404 there.
+          Upload an <code>index.html</code>, or show the files in the File viewer.</span>
+        <button class="btn small" id="startpage-viewer">Switch to File viewer</button>
+      </div>
       <div class="opt hidden" id="entrywrap" style="margin-top:14px">
         <label for="entry-file">Viewer shows</label>
         <div class="row">
@@ -162,6 +167,18 @@
         </label>
         <span class="sub">Serve <code>index.html</code> for unknown paths — needed for single-page apps
           (React/Vue/etc.) so deep links and reloads work. Use relative asset paths.</span>
+      </div>
+      <div class="opt hidden" id="notfoundwrap" style="margin-top:16px">
+        <label for="e-notfound">Page for missing addresses</label>
+        <div class="row">
+          <input type="text" id="e-notfound" maxlength="1024" placeholder="404.html" autocomplete="off" style="max-width:320px">
+          <button class="btn small" id="save-notfound">Save</button>
+          <button class="btn small hidden" id="clear-notfound">Automatic</button>
+        </div>
+        <span class="sub"><span id="notfound-status"></span> An address that does not exist answers with status 404
+          and this page; a folder without an <code>index.html</code> counts as missing. Without a setting, a
+          <code>404.html</code> at the root is used. Link its styles and images from the root
+          (<code>/assets/site.css</code>), because it is shown at whatever address was asked for.</span>
       </div>
       <div class="opt" id="cachewrap" style="margin-top:16px">
         <label for="e-cache">Browser caching</label>
