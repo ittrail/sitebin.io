@@ -43,3 +43,24 @@ func TestEntryFileEmptyMeansTheList(t *testing.T) {
 		t.Errorf("bad entry path: %d, want 400", w.Code)
 	}
 }
+
+// An agent may create an empty viewer site and send its one file later. The
+// empty site must not save "" (the owner's list) on its own: its first lone
+// file opens.
+func TestEmptyViewerSiteOpensItsFirstLoneFile(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, map[string]string{"mode": "viewer"}, nil)
+	edit := editIDFrom(t, c.EditURL)
+
+	if w := e.public(t, authed(uploadReq(t, edit, "setup.exe", "MZ"), c.EditPassword)); w.Code != 200 {
+		t.Fatalf("upload: %d %s", w.Code, w.Body)
+	}
+	site, _ := e.st.ByViewID(c.ID)
+	if site.Meta.EntryFile != "setup.exe" {
+		t.Errorf("entry after the first upload = %q, want the lone file", site.Meta.EntryFile)
+	}
+	b, err := os.ReadFile(site.FilesDir() + "/index.html")
+	if err != nil || !strings.Contains(string(b), `"entry":"setup.exe"`) {
+		t.Errorf("wrapper does not open the lone file: %v", err)
+	}
+}

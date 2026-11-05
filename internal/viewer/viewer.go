@@ -117,8 +117,9 @@ type wrapperFile struct {
 }
 
 // Apply converts the site's files/ tree to viewer layout and (re)generates
-// the wrapper. It returns the effective entry file so callers can persist it
-// when the configured one was missing. Safe to call repeatedly.
+// the wrapper. It returns the entry file callers persist: the effective one
+// ("" is the file list), or the stored choice unchanged while the site has no
+// visible file. Safe to call repeatedly.
 func Apply(site *store.Site) (string, error) {
 	filesDir := site.FilesDir()
 	rawDir := filepath.Join(filesDir, "_raw")
@@ -200,6 +201,13 @@ func generate(site *store.Site) (string, error) {
 	}
 	if err := os.WriteFile(filepath.Join(site.FilesDir(), "index.html"), []byte(buf.String()), 0o644); err != nil {
 		return "", fmt.Errorf("write wrapper: %w", err)
+	}
+	// With no visible file there is nothing to fall back to: the page shows
+	// the (empty) list, but the stored choice stays as it was, so the first
+	// upload decides again. Saving "" here would read later as the owner's
+	// choice of the list, and a lone file would never open.
+	if entry == "" && len(files) == 0 {
+		return site.Meta.EntryFile, nil
 	}
 	return entry, nil
 }

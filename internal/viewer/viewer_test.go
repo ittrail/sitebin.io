@@ -361,3 +361,36 @@ func TestViewerModulesShip(t *testing.T) {
 		}
 	}
 }
+
+// A viewer site with no visible file yet has nothing to fall back to. Its
+// stored choice must stay open, or the first upload of a single file would
+// find "" saved — the owner's list — and never open that file.
+func TestApplyKeepsTheChoiceOpenWhileEmpty(t *testing.T) {
+	s, site := makeSite(t)
+	for _, f := range []string{"report.pdf", "notes.md"} {
+		if err := s.DeleteFile(site, f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setViewer(t, s, site, "index.html") // creation default
+	entry, err := Apply(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry != "index.html" {
+		t.Errorf("empty site saved entry %q, want the stored choice kept", entry)
+	}
+	if cfg := wrapperCfg(t, site); cfg.Entry != "" {
+		t.Errorf("empty site's wrapper entry = %q, want the (empty) list", cfg.Entry)
+	}
+
+	// The first upload is a single file: it opens.
+	writeRaw(t, site, "_raw/setup.exe", "MZ")
+	entry, err = Apply(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry != "setup.exe" {
+		t.Errorf("after the first upload entry = %q, want the only file", entry)
+	}
+}
