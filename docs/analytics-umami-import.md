@@ -1,16 +1,18 @@
 # Importing a site's Umami history
 
-How to bring one site's history from Umami into Sitebin Analytics. The
-design is "Umami import, per site" in
+How to bring one site's history from Umami into Sitebin Analytics. It works
+with any Umami 3 that stores its data in PostgreSQL. The design is "Umami
+import, per site" in
 [`superpowers/specs/2026-11-04-site-analytics-design.md`](superpowers/specs/2026-11-04-site-analytics-design.md).
 
 What the import does:
 
 - **The running server imports.** `sitebin analytics import-umami` only
   streams the files to `POST /internal/analytics/import` on the internal
-  listener (loopback, never proxied) and prints the server's report. The
-  recorder appends under a lock only the server process holds, so the
-  server must be running; with it down, the command fails and says so.
+  listener (loopback, never proxied; the route refuses any other address)
+  and prints the server's report. The recorder appends under a lock only the
+  server process holds, so the server must be running; with it down, the
+  command fails and says so.
 - **It never counts twice.** Events at or after the site's **first own
   record** (the earliest line Sitebin recorded itself) are skipped and
   counted, because from then on Sitebin was measuring. `--until <RFC3339>`
@@ -26,16 +28,20 @@ What the import does:
 - Imported visitors are counted per day, like Sitebin's own: an Umami
   session becomes one visitor per local day. Umami's visit ids are kept, so
   visits are Umami's.
-- Imported referrers are stored without `www.`, as Umami stores them
-  (`google.com/`), while Sitebin's own records keep it (`www.google.com/`).
-  The referrer table can list both for the same source.
+- Referrer hosts are stored without a leading `www.`, as Umami stores them
+  (`google.com/`), and so are Sitebin's own records: imported and new rows
+  of the same source group together.
 - It is refused (409) for a locked site and when analytics is off on the
   instance (`SITEBIN_ANALYTICS=false`). A site whose plan lacks analytics
   may be imported into: what is stored stays readable.
 
-The export holds per-visit data (session and visit ids, city, referrers).
-Keep the copies only as long as these steps need them, and delete them at
-the end (step 6).
+**What leaves Umami.** The export holds per-visit data (session and visit
+ids, city, referrers). Click ids leave Umami only as a presence marker
+(`"1"`), never their values. `url_query` is exported in full to the machine
+you run the export on: the import uses it only to pick out the `utm_*`
+parameters and the site's own query names, and it is deleted with the
+copies. Keep the copies only as long as these steps need them, and delete
+them at the end (step 6).
 
 ## Before you start
 
@@ -45,37 +51,31 @@ the end (step 6).
    records begin. If Umami kept counting for a while after that (a page
    with the old script, a cache), pass `--until` with the moment it stopped.
 2. Note the site's **view id** (`docker exec sitebin sitebin list` on the
-   Sitebin host, or the view address `https://<view-id>.sitebin.app`), and
+   Sitebin host, or the first label of its generated view address), and
    the **switch-over day**: the local date its analytics was turned on.
-3. Work from a machine that can SSH to the Proxmox host srv03 and to the
-   Sitebin host. The commands below are POSIX shell (Git Bash works) and
-   need nothing else locally: the decoding runs on srv03.
+3. You need `psql` access to Umami's database (user and database `umami`
+   in a default install) and a shell on the Sitebin host. The commands
+   below are POSIX shell (Git Bash works).
 
-Set the two hosts once. Their real addresses are in the operator's private
-notes, not in this public repository; give each as an SSH destination your
-SSH config resolves (an alias carrying user, host and port, or
-`user@host`).
-
-```sh
-PVE='<srv03>'         # the Proxmox host srv03, where Umami runs as VM 103
-SB='<sitebin-host>'   # the host running the sitebin container
-```
-
-Every query goes to Umami's Postgres (container `0007-1-umami-db-1` in VM
-103, user and database `umami`) through the guest agent. `UMAMI` is the
-remote command that runs the SQL on its standard input and hands back what
-psql printed. The output is compressed on the way, because the guest agent
-returns at most 16 MiB, and the command fails rather than hand back a cut
-or failed answer:
+Say once how psql reaches Umami's database, and which host runs the
+`sitebin` container (an SSH destination: an alias from your SSH config, or
+`user@host`):
 
 ```sh
-UMAMI='qm guest exec 103 --timeout 600 --pass-stdin 1 -- sh -c "docker exec -i 0007-1-umami-db-1 psql -X -q -v ON_ERROR_STOP=1 -U umami -d umami | gzip | base64 -w0" | python3 -c "import sys, json, base64, gzip; d = json.load(sys.stdin); assert d.get(\"exitcode\") == 0 and not d.get(\"out-truncated\") and not d.get(\"err-data\"), d; sys.stdout.buffer.write(gzip.decompress(base64.b64decode(d[\"out-data\"])))"'
+# psql against Umami's database, for example over the network:
+UMAMI_PSQL='psql -X -q -v ON_ERROR_STOP=1 -h <umami-db-host> -U umami -d umami'
+# or, on the machine where the database runs in a container:
+# UMAMI_PSQL='docker exec -i <umami-db-container> psql -X -q -v ON_ERROR_STOP=1 -U umami -d umami'
+SB='<sitebin-host>'
 ```
+
+Every query below reads its SQL from standard input:
+`$UMAMI_PSQL < file.sql`.
 
 ## 1. Find the website id
 
 ```sh
-echo "select website_id, name, domain from website where deleted_at is null and domain ilike '%morgenfertig%';" | ssh "$PVE" "$UMAMI"
+echo "select website_id, name, domain from website where deleted_at is null and domain ilike '%example.com%';" | $UMAMI_PSQL
 ```
 
 ## 2. Export the events and the reports
@@ -108,12 +108,12 @@ copy (
     'utm_campaign', e.utm_campaign,
     'utm_content', e.utm_content,
     'utm_term', e.utm_term,
-    'gclid', e.gclid,
-    'fbclid', e.fbclid,
-    'msclkid', e.msclkid,
-    'ttclid', e.ttclid,
-    'li_fat_id', e.li_fat_id,
-    'twclid', e.twclid,
+    'gclid', case when coalesce(e.gclid, '') <> '' then '1' end,
+    'fbclid', case when coalesce(e.fbclid, '') <> '' then '1' end,
+    'msclkid', case when coalesce(e.msclkid, '') <> '' then '1' end,
+    'ttclid', case when coalesce(e.ttclid, '') <> '' then '1' end,
+    'li_fat_id', case when coalesce(e.li_fat_id, '') <> '' then '1' end,
+    'twclid', case when coalesce(e.twclid, '') <> '' then '1' end,
     'browser', s.browser,
     'os', s.os,
     'device', s.device,
@@ -167,22 +167,27 @@ Why the SQL looks like this:
 - **Event data is typed** by `data_type`: numbers stay numbers, booleans
   (stored as `"true"`/`"false"`) become booleans, dates become their
   RFC 3339 text, strings and arrays stay strings.
-- **No `referrer_query`** and no click-id values leave Umami as more than
-  "present": Sitebin never stores either.
+- **Click ids are presence markers**: each click-id column is `"1"` when
+  the event had one and null otherwise, so no click id's value leaves
+  Umami. There is no `referrer_query` either: Sitebin never stores either
+  value.
+- **`url_query` is exported whole**, because the site's own query names
+  (its settings' "query parameters to keep") can only be picked from it.
+  The importer keeps those and the `utm_*` values and drops the rest.
 
 Run both:
 
 ```sh
-ssh "$PVE" "$UMAMI" < umami-events.sql > umami-events.jsonl
-ssh "$PVE" "$UMAMI" < umami-reports.sql > umami-reports.json
+$UMAMI_PSQL < umami-events.sql > umami-events.jsonl
+$UMAMI_PSQL < umami-reports.sql > umami-reports.json
 wc -l umami-events.jsonl
 head -c 600 umami-events.jsonl; echo
 cat umami-reports.json
 ```
 
 `wc -l` is the number of events; it should match Umami's count for the
-website (types 1 and 2). An `AssertionError` means the export failed or was
-cut: the guest agent's answer is printed with it.
+website (types 1 and 2). A psql error stops with a non-zero exit
+(`ON_ERROR_STOP`); then delete the half-written file and run it again.
 
 ## 3. Copy the files into the Sitebin container
 
@@ -212,8 +217,8 @@ non-zero when the import failed:
   "skipped_retention": 0,
   "from": "2026-10-17",
   "to": "2026-11-03",
-  "funnels": ["Landingpage → Anfrage", "Formular begonnen → gesendet"],
-  "goals": ["Anfrage gesendet", "Formular begonnen"],
+  "funnels": ["Landing page → request", "Form started → sent"],
+  "goals": ["Request sent", "Form started"],
   "skipped_reports": []
 }
 ```
@@ -233,6 +238,7 @@ What a failure answers:
 |---|---|
 | "could not reach the running Sitebin server" | the server is not running in the container, or `SITEBIN_INTERNAL_ADDR` is not what the command reads |
 | 400 | a line of the export is not usable (the message names it), or a part of the request is missing or malformed |
+| 403 | the request did not come from a loopback address: run the command inside the container |
 | 404 | no site with that view id, or it was deleted during the import |
 | 409, `reason: locked` | the site is locked: an evidence hold, nothing is imported into it. A lock that came during the import leaves the records written (the report says so) but adds no funnel or goal |
 | 409, `reason: instance` | analytics is off on the instance (`SITEBIN_ANALYTICS=false`) |
@@ -274,7 +280,7 @@ where e.website_id = :'site' and e.event_type in (1, 2)
   and (e.created_at at time zone :'zone')::date between :'switch'::date - 14 and :'switch'::date - 1
 group by 1 order by 1;
 EOF
-ssh "$PVE" "$UMAMI" < umami-days.sql
+$UMAMI_PSQL < umami-days.sql
 ```
 
 In the Analytics tab, pick each of those days as the range and compare

@@ -716,3 +716,27 @@ func TestImportStoresAngleBracketsAsTheyCame(t *testing.T) {
 		t.Fatalf("the import escaped a <: %.120s", raw)
 	}
 }
+
+// The runbook exports a click id as a presence marker ("1"), never its
+// value: a marker is presence, and nothing else is kept of it.
+func TestConvertUmamiClickIDMarkers(t *testing.T) {
+	ev := umamiView(umamiAt(t, "2026-11-03T10:00:00Z"), "s", "/")
+	ev.Gclid, ev.Fbclid, ev.Msclkid, ev.Ttclid, ev.LiFatID, ev.Twclid = "1", "1", "", "1", "", "1"
+	_, rec := ConvertUmami(ev, time.UTC, nil, nil)
+	if want := []string{"gclid", "fbclid", "ttclid", "twclid"}; !reflect.DeepEqual(rec.Ck, want) {
+		t.Errorf("ck = %q, want %q", rec.Ck, want)
+	}
+	if rec.Q != nil {
+		t.Errorf("q = %v; a marker is no query value", rec.Q)
+	}
+	// The same line as the runbook's SQL writes it: a column without a click
+	// id is null.
+	line := `{"created_at":"2026-11-03T10:00:00Z","event_type":1,"hostname":"example.at","url_path":"/","url_query":"utm_source=ads","session_id":"s","gclid":"1","fbclid":null,"msclkid":null,"ttclid":null,"li_fat_id":null,"twclid":null}`
+	var fromSQL UmamiEvent
+	if err := json.Unmarshal([]byte(line), &fromSQL); err != nil {
+		t.Fatal(err)
+	}
+	if _, rec := ConvertUmami(fromSQL, time.UTC, nil, nil); !reflect.DeepEqual(rec.Ck, []string{"gclid"}) || rec.Q["utm_source"] != "ads" {
+		t.Errorf("from the SQL: ck %q, q %v", rec.Ck, rec.Q)
+	}
+}
