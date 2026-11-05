@@ -239,14 +239,41 @@ colours.
 ### Modes
 
 - **Web server** — files served exactly as uploaded, `index.html` is the
-  entry point. Directory listings appear when no index exists.
+  entry point. A folder is never listed: an address that names no file —
+  a missing page, a folder without an `index.html` — answers **404** with a
+  [not-found page](#not-found-pages). A drop that is only files (PDFs, a
+  download) belongs in the File viewer.
 - **File viewer** — the site renders one document in the browser (PDF,
-  Markdown, DOCX, images, video, audio, code/text with highlighting). The raw
-  files stay available under `/_raw/…`, and the viewer has a built-in file
-  switcher + download button. Switching modes back and forth is lossless.
+  Markdown, DOCX, images, video, audio, code/text with highlighting). A file
+  it cannot show (an installer, an archive, a font, a binary) gets a download
+  view instead. The raw files stay available under `/_raw/…`, and the viewer
+  has a built-in file switcher + download button. Switching modes back and
+  forth is lossless.
 - **Container** *(Enterprise)* — the site runs the project its
   `sitebin-container-compose.yaml` declares, and Caddy proxies to it. See
   [Container sites](#container-sites-enterprise).
+
+### Not-found pages
+
+A web server site answers an address that does not exist with status `404`
+and a page, never a directory listing:
+
+1. the page named in the **not_found_page** setting (edit page, API
+   `"not_found_page"`, MCP `update_site`), an `.html` file inside the site;
+2. otherwise a `404.html` at the site's root, as GitHub Pages, Netlify and
+   Cloudflare Pages use it (Astro, Hugo and Jekyll build one);
+3. otherwise Sitebin's own "Page not found" page.
+
+A named page that does not exist falls back to Sitebin's page, not to
+`404.html`. Every 404 carries `Cache-Control: no-store` and the same security
+headers as the site's other pages. The page is shown at the address that was
+asked for (no redirect), so link its styles and images from the root
+(`/assets/site.css`), as generated sites do. The SPA fallback never answers
+404 for a path; viewer sites always get Sitebin's page; a container's app
+answers its own 404s. A web server site with files but no `index.html` (or
+`index.txt`) at its root says so: the edit page shows a notice, and the API
+and MCP add a line to `warnings`. See
+`docs/superpowers/specs/2026-11-05-not-found-pages-design.md`.
 
 ### Browser caching
 
@@ -274,7 +301,8 @@ file (`style.css`, `report2024.pdf`) never counts. Those are what Lighthouse's
 "efficient cache policy" audit wants cached for a year. The fixed times cache
 every other file that long: only for files that never change under their name.
 A site behind a view password sends `private` instead of `public`; error
-pages, redirects and the password gate are never given the header; container
+pages, redirects and the password gate are never given the site's policy (a
+404 is `no-store`, see [Not-found pages](#not-found-pages)); container
 sites are left to their upstream. authz computes the value and Caddy copies it
 — see `docs/superpowers/specs/2026-10-16-browser-caching-design.md`.
 
@@ -315,7 +343,8 @@ curl -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID
 # update settings (any subset; expires_at: null clears it, unless a tier caps the site;
 # name is a private label of up to 60 characters, "" removes it; tags replaces the
 # whole set of up to 10 private tags, [] clears it; cache is the
-# browser-cache policy: auto, revalidate, hour, day, week, year or off)
+# browser-cache policy: auto, revalidate, hour, day, week, year or off;
+# not_found_page is the .html file a 404 shows, "" returns to 404.html)
 curl -X PUT -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
      -d '{"name":"Client docs","tags":["client","Q3"],"mode":"viewer","entry_file":"report.pdf","webdav_enabled":true}' \
      https://sitebin.example.com/api/sites/$EDIT_ID
@@ -467,7 +496,7 @@ require stdio) can bridge with `npx mcp-remote https://…/mcp --header …`.
 |---|---|
 | `create_site` | Publish files as a new site; returns the URL, the edit id and — once — the edit password |
 | `list_sites` | The connected account's sites, with their names, tags and custom domains; sites other accounts [shared](#site-ownership-enterprise) with it appear with `role: "admin"` *(needs a token)* |
-| `get_site` / `update_site` | Read and change the name, tags (`settings.tags` replaces them; an empty list removes all), settings, expiry, view password, WebDAV/FTP, SPA fallback, browser caching; an admin of a shared site cannot change the expiry |
+| `get_site` / `update_site` | Read and change the name, tags (`settings.tags` replaces them; an empty list removes all), settings, expiry, view password, WebDAV/FTP, SPA fallback, browser caching, the not-found page; an admin of a shared site cannot change the expiry |
 | `list_files` / `read_file` | Inspect a site's contents |
 | `write_files` | Add or overwrite files; with `replace`, the site ends up containing exactly what you pass |
 | `delete_file` / `delete_site` | Remove a file, or the whole site (not for an admin of a shared site) |

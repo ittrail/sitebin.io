@@ -21,10 +21,11 @@ docker build --build-arg EDITION=enterprise -t sitebin:latest-ee .   # enterpris
 ```
 
 **`e2e.ps1` is not the full E2E.** It is the core HTTP suite and references no
-other script; there is no aggregate entry point. A full pass is all eighteen run
+other script; there is no aggregate entry point. A full pass is all nineteen run
 by hand: `e2e.ps1`, `spa.ps1`, `paths.ps1`, `ftp.ps1`, `mcp.ps1`, `git.ps1` (community
 image), `analytics.ps1` (community image), `forms.ps1` (community image; pulls `axllent/mailpit` as its SMTP
-server), `caching.ps1` (community image), `accounts.ps1`, `frontdoor.ps1`,
+server), `caching.ps1` (community image), `notfound.ps1` (community image),
+`accounts.ps1`, `frontdoor.ps1`,
 `ownership.ps1` (runs `axllent/mailpit` as the account mailer's SMTP server),
 `tiers.ps1`, `redirects.ps1`, `mounts.ps1`, `containers.ps1`
 (enterprise image; `containers.ps1` and `mounts.ps1` without `-NoContainers`
@@ -32,7 +33,7 @@ drive the host's real Docker Engine and pull images), `license.ps1`, and
 `consent.ps1` -- the last of which is the only one that needs a **running SaaS
 Stack** (the stack's consent gate, the OIDC issuer/discovery split, and the
 `consents` declaration; see `docs/superpowers/specs/2026-09-01-consent-gate-through-the-stack-design.md`).
-`e2e/stack/verify.ps1` is the nineteenth, run against the compose container in
+`e2e/stack/verify.ps1` is the twentieth, run against the compose container in
 `e2e/stack/` rather than one it starts itself: the registration the stack
 holds, the stack-hosted self-service links, and a signed GDPR export and
 deletion.
@@ -502,6 +503,37 @@ missing hashed bundle would leave a year of `index.html` in a browser; and
 **`fingerprinted` must never match a hand-named file** — a false positive is a
 year of stale content, so when in doubt it says no. Container sites get no
 header. Read `docs/superpowers/specs/2026-10-16-browser-caching-design.md`.
+
+## Not-found pages, never a listing
+
+No site ever lists a folder (`browse` is gone from the Caddyfile). A missing
+file or a folder without an index is a file-server 404, answered by a
+`handle_errors 404` block in each content site block (`writeNotFound`): the
+file authz names in `X-Sitebin-NotFound` (`Meta.NotFoundTarget()`: the owner's
+`not_found_page` or `404.html`; none for viewer, container and SPA sites) when
+it exists, served with status 404, else Sitebin's page from
+`GET /_sitebin/not-found`. Read
+`docs/superpowers/specs/2026-11-05-not-found-pages-design.md`. Rules a change
+must keep:
+
+- **The header is authz's alone**: it is in every strip list before the gate,
+  like `X-Sitebin-Upstream`. A client choosing it would choose which file
+  serves every 404.
+- **A 404 keeps the site's security headers.** The `header` lines the content
+  route set before the error survive into `handle_errors` (verified on Caddy
+  v2.11.4); a site's own `404.html` is user content and must carry the
+  untrusted CSP like any page. `notfound.ps1` checks both trust states.
+- **Strip conditional and range headers before serving the page**: with a
+  status override, `file_server` answered `If-None-Match` with an empty 404
+  and `Range` with part of the page. Every 404 is `no-store`.
+- **No file check on the hot path.** authz only names the page; Caddy's `file`
+  matcher looks for it when a 404 actually happens.
+- **An app's 404 is the app's.** A proxied answer is never an error in Caddy,
+  and must stay that way: never `handle_response` on a container's 404.
+- **"No start page" agrees with Caddy**: `index.html` or `index.txt` at the
+  root (`store.MissingStartPage`), and an empty site is never warned. MCP
+  carries it in `warnings` and `not_found_page` is `omitempty` in
+  `SiteResult`: cached output schemas.
 
 ## Site forms
 
