@@ -105,6 +105,10 @@ func fingerprinted(p string) bool {
 	base := path.Base(p)
 	name := strings.TrimSuffix(base, path.Ext(base))
 	segs := strings.FieldsFunc(name, func(r rune) bool { return r == '.' || r == '-' })
+	if len(segs) == 0 {
+		// A dotfile (.env, .htaccess): its whole name is the extension.
+		return false
+	}
 	if len(segs) == 1 {
 		return len(segs[0]) >= 16 && hashSegment(segs[0])
 	}

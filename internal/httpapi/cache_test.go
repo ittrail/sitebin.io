@@ -251,3 +251,21 @@ func TestMCPCachePolicy(t *testing.T) {
 		t.Errorf("a bad policy must say which exist: %v %s", res.IsError, mcpText(res))
 	}
 }
+
+// A dotfile's name is all extension (".env": base ".env", ext ".env"), so
+// nothing is left to split. It used to panic authz with a slice out of range,
+// and Caddy answered 502 for every existing .env, .htaccess or .DS_Store.
+func TestFingerprintedDotfiles(t *testing.T) {
+	for _, p := range []string{"/.env", "/_raw/.env", "/a/.htaccess", "/.DS_Store", "/.gitignore", "/.", "/"} {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("fingerprinted(%q) panicked: %v", p, r)
+				}
+			}()
+			if fingerprinted(p) {
+				t.Errorf("fingerprinted(%q) = true, want false", p)
+			}
+		}()
+	}
+}
