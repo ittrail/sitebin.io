@@ -443,3 +443,89 @@ func TestEveryContentOriginSetsCacheControlFromAuthz(t *testing.T) {
 		}
 	}
 }
+
+// A site never lists a folder: a folder without an index is a 404 like a
+// missing file, in every view access mode.
+func TestNoDirectoryListings(t *testing.T) {
+	for _, access := range []string{"subdomain", "path", "both"} {
+		cfg := mustLoad(t, map[string]string{"SITEBIN_BASE_DOMAIN": "sitebin.example", "SITEBIN_HTTP_ONLY": "true", "SITEBIN_VIEW_ACCESS": access})
+		if out := Generate(cfg); strings.Contains(out, "browse") {
+			t.Errorf("%s: the Caddyfile lists folders:\n%s", access, out)
+		}
+	}
+}
+
+// blockBody is the text of the site block that starts with header, up to its
+// closing brace at column 0.
+func blockBody(t *testing.T, out, header string) string {
+	t.Helper()
+	i := strings.Index(out, header)
+	if i < 0 {
+		t.Fatalf("no %q block in:\n%s", header, out)
+	}
+	body := out[i:]
+	if j := strings.Index(body, "\n}\n"); j >= 0 {
+		body = body[:j]
+	}
+	return body
+}
+
+// Every content origin answers a 404 with a page: the site's own when authz
+// named one and it exists (served with status 404, never cached, never as a
+// 304 or a range), else Sitebin's from the backend.
+func TestEveryContentOriginAnswers404WithAPage(t *testing.T) {
+	want := []string{
+		"handle_errors 404 {",
+		"header X-Sitebin-NotFound /*",
+		"file {http.request.header.X-Sitebin-NotFound}",
+		"request_header -If-None-Match",
+		"request_header -If-Modified-Since",
+		"request_header -Range",
+		"header Cache-Control no-store",
+		"rewrite * {http.request.header.X-Sitebin-NotFound}",
+		"status 404",
+		"rewrite * /_sitebin/not-found",
+		"reverse_proxy 127.0.0.1:8080",
+	}
+	check := func(name, body string) {
+		t.Helper()
+		for _, w := range want {
+			if !strings.Contains(body, w) {
+				t.Errorf("%s: missing %q in:\n%s", name, w, body)
+			}
+		}
+	}
+	both := Generate(mustLoad(t, map[string]string{"SITEBIN_BASE_DOMAIN": "sitebin.example", "SITEBIN_HTTP_ONLY": "true", "SITEBIN_VIEW_ACCESS": "both"}))
+	check("view wildcard", blockBody(t, both, "*.sitebin.example {"))
+	check("custom domains (HTTP)", blockBody(t, both, "http://:80 {"))
+	check("main domain with path views", blockBody(t, both, "http://sitebin.example {"))
+
+	tls := Generate(mustLoad(t, map[string]string{"SITEBIN_BASE_DOMAIN": "sitebin.example", "SITEBIN_DNS_PROVIDER": "cloudflare", "SITEBIN_DNS_TOKEN": "x"}))
+	check("custom domains (TLS)", blockBody(t, tls, "https:// {"))
+	if main := blockBody(t, tls, "sitebin.example {"); strings.Contains(main, "handle_errors") {
+		t.Errorf("the main domain without path views catches errors it has no site for:\n%s", main)
+	}
+}
+
+// A client cannot name the not-found page itself: its copy of the header is
+// removed before the gate, and only authz's answer is copied.
+func TestClientCannotNameTheNotFoundPage(t *testing.T) {
+	out := Generate(mustLoad(t, map[string]string{"SITEBIN_BASE_DOMAIN": "sitebin.example", "SITEBIN_HTTP_ONLY": "true", "SITEBIN_VIEW_ACCESS": "both"}))
+	for _, block := range []string{"*.sitebin.example {", "http://:80 {", "handle @view {"} {
+		body := blockBody(t, out, block)
+		strip := strings.Index(body, "request_header -X-Sitebin-NotFound")
+		gate := strings.Index(body, "forward_auth")
+		if strip < 0 || gate < 0 || strip > gate {
+			t.Errorf("%s: strip=%d gate=%d, want the strip before the gate", block, strip, gate)
+		}
+		copied := false
+		for _, line := range strings.Split(body, "\n") {
+			if strings.Contains(line, "copy_headers") && strings.Contains(line, "X-Sitebin-NotFound") {
+				copied = true
+			}
+		}
+		if !copied {
+			t.Errorf("%s: authz's X-Sitebin-NotFound is not copied", block)
+		}
+	}
+}

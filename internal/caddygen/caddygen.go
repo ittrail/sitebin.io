@@ -48,6 +48,9 @@ func Generate(cfg config.Config) string {
 	if cfg.PathViews() {
 		writePathViewRoutes(&b, backend, cfg.DataDir, untrusted)
 		fmt.Fprintf(&b, "\thandle {\n\t\treverse_proxy %s\n\t}\n", backend("8080"))
+		// Only the path views raise a 404 error here: the backend's own 404s
+		// are answers, which handle_errors never sees.
+		writeNotFound(&b, backend)
 	} else {
 		fmt.Fprintf(&b, "\treverse_proxy %s\n", backend("8080"))
 	}
@@ -59,6 +62,7 @@ func Generate(cfg config.Config) string {
 		writeViewTLS(&b, cfg)
 		writeHSTS(&b, cfg, true)
 		writeContentRoutes(&b, backend, fmt.Sprintf("%s/sites/{labels.%d}/files", cfg.DataDir, labelIdx), untrusted, false)
+		writeNotFound(&b, backend)
 		b.WriteString("}\n\n")
 	}
 
@@ -94,6 +98,7 @@ func Generate(cfg config.Config) string {
 	// mounted at its longest matching path. See
 	// docs/superpowers/specs/2026-11-02-custom-domains-with-a-path-design.md.
 	writeContentRoutes(&b, backend, fmt.Sprintf("%s/sites/{http.request.header.%s}/files", cfg.DataDir, siteHeader), untrusted, true)
+	writeNotFound(&b, backend)
 	b.WriteString("}\n")
 
 	if !cfg.HTTPOnly {
@@ -181,7 +186,8 @@ func writePathViewRoutes(b *strings.Builder, backend func(string) string, dataDi
 	b.WriteString("\thandle @view {\n")
 	b.WriteString("\t\troute {\n")
 	fmt.Fprintf(b, "\t\t\trequest_header -%s\n", cacheHeader)
-	fmt.Fprintf(b, "\t\t\tforward_auth %s {\n\t\t\t\turi /internal/authz\n\t\t\t\theader_up X-Sitebin-View {re.view.1}\n\t\t\t\tcopy_headers Set-Cookie %s\n\t\t\t}\n", backend("9000"), cacheHeader)
+	fmt.Fprintf(b, "\t\t\trequest_header -%s\n", notFoundHeader)
+	fmt.Fprintf(b, "\t\t\tforward_auth %s {\n\t\t\t\turi /internal/authz\n\t\t\t\theader_up X-Sitebin-View {re.view.1}\n\t\t\t\tcopy_headers Set-Cookie %s %s\n\t\t\t}\n", backend("9000"), cacheHeader, notFoundHeader)
 	b.WriteString("\t\t\turi strip_prefix /v/{re.view.1}\n")
 	fmt.Fprintf(b, "\t\t\troot * %s/sites/{re.view.1}/files\n", dataDir)
 	writeSecurityHeaders(b, "\t\t\t", untrusted)
@@ -227,14 +233,15 @@ func writeContentRoutes(b *strings.Builder, backend func(string) string, root, u
 	// own path): authz takes it as the site to check, and on a view host the
 	// folder served comes from the label — a client sending it would have
 	// another, open site checked and the protected one served.
-	for _, h := range []string{upstreamHeader, cacheHeader, siteHeader, stripHeader, mountHeader, "X-Forwarded-Prefix", "X-Sitebin-View"} {
+	// So is the not-found page, which names a file the 404 handler serves.
+	for _, h := range []string{upstreamHeader, cacheHeader, siteHeader, stripHeader, mountHeader, notFoundHeader, "X-Forwarded-Prefix", "X-Sitebin-View"} {
 		fmt.Fprintf(b, "\t\t\trequest_header -%s\n", h)
 	}
 	// Pin X-Forwarded-Host to Caddy's own {host} placeholder so authz resolves
 	// the SAME site that file_server will serve. Without this, a client-supplied
 	// X-Forwarded-Host could make the gate evaluate a different (open) site than
 	// the one whose files are served — a password-gate bypass.
-	fmt.Fprintf(b, "\t\t\tforward_auth %s {\n\t\t\t\turi /internal/authz\n\t\t\t\theader_up X-Forwarded-Host {host}\n\t\t\t\tcopy_headers Set-Cookie %s %s %s %s %s\n\t\t\t}\n", backend("9000"), upstreamHeader, cacheHeader, siteHeader, stripHeader, mountHeader)
+	fmt.Fprintf(b, "\t\t\tforward_auth %s {\n\t\t\t\turi /internal/authz\n\t\t\t\theader_up X-Forwarded-Host {host}\n\t\t\t\tcopy_headers Set-Cookie %s %s %s %s %s %s\n\t\t\t}\n", backend("9000"), upstreamHeader, cacheHeader, siteHeader, stripHeader, mountHeader, notFoundHeader)
 	fmt.Fprintf(b, "\t\t\troot * %s\n", root)
 	if mounts {
 		fmt.Fprintf(b, "\t\t\t@strip header %s *\n", stripHeader)
@@ -260,7 +267,10 @@ func writeContentRoutes(b *strings.Builder, backend func(string) string, root, u
 
 // writeFileServing emits SPA-aware static serving: when the site opted into SPA
 // fallback (its .sitebin-spa marker exists in the root), unknown paths fall back
-// to /index.html; otherwise normal serving with a directory listing.
+// to /index.html; otherwise normal serving. Never a directory listing: a folder
+// without an index is a 404 error like a missing file, which writeNotFound
+// answers with a page. See
+// docs/superpowers/specs/2026-11-05-not-found-pages-design.md.
 func writeFileServing(b *strings.Builder, ind string) {
 	fmt.Fprintf(b, "%s@spa file /%s\n", ind, spaMarkerName)
 	fmt.Fprintf(b, "%shandle @spa {\n", ind)
@@ -268,9 +278,40 @@ func writeFileServing(b *strings.Builder, ind string) {
 	fmt.Fprintf(b, "%s\tfile_server {\n%s\t\thide %s %s\n%s\t}\n", ind, ind, spaMarkerName, trustedMarkerName, ind)
 	fmt.Fprintf(b, "%s}\n", ind)
 	fmt.Fprintf(b, "%shandle {\n", ind)
-	fmt.Fprintf(b, "%s\tfile_server {\n%s\t\tbrowse\n%s\t\thide %s %s\n%s\t}\n", ind, ind, ind, spaMarkerName, trustedMarkerName, ind)
+	fmt.Fprintf(b, "%s\tfile_server {\n%s\t\thide %s %s\n%s\t}\n", ind, ind, spaMarkerName, trustedMarkerName, ind)
 	fmt.Fprintf(b, "%s}\n", ind)
 }
+
+// writeNotFound emits the site block's 404 handler. The file server's 404 — a
+// missing file, a folder without an index — is answered with the site's own
+// page when authz named one (notFoundHeader) and it exists, served with
+// status 404; otherwise with Sitebin's page from the backend. Neither is ever
+// cached. A container's own 404 is a proxied answer, not an error, and never
+// reaches this; neither does a 404 authz itself relays.
+//
+// The response headers the content route set before the error — the security
+// headers by trust marker — stay on the 404, so a site's own 404.html carries
+// the same policy as any of its pages (verified against Caddy v2.11.4).
+// Conditional and range headers are dropped before the page is served:
+// file_server with a status override answered If-None-Match with an empty
+// 404, and Range with part of the page.
+func writeNotFound(b *strings.Builder, backend func(string) string) {
+	b.WriteString("\thandle_errors 404 {\n")
+	fmt.Fprintf(b, "\t\t@notfoundpage {\n\t\t\theader %s /*\n\t\t\tfile {http.request.header.%s}\n\t\t}\n", notFoundHeader, notFoundHeader)
+	b.WriteString("\t\thandle @notfoundpage {\n")
+	for _, h := range []string{"If-None-Match", "If-Modified-Since", "If-Match", "If-Unmodified-Since", "Range", "If-Range"} {
+		fmt.Fprintf(b, "\t\t\trequest_header -%s\n", h)
+	}
+	b.WriteString("\t\t\theader Cache-Control no-store\n")
+	fmt.Fprintf(b, "\t\t\trewrite * {http.request.header.%s}\n", notFoundHeader)
+	fmt.Fprintf(b, "\t\t\tfile_server {\n\t\t\t\tstatus 404\n\t\t\t\thide %s %s\n\t\t\t}\n", spaMarkerName, trustedMarkerName)
+	b.WriteString("\t\t}\n")
+	fmt.Fprintf(b, "\t\thandle {\n\t\t\trewrite * /_sitebin/not-found\n\t\t\treverse_proxy %s\n\t\t}\n", backend("8080"))
+	b.WriteString("\t}\n")
+}
+
+// notFoundHeader mirrors httpapi's: authz names a file site's not-found page.
+const notFoundHeader = "X-Sitebin-NotFound"
 
 // upstreamHeader mirrors httpapi's: authz sets it for a container site.
 const upstreamHeader = "X-Sitebin-Upstream"
