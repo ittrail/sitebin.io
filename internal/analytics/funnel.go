@@ -2,7 +2,9 @@ package analytics
 
 import (
 	"cmp"
+	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/ittrail/sitebin.io/internal/store"
@@ -124,22 +126,41 @@ func (e *Engine) Goals(siteDir string, q Query, gs []store.AnalyticsGoal) ([]Goa
 }
 
 // target is what a funnel step or a goal matches: page views whose path
-// matches a glob, or events of one name. One that does not compile (an
-// unknown type, an invalid glob) matches nothing.
+// matches a path value, or events of one name. A value store would refuse
+// (a path GlobOK refuses, an empty event name) or an unknown type matches
+// nothing.
+//
+// A path value matches as Umami's funnels and goals match a URL: "*" stands
+// for any characters, "/" included (SQL's %), so "**" is the same as "*";
+// everything else is literal, and the value covers the whole path. A value
+// without "*" is the one path. This is not store.CompileGlob, whose "*"
+// stays within one segment: that is for a site's excluded paths.
 type target struct {
-	kind  string      // the record kind it matches, "p" or "e"; "" matches nothing
-	glob  *store.Glob // for "p"
-	event string      // for "e"
+	kind  string         // the record kind it matches, "p" or "e"; "" matches nothing
+	value string         // the path without "*", or the event name
+	re    *regexp.Regexp // a path with "*"
 }
 
 func newTarget(typ, value string) target {
 	switch typ {
 	case "path":
-		if g, ok := store.CompileGlob(value); ok {
-			return target{kind: "p", glob: g}
+		if !store.GlobOK(value) {
+			break
+		}
+		if !strings.Contains(value, "*") {
+			return target{kind: "p", value: value}
+		}
+		parts := strings.Split(value, "*")
+		for i, p := range parts {
+			parts[i] = regexp.QuoteMeta(p)
+		}
+		if re, err := regexp.Compile(`(?s)^` + strings.Join(parts, ".*") + `$`); err == nil {
+			return target{kind: "p", re: re}
 		}
 	case "event":
-		return target{kind: "e", event: value}
+		if value != "" {
+			return target{kind: "e", value: value}
+		}
 	}
 	return target{}
 }
@@ -148,10 +169,12 @@ func (t *target) matches(r *Record) bool {
 	switch {
 	case t.kind == "" || r.K != t.kind:
 		return false
+	case t.re != nil:
+		return t.re.MatchString(r.P)
 	case t.kind == "p":
-		return t.glob.Match(r.P)
+		return r.P == t.value
 	}
-	return r.N == t.event
+	return r.N == t.value
 }
 
 // visitorRuns is a day's kept records grouped by visitor: the records'

@@ -170,6 +170,12 @@ func TestFunnelMorgenfertig(t *testing.T) {
 		// b1 lands and rates; bewerten is no step.
 		pv("2026-11-02T14:00:00+01:00", "b1", "/app-entwickeln-lassen/"),
 		ev("2026-11-02T14:05:00+01:00", "b1", "/app-entwickeln-lassen/", "bewerten"),
+		// s1 and s2 land below a landing page: "*" crosses "/", as in Umami.
+		// s1 begins and sends, s2 only lands.
+		pv("2026-11-02T15:00:00+01:00", "s1", "/app-entwickeln-lassen/x/"),
+		ev("2026-11-02T15:03:00+01:00", "s1", "/app-entwickeln-lassen/x/", "anfrage-start"),
+		ev("2026-11-02T15:06:00+01:00", "s1", "/app-entwickeln-lassen/x/", "anfrage"),
+		pv("2026-11-02T16:00:00+01:00", "s2", "/app-entwickeln-lassen/x/y"),
 	})
 	f := store.AnalyticsFunnel{
 		ID: "landingpage-anfrage", Name: "Landingpage → Anfrage", WindowMinutes: 60,
@@ -181,11 +187,12 @@ func TestFunnelMorgenfertig(t *testing.T) {
 	if got.ID != f.ID || got.Name != f.Name {
 		t.Fatalf("result names %q %q", got.ID, got.Name)
 	}
-	// m1, m2, g1 and b1 landed; m1, m2 and g1 began; m1 sent within the hour.
+	// m1, m2, g1, b1, s1 and s2 landed; m1, m2, g1 and s1 began; m1 and
+	// s1 sent within the hour.
 	want := []StepResult{
-		{Visitors: 4, Conversion: 1},
-		{Visitors: 3, DropOff: 1, Conversion: 0.75},
-		{Visitors: 1, DropOff: 2, Conversion: 0.25},
+		{Visitors: 6, Conversion: 1},
+		{Visitors: 4, DropOff: 2, Conversion: 4.0 / 6},
+		{Visitors: 2, DropOff: 2, Conversion: 2.0 / 6},
 	}
 	if !reflect.DeepEqual(got.Steps, want) {
 		t.Fatalf("steps = %+v, want %+v", got.Steps, want)
@@ -200,7 +207,7 @@ func TestFunnelMorgenfertig(t *testing.T) {
 	// form it sent, in range, follows nothing.
 	cut := day
 	cut.From = tm("2026-11-02T09:05:00+01:00")
-	wantReached(t, "from 09:05", funnels(t, dir, cut, f)[0], 3, 2, 0)
+	wantReached(t, "from 09:05", funnels(t, dir, cut, f)[0], 5, 3, 1)
 }
 
 func TestFunnelDoesNotLinkAcrossDays(t *testing.T) {
@@ -228,7 +235,12 @@ func TestGoalsRate(t *testing.T) {
 		pv("2026-11-02T11:01:00Z", "B", "/pricing", cc("AT")),
 		pv("2026-11-02T11:02:00Z", "B", "/pricing/team", cc("AT")),
 		pv("2026-11-02T12:00:00Z", "C", "/pricing", cc("DE")),
+		pv("2026-11-02T12:01:00Z", "C", "/axb", cc("DE")),
+		pv("2026-11-02T12:02:00Z", "C", "/x/a.b", cc("DE")),
 		pv("2026-11-02T13:00:00Z", "D", "/", cc("DE")),
+		pv("2026-11-02T13:01:00Z", "D", "/pricing/a/b", cc("DE")),
+		pv("2026-11-02T13:02:00Z", "D", "/pricing/b/x", cc("DE")),
+		pv("2026-11-02T13:03:00Z", "D", "/a.b", cc("DE")),
 		// The same id the next day is another visitor.
 		pv("2026-11-03T10:00:00Z", "A", "/", cc("DE")),
 		ev("2026-11-03T10:01:00Z", "A", "/", "signup", cc("DE")),
@@ -237,8 +249,14 @@ func TestGoalsRate(t *testing.T) {
 		{ID: "signup", Name: "Signed up", Type: "event", Value: "signup"},
 		{ID: "pricing", Name: "Saw pricing", Type: "path", Value: "/pricing"},
 		{ID: "plan", Name: "Saw a plan", Type: "path", Value: "/pricing/*"},
+		{ID: "plan-any", Name: "Saw a plan too", Type: "path", Value: "/pricing/**"},
+		{ID: "mid", Name: "Star mid-path", Type: "path", Value: "/p*/b"},
+		{ID: "dot", Name: "A literal dot", Type: "path", Value: "/a.b"},
+		{ID: "dot-star", Name: "A literal dot and a star", Type: "path", Value: "/a.b*"},
 		{ID: "never", Name: "Never", Type: "event", Value: "never"},
-		{ID: "bad", Name: "Not a glob", Type: "path", Value: "pricing"},
+		// store refuses a path value without a leading "/": it matches
+		// nothing, though "*" would match /pricing.
+		{ID: "bad", Name: "No leading slash", Type: "path", Value: "*pricing"},
 	}
 	result := func(id string, completions, visitors int, rate float64) GoalResult {
 		for _, g := range gs {
@@ -258,10 +276,19 @@ func TestGoalsRate(t *testing.T) {
 
 	// Five visitors: A, B, C and D on the 2nd, A again on the 3rd. The
 	// signups carry the path /pricing, but a path goal counts page views.
+	// Path values match as Umami's do: "*" (and "**") crosses "/", so
+	// /pricing/a/b and /pricing/b/x are plans; a value without "*" is
+	// exact, so /pricing/team is not /pricing; the rest is literal, so /axb
+	// is neither /a.b nor /a.b*; and a value covers the whole path, so
+	// /pricing/b/x is not /p*/b, nor /x/a.b /a.b*.
 	check("unfiltered", goals(t, dir, both, gs), []GoalResult{
 		result("signup", 3, 2, 0.4),
 		result("pricing", 4, 3, 0.6),
-		result("plan", 1, 1, 0.2),
+		result("plan", 3, 2, 0.4),
+		result("plan-any", 3, 2, 0.4),
+		result("mid", 1, 1, 0.2),
+		result("dot", 1, 1, 0.2),
+		result("dot-star", 1, 1, 0.2),
 		result("never", 0, 0, 0),
 		result("bad", 0, 0, 0),
 	})
@@ -273,6 +300,10 @@ func TestGoalsRate(t *testing.T) {
 		result("signup", 2, 1, 0.5),
 		result("pricing", 3, 2, 1),
 		result("plan", 1, 1, 0.5),
+		result("plan-any", 1, 1, 0.5),
+		result("mid", 0, 0, 0),
+		result("dot", 0, 0, 0),
+		result("dot-star", 0, 0, 0),
 		result("never", 0, 0, 0),
 		result("bad", 0, 0, 0),
 	})
@@ -285,6 +316,10 @@ func TestGoalsRate(t *testing.T) {
 		result("signup", 2, 1, 1.0/3),
 		result("pricing", 4, 3, 1),
 		result("plan", 0, 0, 0),
+		result("plan-any", 0, 0, 0),
+		result("mid", 0, 0, 0),
+		result("dot", 0, 0, 0),
+		result("dot-star", 0, 0, 0),
 		result("never", 0, 0, 0),
 		result("bad", 0, 0, 0),
 	})

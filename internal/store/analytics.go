@@ -52,6 +52,11 @@ type AnalyticsGoal struct {
 
 // Analytics is a site's analytics settings. A site without them (nil in Meta)
 // collects nothing.
+//
+// Two path syntaxes, not to be confused: Exclude holds globs (CompileGlob,
+// "*" within one segment), while a funnel step's or a goal's path value
+// matches as in Umami ("*" crosses "/"; internal/analytics matches them).
+// Validate checks both with GlobOK.
 type Analytics struct {
 	Enabled   bool              `json:"enabled"`
 	Mode      string            `json:"mode"`     // "server" | "script"; "" = server
