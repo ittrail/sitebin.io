@@ -37,7 +37,7 @@ func TestSweep(t *testing.T) {
 	set(expiredRecent, now.Add(-1*time.Hour))
 	set(expiredOld, now.Add(-25*time.Hour))
 
-	removed, err := Sweep(st, now)
+	removed, err := Sweep(st, now, Options{})
 	if err != nil {
 		t.Fatalf("Sweep: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestSweepPrunesDanglingLinks(t *testing.T) {
 	if err := os.RemoveAll(site.Dir()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Sweep(st, time.Now()); err != nil {
+	if _, err := Sweep(st, time.Now(), Options{}); err != nil {
 		t.Fatalf("Sweep: %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(dir, "edit-index", site.EditID)); !os.IsNotExist(err) {
@@ -148,7 +148,7 @@ func TestSweepKeepsSiteWhoseOwnerUpgraded(t *testing.T) {
 	now := time.Now().UTC()
 	site := expiredOwnedSite(t, st, now, "acct-1", 7, true)
 
-	removed, err := Sweep(st, now)
+	removed, err := Sweep(st, now, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestSweepDeletesSiteStillCapped(t *testing.T) {
 	now := time.Now().UTC()
 	site := expiredOwnedSite(t, st, now, "acct-1", 7, true)
 
-	if removed, err := Sweep(st, now); err != nil || removed != 1 {
+	if removed, err := Sweep(st, now, Options{}); err != nil || removed != 1 {
 		t.Fatalf("removed = %d, err = %v, want 1, nil", removed, err)
 	}
 	if _, err := st.ByViewID(site.ViewID); err == nil {
@@ -189,7 +189,7 @@ func TestSweepKeepsSiteWhenTierLookupFails(t *testing.T) {
 	now := time.Now().UTC()
 	site := expiredOwnedSite(t, st, now, "acct-1", 7, true)
 
-	removed, err := Sweep(st, now)
+	removed, err := Sweep(st, now, Options{})
 	if err != nil {
 		t.Fatalf("a lookup failure must not fail the sweep: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestSweepDeletesSiteWithUnknownOwner(t *testing.T) {
 	now := time.Now().UTC()
 	expiredOwnedSite(t, st, now, "acct-1", 7, true)
 
-	if removed, err := Sweep(st, now); err != nil || removed != 1 {
+	if removed, err := Sweep(st, now, Options{}); err != nil || removed != 1 {
 		t.Fatalf("removed = %d, err = %v, want 1, nil", removed, err)
 	}
 }
@@ -224,7 +224,7 @@ func TestSweepDeletesUserChosenExpiryOnUnlimitedTier(t *testing.T) {
 	now := time.Now().UTC()
 	expiredOwnedSite(t, st, now, "acct-1", 0, false) // the owner asked for this date
 
-	if removed, err := Sweep(st, now); err != nil || removed != 1 {
+	if removed, err := Sweep(st, now, Options{}); err != nil || removed != 1 {
 		t.Fatalf("removed = %d, err = %v, want 1, nil — the owner chose this expiry", removed, err)
 	}
 }
@@ -241,7 +241,7 @@ func TestSweepIgnoresProviderForAnonymousSites(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if removed, err := Sweep(st, now); err != nil || removed != 1 {
+	if removed, err := Sweep(st, now, Options{}); err != nil || removed != 1 {
 		t.Fatalf("removed = %d, err = %v, want 1, nil", removed, err)
 	}
 	if len(p.calls) != 0 {
@@ -276,7 +276,7 @@ func TestSweepKeepsSiteRenewedDuringSweep(t *testing.T) {
 	ext.Register(p)
 	defer ext.Reset()
 
-	removed, err := Sweep(st, now)
+	removed, err := Sweep(st, now, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +308,7 @@ func TestSweepDeletesOwnedSiteInCommunityBuild(t *testing.T) {
 	now := time.Now().UTC()
 	site := expiredOwnedSite(t, st, now, "acct-1", 7, true)
 
-	if removed, err := Sweep(st, now); err != nil || removed != 1 {
+	if removed, err := Sweep(st, now, Options{}); err != nil || removed != 1 {
 		t.Fatalf("removed = %d, err = %v, want 1, nil — an owned expired site must still be deleted with no provider registered", removed, err)
 	}
 	if _, err := st.ByViewID(site.ViewID); err == nil {
@@ -368,7 +368,7 @@ func TestSweepHandlesMultipleSitesIndependently(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	removed, err := Sweep(st, now)
+	removed, err := Sweep(st, now, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,7 +417,7 @@ func TestSweepReconcilesTheTrustMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Sweep(st, time.Now()); err != nil {
+	if _, err := Sweep(st, time.Now(), Options{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -462,14 +462,14 @@ func TestSweepAttachesAPendingDomainOnceProven(t *testing.T) {
 	if err := st.AddDomain(site, "later.example.org"); !errors.Is(err, store.ErrDomainPending) {
 		t.Fatalf("AddDomain = %v", err)
 	}
-	if _, err := Sweep(st, time.Now()); err != nil {
+	if _, err := Sweep(st, time.Now(), Options{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.ByDomain("later.example.org"); err == nil {
 		t.Fatal("attached without proof")
 	}
 	v.ok["later.example.org"] = true
-	if _, err := Sweep(st, time.Now()); err != nil {
+	if _, err := Sweep(st, time.Now(), Options{}); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := st.ByDomain("later.example.org"); err != nil || got.ViewID != site.ViewID {
@@ -488,7 +488,7 @@ func TestSweepReconcileKeepsTheFormsCap(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	site := expiredOwnedSite(t, st, now, "acct-1", 7, true)
-	if _, err := Sweep(st, now); err != nil {
+	if _, err := Sweep(st, now, Options{}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := st.ByViewID(site.ViewID)
@@ -505,7 +505,7 @@ func TestSweepPurgesReportsOlderThanRetention(t *testing.T) {
 	now := time.Now()
 	st.AddReport(store.Report{Target: "old", Reason: "x", Time: now.Add(-store.ReportRetention - time.Hour)})
 	st.AddReport(store.Report{Target: "new", Reason: "x", Time: now})
-	if _, err := Sweep(st, now); err != nil {
+	if _, err := Sweep(st, now, Options{}); err != nil {
 		t.Fatal(err)
 	}
 	reports, _ := st.ListReports()
@@ -535,7 +535,7 @@ func TestSweepLeavesALockedSiteAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	removed, err := Sweep(st, now)
+	removed, err := Sweep(st, now, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -557,7 +557,7 @@ func TestSweepLeavesALockedSiteAlone(t *testing.T) {
 	if _, err := st.SetLock(got, nil); err != nil {
 		t.Fatal(err)
 	}
-	if removed, _ := Sweep(st, now); removed != 1 {
+	if removed, _ := Sweep(st, now, Options{}); removed != 1 {
 		t.Fatalf("removed = %d after unlock, want 1", removed)
 	}
 }
@@ -573,7 +573,7 @@ func TestSweepLeavesAnAccountLockedAnonymousSiteAlone(t *testing.T) {
 	when := now.Add(-48 * time.Hour)
 	st.Update(site, func(m *store.Meta) error { m.ExpiresAt = &when; return nil })
 	st.SetLock(site, &store.SiteLock{By: store.LockByAccount})
-	if removed, _ := Sweep(st, now); removed != 0 {
+	if removed, _ := Sweep(st, now, Options{}); removed != 0 {
 		t.Fatalf("removed = %d, want 0", removed)
 	}
 	if _, err := st.ByViewID(site.ViewID); err != nil {

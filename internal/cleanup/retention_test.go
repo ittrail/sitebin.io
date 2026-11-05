@@ -66,7 +66,7 @@ func TestSweepPurgesALockPastTheRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	removed, err := Sweep(st, now)
+	removed, err := Sweep(st, now, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,14 +107,14 @@ func TestSweepKeepsAHeldLock(t *testing.T) {
 	if _, err := st.SetHold(held, &store.LockHold{By: "acct-admin"}); err != nil {
 		t.Fatal(err)
 	}
-	if removed, _ := Sweep(st, now); removed != 0 || gone(st, held) {
+	if removed, _ := Sweep(st, now, Options{}); removed != 0 || gone(st, held) {
 		t.Fatalf("a held site was purged (removed %d)", removed)
 	}
 	// Released, the next sweep purges it.
 	if _, err := st.SetHold(held, nil); err != nil {
 		t.Fatal(err)
 	}
-	if removed, _ := Sweep(st, now); removed != 1 || !gone(st, held) {
+	if removed, _ := Sweep(st, now, Options{}); removed != 1 || !gone(st, held) {
 		t.Fatalf("a released site past its retention was kept (removed %d)", removed)
 	}
 }
@@ -129,7 +129,7 @@ func TestSweepReLockDoesNotResetTheClock(t *testing.T) {
 	site := lockedAt(t, st, now.Add(-181*day), store.LockByScanner)
 	st.SetLock(site, &store.SiteLock{At: now.Add(-10 * day), By: store.LockByAdmin, Reason: "kept"})
 	st.SetLock(site, &store.SiteLock{At: now.Add(-time.Hour), By: store.LockByAccount, Reason: "suspended"})
-	if removed, _ := Sweep(st, now); removed != 1 || !gone(st, site) {
+	if removed, _ := Sweep(st, now, Options{}); removed != 1 || !gone(st, site) {
 		t.Fatalf("re-locking restarted the retention (removed %d)", removed)
 	}
 }
@@ -140,7 +140,7 @@ func TestSweepRetentionZeroNeverPurges(t *testing.T) {
 	st := retentionStore(t, 0)
 	now := time.Now().UTC()
 	site := lockedAt(t, st, now.Add(-3650*day), store.LockByAdmin)
-	if removed, _ := Sweep(st, now); removed != 0 || gone(st, site) {
+	if removed, _ := Sweep(st, now, Options{}); removed != 0 || gone(st, site) {
 		t.Fatalf("retention 0 purged a site (removed %d)", removed)
 	}
 }
@@ -178,11 +178,11 @@ func TestSweepStopsALockedContainerSiteBeforeThePurge(t *testing.T) {
 	site := lockedAt(t, st, now.Add(-200*day), store.LockByAdmin)
 	st.Update(site, func(m *store.Meta) error { m.Mode = store.ModeContainer; return nil })
 
-	if removed, _ := Sweep(st, now); removed != 0 || gone(st, site) {
+	if removed, _ := Sweep(st, now, Options{}); removed != 0 || gone(st, site) {
 		t.Fatal("the site was purged although its containers could not be stopped")
 	}
 	rt.err = nil
-	if removed, _ := Sweep(st, now); removed != 1 || !gone(st, site) {
+	if removed, _ := Sweep(st, now, Options{}); removed != 1 || !gone(st, site) {
 		t.Fatal("the site was not purged once its containers stopped")
 	}
 	if len(rt.stopped) != 2 || rt.stopped[1] != site.ViewID {
@@ -218,7 +218,7 @@ func TestSweepHandsTheAccountPurgeTheLockRetention(t *testing.T) {
 				}
 			}
 		}
-		if _, err := Sweep(st, now); err != nil {
+		if _, err := Sweep(st, now, Options{}); err != nil {
 			t.Fatal(err)
 		}
 		if len(p.cutoffs) != 1 || !p.cutoffs[0].Equal(now.Add(-provenance.Retention)) || !p.held[0].Equal(c.held) {
@@ -235,7 +235,7 @@ func TestSweepPurgeLeavesNoDanglingLinks(t *testing.T) {
 	st, _ := store.New(dir, "sitebin.example", 1<<20, 100)
 	st.SetLockRetention(day)
 	site := lockedAt(t, st, time.Now().Add(-2*day), store.LockByAdmin)
-	if removed, _ := Sweep(st, time.Now()); removed != 1 {
+	if removed, _ := Sweep(st, time.Now(), Options{}); removed != 1 {
 		t.Fatal("not purged")
 	}
 	if _, err := os.Lstat(filepath.Join(dir, "edit-index", site.EditID)); !os.IsNotExist(err) {

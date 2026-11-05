@@ -70,7 +70,9 @@ type API struct {
 	gitInspect     pushInspector   // nil: git; a test's stand-in for the push bookkeeping
 	sharingWarn    *auth.Limiter   // one "plan unknown" log line per account a minute
 	analytics      *analytics.Recorder
-	analyticsSalts *analytics.Salts // the one salt store: the recorder hashes with it, the sweep prunes it
+	analyticsSalts *analytics.Salts  // the one salt store: the recorder hashes with it, the sweep prunes it
+	analyticsGeo   *analytics.Geo    // nil: no GeoIP database
+	engine         *analytics.Engine // answers the analytics API from the day files
 
 	analyticsLimiter *auth.Limiter // the script's records per (site, client network)
 }
@@ -121,7 +123,9 @@ func New(cfg config.Config, st *store.Store, secret []byte, webFS fs.FS) (*API, 
 	st.SetPurgeHook(a.onLockPurged)
 	a.git = newGitRunner(cfg, a.log)
 	a.analyticsSalts = analytics.NewSalts(cfg.DataDir)
-	a.analytics = newAnalyticsRecorder(cfg, st, a.analyticsSalts, a.log)
+	a.analyticsGeo = openAnalyticsGeo(cfg, a.log)
+	a.analytics = newAnalyticsRecorder(cfg, st, a.analyticsSalts, a.analyticsGeo, a.log)
+	a.engine = analytics.NewEngine(64 << 20)
 	return a, nil
 }
 
@@ -133,14 +137,23 @@ func (a *API) AnalyticsRecorder() *analytics.Recorder { return a.analytics }
 // the sweep to prune.
 func (a *API) AnalyticsSalts() *analytics.Salts { return a.analyticsSalts }
 
-// newAnalyticsRecorder wires the recorder. A GeoIP database that does not
-// open never stops the instance: it is logged, and records carry no location.
-func newAnalyticsRecorder(cfg config.Config, st *store.Store, salts *analytics.Salts, log *slog.Logger) *analytics.Recorder {
+// AnalyticsEngine answers the analytics API's queries; an import drops the
+// days it rewrote from it.
+func (a *API) AnalyticsEngine() *analytics.Engine { return a.engine }
+
+// openAnalyticsGeo opens the GeoIP database. One that does not open never
+// stops the instance: it is logged, and records carry no location.
+func openAnalyticsGeo(cfg config.Config, log *slog.Logger) *analytics.Geo {
 	geo, err := analytics.OpenGeo(cfg.AnalyticsGeoIP)
 	if err != nil {
 		log.Warn("analytics: GeoIP database not opened, records carry no location", "path", cfg.AnalyticsGeoIP, "err", err)
-		geo = nil
+		return nil
 	}
+	return geo
+}
+
+// newAnalyticsRecorder wires the recorder.
+func newAnalyticsRecorder(cfg config.Config, st *store.Store, salts *analytics.Salts, geo *analytics.Geo, log *slog.Logger) *analytics.Recorder {
 	return analytics.NewRecorder(analytics.RecorderConfig{
 		DailyCap: cfg.AnalyticsDailyCap,
 		Salts:    salts,
@@ -218,6 +231,15 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("GET /api/sites/{editID}/git/blob", a.withEditAuth(a.gitBlob))
 	mux.HandleFunc("GET /api/sites/{editID}/git/archive", a.withEditAuth(a.gitArchive))
 	mux.HandleFunc("DELETE /api/sites/{editID}/git", a.withEditAuth(a.recorded(provenance.ActionGitDelete, a.deleteGitRepo)))
+
+	mux.HandleFunc("GET /api/sites/{editID}/analytics", a.withEditAuthEvenLocked(a.getAnalytics))
+	mux.HandleFunc("PUT /api/sites/{editID}/analytics", a.withEditAuth(a.recorded(provenance.ActionAnalyticsSettings, a.putAnalytics)))
+	mux.HandleFunc("GET /api/sites/{editID}/analytics/overview", a.withEditAuth(a.analyticsOverview))
+	mux.HandleFunc("GET /api/sites/{editID}/analytics/table", a.withEditAuth(a.analyticsTable))
+	mux.HandleFunc("GET /api/sites/{editID}/analytics/event-data", a.withEditAuth(a.analyticsEventData))
+	mux.HandleFunc("GET /api/sites/{editID}/analytics/realtime", a.withEditAuth(a.analyticsRealtime))
+	mux.HandleFunc("GET /api/sites/{editID}/analytics/funnels", a.withEditAuth(a.analyticsFunnels))
+	mux.HandleFunc("GET /api/sites/{editID}/analytics/goals", a.withEditAuth(a.analyticsGoals))
 
 	mux.Handle("/dav/", http.HandlerFunc(a.webdav))
 
@@ -658,9 +680,10 @@ func (a *API) withEditAuth(next func(http.ResponseWriter, *http.Request, *store.
 	return a.editAuth(next, false)
 }
 
-// withEditAuthEvenLocked is withEditAuth for the one route that answers a
-// locked site: GET /api/sites/{editID}, the edit page's load, which is how
-// the owner learns about the lock. Its payload then carries no file list.
+// withEditAuthEvenLocked is withEditAuth for the reads that answer a locked
+// site: GET /api/sites/{editID}, the edit page's load, which is how the owner
+// learns about the lock (its payload then carries no file list), and the
+// analytics state, which carries no record.
 func (a *API) withEditAuthEvenLocked(next func(http.ResponseWriter, *http.Request, *store.Site)) http.HandlerFunc {
 	return a.editAuth(next, true)
 }

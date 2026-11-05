@@ -31,6 +31,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ittrail/sitebin.io/internal/analytics"
 	"github.com/ittrail/sitebin.io/internal/auth"
 	"github.com/ittrail/sitebin.io/internal/caddygen"
 	"github.com/ittrail/sitebin.io/internal/cleanup"
@@ -63,7 +64,8 @@ func main() {
 		// No git collection here: this one-shot runs apart from a serving
 		// process, whose push registry it cannot see, so a gc could race a
 		// push or a delete. The serving process collects in cleanup.Run.
-		n, err := cleanup.Sweep(st, time.Now())
+		// The analytics retention and the salts' end apply here as there.
+		n, err := cleanup.Sweep(st, time.Now(), sweepOptions(cfg, analytics.NewSalts(cfg.DataDir)))
 		if err != nil {
 			slog.Error("cleanup", "err", err)
 			os.Exit(1)
@@ -188,6 +190,16 @@ func mustConfig() config.Config {
 		os.Exit(1)
 	}
 	return cfg
+}
+
+// sweepOptions are the cleanup sweep's analytics settings, with the salt
+// store visitor ids are hashed with.
+func sweepOptions(cfg config.Config, salts *analytics.Salts) cleanup.Options {
+	return cleanup.Options{
+		AnalyticsRetentionDays: cfg.AnalyticsRetentionDays,
+		AnalyticsTimezone:      cfg.AnalyticsTimezone,
+		AnalyticsSalts:         salts,
+	}
 }
 
 func mustStore(cfg config.Config) *store.Store {
@@ -325,7 +337,7 @@ func serve() error {
 	errs := make(chan error, 4)
 	go func() { errs <- fmt.Errorf("public listener: %w", public.ListenAndServe()) }()
 	go func() { errs <- fmt.Errorf("internal listener: %w", internal.ListenAndServe()) }()
-	go cleanup.Run(ctx, st, cfg.CleanupInterval, api.GitRunner())
+	go cleanup.Run(ctx, st, cfg.CleanupInterval, api.GitRunner(), sweepOptions(cfg, api.AnalyticsSalts()))
 	// The analytics writer. It stops after the listeners (below), so a page
 	// view authz admits while they shut down is still written, and it drains
 	// its queue for at most 2 seconds before it returns.

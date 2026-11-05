@@ -51,7 +51,7 @@ const (
 	MaxDetail = 200
 )
 
-// Actions. Site logs use the first group, account logs the second.
+// Actions. Site logs use the first two groups, account logs the last.
 const (
 	ActionCreate         = "create"
 	ActionUpload         = "upload"
@@ -81,6 +81,8 @@ const (
 	ActionTransfer       = "transfer"   // the site changed hands; the detail names both accounts
 	ActionAdopt          = "adopt"      // an anonymous drop was given to an account
 	ActionAdmins         = "admins"     // the site's admins changed
+
+	ActionAnalyticsSettings = "analytics-settings" // the site's analytics settings changed
 
 	ActionSignup     = "signup"
 	ActionSignin     = "signin"

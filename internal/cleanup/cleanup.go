@@ -14,6 +14,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/ittrail/sitebin.io/internal/analytics"
 	"github.com/ittrail/sitebin.io/internal/ext"
 	"github.com/ittrail/sitebin.io/internal/gitrepo"
 	"github.com/ittrail/sitebin.io/internal/provenance"
@@ -114,10 +115,26 @@ func stopContainers(site *store.Site) error {
 	return rt.Stop(site.ViewID)
 }
 
+// Options are what a sweep needs beyond the store: the instance's analytics
+// settings and its salt store. The zero value deletes no analytics day and
+// no salt.
+type Options struct {
+	// AnalyticsRetentionDays is how many days of analytics a site keeps
+	// before today (SITEBIN_ANALYTICS_RETENTION_DAYS); 0 keeps every day.
+	AnalyticsRetentionDays int
+	// AnalyticsTimezone is the instance's default analytics zone
+	// (SITEBIN_ANALYTICS_TIMEZONE), for a site whose settings name none.
+	AnalyticsTimezone string
+	// AnalyticsSalts is the salt store visitor ids are hashed with, pruned
+	// once per sweep; nil prunes nothing.
+	AnalyticsSalts *analytics.Salts
+}
+
 // Sweep removes sites expired for longer than the grace period and locked
-// sites past the lock retention, and prunes index links whose target no
+// sites past the lock retention, deletes analytics days past the retention
+// and salts whose day is over, and prunes index links whose target no
 // longer exists. It returns the number of sites deleted.
-func Sweep(st *store.Store, now time.Time) (int, error) {
+func Sweep(st *store.Store, now time.Time, opts Options) (int, error) {
 	sites, err := st.AllSites()
 	if err != nil {
 		return 0, err
@@ -130,10 +147,10 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 		// A locked site is the operator's evidence hold, and the sweep leaves
 		// it alone: no expiry (it outlives its date), no restamp from the
 		// owner's tier, no trust or domain reconciliation, no provenance
-		// purge — it is kept exactly as the lock found it. store.Delete
-		// refuses it as well. The one thing the sweep does to a locked site
-		// is the lock retention: once the lock is older than it and carries
-		// no evidence hold, the site is purged whole.
+		// purge, no analytics retention — it is kept exactly as the lock
+		// found it. store.Delete refuses it as well. The one thing the sweep
+		// does to a locked site is the lock retention: once the lock is older
+		// than it and carries no evidence hold, the site is purged whole.
 		if site.Meta.IsLocked() {
 			if st.LockPurgeDue(site.Meta, now) && purgeLocked(st, site, now) {
 				removed++
@@ -147,6 +164,11 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 			slog.Error("cleanup: purge provenance", "id", site.ViewID, "err", err)
 		} else if n > 0 {
 			slog.Info("cleanup: purged provenance past retention", "id", site.ViewID, "entries", n)
+		}
+		if n, err := PurgeAnalytics(st, site, now, opts.AnalyticsRetentionDays, opts.AnalyticsTimezone); err != nil {
+			slog.Error("cleanup: purge analytics past retention", "id", site.ViewID, "err", err)
+		} else if n > 0 {
+			slog.Info("cleanup: purged analytics past retention", "id", site.ViewID, "files", n)
 		}
 		reconcileTrust(st, site)
 		reconcileGit(st, site)
@@ -198,6 +220,13 @@ func Sweep(st *store.Store, now time.Time) (int, error) {
 		if ap, ok := p.(ext.AccountProvenance); ok {
 			before, heldBefore := provenanceCutoffs(now, st.LockRetention())
 			ap.PurgeProvenance(before, heldBefore)
+		}
+	}
+	// A salt goes once its day is over everywhere; the recorder prunes too,
+	// but only while it runs.
+	if opts.AnalyticsSalts != nil {
+		if err := opts.AnalyticsSalts.Prune(now); err != nil {
+			slog.Error("cleanup: prune analytics salts", "err", err)
 		}
 	}
 	// Abuse reports are a log somebody typed; they go after the retention the
@@ -374,10 +403,10 @@ func collectOne(ctx context.Context, st *store.Store, git *gitrepo.Runner, site 
 	}
 }
 
-// Run sweeps on the given interval until ctx is cancelled. With a non-nil git
-// runner (the one the API pushes through) each sweep is followed by a garbage
-// collection of the changed repositories.
-func Run(ctx context.Context, st *store.Store, interval time.Duration, git *gitrepo.Runner) {
+// Run sweeps on the given interval until ctx is cancelled, with opts. With a
+// non-nil git runner (the one the API pushes through) each sweep is followed
+// by a garbage collection of the changed repositories.
+func Run(ctx context.Context, st *store.Store, interval time.Duration, git *gitrepo.Runner, opts Options) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -385,7 +414,7 @@ func Run(ctx context.Context, st *store.Store, interval time.Duration, git *gitr
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if _, err := Sweep(st, time.Now()); err != nil {
+			if _, err := Sweep(st, time.Now(), opts); err != nil {
 				slog.Error("cleanup sweep", "err", err)
 			}
 			CollectGit(ctx, st, git)

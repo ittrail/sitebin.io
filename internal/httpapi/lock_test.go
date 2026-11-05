@@ -169,6 +169,13 @@ func TestLockedSiteRefusesEveryPerSiteRoute(t *testing.T) {
 		{"PUT", "/api/sites/" + edit + "/forms/abc", `{"name":"y"}`},
 		{"DELETE", "/api/sites/" + edit + "/forms/abc", ""},
 		{"POST", "/api/sites/" + edit + "/forms/abc/confirmation", ""},
+		{"PUT", "/api/sites/" + edit + "/analytics", `{"enabled":true}`},
+		{"GET", "/api/sites/" + edit + "/analytics/overview?range=last24h", ""},
+		{"GET", "/api/sites/" + edit + "/analytics/table?dim=path&range=last24h", ""},
+		{"GET", "/api/sites/" + edit + "/analytics/event-data?name=x&range=last24h", ""},
+		{"GET", "/api/sites/" + edit + "/analytics/realtime", ""},
+		{"GET", "/api/sites/" + edit + "/analytics/funnels?range=last24h", ""},
+		{"GET", "/api/sites/" + edit + "/analytics/goals?range=last24h", ""},
 	}
 	creds := []struct {
 		name string

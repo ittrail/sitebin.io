@@ -51,6 +51,8 @@ func siteRoutes(editID string) []restCall {
 		{"PUT", base + "/forms/k1", "application/json", jsonBody(`{"name":"x"}`)},
 		{"DELETE", base + "/forms/k1", "", jsonBody("")},
 		{"POST", base + "/forms/k1/confirmation", "", jsonBody("")},
+		{"PUT", base + "/analytics", "application/json", jsonBody(`{"enabled":true}`)},
+		{"GET", base + "/analytics/overview?range=last24h", "", jsonBody("")},
 		{"DELETE", base, "", jsonBody("")},
 	}
 }

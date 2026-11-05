@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	_ "time/tzdata" // LoadLocation works without system zoneinfo (Alpine, Windows)
 	"unicode/utf8"
@@ -218,6 +219,32 @@ func GlobOK(pattern string) bool {
 func GlobMatch(pattern, path string) bool {
 	g, ok := CompileGlob(pattern)
 	return ok && g.Match(path)
+}
+
+// analyticsZones caches loaded time zones by name. The names are a site's
+// setting or the instance's, both validated as IANA names on the way in; a
+// name that does not load is not cached.
+var analyticsZones sync.Map // name → *time.Location
+
+// AnalyticsZone is the zone the site's analytics days are counted in: its
+// own setting, else defaultName (the instance's, SITEBIN_ANALYTICS_TIMEZONE).
+// A name that does not load is UTC, and so is "Local": never the server's own
+// zone. Collection, the API and the sweep's retention all ask this, so they
+// agree on what a date is.
+func (m Meta) AnalyticsZone(defaultName string) *time.Location {
+	name := defaultName
+	if a := m.Analytics; a != nil && a.Timezone != "" {
+		name = a.Timezone
+	}
+	if loc, ok := analyticsZones.Load(name); ok {
+		return loc.(*time.Location)
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil || name == "Local" {
+		return time.UTC
+	}
+	analyticsZones.Store(name, loc)
+	return loc
 }
 
 // SetAnalytics replaces the site's analytics settings; nil clears them.

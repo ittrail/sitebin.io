@@ -550,6 +550,7 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		tags = []string{}
 	}
 	gs := a.gitStateOf(site)
+	ar := a.analyticsReason(site)
 	payload := map[string]any{
 		"views":                   stats.Views,
 		"last_seen":               stats.LastSeen,
@@ -567,6 +568,7 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"webdav_available":        webdavAvailable,
 		"ftp_enabled":             m.FTPEnabled,
 		"ftp_available":           ftpAvailable,
+		"analytics_available":     ar == "" || ar == analyticsReasonPlan, // the Analytics tab, shown like the Git tab's
 		"custom_domains":          m.CustomDomains,
 		"domain_redirects":        redirectsPayload(m),
 		"view_address":            viewAddressPayload(m),

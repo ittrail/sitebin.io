@@ -185,26 +185,10 @@ func (a *API) siteAddresses(site *store.Site) []string {
 	return append(out, site.Meta.CustomDomains...)
 }
 
-// analyticsZones caches loaded time zones by name. The names are a site's
-// setting or the instance's, both validated as IANA names on the way in.
-var analyticsZones sync.Map // name → *time.Location
-
 // analyticsTZ is the zone the site's days are counted in: its setting, else
-// the instance's. A name that does not load is UTC.
+// the instance's (store.Meta.AnalyticsZone, which the sweep asks too).
 func (a *API) analyticsTZ(site *store.Site) *time.Location {
-	name := a.cfg.AnalyticsTimezone
-	if s := site.Meta.Analytics; s != nil && s.Timezone != "" {
-		name = s.Timezone
-	}
-	if loc, ok := analyticsZones.Load(name); ok {
-		return loc.(*time.Location)
-	}
-	loc, err := time.LoadLocation(name)
-	if err != nil || name == "Local" { // never the server's own zone
-		return time.UTC
-	}
-	analyticsZones.Store(name, loc)
-	return loc
+	return site.Meta.AnalyticsZone(a.cfg.AnalyticsTimezone)
 }
 
 // analyticsGlobs caches compiled exclude globs by pattern, so authz does not

@@ -562,7 +562,7 @@ func TestSweepKeepsSiteOfAccountOnUnconfiguredTier(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	removed, err := cleanup.Sweep(st, now)
+	removed, err := cleanup.Sweep(st, now, cleanup.Options{})
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}

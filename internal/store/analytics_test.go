@@ -156,3 +156,25 @@ func TestWithStatsLockExistingSiteAndSetters(t *testing.T) {
 		t.Fatalf("quota clear: %v", err)
 	}
 }
+
+// AnalyticsZone is the one statement of a site's zone, for collection, the
+// API and the sweep's retention alike.
+func TestMetaAnalyticsZone(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		a    *Analytics
+		def  string
+		want string
+	}{
+		{"no settings", nil, "Europe/Vienna", "Europe/Vienna"},
+		{"no zone of its own", &Analytics{Enabled: true}, "Europe/Vienna", "Europe/Vienna"},
+		{"its own zone", &Analytics{Timezone: "America/New_York"}, "Europe/Vienna", "America/New_York"},
+		{"no default", nil, "", "UTC"},
+		{"never the server's own", &Analytics{Timezone: "Local"}, "Europe/Vienna", "UTC"},
+		{"a name that does not load", &Analytics{Timezone: "Mars/Olympus"}, "Europe/Vienna", "UTC"},
+	} {
+		if got := (Meta{Analytics: tc.a}).AnalyticsZone(tc.def).String(); got != tc.want {
+			t.Errorf("%s: zone = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

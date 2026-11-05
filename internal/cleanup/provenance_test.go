@@ -55,7 +55,7 @@ func TestSweepPurgesProvenancePastRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Sweep(st, now); err != nil {
+	if _, err := Sweep(st, now, Options{}); err != nil {
 		t.Fatal(err)
 	}
 	if es, _ := st.Provenance(open); len(es) != 1 || es[0].Action != provenance.ActionUpload {
@@ -77,7 +77,7 @@ func TestSweepPurgesProvenanceInCommunityBuild(t *testing.T) {
 	now := time.Now().UTC()
 	s, _, _ := st.Create()
 	st.RecordProvenance(s, provenance.Entry{Time: now.Add(-100 * 24 * time.Hour), Action: provenance.ActionCreate, IP: "203.0.113.7"})
-	if _, err := Sweep(st, now); err != nil {
+	if _, err := Sweep(st, now, Options{}); err != nil {
 		t.Fatal(err)
 	}
 	if es, _ := st.Provenance(s); len(es) != 0 {
