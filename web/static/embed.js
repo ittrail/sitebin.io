@@ -535,6 +535,10 @@ input::placeholder { color: var(--ink-faint); }
     <h2>Your claim ticket</h2>
     <p class="sub" id="ticket-sub">Everything you need to view, share and edit this site.</p>
     <p class="sub" id="t-life"></p>
+    <div class="keepnote hidden" id="t-warn" role="status">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4m0 4h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span id="t-warn-text"></span>
+    </div>
     <p class="acctline hidden" id="t-acct">
       <span id="t-acct-text"></span>
       <a id="t-acct-link" target="_blank" rel="noopener"></a>
@@ -915,6 +919,22 @@ input::placeholder { color: var(--ink-faint); }
           }
         }
       }
+
+      // What the instance warns about goes on the ticket. A web server site
+      // without an index.html answers 404 at its front page now (no folder
+      // is ever listed), so that one is said in the visitor's words, with the
+      // way out; anything else is shown as the instance wrote it.
+      const notes = [];
+      if (body.start_page_missing === true) {
+        notes.push("These files have no index.html, so the View URL's front page shows a 404. " +
+          "To show the files themselves, open the Edit URL and switch the site to the File viewer.");
+      }
+      for (const w of (Array.isArray(body.warnings) ? body.warnings : [])) {
+        if (body.start_page_missing === true && /no index\.html at its root/.test(w)) continue;
+        notes.push(w);
+      }
+      this.$("t-warn-text").textContent = notes.join(" ");
+      this.$("t-warn").classList.toggle("hidden", notes.length === 0);
 
       if (this.demo) {
         this.$("stamp-text").textContent = "demo — nothing was uploaded";

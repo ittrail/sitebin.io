@@ -62,7 +62,20 @@ function showTicket(body) {
   $("t-open").href = body.view_url;
   $("t-editlink").href = body.edit_url;
 
-  if (body.warnings) body.warnings.forEach((w) => toast(w, true));
+  // What the instance warns about stays on the ticket. A web server site
+  // without an index.html answers 404 at its front page (no folder is ever
+  // listed), so that one is said in the visitor's words, with the way out.
+  const notes = [];
+  if (body.start_page_missing === true) {
+    notes.push("These files have no index.html, so the View URL's front page shows a 404. " +
+      "To show the files themselves, open the Edit URL and switch the site to the File viewer.");
+  }
+  for (const w of (Array.isArray(body.warnings) ? body.warnings : [])) {
+    if (body.start_page_missing === true && /no index\.html at its root/.test(w)) continue;
+    notes.push(w);
+  }
+  $("t-warn-text").textContent = notes.join(" ");
+  $("t-warn").classList.toggle("hidden", notes.length === 0);
 
   const life = $("t-life");
   if (life) {
