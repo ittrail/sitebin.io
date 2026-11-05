@@ -1592,7 +1592,7 @@ powershell -File e2e\caching.ps1 -SkipBuild   # tag sitebin:e2e-caching first
 powershell -File e2e\paths.ps1
 powershell -File e2e\ftp.ps1
 powershell -File e2e\mcp.ps1
-powershell -File e2enalytics.ps1
+powershell -File e2e\analytics.ps1
 powershell -File e2e\accounts.ps1
 powershell -File e2e\tiers.ps1
 powershell -File e2e\redirects.ps1 -SkipBuild # tag sitebin:e2e-redirects (enterprise) first
