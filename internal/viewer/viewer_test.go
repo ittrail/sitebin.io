@@ -394,3 +394,47 @@ func TestApplyKeepsTheChoiceOpenWhileEmpty(t *testing.T) {
 		t.Errorf("after the first upload entry = %q, want the only file", entry)
 	}
 }
+
+// A site whose only files are hidden opens on the (empty) list and names
+// none of them.
+func TestOnlyHiddenFilesOpenAnEmptyList(t *testing.T) {
+	s, site := makeSite(t)
+	for _, f := range []string{"report.pdf", "notes.md"} {
+		if err := s.DeleteFile(site, f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeRaw(t, site, ".DS_Store", "x")
+	writeRaw(t, site, "__MACOSX/._a.pdf", "x")
+	setViewer(t, s, site, "index.html")
+	if _, err := Apply(site); err != nil {
+		t.Fatal(err)
+	}
+	cfg := wrapperCfg(t, site)
+	if cfg.Entry != "" || len(cfg.Files) != 0 {
+		t.Errorf("config = %+v, want an empty list", cfg)
+	}
+}
+
+// files.js hides the same names as isHiddenPath, so a wrapper written before
+// the list existed (which still names them) shows none of them either.
+func TestViewerJSHidesTheSameNames(t *testing.T) {
+	src, err := fs.ReadFile(web.Assets, "viewer/files.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(src)
+	if !strings.Contains(s, "export function isHiddenPath(") {
+		t.Fatal("files.js has no isHiddenPath")
+	}
+	for _, name := range []string{`"__macosx"`, `"thumbs.db"`, `"desktop.ini"`, `startsWith(".")`} {
+		if !strings.Contains(s, name) {
+			t.Errorf("files.js isHiddenPath does not know %s", name)
+		}
+	}
+	for _, p := range []string{".env", "a/.git/x", "__MACOSX/y", "p/Thumbs.db", "Desktop.ini"} {
+		if !isHiddenPath(p) {
+			t.Errorf("Go isHiddenPath(%q) = false", p)
+		}
+	}
+}

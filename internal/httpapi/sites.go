@@ -74,8 +74,9 @@ func settingsFromForm(fields url.Values) (updateSet, error) {
 	if v := fields.Get("mode"); v != "" {
 		set.Mode = strPtr(v)
 	}
-	if v := fields.Get("entry_file"); v != "" {
-		set.EntryFile = strPtr(v)
+	// Present but empty asks for the File viewer's list, as "" does in a PUT.
+	if _, ok := fields["entry_file"]; ok {
+		set.EntryFile = strPtr(fields.Get("entry_file"))
 	}
 	if _, ok := fields["view_password"]; ok {
 		set.ViewPassword = strPtr(fields.Get("view_password"))

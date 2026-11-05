@@ -64,3 +64,40 @@ func TestEmptyViewerSiteOpensItsFirstLoneFile(t *testing.T) {
 		t.Errorf("wrapper does not open the lone file: %v", err)
 	}
 }
+
+// MCP reaches the same rule: update_site with entry_file "" opens the list.
+func TestMCPEntryFileEmptyMeansTheList(t *testing.T) {
+	e := newEnv(t, nil)
+	cs := mcpClient(t, e, nil)
+	editID, pw := mcpCreate(t, cs, "hi")
+	res := mcpCall(t, cs, "update_site", map[string]any{
+		"edit_id": editID, "edit_password": pw,
+		"settings": map[string]any{"mode": "viewer", "entry_file": ""},
+	})
+	if res.IsError {
+		t.Fatalf("update_site: %s", mcpText(res))
+	}
+	site, _ := e.st.ByEditID(editID)
+	if site.Meta.EntryFile != "" {
+		t.Errorf("stored entry = %q, want the list", site.Meta.EntryFile)
+	}
+	b, err := os.ReadFile(site.FilesDir() + "/index.html")
+	if err != nil || !strings.Contains(string(b), `"entry":""`) {
+		t.Errorf("wrapper does not open on the list: %v", err)
+	}
+}
+
+// A form create may ask for the list too: entry_file present but empty, as
+// a PUT may. Without it a one-file viewer site opens that file.
+func TestCreateFormEntryFileEmptyMeansTheList(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, map[string]string{"mode": "viewer", "entry_file": ""}, map[string]string{"report.pdf": "%PDF"})
+	site, _ := e.st.ByViewID(c.ID)
+	if site.Meta.EntryFile != "" {
+		t.Errorf("stored entry = %q, want the list asked for", site.Meta.EntryFile)
+	}
+	c = e.createSite(t, map[string]string{"mode": "viewer"}, map[string]string{"report.pdf": "%PDF"})
+	if site, _ = e.st.ByViewID(c.ID); site.Meta.EntryFile != "report.pdf" {
+		t.Errorf("without entry_file the lone file should open, got %q", site.Meta.EntryFile)
+	}
+}

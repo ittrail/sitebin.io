@@ -88,7 +88,23 @@ export function icon(name, cls) {
 // time and are kept for the page's lifetime; a queued one whose tiles have
 // all left the page (scrolled past in a folder that was left, a new filter)
 // is dropped before it fetches anything.
-const pdfPreviews = new Map(); // path -> { promise, thumbs: Set<Element> }
+const pdfPreviews = new Map(); // path -> { promise, thumbs: Set<Element>, url }
+const PDF_PREVIEWS_KEPT = 200;
+const pdfKept = []; // paths whose blob: URL is held, oldest first
+
+// keepPdfPreview holds a rendered page, and lets the oldest go past the cap:
+// a long scroll through a PDF folder must not keep every page in memory. An
+// image already on screen keeps its picture when its URL is revoked.
+function keepPdfPreview(path, url) {
+  pdfKept.push(path);
+  while (pdfKept.length > PDF_PREVIEWS_KEPT) {
+    const old = pdfPreviews.get(pdfKept.shift());
+    if (old && old.url) {
+      URL.revokeObjectURL(old.url);
+      pdfPreviews.delete(old.path);
+    }
+  }
+}
 let pdfWorker = null;
 let pdfRunning = 0;
 const pdfQueue = [];
@@ -118,7 +134,7 @@ function pdfPreview(url, path, width, thumb) {
     known.thumbs.add(thumb);
     return known.promise;
   }
-  const entry = { promise: null, thumbs: new Set([thumb]) };
+  const entry = { promise: null, thumbs: new Set([thumb]), url: null, path };
   entry.promise = new Promise((resolve) => {
     pdfQueue.push(async () => {
       if (![...entry.thumbs].some((t) => t.isConnected)) {
@@ -141,8 +157,11 @@ function pdfPreview(url, path, width, thumb) {
         canvas.width = Math.ceil(vp.width);
         canvas.height = Math.ceil(vp.height);
         await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
-        const blob = await new Promise((r) => canvas.toBlob(r, "image/png"));
-        resolve(blob ? URL.createObjectURL(blob) : null);
+        const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.85));
+        if (!blob) { resolve(null); return; }
+        entry.url = URL.createObjectURL(blob);
+        keepPdfPreview(path, entry.url);
+        resolve(entry.url);
       } catch {
         resolve(null);
       } finally {
@@ -170,11 +189,35 @@ function loadPreview(thumb, file, rawURL) {
     img.onload = () => showPreview(thumb, img);
     img.src = rawURL(file.path);
   } else if (kind === "video") {
+    // One frame becomes a still and the player is let go at once: browsers
+    // allow only a few media players per page (fewer on phones), so a tile
+    // must not keep one.
     const v = document.createElement("video");
     v.muted = true;
     v.playsInline = true;
     v.preload = "metadata";
-    v.onloadeddata = () => showPreview(thumb, v);
+    const release = () => { v.removeAttribute("src"); v.load(); };
+    v.onloadeddata = () => {
+      try {
+        const scale = Math.min(1, 480 / (v.videoWidth || 480));
+        const c = document.createElement("canvas");
+        c.width = Math.max(1, Math.round((v.videoWidth || 480) * scale));
+        c.height = Math.max(1, Math.round((v.videoHeight || 270) * scale));
+        c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+        c.toBlob((blob) => {
+          release();
+          if (!blob || !thumb.isConnected) return;
+          const url = URL.createObjectURL(blob);
+          const img = new Image();
+          img.alt = "";
+          img.onload = () => { URL.revokeObjectURL(url); showPreview(thumb, img); };
+          img.src = url;
+        }, "image/jpeg", 0.85);
+      } catch {
+        release();
+      }
+    };
+    v.onerror = release;
     v.src = rawURL(file.path) + "#t=0.5";
   } else if (kind === "pdf" && file.size <= PDF_PREVIEW_MAX) {
     const width = Math.min(480, Math.round(TILE_MAX * Math.min(window.devicePixelRatio || 1, 2)));
@@ -401,7 +444,8 @@ export function renderFolderView(stage, node, ctx) {
       thumb.appendChild(icon(iconName, iconName === "folder" ? "is-folder" : ""));
       if (file && iconName !== "folder") {
         const ext = baseName(file.path).includes(".") ? baseName(file.path).split(".").pop() : "";
-        if (ext && !hasPreview(file)) thumb.appendChild(el("span", "v-ext", ext.slice(0, 5).toUpperCase()));
+        // The badge stays under a preview (hidden by CSS) for when it fails.
+        if (ext) thumb.appendChild(el("span", "v-ext", ext.slice(0, 5).toUpperCase()));
         if (hasPreview(file)) pending.set(thumb, file);
       }
       a.appendChild(thumb);

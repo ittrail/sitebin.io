@@ -337,6 +337,10 @@ a.v-crumb:hover { color: var(--amber); background: rgba(245, 184, 77, .07); }
   .v-chrome { gap: 8px; padding: 9px 12px; }
   .paper { padding: 22px 18px; }
   .v-details .col-type, .v-details .col-mod { display: none; }
+  /* only the way one level up and where you are: the name stays readable */
+  .v-crumbs > :not(:nth-last-child(-n+3)) { display: none; }
+  .v-crumb { flex: 0 3 auto; min-width: 2ch; }
+  .v-crumb.is-current { flex: 0 1 auto; max-width: none; }
   .v-summary { order: 9; flex-basis: 100%; }
   .v-filter { flex: 1 1 160px; }
 }

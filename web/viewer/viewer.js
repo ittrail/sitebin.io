@@ -7,14 +7,14 @@
 
 import {
   rendererFor, buildTree, findFolder, parseRoute, folderHash, fileHash,
-  baseName, dirName, resolveRelative, fmtBytes,
+  baseName, dirName, resolveRelative, fmtBytes, isHiddenPath,
 } from "./files.js";
 import { renderFolderView, loadPrefs, savePrefs, orderedFiles, icon, loadPdfjs } from "./browser.js";
 
 const ASSETS = "/_sitebin/assets";
 const cfg = JSON.parse(document.getElementById("sitebin-config").textContent);
 const app = document.getElementById("viewer-app");
-const files = Array.isArray(cfg.files) ? cfg.files : [];
+const files = (Array.isArray(cfg.files) ? cfg.files : []).filter((f) => f && !isHiddenPath(f.path));
 const tree = buildTree(files);
 const fileIndex = new Map(files.map((f) => [f.path, f]));
 
@@ -71,8 +71,9 @@ function crumbs(path, isFile) {
   const add = (label, href, here) => {
     if (nav.childNodes.length) nav.appendChild(el("span", "v-crumb-sep", "/"));
     if (here) {
-      const c = el("span", "v-crumb is-current" + (isFile ? " is-file" : ""), label);
-      c.setAttribute("aria-current", "page");
+      const isLast = nav.querySelectorAll(".v-crumb").length === (path ? path.split("/").length : 0);
+      const c = el("span", "v-crumb" + (isLast ? " is-current" + (isFile ? " is-file" : "") : ""), label);
+      if (isLast) c.setAttribute("aria-current", "page");
       nav.appendChild(c);
     } else {
       const a = el("a", "v-crumb", label);
@@ -81,8 +82,21 @@ function crumbs(path, isFile) {
     }
   };
   add("Files", folderHash(""), segs.length === 0);
-  segs.forEach((seg, i) => add(seg, folderHash(segs.slice(0, i + 1).join("/")), i === last));
+  segs.forEach((seg, i) => {
+    const folder = segs.slice(0, i + 1).join("/");
+    // A folder the list does not show (a chosen entry in .private/) is named,
+    // not linked: its address would find nothing.
+    add(seg, folderHash(folder), i === last || !findFolder(tree, folder));
+  });
   return nav;
+}
+
+// nearestFolder is the file's folder, or the closest one above it that the
+// list shows.
+function nearestFolder(path) {
+  let dir = dirName(path);
+  while (dir && !findFolder(tree, dir)) dir = dirName(dir);
+  return dir;
 }
 
 function navButton(label, iconName, href) {
@@ -122,7 +136,7 @@ function fileChrome(path) {
     bar.appendChild(step);
   }
   const all = el("a", "v-dl v-files-btn");
-  all.href = folderHash(dirName(path));
+  all.href = folderHash(nearestFolder(path));
   all.title = "Show the files in this folder";
   all.appendChild(icon("grid"));
   all.appendChild(el("span", "v-btnlabel", "Files"));
@@ -555,7 +569,7 @@ document.addEventListener("keydown", (e) => {
       if (to) { e.preventDefault(); location.hash = fileHash(to.path); }
     } else if (e.key === "Escape") {
       e.preventDefault();
-      location.hash = folderHash(dirName(here));
+      location.hash = folderHash(nearestFolder(here));
     }
   } else if (current.kind === "folder" && e.key === "/" && folderView) {
     e.preventDefault();

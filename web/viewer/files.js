@@ -54,6 +54,15 @@ export function rendererFor(path) {
   return rendererByExt[extOf(path)] || "text";
 }
 
+// isHiddenPath is internal/viewer's rule (TestViewerJSHidesTheSameNames):
+// dotfiles and dot-folders, and operating-system clutter, anywhere in the
+// path. The server leaves them out of the page; this hides them in a page
+// written before it did.
+export function isHiddenPath(path) {
+  return path.split("/").some((seg) => seg.startsWith(".") ||
+    ["__macosx", "thumbs.db", "desktop.ini"].includes(seg.toLowerCase()));
+}
+
 const ARCHIVES = new Set(["zip", "7z", "rar", "tar", "gz", "tgz", "bz2", "xz", "zst", "jar"]);
 const APPS = new Set(["exe", "msi", "dmg", "pkg", "app", "apk", "ipa", "deb", "rpm", "appimage", "iso", "img", "bin", "dll", "so", "dylib", "wasm"]);
 const FONTS = new Set(["woff", "woff2", "ttf", "otf", "eot"]);
