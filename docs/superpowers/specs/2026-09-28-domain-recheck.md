@@ -9,8 +9,8 @@ TXT record exists; when is it re-checked?" (container site
 - `physioprint.org` was **registered at 21:17:40 UTC** (RDAP) and added to the
   site at 21:20:16, the TXT record created a few minutes later. Hetzner's three
   servers answered the TXT authoritatively; `1.1.1.1` saw it.
-- The instance's resolver (`192.103.100.1`, the hosting provider's; Docker's
-  127.0.0.11 forwards to it) answered **NXDOMAIN for every name under
+- The instance's upstream resolver (the host network's; Docker's 127.0.0.11
+  forwards to it) answered **NXDOMAIN for every name under
   `physioprint.org`**, with the `.org` SOA — negative TTL 3600 s. The domain
   had been looked up before `.org` published its delegation: by the add-time
   check and the first sweep, whose nameserver discovery goes through that
