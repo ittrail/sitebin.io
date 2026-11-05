@@ -574,6 +574,60 @@ func TestSweepKeepsSiteOfAccountOnUnconfiguredTier(t *testing.T) {
 	}
 }
 
+// TestSweepWithAnUninitializedProviderKeepsOwnedSites is `sitebin cleanup`,
+// the one-shot command: it sweeps without the server, so the provider the
+// package registered is never Init'ed — no config, no account store. An
+// owned site's plan is then unknown, and an unknown plan keeps the site; it
+// must not dereference the account store that was never opened.
+func TestSweepWithAnUninitializedProviderKeepsOwnedSites(t *testing.T) {
+	ext.Reset()
+	ext.Register(newProvider())
+	defer func() { ext.Reset(); ext.Register(newProvider()) }()
+
+	st, err := store.New(t.TempDir(), "sitebin.example", 1<<20, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	site, _, err := st.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	when := now.Add(-25 * time.Hour)
+	if err := st.Update(site, func(m *store.Meta) error {
+		m.OwnerAccountID = "abcdefghijklmnopqrstuvwxyz" // a real account id: ByID would read its file
+		m.QuotaExpiryDays = 7
+		m.ExpiresAt = &when
+		m.ExpiryFromTier = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := cleanup.Sweep(st, now, cleanup.Options{})
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if removed != 0 {
+		t.Fatalf("removed = %d, want 0: without the extension running, the owner's plan is unknown", removed)
+	}
+	if _, err := st.ByViewID(site.ViewID); err != nil {
+		t.Fatalf("owned site deleted by a sweep that could not ask its plan: %v", err)
+	}
+}
+
+// TestQuotaForUninitializedIsUnknown: an anonymous site has no plan to ask,
+// initialized or not; an owned one is unknown until Init opened the accounts.
+func TestQuotaForUninitializedIsUnknown(t *testing.T) {
+	p := newProvider()
+	if _, known, err := p.QuotaFor(""); err != nil || known {
+		t.Fatalf("QuotaFor(\"\") = known %v, err %v; want unknown with no error", known, err)
+	}
+	if _, known, err := p.QuotaFor("abcdefghijklmnopqrstuvwxyz"); err == nil || known {
+		t.Fatalf("QuotaFor(owner) = known %v, err %v; want an error: the plan cannot be asked", known, err)
+	}
+}
+
 // TestSyncTierRetriesAfterAPartialRestamp pins the order of the two writes.
 // acc.Tier is the only retry marker there is: once it matches the resolved
 // tier, every later syncTier early-returns. Persisting it before the sites are

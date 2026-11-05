@@ -67,6 +67,9 @@ func main() {
 		// process, whose push registry it cannot see, so a gc could race a
 		// push or a delete. The serving process collects in cleanup.Run.
 		// The analytics retention and the salts' end apply here as there.
+		// The enterprise extension is not running here either (Init would
+		// start its loops and register with the stack): an owned site's
+		// plan is unknown, so it is kept, never deleted or restamped.
 		n, err := cleanup.Sweep(st, time.Now(), sweepOptions(cfg, analytics.NewSalts(cfg.DataDir)))
 		if err != nil {
 			slog.Error("cleanup", "err", err)

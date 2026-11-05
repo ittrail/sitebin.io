@@ -385,9 +385,21 @@ func (p *provider) effectiveTierStrict(acc *account.Account) (eeconfig.Tier, err
 	return t, nil
 }
 
+// errNotInitialized is QuotaFor's answer in a process that never ran Init
+// (`sitebin cleanup`, the one-shot sweep): no config was loaded and no
+// account store opened, so an owner's plan cannot be asked. It is an error,
+// never "no such account": the sweep keeps what it cannot ask about.
+var errNotInitialized = errors.New("the enterprise extension is not running in this process (sitebin cleanup); the owner's plan is unknown, the serving process's sweep decides")
+
 // QuotaFor returns the caps the owner's current tier grants. See ext.Provider.
 func (p *provider) QuotaFor(ownerAccountID string) (ext.CreateGrant, bool, error) {
-	if !p.cfg.Enabled() || ownerAccountID == "" {
+	if ownerAccountID == "" {
+		return ext.CreateGrant{}, false, nil
+	}
+	if p.accounts == nil {
+		return ext.CreateGrant{}, false, errNotInitialized
+	}
+	if !p.cfg.Enabled() {
 		return ext.CreateGrant{}, false, nil
 	}
 	acc, err := p.accounts.ByID(ownerAccountID)
