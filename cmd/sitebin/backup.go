@@ -40,6 +40,12 @@ func inFlight(rel string, isDir bool) bool {
 	return isDir && strings.HasPrefix(path.Base(rel), ".replace-") && path.Dir(path.Dir(rel)) == "sites"
 }
 
+// isAnalyticsSalts reports whether rel (slash-separated) is the analytics
+// salts' folder, <data>/analytics/salts. It is never archived: a salt must
+// be gone two days after its date, so that nobody can tie that day's
+// visitor ids to anyone again, and a backup is kept longer than that.
+func isAnalyticsSalts(rel string) bool { return rel == "analytics/salts" }
+
 // inSiteContent reports whether rel (slash-separated) lies inside a site's
 // files/ — content its owner, or a container, controls.
 func inSiteContent(rel string) bool {
@@ -106,7 +112,7 @@ func backupData(root, outPath string) error {
 		if p == "." || p == skipRel {
 			return nil
 		}
-		if inFlight(p, d.IsDir()) {
+		if inFlight(p, d.IsDir()) || isAnalyticsSalts(p) {
 			if d.IsDir() {
 				return fs.SkipDir
 			}

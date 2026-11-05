@@ -233,6 +233,42 @@ func TestBackupSkipsUploadsInFlight(t *testing.T) {
 	}
 }
 
+// The analytics salts are left out: a backup kept longer than two days
+// would keep the salts that make a day's visitor ids linkable again. A
+// site's own analytics folder is data, and stays in.
+func TestBackupSkipsAnalyticsSalts(t *testing.T) {
+	src := t.TempDir()
+	salts := filepath.Join(src, "analytics", "salts")
+	events := filepath.Join(src, "sites", "abc", "analytics", "events")
+	for _, d := range []string{salts, events, filepath.Join(src, "sites", "abc", "files", "analytics", "salts")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(salts, "2026-11-04"), []byte("secret-salt"), 0o600)
+	os.WriteFile(filepath.Join(events, "2026-11-04.jsonl"), []byte(`{"t":1}`+"\n"), 0o644)
+	os.WriteFile(filepath.Join(src, "sites", "abc", "meta.json"), []byte("{}"), 0o644)
+	os.WriteFile(filepath.Join(src, "sites", "abc", "files", "analytics", "salts", "page.html"), []byte("mine"), 0o644)
+
+	archive := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if err := backupData(src, archive); err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	dst := t.TempDir()
+	if err := restoreData(dst, archive); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "analytics", "salts")); !os.IsNotExist(err) {
+		t.Errorf("the salts were archived: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dst, "sites", "abc", "analytics", "events", "2026-11-04.jsonl")); err != nil || len(b) == 0 {
+		t.Errorf("a site's analytics were left out: %q %v", b, err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dst, "sites", "abc", "files", "analytics", "salts", "page.html")); err != nil || string(b) != "mine" {
+		t.Errorf("a site's own folder named analytics/salts was left out: %q %v", b, err)
+	}
+}
+
 // A file that disappears between the walk listing it and the backup reading
 // it — a meta.json.tmp renamed into place, a staging file removed — is
 // skipped; it does not abort the whole backup or corrupt the archive.
