@@ -17,6 +17,23 @@ const rendererByExt = {
   svg: "image", avif: "image", bmp: "image", ico: "image",
   mp4: "video", webm: "video", mov: "video", m4v: "video",
   mp3: "audio", wav: "audio", ogg: "audio", m4a: "audio", flac: "audio",
+  // Files the browser cannot show: a download, never printed as text. Kept
+  // equal to internal/viewer's table by TestViewerJSMirrorsRenderers.
+  exe: "download", msi: "download", dmg: "download", pkg: "download",
+  app: "download", apk: "download", ipa: "download", deb: "download",
+  rpm: "download", appimage: "download",
+  zip: "download", "7z": "download", rar: "download", tar: "download",
+  gz: "download", tgz: "download", bz2: "download", xz: "download",
+  zst: "download", iso: "download", img: "download", bin: "download",
+  dll: "download", so: "download", dylib: "download", jar: "download",
+  wasm: "download", woff: "download", woff2: "download", ttf: "download",
+  otf: "download", eot: "download", psd: "download", ai: "download",
+  sketch: "download", fig: "download", blend: "download",
+  xlsx: "download", xls: "download", pptx: "download", ppt: "download",
+  doc: "download", odt: "download", ods: "download", odp: "download",
+  epub: "download", heic: "download", tif: "download", tiff: "download",
+  mkv: "download", avi: "download", wmv: "download", flv: "download",
+  sqlite: "download", db: "download",
 };
 
 function rendererFor(name) {
@@ -172,12 +189,19 @@ async function renderText(stage, path) {
     loadScript(ASSETS + "/vendor/highlight.min.js"),
     loadCSS(ASSETS + "/vendor/highlight-theme.min.css"),
   ]);
-  const res = await fetch(rawURL(path));
-  if (!res.ok) throw new Error("could not load the file (" + res.status + ")");
-  let text = await res.text();
+  // At most CAP bytes leave the server: a Range request, so an unknown large
+  // file never downloads whole just to be previewed. A server that ignores
+  // Range answers 200 with everything, which is cut below as before.
   const CAP = 2 * 1024 * 1024;
+  const res = await fetch(rawURL(path), { headers: { Range: "bytes=0-" + CAP } });
+  if (!res.ok) throw new Error("could not load the file (" + res.status + ")");
+  let bytes = new Uint8Array(await res.arrayBuffer());
+  // A NUL byte in the first 8 KiB means binary, as git and grep decide it:
+  // offer the download instead of a screen of noise.
+  if (bytes.subarray(0, 8192).includes(0)) { renderDownload(stage, path); return; }
   let truncated = false;
-  if (text.length > CAP) { text = text.slice(0, CAP); truncated = true; }
+  if (bytes.length > CAP) { bytes = bytes.subarray(0, CAP); truncated = true; }
+  const text = new TextDecoder().decode(bytes);
   const box = el("div", "v-code");
   const pre = el("pre");
   const code = el("code", null, text);
@@ -188,6 +212,21 @@ async function renderText(stage, path) {
   stage.appendChild(box);
   try { window.hljs.highlightElement(code); } catch {}
   if (truncated) stage.appendChild(el("p", "v-msg", "Preview truncated — download for the full file."));
+}
+
+// renderDownload is the view for a file the browser cannot show: its name,
+// its size and the download, nothing fetched.
+function renderDownload(stage, path) {
+  const info = cfg.files.find((f) => f.path === path);
+  const box = el("div", "v-download");
+  box.appendChild(el("p", "v-download-name", path.split("/").pop()));
+  if (info) box.appendChild(el("p", "v-download-size", fmtBytes(info.size)));
+  box.appendChild(el("p", "v-download-note", "No preview for this kind of file."));
+  const a = el("a", "v-download-btn", "Download");
+  a.href = rawURL(path);
+  a.setAttribute("download", path.split("/").pop());
+  box.appendChild(a);
+  stage.appendChild(box);
 }
 
 // parseDelimited splits CSV/TSV text into rows, honoring quoted fields.
@@ -344,6 +383,7 @@ async function show(path) {
     else if (kind === "table") await renderTable(target, path);
     else if (kind === "notebook") await renderNotebook(target, path);
     else if (kind === "image" || kind === "video" || kind === "audio") renderMedia(target, path, kind);
+    else if (kind === "download") renderDownload(target, path);
     else await renderText(target, path);
     loading.remove();
   } catch (err) {

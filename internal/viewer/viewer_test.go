@@ -3,6 +3,7 @@ package viewer
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -132,5 +133,50 @@ func TestApplyPicksEntryWhenUnset(t *testing.T) {
 	}
 	if entry != "notes.md" && entry != "report.pdf" {
 		t.Errorf("fallback entry = %q", entry)
+	}
+}
+
+// A file the viewer cannot show is offered as a download, never fetched and
+// shown as text: a 20 MB installer must not arrive as 2 MB of noise.
+func TestRendererForBinaries(t *testing.T) {
+	cases := map[string]string{
+		"setup.EXE": "download", "a.tar.gz": "download", "font.woff2": "download",
+		"book.xlsx": "download", "disk.iso": "download",
+		"main.go": "text", "notes.txt": "text", "a.pdf": "pdf",
+	}
+	for name, want := range cases {
+		if got := RendererFor(name); got != want {
+			t.Errorf("RendererFor(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// The browser decides with its own copy of the table (web/viewer/viewer.js);
+// the two must never drift apart.
+func TestViewerJSMirrorsRenderers(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "web", "viewer", "viewer.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(src)
+	start := strings.Index(s, "const rendererByExt = {")
+	end := strings.Index(s[start:], "};")
+	if start < 0 || end < 0 {
+		t.Fatal("no rendererByExt table in viewer.js")
+	}
+	js := map[string]string{}
+	// A key may be quoted ("7z": a bare 7z is not a JavaScript name).
+	for _, m := range regexp.MustCompile(`"?([a-z0-9]+)"?:\s*"([a-z]+)"`).FindAllStringSubmatch(s[start:start+end], -1) {
+		js["."+m[1]] = m[2]
+	}
+	for ext, kind := range rendererByExt {
+		if js[ext] != kind {
+			t.Errorf("viewer.js: %s = %q, Go says %q", ext, js[ext], kind)
+		}
+	}
+	for ext, kind := range js {
+		if rendererByExt[ext] != kind {
+			t.Errorf("viewer.js has %s = %q, Go says %q", ext, kind, rendererByExt[ext])
+		}
 	}
 }

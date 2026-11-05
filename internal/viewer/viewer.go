@@ -49,6 +49,25 @@ var rendererByExt = map[string]string{
 	".ogg":      "audio",
 	".m4a":      "audio",
 	".flac":     "audio",
+	// Files the browser cannot show: offered as a download, never fetched
+	// and printed as text. Anything else unknown still goes to the text
+	// renderer, which reads at most 2 MiB and turns to the download view
+	// itself when the bytes are binary.
+	".exe": "download", ".msi": "download", ".dmg": "download", ".pkg": "download",
+	".app": "download", ".apk": "download", ".ipa": "download", ".deb": "download",
+	".rpm": "download", ".appimage": "download",
+	".zip": "download", ".7z": "download", ".rar": "download", ".tar": "download",
+	".gz": "download", ".tgz": "download", ".bz2": "download", ".xz": "download",
+	".zst": "download", ".iso": "download", ".img": "download", ".bin": "download",
+	".dll": "download", ".so": "download", ".dylib": "download", ".jar": "download",
+	".wasm": "download", ".woff": "download", ".woff2": "download", ".ttf": "download",
+	".otf": "download", ".eot": "download", ".psd": "download", ".ai": "download",
+	".sketch": "download", ".fig": "download", ".blend": "download",
+	".xlsx": "download", ".xls": "download", ".pptx": "download", ".ppt": "download",
+	".doc": "download", ".odt": "download", ".ods": "download", ".odp": "download",
+	".epub": "download", ".heic": "download", ".tif": "download", ".tiff": "download",
+	".mkv": "download", ".avi": "download", ".wmv": "download", ".flv": "download",
+	".sqlite": "download", ".db": "download",
 }
 
 // RendererFor maps a filename to the viewer renderer module that displays it.
