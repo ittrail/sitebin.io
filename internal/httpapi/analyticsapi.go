@@ -300,6 +300,10 @@ func (a *API) analyticsError(w http.ResponseWriter, site *store.Site, err error)
 		return
 	}
 	a.log.Error("analytics: query failed", "id", site.ViewID, "err", err)
+	if errors.Is(err, analytics.ErrDayTooLarge) {
+		writeError(w, 500, "this day's analytics file is too large to read")
+		return
+	}
 	writeError(w, 500, "could not read the site's analytics")
 }
 

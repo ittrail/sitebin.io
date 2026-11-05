@@ -154,14 +154,16 @@ func openAnalyticsGeo(cfg config.Config, log *slog.Logger) *analytics.Geo {
 	return geo
 }
 
-// newAnalyticsRecorder wires the recorder.
+// newAnalyticsRecorder wires the recorder. It stops writing while the data
+// volume has less than the recorder's floor (2 GiB) free.
 func newAnalyticsRecorder(cfg config.Config, st *store.Store, salts *analytics.Salts, geo *analytics.Geo, log *slog.Logger) *analytics.Recorder {
 	return analytics.NewRecorder(analytics.RecorderConfig{
-		DailyCap: cfg.AnalyticsDailyCap,
-		Salts:    salts,
-		Geo:      geo,
-		WithSite: st.WithStatsLock,
-		Log:      log,
+		DailyCap:  cfg.AnalyticsDailyCap,
+		FreeSpace: func() (uint64, error) { return analytics.DiskFree(cfg.DataDir) },
+		Salts:     salts,
+		Geo:       geo,
+		WithSite:  st.WithStatsLock,
+		Log:       log,
 	})
 }
 

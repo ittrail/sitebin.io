@@ -352,11 +352,11 @@ func TestCountDayClasses(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv, js, cut, err := countDay(path)
-	if err != nil || srv != 2 || js != 1 || !cut {
-		t.Fatalf("countDay = srv %d, js %d, cut %v, %v; want 2, 1, true", srv, js, cut, err)
+	if err != nil || srv.lines != 2 || js.lines != 1 || !cut {
+		t.Fatalf("countDay = srv %d, js %d, cut %v, %v; want 2, 1, true", srv.lines, js.lines, cut, err)
 	}
-	if srv, js, cut, err := countDay(filepath.Join(dir, "missing.jsonl")); err != nil || srv != 0 || js != 0 || cut {
-		t.Fatalf("missing file = %d %d %v %v", srv, js, cut, err)
+	if srv, js, cut, err := countDay(filepath.Join(dir, "missing.jsonl")); err != nil || srv != (classUse{}) || js != (classUse{}) || cut {
+		t.Fatalf("missing file = %+v %+v %v %v", srv, js, cut, err)
 	}
 }
 

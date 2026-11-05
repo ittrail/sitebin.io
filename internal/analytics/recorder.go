@@ -3,7 +3,6 @@ package analytics
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -15,12 +14,15 @@ import (
 )
 
 const (
-	recorderBuffer  = 8192            // hits queued for the writer
-	flushEvery      = time.Second     // a hit waits at most this long
-	flushRecords    = 256             // ...or until this many records wait
-	drainTimeout    = 2 * time.Second // the writer's last drain on shutdown
-	dropLogEvery    = time.Minute     // drops are logged at most this often
-	defaultDailyCap = 50000           // records per site and local day
+	recorderBuffer    = 8192             // hits queued for the writer
+	flushEvery        = time.Second      // a hit waits at most this long
+	flushRecords      = 256              // ...or until this many records wait
+	drainTimeout      = 2 * time.Second  // the writer's last drain on shutdown
+	dropLogEvery      = time.Minute      // drops are logged at most this often
+	defaultDailyCap   = 50000            // records per source, site and local day
+	defaultDailyBytes = 25 << 20         // bytes per source, site and local day
+	defaultMinFree    = 2 << 30          // free bytes on the data volume the recorder leaves alone
+	freeCheckEvery    = 30 * time.Second // the free space is asked at most this often
 )
 
 // Hit is what a request hands the recorder: raw request facts, never
@@ -56,19 +58,28 @@ type Hit struct {
 // fn, when the site is gone. WithSite and Salts are required; Geo may be
 // nil.
 //
-// DailyCap is per source class and per site and local day: the server's
-// records ("srv") and the script's ("js") each get DailyCap, so beacons
-// forged against a site's open endpoint never stop its server-side
-// counting. The disk bound of a site-day is therefore 2×DailyCap lines;
-// imported records ("um") are written by the import, not here, and count
-// against neither. What is over either cap is added to one .over count.
+// DailyCap and DailyBytes are per source class and per site and local day:
+// the server's records ("srv") and the script's ("js") each get DailyCap
+// lines and DailyBytes bytes, so beacons forged against a site's open
+// endpoint never stop its server-side counting. The disk bound of a
+// site-day is therefore 2×DailyBytes; imported records ("um") are written
+// by the import, not here, and count against neither. What is over either
+// bound is added to one .over count.
+//
+// FreeSpace answers the free bytes of the data volume. Below MinFree the
+// recorder writes nothing at all (not even .over): the records are dropped,
+// counted and logged. It is asked at most every 30 seconds; an error is
+// not "full", and nil asks nothing.
 type RecorderConfig struct {
-	DailyCap int // <= 0: 50000; per source class, see above
-	Salts    *Salts
-	Geo      *Geo
-	WithSite func(viewID string, fn func(siteDir string) error) (bool, error)
-	Now      func() time.Time // nil: time.Now
-	Log      *slog.Logger     // nil: slog.Default()
+	DailyCap   int   // <= 0: 50000 lines; per source class, see above
+	DailyBytes int64 // <= 0: 25 MiB; per source class, see above
+	FreeSpace  func() (uint64, error)
+	MinFree    uint64 // 0: 2 GiB
+	Salts      *Salts
+	Geo        *Geo
+	WithSite   func(viewID string, fn func(siteDir string) error) (bool, error)
+	Now        func() time.Time // nil: time.Now
+	Log        *slog.Logger     // nil: slog.Default()
 }
 
 // Recorder turns hits into stored records. Add only queues; one writer
@@ -92,6 +103,15 @@ type Recorder struct {
 	prunedDay   string              // the UTC date salts were last pruned on
 	loggedDrops int64
 	lastDropLog time.Time
+
+	// The free-space floor: the last answer and when it was asked, and the
+	// records dropped under it (logged at most once a minute).
+	freeAskedAt   time.Time
+	freeLow       bool
+	freeErrLogged bool
+	floorDropped  int64
+	loggedFloor   int64
+	lastFloorLog  time.Time
 }
 
 type batchKey struct{ viewID, date string }
@@ -103,16 +123,23 @@ type batchLine struct {
 	js   bool
 }
 
-// dayCount is the number of lines of each capped class in a site's day
+// dayCount is the lines and bytes of each capped class in a site's day
 // file, kept so the cap check does not read the file on every flush. size is
 // the file's size after the last count or append: a file of another size was
 // rewritten (an import) and is counted again. cut is a file ending inside a
 // line.
 type dayCount struct {
 	date    string
-	srv, js int
+	srv, js classUse
 	size    int64
 	cut     bool
+}
+
+// classUse is what one source class takes of a day file: lines, and bytes
+// with their newlines.
+type classUse struct {
+	lines int
+	bytes int64
 }
 
 // NewRecorder returns a recorder; it records nothing until Run is started
@@ -125,6 +152,12 @@ func NewRecorder(c RecorderConfig) *Recorder {
 	}
 	if c.DailyCap <= 0 {
 		c.DailyCap = defaultDailyCap
+	}
+	if c.DailyBytes <= 0 {
+		c.DailyBytes = defaultDailyBytes
+	}
+	if c.MinFree == 0 {
+		c.MinFree = defaultMinFree
 	}
 	if c.Now == nil {
 		c.Now = time.Now
@@ -315,7 +348,7 @@ func (r *Recorder) record(h Hit) (date string, line []byte, ok bool) {
 	rec.C, rec.Rg, rec.Ct = r.c.Geo.Lookup(h.IP)
 	rec.V = VisitorID(salt, h.ViewID, h.IP, h.UA)
 	// rec.Vr stays "": no variants in this version.
-	line, err = json.Marshal(rec)
+	line, err = encodeLine(rec)
 	if err != nil {
 		r.c.Log.Warn("analytics: record not encodable, hit dropped", "site", h.ViewID, "err", err)
 		return "", nil, false
@@ -323,13 +356,53 @@ func (r *Recorder) record(h Hit) (date string, line []byte, ok bool) {
 	return date, line, true
 }
 
-// writeAll writes every batch and empties them.
+// writeAll writes every batch and empties them. Below the free-space floor
+// it writes nothing and counts the records it drops.
 func (r *Recorder) writeAll() {
-	for k, lines := range r.batches {
-		r.writeBatch(k, lines)
+	if len(r.batches) > 0 && r.belowFloor() {
+		n := 0
+		for _, lines := range r.batches {
+			n += len(lines)
+		}
+		r.floorDropped += int64(n)
+		if now := r.c.Now(); r.lastFloorLog.IsZero() || now.Before(r.lastFloorLog) || now.Sub(r.lastFloorLog) >= dropLogEvery {
+			r.c.Log.Warn("analytics: the data volume is almost full, records dropped", "dropped", r.floorDropped-r.loggedFloor, "total", r.floorDropped, "min_free_bytes", r.c.MinFree)
+			r.loggedFloor, r.lastFloorLog = r.floorDropped, now
+		}
+	} else {
+		for k, lines := range r.batches {
+			r.writeBatch(k, lines)
+		}
 	}
 	clear(r.batches)
 	r.pending = 0
+}
+
+// belowFloor reports whether the data volume's free space is under MinFree,
+// asking FreeSpace at most every 30 seconds. An answer that cannot be had
+// is not "below": analytics keeps writing, and the error is logged once
+// until an answer comes again.
+func (r *Recorder) belowFloor() bool {
+	if r.c.FreeSpace == nil {
+		return false
+	}
+	now := r.c.Now()
+	if !r.freeAskedAt.IsZero() && !now.Before(r.freeAskedAt) && now.Sub(r.freeAskedAt) < freeCheckEvery {
+		return r.freeLow
+	}
+	r.freeAskedAt = now
+	free, err := r.c.FreeSpace()
+	if err != nil {
+		if !r.freeErrLogged {
+			r.c.Log.Warn("analytics: the data volume's free space is unknown, records are written", "err", err)
+			r.freeErrLogged = true
+		}
+		r.freeLow = false
+		return false
+	}
+	r.freeErrLogged = false
+	r.freeLow = free < r.c.MinFree
+	return r.freeLow
 }
 
 // writeBatch writes one (site, day) batch under the site's stats lock. A
@@ -354,8 +427,9 @@ func (r *Recorder) writeBatch(k batchKey, lines []batchLine) {
 }
 
 // appendDay runs under the site's stats lock, so the site folder exists
-// and no delete can run. It appends the lines their class's daily cap still
-// has room for, in order, and counts the rest in the day's .over file.
+// and no delete can run. It appends the lines their class's daily cap and
+// byte budget still have room for, in order, and counts the rest in the
+// day's .over file.
 func (r *Recorder) appendDay(viewID, siteDir, date string, lines []batchLine) error {
 	if err := os.MkdirAll(eventsDir(siteDir), 0o755); err != nil {
 		return err
@@ -383,10 +457,12 @@ func (r *Recorder) appendDay(viewID, siteDir, date string, lines []batchLine) er
 		if l.js {
 			n = &dc.js
 		}
-		if *n >= r.c.DailyCap {
+		size := int64(len(l.line)) + 1
+		if n.lines >= r.c.DailyCap || n.bytes+size > r.c.DailyBytes {
 			continue
 		}
-		*n++
+		n.lines++
+		n.bytes += size
 		if keep == 0 && dc.cut { // never glue a record onto a line a crash cut short
 			buf.WriteByte('\n')
 		}
@@ -412,7 +488,7 @@ func (r *Recorder) appendDay(viewID, siteDir, date string, lines []batchLine) er
 	r.days[viewID] = dc
 	if over := len(lines) - keep; over > 0 {
 		if err := addOver(siteDir, date, over); err != nil {
-			return fmt.Errorf("counting %d records over the daily cap: %w", over, err)
+			return fmt.Errorf("counting %d records over the daily bounds: %w", over, err)
 		}
 	}
 	return nil

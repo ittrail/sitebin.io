@@ -807,7 +807,13 @@ must keep:
   drops). No other analytics work on the serving path.
 - **The recorder writes only inside `store.WithStatsLock` and never creates a
   site folder**, so a delete is never undone by a late flush. The daily cap
-  counts per source (server / script); imports are uncapped.
+  (lines) and a 25 MiB byte budget count per source (server / script);
+  imports are uncapped.
+- **Stored bytes stay bounded.** Lines are encoded without HTML escaping
+  (`encodeLine`: a `<` is one byte, not six). Below 2 GiB free on the data
+  volume (`DiskFree`, asked at most every 30 s) the recorder writes nothing.
+  The engine refuses a day file over 256 MiB (`ErrDayTooLarge`, a 500 that
+  says so) instead of reading it into memory.
 - **`vr` is the A/B hook**, always `""` for now; do not fill it without the
   design.
 - **The import runs in the server**: the CLI streams to the loopback

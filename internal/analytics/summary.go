@@ -332,7 +332,7 @@ func readSummary(siteDir, date string) *Summary {
 // same summary write the same content. It never creates the events
 // directory, so a site deleted meanwhile is not recreated.
 func writeSummary(siteDir, date string, s *Summary) error {
-	b, err := json.Marshal(s)
+	b, err := encodeLine(s)
 	if err != nil {
 		return err
 	}

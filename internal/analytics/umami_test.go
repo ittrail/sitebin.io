@@ -406,8 +406,8 @@ func TestRecorderAndImportShareADay(t *testing.T) {
 	if _, err := importInto(t, e, dir, export.String(), time.Time{}, 0, umamiAt(t, "2026-11-05T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
-	if srv, js, _, err := countDay(DayFile(dir, day)); err != nil || srv != 2 || js != 0 {
-		t.Fatalf("after the import: srv %d, js %d, %v; want 2, 0", srv, js, err)
+	if srv, js, _, err := countDay(DayFile(dir, day)); err != nil || srv.lines != 2 || js.lines != 0 {
+		t.Fatalf("after the import: srv %d, js %d, %v; want 2, 0", srv.lines, js.lines, err)
 	}
 
 	for range 2 {
@@ -677,5 +677,23 @@ func TestImportReportsMergeByName(t *testing.T) {
 	bad := []UmamiReport{{Type: "funnel", Name: "Kurz", Parameters: json.RawMessage(`{"steps":[{"type":"event","value":"a"}],"window":60}`)}}
 	if _, funnels, _, skipped := MergeUmamiReports(store.Analytics{}, bad); len(funnels) != 0 || len(skipped) != 1 || !strings.Contains(skipped[0], "steps") {
 		t.Errorf("one-step funnel: added %q, skipped %q", funnels, skipped)
+	}
+}
+
+// The import writes a "<" as the one byte it is, as the recorder does.
+func TestImportStoresAngleBracketsAsTheyCame(t *testing.T) {
+	e := newRecorderEnv(t)
+	dir := e.site(t, testView)
+	ev := umamiView(umamiAt(t, "2026-11-03T10:00:00Z"), "s", "/"+strings.Repeat("<", 200))
+	ev.PageTitle = strings.Repeat("<", 200)
+	if _, err := importInto(t, e, dir, umamiLine(t, ev), time.Time{}, 0, umamiAt(t, "2026-11-05T00:00:00Z")); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(DayFile(dir, "2026-11-03"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, escapedLT) || !bytes.Contains(raw, []byte(strings.Repeat("<", 200))) {
+		t.Fatalf("the import escaped a <: %.120s", raw)
 	}
 }

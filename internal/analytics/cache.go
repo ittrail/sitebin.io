@@ -4,8 +4,11 @@ import (
 	"cmp"
 	"container/list"
 	"errors"
+	"fmt"
+	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"sync"
@@ -158,9 +161,21 @@ func (e *Engine) drop(path string) {
 	delete(e.loading, path)
 }
 
-// parseDay reads and indexes a day file of fileSize bytes; a file gone
-// meanwhile is nil.
+// ErrDayTooLarge is a day file over the read limit (256 MiB): it is refused
+// rather than read into memory. The recorder never writes one (its byte
+// budget is far below); only an import, which is uncapped, could.
+var ErrDayTooLarge = errors.New("analytics: this day's analytics file is too large to read")
+
+// maxDayFile is the read limit of a day file; tests lower it.
+var maxDayFile int64 = 256 << 20
+
+// parseDay reads and indexes a day file of fileSize bytes (its size when
+// the caller looked; no more is read); a file gone meanwhile is nil. A file
+// over the read limit is ErrDayTooLarge.
 func parseDay(path string, fileSize int64) (*parsedDay, error) {
+	if fileSize > maxDayFile {
+		return nil, fmt.Errorf("%w: %s is %d bytes, the limit is %d", ErrDayTooLarge, filepath.Base(path), fileSize, maxDayFile)
+	}
 	f, err := os.Open(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -169,7 +184,7 @@ func parseDay(path string, fileSize int64) (*parsedDay, error) {
 		return nil, err
 	}
 	defer f.Close()
-	recs, err := readRecords(f)
+	recs, err := readRecords(io.LimitReader(f, fileSize))
 	if err != nil {
 		return nil, err
 	}

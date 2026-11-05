@@ -495,6 +495,29 @@ func TestAnalyticsOverviewEndpoint(t *testing.T) {
 	}
 }
 
+// A day file over the read limit (256 MiB) is a 500 that says so, never
+// read into memory. The file is extended without being written, so it takes
+// no time and, where the file system can, no space.
+func TestAnalyticsRefusesADayTooLargeToRead(t *testing.T) {
+	now := time.Now()
+	e := newEnv(t, nil)
+	site, edit, pw := seededSite(t, e, now)
+	if err := os.Truncate(analytics.DayFile(site.Dir(), dateOf(daysAgo(now, 3, 0, 0))), 256<<20+1); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/overview?" + rangeOf(now, 4, 2), "/table?dim=path&" + rangeOf(now, 3, 3), "/funnels?" + rangeOf(now, 3, 2)} {
+		w := e.analyticsCall(t, "GET", edit, pw, path, nil)
+		if w.Code != 500 || !strings.Contains(w.Body.String(), "this day's analytics file is too large to read") {
+			t.Errorf("%s: %d %s", path, w.Code, w.Body)
+		}
+	}
+	// A range that does not reach it (nor pads to it: one day on each side
+	// is read for a zone change) still answers.
+	if w := e.analyticsCall(t, "GET", edit, pw, "/overview?"+rangeOf(now, 1, 1), nil); w.Code != 200 {
+		t.Errorf("another day: %d %s", w.Code, w.Body)
+	}
+}
+
 // The site's zone, not the server's, decides what a date means.
 func TestAnalyticsDatesAreTheSitesLocalDays(t *testing.T) {
 	e := newEnv(t, nil)

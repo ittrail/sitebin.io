@@ -367,7 +367,7 @@ func (im *importer) flush(date string) error {
 	delete(im.pending, date)
 	add := make([]dayLine, len(recs))
 	for i, r := range recs {
-		b, err := json.Marshal(r)
+		b, err := encodeLine(r)
 		if err != nil {
 			return err
 		}

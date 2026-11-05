@@ -80,21 +80,21 @@ func readRecords(r io.Reader) ([]Record, error) {
 	}
 }
 
-// countDay counts the lines of a day file per capped class, a cut last line
-// included, and reports whether the file ends inside a line (so the next
-// append must start a new one). A missing file has no lines.
+// countDay counts the lines and bytes of a day file per capped class, a cut
+// last line included, and reports whether the file ends inside a line (so
+// the next append must start a new one). A missing file has no lines.
 //
 // The class is the record's "s": the script's ("js") and the server's
 // ("srv") lines are counted apart, an import's ("um") in neither. A line
 // whose source cannot be read (one a crash cut short) counts as the
 // server's, so no line escapes the bound.
-func countDay(path string) (srv, js int, cut bool, err error) {
+func countDay(path string) (srv, js classUse, cut bool, err error) {
 	f, err := os.Open(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return 0, 0, false, nil
+		return classUse{}, classUse{}, false, nil
 	}
 	if err != nil {
-		return 0, 0, false, err
+		return classUse{}, classUse{}, false, err
 	}
 	defer f.Close()
 	br := bufio.NewReaderSize(f, 64<<10)
@@ -107,12 +107,17 @@ func countDay(path string) (srv, js int, cut bool, err error) {
 			}
 			if l := bytes.TrimSpace(line); len(l) > 0 {
 				_ = json.Unmarshal(l, &rec) // a line that does not parse has no source
+				var n *classUse
 				switch rec.S {
 				case "js":
-					js++
+					n = &js
 				case "um":
 				default:
-					srv++
+					n = &srv
+				}
+				if n != nil {
+					n.lines++
+					n.bytes += int64(len(line))
 				}
 			}
 		}
@@ -120,9 +125,24 @@ func countDay(path string) (srv, js int, cut bool, err error) {
 			return srv, js, cut, nil
 		}
 		if err != nil {
-			return 0, 0, false, err
+			return classUse{}, classUse{}, false, err
 		}
 	}
+}
+
+// encodeLine is v as one line of JSON, without the trailing newline and
+// without HTML escaping: a visitor's "<" is stored as the one byte it is,
+// never as the six of "\u003c", so a line's size follows the bounds its
+// fields were cut to. Day files are never served; the API encodes what it
+// answers again.
+func encodeLine(v any) ([]byte, error) {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
 }
 
 // addOver adds n to a day's over-the-cap count, written through a temp file
