@@ -124,24 +124,19 @@ func umamiVisitor(sessionID, date string) string {
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
-// umamiReferrer is the referrer as host+path (no query), cut at 200, or ""
-// when it is internal: from one of the site's addresses or from the host the
-// event was recorded on. Umami stores a referrer's host without its "www.",
-// so hosts compare without it.
+// umamiReferrer is Umami's referrer domain and path as CleanReferrer stores
+// a recorded referrer (host without "www.", path without query, cut at 200),
+// or "" when it is internal: from one of the site's addresses or from the
+// host the event was recorded on.
 func umamiReferrer(domain, path, hostname string, own []string) string {
-	host := strings.ToLower(strings.TrimSpace(domain))
-	if host == "" {
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
 		return ""
 	}
-	bare := strings.TrimPrefix(host, "www.")
-	internal := func(o string) bool { return strings.TrimPrefix(ownHost(o), "www.") == bare }
-	if internal(hostname) || slices.ContainsFunc(own, internal) {
-		return ""
+	if path != "" && !strings.HasPrefix(path, "/") {
+		path = "/" + path
 	}
-	if i := strings.IndexAny(path, "?#"); i >= 0 {
-		path = path[:i]
-	}
-	return cutRunes(host+path, maxReferrer)
+	return CleanReferrer("https://"+domain+path, append(slices.Clip(own), hostname))
 }
 
 // umamiQuery keeps the utm_* columns, the site's own names from url_query,

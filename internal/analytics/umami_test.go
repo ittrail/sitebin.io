@@ -142,6 +142,25 @@ func TestConvertUmamiMapsNames(t *testing.T) {
 	if _, r := ConvertUmami(ext, vienna, own, nil); r.R != "google.com/search" {
 		t.Errorf("r = %q, want google.com/search", r.R)
 	}
+	// It goes through CleanReferrer, as a recorded one does: without a
+	// leading "www.", the host in lower case, and the same as the recorder
+	// stores for that referrer.
+	for _, c := range []struct{ domain, path, want string }{
+		{"www.Google.com", "/search", "google.com/search"},
+		{"news.example", "story#top", "news.example/story"},
+		{"bad host/x", "/", ""},
+	} {
+		x := ev
+		x.ReferrerDomain, x.ReferrerPath = c.domain, c.path
+		if _, r := ConvertUmami(x, vienna, own, nil); r.R != c.want {
+			t.Errorf("referrer %q %q: r = %q, want %q", c.domain, c.path, r.R, c.want)
+		}
+	}
+	imp := ev
+	imp.ReferrerDomain, imp.ReferrerPath = "www.google.com", "/search"
+	if _, r := ConvertUmami(imp, vienna, own, nil); r.R != CleanReferrer("https://www.google.com/search?q=x", own) {
+		t.Errorf("imported %q, recorded %q: the same referrer must group together", r.R, CleanReferrer("https://www.google.com/search?q=x", own))
+	}
 
 	// An event: its name and bounded data.
 	e := ev

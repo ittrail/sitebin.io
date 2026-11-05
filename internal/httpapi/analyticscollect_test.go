@@ -117,7 +117,7 @@ func TestAuthzRecordsBrowserNavigation(t *testing.T) {
 	if len(r.Q) != 1 || r.Q["utm_source"] != "news" || !slices.Equal(r.Ck, []string{"gclid"}) {
 		t.Errorf("query = %v, click ids = %v", r.Q, r.Ck)
 	}
-	if r.R != "www.google.com/search" {
+	if r.R != "google.com/search" {
 		t.Errorf("referrer = %q", r.R)
 	}
 	if r.B != "Chrome" || r.O != "Windows" || r.Dv != "desktop" || r.L != "de-AT" {

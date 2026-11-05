@@ -102,7 +102,7 @@ func TestSendRecordsEventInServerMode(t *testing.T) {
 	if len(r.Q) != 1 || r.Q["utm_campaign"] != "herbst" || len(r.Ck) != 1 || r.Ck[0] != "gclid" {
 		t.Errorf("query = %v, click ids = %v", r.Q, r.Ck)
 	}
-	if r.R != "www.google.com/search" || r.Tg != "blau" || r.L != "de-AT" || r.Ti != "About" || r.Sc != "1920x1080" {
+	if r.R != "google.com/search" || r.Tg != "blau" || r.L != "de-AT" || r.Ti != "About" || r.Sc != "1920x1080" {
 		t.Errorf("referrer/tag/language/title/screen = %q %q %q %q %q", r.R, r.Tg, r.L, r.Ti, r.Sc)
 	}
 	if at := time.UnixMilli(r.T); at.Before(since.Add(-time.Second)) || at.After(time.Now().Add(time.Second)) {

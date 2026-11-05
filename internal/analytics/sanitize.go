@@ -101,16 +101,23 @@ func ownHost(o string) string {
 	return strings.ToLower(strings.TrimSpace(o))
 }
 
+// withoutWWW is a lower-case host without a leading "www.", as Umami stores
+// a referrer's host.
+func withoutWWW(host string) string { return strings.TrimPrefix(host, "www.") }
+
 // CleanReferrer returns the referrer as host+path (no query, no fragment,
-// cut at 200), or "" when it is empty, unparseable or one of the site's own
-// addresses. own entries are a host or a host/path address; only the host
-// part counts. A non-http(s) referrer is kept as scheme://host.
+// cut at 200), the host in lower case and without a leading "www." (as
+// Umami stores it, so imported and recorded rows group together), or ""
+// when it is empty, unparseable, scheme-relative ("//host/x") or from one of
+// the site's own addresses. own entries are a host or a host/path address;
+// only the host part counts, and "www." is ignored on both sides. A
+// non-http(s) referrer is kept as scheme://host.
 func CleanReferrer(ref string, own []string) string {
 	if ref == "" {
 		return ""
 	}
 	u, err := url.Parse(ref)
-	if err != nil || u.Host == "" {
+	if err != nil || u.Scheme == "" || u.Host == "" {
 		return ""
 	}
 	host := strings.ToLower(u.Hostname())
@@ -118,14 +125,14 @@ func CleanReferrer(ref string, own []string) string {
 		return ""
 	}
 	for _, o := range own {
-		if ownHost(o) == host {
+		if withoutWWW(ownHost(o)) == withoutWWW(host) {
 			return ""
 		}
 	}
 	scheme := strings.ToLower(u.Scheme)
 	var out string
 	if scheme == "http" || scheme == "https" {
-		out = u.Host + u.Path
+		out = withoutWWW(strings.ToLower(u.Host)) + u.Path
 	} else {
 		out = scheme + "://" + u.Host
 	}

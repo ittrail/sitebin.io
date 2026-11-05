@@ -37,14 +37,24 @@ func TestKeepQuery(t *testing.T) {
 }
 
 func TestCleanReferrer(t *testing.T) {
-	own := []string{"www.morgenfertig.at", "shop.example.com/store"}
+	own := []string{"www.morgenfertig.at", "shop.example.com/store", "blog.example.org"}
 	cases := []struct{ ref, want string }{
-		{"https://www.google.com/search?q=x", "www.google.com/search"},
-		{"https://www.google.com/a#frag", "www.google.com/a"},
+		// The host is kept without a leading "www.", as Umami stores it.
+		{"https://www.google.com/search?q=x", "google.com/search"},
+		{"https://www.google.com/a#frag", "google.com/a"},
+		{"https://WWW.Google.COM/Path", "google.com/Path"},
+		{"http://www2.example.net/x", "www2.example.net/x"},
+		{"https://wwwexample.net/x", "wwwexample.net/x"},
 		{"https://www.morgenfertig.at/a", ""},
 		{"https://WWW.MorgenFertig.at:8443/a", ""},
+		// The own-address check ignores "www." on both sides.
+		{"https://morgenfertig.at/a", ""},
+		{"https://www.blog.example.org/a", ""},
 		{"https://shop.example.com/other", ""},
 		{"android-app://com.google.android.gm/", "android-app://com.google.android.gm"},
+		// A scheme-relative referrer names no scheme: unparseable.
+		{"//evil.example/x", ""},
+		{"//www.google.com/search", ""},
 		{"", ""},
 		{"not a url", ""},
 	}
