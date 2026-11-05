@@ -739,4 +739,18 @@ func TestConvertUmamiClickIDMarkers(t *testing.T) {
 	if _, rec := ConvertUmami(fromSQL, time.UTC, nil, nil); !reflect.DeepEqual(rec.Ck, []string{"gclid"}) || rec.Q["utm_source"] != "ads" {
 		t.Errorf("from the SQL: ck %q, q %v", rec.Ck, rec.Q)
 	}
+	// The SQL also replaces a click id's value in url_query with "1", keeping
+	// its name: gbraid and wbraid have no column, so the name is all there is.
+	line = `{"created_at":"2026-11-03T10:00:00Z","event_type":1,"hostname":"example.at","url_path":"/","url_query":"utm_source=google&gclid=1&gbraid=1&wbraid=1&keyword=kaese","session_id":"s","gclid":"1"}`
+	fromSQL = UmamiEvent{}
+	if err := json.Unmarshal([]byte(line), &fromSQL); err != nil {
+		t.Fatal(err)
+	}
+	_, rec = ConvertUmami(fromSQL, time.UTC, nil, []string{"keyword"})
+	if want := []string{"gclid", "gbraid", "wbraid"}; !reflect.DeepEqual(rec.Ck, want) {
+		t.Errorf("markers in url_query: ck %q, want %q", rec.Ck, want)
+	}
+	if want := map[string]string{"utm_source": "google", "keyword": "kaese"}; !reflect.DeepEqual(rec.Q, want) {
+		t.Errorf("markers in url_query: q %v, want %v", rec.Q, want)
+	}
 }

@@ -719,9 +719,9 @@ private website repo's internal docs.
    database.
 2. Export the events with the documented `copy (select json_build_object(…)
    …) to stdout`, and the reports likewise. Click ids leave Umami only as
-   presence markers (`"1"`), never their values; `url_query` is exported
-   whole, used only to pick out `utm_*` and the site's own query names, and
-   deleted with the copies.
+   presence markers (`"1"`), never their values, in their own columns and
+   in `url_query` alike; the rest of `url_query` is used only to pick out
+   `utm_*` and the site's own query names, and deleted with the copies.
 3. Copy both files to the Sitebin host, then `docker cp` them into the
    container.
 4. Run the import. Check the dashboard against Umami's totals for a few
@@ -778,9 +778,9 @@ private website repo's internal docs.
   3. put `"analytics": true` in `tiers.json` for pro, studio, admin and
      unlimited, and set `SITEBIN_ANALYTICS_TIMEZONE=Europe/Vienna` and
      `SITEBIN_ANALYTICS_GEOIP`, with the DB-IP file plus its cron;
-  4. restart, then run `docker exec sitebin sitebin cleanup` once, so the
-     stamp is backfilled at once rather than at the next sweep; verify on
-     a test site:
+  4. restart, then wait for the first sweep (`SITEBIN_CLEANUP_INTERVAL`,
+     10 minutes by default), which backfills the stamp; verify on a test
+     site:
      - server mode counts a browser and not curl;
      - script mode receives events;
      - the opt-out works;
@@ -941,3 +941,15 @@ they differ, this block wins.
 - **Privacy paragraph.** The text the tab offers to copy says the analytics
   set no cookies except one when a visitor asks not to be counted, and that
   the site may also count actions (events) such as form submissions.
+- **No click-id value in the export's `url_query` either.** The runbook's
+  SQL exported `url_query` whole, so a click id in the query left Umami with
+  its value although its column did not. It now replaces the value of every
+  parameter named like a click id (any case) with `1`, keeping the name for
+  `gbraid` / `wbraid`, which have no Umami column; it drops a pair with a
+  percent-encoded name or a `;`, and a leading `?`.
+- **Ship step 4 waits for the sweep.** `sitebin cleanup` was the backfill,
+  but the one-shot never initializes the enterprise extension, so it cannot
+  resolve an owner's plan: it crashed on the first owned site, and now keeps
+  every owned site unchanged (a fix of its own). The stamp comes from the
+  serving process's first sweep, at most one cleanup interval after the
+  restart.

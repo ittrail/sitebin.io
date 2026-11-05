@@ -37,11 +37,11 @@ What the import does:
 
 **What leaves Umami.** The export holds per-visit data (session and visit
 ids, city, referrers). Click ids leave Umami only as a presence marker
-(`"1"`), never their values. `url_query` is exported in full to the machine
-you run the export on: the import uses it only to pick out the `utm_*`
-parameters and the site's own query names, and it is deleted with the
-copies. Keep the copies only as long as these steps need them, and delete
-them at the end (step 6).
+(`"1"`), never their values: in their own columns and in `url_query` alike.
+The rest of `url_query` goes to the machine you run the export on: the
+import uses it only to pick out the `utm_*` parameters and the site's own
+query names, and it is deleted with the copies. Keep the copies only as
+long as these steps need them, and delete them at the end (step 6).
 
 ## Before you start
 
@@ -96,7 +96,15 @@ copy (
     'event_name', e.event_name,
     'hostname', e.hostname,
     'url_path', e.url_path,
-    'url_query', e.url_query,
+    'url_query', (
+      select string_agg(case
+               when lower(split_part(p, '=', 1)) in ('gclid', 'gbraid', 'wbraid', 'fbclid', 'msclkid', 'ttclid', 'li_fat_id', 'twclid')
+               then split_part(p, '=', 1) || '=1'
+               else p
+             end, '&' order by n)
+      from unnest(string_to_array(ltrim(e.url_query, '?'), '&')) with ordinality as qp(p, n)
+      where p <> '' and strpos(split_part(p, '=', 1), '%') = 0 and strpos(p, ';') = 0
+    ),
     'referrer_domain', e.referrer_domain,
     'referrer_path', e.referrer_path,
     'page_title', e.page_title,
@@ -168,12 +176,17 @@ Why the SQL looks like this:
   (stored as `"true"`/`"false"`) become booleans, dates become their
   RFC 3339 text, strings and arrays stay strings.
 - **Click ids are presence markers**: each click-id column is `"1"` when
-  the event had one and null otherwise, so no click id's value leaves
-  Umami. There is no `referrer_query` either: Sitebin never stores either
-  value.
-- **`url_query` is exported whole**, because the site's own query names
-  (its settings' "query parameters to keep") can only be picked from it.
-  The importer keeps those and the `utm_*` values and drops the rest.
+  the event had one and null otherwise. There is no `referrer_query`
+  either: Sitebin never stores either value.
+- **`url_query` is exported with every click id's value replaced by `1`**.
+  The site's own query names (its settings' "query parameters to keep") can
+  only be picked from it, and so can `gbraid` and `wbraid`, which have no
+  Umami column, so the names stay: a parameter named like a click id, in
+  any case, keeps its name and loses its value. A pair whose name is
+  percent-encoded (it could spell a click id) or that holds a `;` (the
+  importer skips it anyway) is left out whole, and a leading `?` is
+  dropped. So no click id's value leaves Umami. The importer keeps the
+  site's own names and the `utm_*` values and drops the rest.
 
 Run both:
 
@@ -183,6 +196,8 @@ $UMAMI_PSQL < umami-reports.sql > umami-reports.json
 wc -l umami-events.jsonl
 head -c 600 umami-events.jsonl; echo
 cat umami-reports.json
+# no click id's value in the export: must print 0
+grep -c -i -E '(gclid|gbraid|wbraid|fbclid|msclkid|ttclid|li_fat_id|twclid)=([^1&"]|1[^&"])' umami-events.jsonl
 ```
 
 `wc -l` is the number of events; it should match Umami's count for the
