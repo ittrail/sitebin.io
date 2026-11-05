@@ -247,6 +247,36 @@ if ($vsite) {
     Assert "switch back to viewer with new entry" ($r.code -eq 200) "got $($r.code): $($r.body)"
     $r = Req "GET" "$($vsite.view_url)/"
     Assert "wrapper regenerated for markdown entry" ($r.body -match '"entry":"notes.md"') "body: $($r.body.Substring(0,[Math]::Min(200,$r.body.Length)))"
+
+    # entry_file "" makes the file list the start page
+    $r = Req "PUT" "$origin/api/sites/$vedit" @("-H", "X-Edit-Password: $($vsite.edit_password)", "-H", "Content-Type: application/json", "--data", (JsonBody '{"entry_file":""}'))
+    Assert "entry_file empty is accepted" ($r.code -eq 200) "got $($r.code): $($r.body)"
+    $r = Req "GET" "$($vsite.view_url)/"
+    Assert "the wrapper then opens on the file list" ($r.body -match '"entry":""')
+}
+
+# ---------- viewer file list ----------
+
+$lsite = CreateSite @(
+    "-F", "mode=viewer",
+    "-F", "files=@$work\sample.pdf;filename=docs/a.pdf",
+    "-F", "files=@$fixtures\sample.md;filename=docs/b.md",
+    "-F", "files=@$fixtures\sample.txt;filename=top.txt",
+    "-F", "files=@$fixtures\sample.txt;filename=.secret"
+)
+Assert "create viewer site without an entry file" ($null -ne $lsite)
+if ($lsite) {
+    $r = Req "GET" "$($lsite.view_url)/"
+    Assert "several files and no entry open on the file list" ($r.body -match '"entry":""') "code $($r.code)"
+    Assert "the list carries modification times" ($r.body -match '"mtime":\d+')
+    Assert "the list names files in folders" ($r.body -match '"docs/a.pdf"' -and $r.body -match '"top.txt"')
+    Assert "the list leaves dotfiles out of the page" (-not ($r.body -match '\.secret'))
+    $r = Req "GET" "$($lsite.view_url)/_raw/.secret"
+    Assert "a hidden file is still served at /_raw/" ($r.code -eq 200) "code $($r.code)"
+    foreach ($m in @("files.js", "browser.js")) {
+        $r = Req "GET" "$($lsite.view_url)/_sitebin/assets/viewer/$m"
+        Assert "viewer module $m on the site origin" ($r.code -eq 200 -and $r.body -match "export") "code $($r.code)"
+    }
 }
 
 # ---------- docx viewer ----------
