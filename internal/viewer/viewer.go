@@ -100,10 +100,20 @@ var wrapperTmpl = template.Must(template.New("wrapper").Parse(`<!doctype html>
 </html>
 `))
 
+// wrapperConfig is what the wrapper page hands viewer.js. Entry "" opens the
+// file list; otherwise the named file opens first.
 type wrapperConfig struct {
-	Entry    string           `json:"entry"`
-	Renderer string           `json:"renderer"`
-	Files    []store.FileInfo `json:"files"`
+	Entry    string        `json:"entry"`
+	Renderer string        `json:"renderer"`
+	Files    []wrapperFile `json:"files"`
+}
+
+// wrapperFile is one file of the list. It is the wrapper's own shape, not
+// store.FileInfo, which is the API's and MCP's output.
+type wrapperFile struct {
+	Path  string `json:"path"`
+	Size  int64  `json:"size"`
+	Mtime int64  `json:"mtime"` // Unix seconds
 }
 
 // Apply converts the site's files/ tree to viewer layout and (re)generates
@@ -153,35 +163,32 @@ func Regenerate(site *store.Site) (string, error) {
 }
 
 func generate(site *store.Site) (string, error) {
-	files, err := listRaw(site)
+	all, err := listRaw(site)
 	if err != nil {
 		return "", err
 	}
-	entry := site.Meta.EntryFile
-	found := false
-	for _, f := range files {
-		if f.Path == entry {
-			found = true
-			break
+	files := make([]wrapperFile, 0, len(all))
+	for _, f := range all {
+		if !isHiddenPath(f.Path) {
+			files = append(files, f)
 		}
 	}
-	if !found {
-		entry = ""
-		if len(files) > 0 {
-			entry = files[0].Path
-		}
+	entry := startPage(site.Meta.EntryFile, all, files)
+	renderer := ""
+	if entry != "" {
+		renderer = RendererFor(entry)
 	}
 	cfgJSON, err := json.Marshal(wrapperConfig{
 		Entry:    entry,
-		Renderer: RendererFor(entry),
+		Renderer: renderer,
 		Files:    files,
 	})
 	if err != nil {
 		return "", err
 	}
-	title := entry
-	if title == "" {
-		title = "Sitebin viewer"
+	title := path.Base(entry)
+	if entry == "" {
+		title = "Files"
 	}
 	var buf strings.Builder
 	err = wrapperTmpl.Execute(&buf, map[string]any{
@@ -233,10 +240,46 @@ func Remove(site *store.Site) error {
 	return os.Remove(rawDir)
 }
 
+// startPage decides what the viewer opens on. "" is the file list: the
+// owner's explicit choice, never replaced. A chosen file that exists opens
+// first, even one the list hides. A choice that names no file (the creation
+// default index.html, a deleted file) falls back: the one visible file when
+// there is exactly one, else the list.
+func startPage(chosen string, all, visible []wrapperFile) string {
+	if chosen == "" {
+		return ""
+	}
+	for _, f := range all {
+		if f.Path == chosen {
+			return chosen
+		}
+	}
+	if len(visible) == 1 {
+		return visible[0].Path
+	}
+	return ""
+}
+
+// isHiddenPath reports whether the list leaves a file out: any segment that
+// is a dotfile or dot-folder (the .sitebin-* markers among them), or
+// operating-system clutter. Hidden files are still served at /_raw/.
+func isHiddenPath(rel string) bool {
+	for _, seg := range strings.Split(rel, "/") {
+		if strings.HasPrefix(seg, ".") {
+			return true
+		}
+		switch strings.ToLower(seg) {
+		case "__macosx", "thumbs.db", "desktop.ini":
+			return true
+		}
+	}
+	return false
+}
+
 // listRaw lists files under _raw with slash paths relative to _raw.
-func listRaw(site *store.Site) ([]store.FileInfo, error) {
+func listRaw(site *store.Site) ([]wrapperFile, error) {
 	root := filepath.Join(site.FilesDir(), "_raw")
-	var out []store.FileInfo
+	var out []wrapperFile
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
@@ -249,17 +292,17 @@ func listRaw(site *store.Site) ([]store.FileInfo, error) {
 		if err != nil {
 			return err
 		}
-		out = append(out, store.FileInfo{Path: filepath.ToSlash(rel), Size: fi.Size()})
+		out = append(out, wrapperFile{Path: filepath.ToSlash(rel), Size: fi.Size(), Mtime: fi.ModTime().Unix()})
 		return nil
 	})
 	if os.IsNotExist(err) {
-		return []store.FileInfo{}, nil
+		return []wrapperFile{}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
 	if out == nil {
-		out = []store.FileInfo{}
+		out = []wrapperFile{}
 	}
 	return out, nil
 }

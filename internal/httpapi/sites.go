@@ -209,9 +209,13 @@ func (a *API) writeSettings(site *store.Site, set updateSet, expires **time.Time
 			m.Mode = *set.Mode
 		}
 		if set.EntryFile != nil {
-			clean, err := store.CleanRelPath(*set.EntryFile)
-			if err != nil {
-				return &apiError{400, "invalid entry_file path"}
+			// "" opens the File viewer on its file list.
+			clean := ""
+			if *set.EntryFile != "" {
+				var err error
+				if clean, err = store.CleanRelPath(*set.EntryFile); err != nil {
+					return &apiError{400, "invalid entry_file path"}
+				}
 			}
 			m.EntryFile = clean
 		}

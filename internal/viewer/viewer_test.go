@@ -1,6 +1,7 @@
 package viewer
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -118,22 +119,151 @@ func TestApplyAndRemove(t *testing.T) {
 	}
 }
 
-func TestApplyPicksEntryWhenUnset(t *testing.T) {
+// A start page that names no file (the creation default index.html, or a
+// deleted file) opens on the file list when the site holds several files.
+func TestApplyListsSeveralFilesWithoutEntry(t *testing.T) {
 	s, site := makeSite(t)
-	if err := s.Update(site, func(m *store.Meta) error {
-		m.Mode = store.ModeViewer
-		m.EntryFile = "index.html" // creation default, doesn't exist here
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
+	setViewer(t, s, site, "index.html") // creation default, doesn't exist here
 	entry, err := Apply(site)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if entry != "notes.md" && entry != "report.pdf" {
-		t.Errorf("fallback entry = %q", entry)
+	if entry != "" {
+		t.Errorf("fallback entry = %q, want the list (\"\")", entry)
 	}
+	if cfg := wrapperCfg(t, site); cfg.Entry != "" {
+		t.Errorf("wrapper entry = %q, want \"\"", cfg.Entry)
+	}
+}
+
+// A lone file opens at once: a list of one would only add a click.
+func TestApplyOpensTheOnlyFile(t *testing.T) {
+	s, site := makeSite(t)
+	if err := s.DeleteFile(site, "notes.md"); err != nil {
+		t.Fatal(err)
+	}
+	setViewer(t, s, site, "index.html")
+	entry, err := Apply(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry != "report.pdf" {
+		t.Errorf("entry = %q, want the only file", entry)
+	}
+}
+
+// "" is the owner's choice of the list, never replaced by a fallback.
+func TestApplyKeepsAnExplicitList(t *testing.T) {
+	s, site := makeSite(t)
+	if err := s.DeleteFile(site, "notes.md"); err != nil {
+		t.Fatal(err)
+	}
+	setViewer(t, s, site, "")
+	entry, err := Apply(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry != "" {
+		t.Errorf("entry = %q, want the list kept", entry)
+	}
+}
+
+// The list shows when each file changed, and never names dotfiles or
+// operating-system clutter: they are left out of the page itself.
+func TestWrapperCarriesMtimeAndLeavesHiddenOut(t *testing.T) {
+	s, site := makeSite(t)
+	for _, p := range []string{".env", "a/.git/config", "__MACOSX/y.pdf", "pics/Thumbs.db", "Desktop.ini", "docs/.hidden/z.md", "docs/visible.txt"} {
+		writeRaw(t, site, p, "x")
+	}
+	setViewer(t, s, site, "")
+	if _, err := Apply(site); err != nil {
+		t.Fatal(err)
+	}
+	cfg := wrapperCfg(t, site)
+	got := map[string]wrapperFile{}
+	for _, f := range cfg.Files {
+		got[f.Path] = f
+	}
+	for _, want := range []string{"report.pdf", "notes.md", "docs/visible.txt"} {
+		f, ok := got[want]
+		if !ok {
+			t.Errorf("%s missing from the list", want)
+			continue
+		}
+		if f.Mtime <= 0 {
+			t.Errorf("%s has no mtime", want)
+		}
+	}
+	if len(got) != 3 {
+		t.Errorf("listed %v, want only the three visible files", cfg.Files)
+	}
+	html := wrapperHTML(t, site)
+	for _, hidden := range []string{".env", ".git", "__MACOSX", "Thumbs.db", "Desktop.ini", ".hidden"} {
+		if strings.Contains(html, hidden) {
+			t.Errorf("wrapper names hidden %q", hidden)
+		}
+	}
+}
+
+// An entry the owner chose explicitly is honoured even when the list hides it.
+func TestHiddenEntryIsHonoured(t *testing.T) {
+	s, site := makeSite(t)
+	writeRaw(t, site, ".notes.md", "# dot")
+	setViewer(t, s, site, ".notes.md")
+	entry, err := Apply(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry != ".notes.md" {
+		t.Errorf("entry = %q, want the chosen hidden file", entry)
+	}
+}
+
+func setViewer(t *testing.T, s *store.Store, site *store.Site, entry string) {
+	t.Helper()
+	if err := s.Update(site, func(m *store.Meta) error {
+		m.Mode = store.ModeViewer
+		m.EntryFile = entry
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeRaw puts a file straight into the content folder, as an upload of any
+// name would, so the test does not depend on what the store's own checks allow.
+func writeRaw(t *testing.T, site *store.Site, rel, body string) {
+	t.Helper()
+	p := filepath.Join(site.FilesDir(), filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func wrapperHTML(t *testing.T, site *store.Site) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(site.FilesDir(), "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func wrapperCfg(t *testing.T, site *store.Site) wrapperConfig {
+	t.Helper()
+	html := wrapperHTML(t, site)
+	m := regexp.MustCompile(`(?s)<script type="application/json" id="sitebin-config">(.*?)</script>`).FindStringSubmatch(html)
+	if m == nil {
+		t.Fatal("no config in wrapper")
+	}
+	var cfg wrapperConfig
+	if err := json.Unmarshal([]byte(m[1]), &cfg); err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	return cfg
 }
 
 // A file the viewer cannot show is offered as a download, never fetched and
