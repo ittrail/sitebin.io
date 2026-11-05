@@ -816,8 +816,13 @@ must keep:
   says so) instead of reading it into memory.
 - **`vr` is the A/B hook**, always `""` for now; do not fill it without the
   design.
+- **Salts are never kept longer than two days past their date**:
+  `sitebin backup` leaves out `<data>/analytics/salts` (`isAnalyticsSalts`).
+- **Referrer hosts are stored without a leading `www.`** (`CleanReferrer`, the
+  importer goes through it too), as Umami stores them.
 - **The import runs in the server**: the CLI streams to the loopback
-  `POST /internal/analytics/import`, which writes days under the stats lock
+  `POST /internal/analytics/import` (the route itself answers 403 to any
+  peer that is not 127.0.0.0/8 or ::1), which writes days under the stats lock
   (tmp + rename; `PurgeDays` deletes a stale `.tmp` after 1 h). Never write
   day files from another process.
 - **Two glob syntaxes.** Exclude globs are segment globs (`*` stops at `/`).

@@ -5,7 +5,7 @@ Date: 2026-11-04. Status: design, agreed with the operator in conversation
 
 ## Why
 
-The operator runs Umami (umami.ittrail.cloud, Umami 3.0.2) for 14 websites
+The operator runs a self-hosted Umami (version 3) for 14 websites
 and wants to **take Umami out**. Every one of those sites moves to Sitebin
 sooner or later, so the question here is only whether Sitebin can do what
 Umami does for a site it hosts. It cannot today: authz sees every request,
@@ -49,7 +49,7 @@ need to change.**
   disk). The operator left the technical side of this to the agent.
 - The playback of the shape below was confirmed: off until the owner turns
   it on, two measuring modes, a Umami-compatible script, no IP stored, a
-  daily salt, no cookies (except the one the owner asks for, below), owner
+  daily salt, no cookies (except the one a visitor asks for, below), owner
   and admins see it.
 - **Umami history is imported per site, on request.** The operator moves
   sites one at a time and comes back after each move. The agent then
@@ -267,7 +267,7 @@ It is ours: a small, dependency-free file in `web/static/`. It is not a
 vendored copy of Umami's tracker, because Umami's posts to `<origin>/api/send`,
 which collides with a site's own `/api` (Rombalu has one).
 
-Its compatibility contract with Umami's tracker (Umami 3.0.2 docs and
+Its compatibility contract with Umami's tracker (Umami 3 docs and
 behaviour):
 
 - `window.umami.track()` sends a page view. `track(name)`,
@@ -307,7 +307,7 @@ behaviour):
   never throw, and nothing is sent.
 
 Migrating a page means replacing
-`<script src="https://umami.ittrail.cloud/script.js" data-website-id=…>`
+`<script src="https://<umami-host>/script.js" data-website-id=…>`
 with `<script defer src="/_sitebin/analytics.js" …same data attributes…>`.
 
 ### The send endpoint: `POST /_sitebin/analytics/send`
@@ -711,13 +711,17 @@ linked.
 ### Runbook: importing one site
 
 Kept in the product docs (`docs/analytics-umami-import.md`) with the exact
-commands:
+commands, for any Umami 3 on PostgreSQL. How the operator reaches their own
+Umami and the hosted instance is not part of the public repo; it is in the
+private website repo's internal docs.
 
-1. Find the Umami `website_id` by domain. Umami runs on srv03 VM 103,
-   container `0007-1-umami-db-1`; use `qm guest exec 103 --pass-stdin 1 --
-   docker exec -i … psql`.
-2. Export the events with the documented `\copy (select json_build_object(…)
-   …) to stdout`, and the reports likewise.
+1. Find the Umami `website_id` by domain, with `psql` against Umami's
+   database.
+2. Export the events with the documented `copy (select json_build_object(…)
+   …) to stdout`, and the reports likewise. Click ids leave Umami only as
+   presence markers (`"1"`), never their values; `url_query` is exported
+   whole, used only to pick out `utm_*` and the site's own query names, and
+   deleted with the copies.
 3. Copy both files to the Sitebin host, then `docker cp` them into the
    container.
 4. Run the import. Check the dashboard against Umami's totals for a few
@@ -739,7 +743,7 @@ commands:
 
 | Threat / duty | Answer |
 |---|---|
-| Visitor tracking across sites or days | per-site, per-day salted ids; salts deleted after two days; no cookie |
+| Visitor tracking across sites or days | per-site, per-day salted ids; salts deleted after two days; no cookie except the opt-out one a visitor asks for |
 | Personal data on disk | no IP, no UA string, no referrer query, no click-id values, no form values; event data bounded and shown only to the site's managers |
 | Consent banner needed on customer sites | no device access except the opt-out cookie the visitor asks for; the docs give the owner a privacy-policy paragraph (the owner is the controller, Sitebin processes on their behalf) |
 | CSP weakened | no; `'self'` already covers the script and the beacon |
@@ -774,8 +778,9 @@ commands:
   3. put `"analytics": true` in `tiers.json` for pro, studio, admin and
      unlimited, and set `SITEBIN_ANALYTICS_TIMEZONE=Europe/Vienna` and
      `SITEBIN_ANALYTICS_GEOIP`, with the DB-IP file plus its cron;
-  4. restart; wait for the sweep stamp (or the restart sweep) and verify
-     on a test site:
+  4. restart, then run `docker exec sitebin sitebin cleanup` once, so the
+     stamp is backfilled at once rather than at the next sweep; verify on
+     a test site:
      - server mode counts a browser and not curl;
      - script mode receives events;
      - the opt-out works;
@@ -861,8 +866,15 @@ they differ, this block wins.
 
 - **Daily cap per source.** `SITEBIN_ANALYTICS_DAILY_CAP` counts per site, per
   local day and per source (server-counted, script-sent; imports are uncapped),
-  so forged script beacons cannot starve server-mode page views. The disk bound
-  per site-day is twice the cap.
+  so forged script beacons cannot starve server-mode page views.
+- **Stored bytes are bounded** (final review). Beside the line cap, each source
+  has a byte budget of 25 MiB per site-day, so the disk bound per site-day is
+  50 MiB; records over either bound are counted in `.over`. Lines are encoded
+  without HTML escaping, so a visitor's `<` costs one byte, not six. While
+  the data volume has less than 2 GiB free (asked at most every 30 s), the
+  recorder writes nothing; it drops, counts and logs (at most once a minute).
+  The engine refuses a day file over 256 MiB with `ErrDayTooLarge`, which the
+  API answers as a 500 "this day's analytics file is too large to read".
 - **Visit duration** is the last page view minus the first (0 for 0 or 1
   views); events never extend it. A bounce is a visit with one page view.
   With a record-level filter, bounce and duration use only the visit's
@@ -908,5 +920,24 @@ they differ, this block wins.
   in-range days of unfiltered overview/table/event-data use them. The event
   table is sorted by count, other tables by visitors.
 - **Script cache.** The tracker and the stub are served `public, max-age=3600`.
-- **Referrer hosts** lose a leading `www.` (in `CleanReferrer` and the
-  importer, as Umami stores them), landing in the final fix wave.
+- **Referrer hosts** lose a leading `www.` (`CleanReferrer`, which the
+  importer uses too, as Umami stores them), so imported and new rows group
+  together. The own-address check ignores `www.` on both sides, and a
+  scheme-relative referrer (`//host/x`) is unparseable and kept as nothing.
+- **The import route is loopback-only by itself**: `POST
+  /internal/analytics/import` answers 403 unless the request comes from
+  127.0.0.0/8 or ::1, whatever address the internal listener is bound to.
+- **Salts are not backed up.** `sitebin backup` leaves out
+  `<data>/analytics/salts`: a backup kept longer than two days would
+  otherwise keep the salts that make visitor ids linkable. VM or host
+  snapshots keep the salts as long as the snapshots are kept.
+- **GeoIP attribution.** DB-IP Lite's metadata description
+  (`DB-IP.com - IP to City`) is not the attribution its licence (CC BY 4.0)
+  asks for, so for a DB-IP database (type or description naming DB-IP) the
+  tab shows "IP geolocation by DB-IP" linking https://db-ip.com; any other
+  database shows its metadata description. The README gives the monthly
+  update (download beside the configured file, verify, `mv` over it,
+  restart: the file is memory-mapped, so it is never overwritten in place).
+- **Privacy paragraph.** The text the tab offers to copy says the analytics
+  set no cookies except one when a visitor asks not to be counted, and that
+  the site may also count actions (events) such as form submissions.

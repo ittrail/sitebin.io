@@ -134,8 +134,8 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | `SITEBIN_INTERNAL_ADDR` | `:9000` | Address of the authz / `tls-check` / health listener. It is **never proxied publicly**; do not expose it. It also carries the loopback-only write route `POST /internal/analytics/import` (the [Umami import](#analytics)); never expose it. |
 | `SITEBIN_ANALYTICS` | `true` | Instance switch for [site analytics](#analytics). A site still collects nothing until its owner enables it. `false` stops all collection and hides the tab; stored data is kept (and still purged by the retention). |
 | `SITEBIN_ANALYTICS_TIMEZONE` | `UTC` | IANA zone for day buckets when a site sets none. |
-| `SITEBIN_ANALYTICS_GEOIP` | — | Path to a DB-IP Lite City `.mmdb` file. Unset: no country, region or city. DB-IP's licence requires the attribution the Analytics tab then shows. |
-| `SITEBIN_ANALYTICS_DAILY_CAP` | `50000` | Records kept per site and local day, **per source**: server-counted and script-sent records each have their own cap, so forged script beacons cannot starve server-mode page views. Imports are uncapped. |
+| `SITEBIN_ANALYTICS_GEOIP` | — | Path to a DB-IP Lite City `.mmdb` file (any MaxMind-format database works). Unset: no country, region or city. DB-IP's licence requires the attribution the Analytics tab then shows. Opened at startup: replace the file with `mv` and restart (see [Analytics](#analytics) for the monthly update). |
+| `SITEBIN_ANALYTICS_DAILY_CAP` | `50000` | Records kept per site and local day, **per source**: server-counted and script-sent records each have their own cap, so forged script beacons cannot starve server-mode page views. Each source also has a fixed budget of 25 MiB per site and day; what is over either bound is counted, not stored. Imports are uncapped. |
 | `SITEBIN_ANALYTICS_RETENTION_DAYS` | `760` | Days of records kept; older days are deleted by the sweep (locked sites are skipped). `0` keeps them forever. |
 | `SITEBIN_FORMS_SMTP_HOST` | — | SMTP server for [forms](#forms). Unset: the instance has no forms. Separate from the account mailer's `SITEBIN_SMTP_*`. |
 | `SITEBIN_FORMS_SMTP_PORT` | `587` | |
@@ -942,10 +942,20 @@ Two modes:
 or form value is stored or logged (the access log omits the address for
 `/_sitebin/analytics*`). A visitor is a hash of IP, user agent and site with a
 daily salt that is deleted after two days, so nobody can be followed across
-days or sites. No cookies are set, except the one a visitor asks for on the
+days or sites. The salts live in `<data>/analytics/salts` and `sitebin backup`
+leaves them out; VM or host snapshots keep salts as long as the snapshots are
+kept. No cookies are set, except the one a visitor asks for on the
 opt-out page `/_sitebin/analytics/opt-out`, which keeps that browser out of
 the count. Records live in the site's own folder and go with the site; they
 are purged after `SITEBIN_ANALYTICS_RETENTION_DAYS`.
+
+**Disk.** A site-day holds at most `SITEBIN_ANALYTICS_DAILY_CAP` records and
+25 MiB per source (server, script), so an open endpoint cannot fill the disk.
+While the data volume has less than **2 GiB** free (checked at most every
+30 seconds), nothing is recorded at all: the records are dropped, counted and
+logged at most once a minute. The dashboard refuses to read a day file over
+**256 MiB** (only an uncapped import could write one) with "this day's
+analytics file is too large to read".
 
 **Settings.** Besides the mode, a site chooses its timezone, the addresses to
 count, paths to exclude, extra query parameter names to keep, funnels and goals.
@@ -953,8 +963,38 @@ Exclude patterns are segment globs (`*` does not cross `/`, `**` does).
 Funnel and goal path values follow Umami (`*` matches any characters, `/`
 included), so imported ones give the same numbers.
 
-**Countries** need `SITEBIN_ANALYTICS_GEOIP`, a DB-IP Lite database
-(attribution: "IP Geolocation by DB-IP", shown in the tab).
+**Countries** need `SITEBIN_ANALYTICS_GEOIP`: a MaxMind-format `.mmdb`
+file, such as DB-IP's free "IP to City Lite" (or "IP to Country Lite" for
+countries only). Its licence, CC BY 4.0, asks for an attribution with a link,
+so for a DB-IP database the tab shows "IP geolocation by DB-IP" linking
+https://db-ip.com (for any other database, its own description). The
+instance never downloads a database itself. DB-IP publishes a new one every
+month; keep it in a host folder mounted into the container (say
+`/srv/sitebin/geoip` as `/geoip`, with
+`SITEBIN_ANALYTICS_GEOIP=/geoip/dbip-city-lite.mmdb`) and update it monthly
+from cron (`0 5 3 * * /srv/sitebin/geoip/update.sh`):
+
+```sh
+#!/bin/sh
+# /srv/sitebin/geoip/update.sh: this month's DB-IP City Lite (last month's
+# while this month's is not out yet), checked, then moved over the old one.
+set -eu
+cd /srv/sitebin/geoip
+get() { curl -fsS -o dbip.mmdb.gz.tmp "https://download.db-ip.com/free/dbip-city-lite-$1.mmdb.gz"; }
+get "$(date +%Y-%m)" || get "$(date -d '-1 month' +%Y-%m)"
+gzip -t dbip.mmdb.gz.tmp
+gunzip -c dbip.mmdb.gz.tmp > dbip-city-lite.mmdb.tmp
+rm dbip.mmdb.gz.tmp
+LC_ALL=C grep -q 'MaxMind.com' dbip-city-lite.mmdb.tmp   # an .mmdb ends with its metadata
+mv dbip-city-lite.mmdb.tmp dbip-city-lite.mmdb
+docker restart sitebin
+```
+
+Download into the same folder and `mv` over the file: never write into the
+file the instance has open. It is memory-mapped, so overwriting it in place
+can crash the process; `mv` replaces only the name, and the restart opens the
+new file. A database that does not open is logged and leaves records without
+a location; it never stops the instance.
 
 **Import.** A site's Umami history can be imported once, through the running
 server: see [docs/analytics-umami-import.md](docs/analytics-umami-import.md).
@@ -1436,6 +1476,9 @@ Operator commands (run inside the container, e.g. `docker exec sitebin sitebin <
 - **Backup:** the `/data` volume is everything (sites + indexes + certs) — or
   use `sitebin backup` to stream a snapshot, e.g.
   `docker exec sitebin sitebin backup - > sitebin-$(date +%F).tar.gz`.
+  It leaves out uploads in flight and the analytics salts
+  (`analytics/salts`), which must be gone two days after their date; VM or
+  host snapshots keep salts as long as the snapshots are kept.
 - **Health:** the image ships a `HEALTHCHECK`.
 - **Freeze:** `SITEBIN_READONLY=true` disables new-site creation.
 - **Logs:** structured request + lifecycle logs on stdout (`docker logs`).
