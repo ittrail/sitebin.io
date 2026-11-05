@@ -155,3 +155,28 @@ a file explorer does.
 Icon drawings, exact copy, layout details, how the folder tree is built in
 the script, and how the edit page words the "File list" option — in the
 product's dark/amber look.
+
+## Corrections (post-implementation)
+
+From the browser check and the final review (2026-11-05):
+
+- **An empty site keeps its stored choice.** With no visible file there is
+  nothing to fall back to: the page shows the (empty) list, but `entry_file`
+  is not rewritten to `""`, so the first upload decides again — a viewer
+  site created empty opens its first lone file. Only the owner (or a real
+  fallback with several files) stores `""`.
+- **A fragment that does not start with `#/` is an anchor of the shown
+  document** (a Word table of contents, `#install`, an old `#page=3` link),
+  not an address: it leaves the view alone, and arriving with one opens the
+  start page and then scrolls to the anchor if the document has it.
+- **The arrow keys** ignore a held key's repeats and Shift, and do not step on
+  a table, text or notebook, which scroll sideways with them; ‹ › step
+  through every file.
+- **One pdf.js worker per page**, shared by the file view and the previews; a
+  PDF view stops rendering and frees its document when the visitor moves on;
+  a queued preview whose tiles are all gone is dropped before it fetches.
+- **Added:** relative links and images in a Markdown file point at the
+  site's other files (a link opens it in the viewer, an image loads from
+  `/_raw/`).
+- **Found on the way and fixed separately:** `fingerprinted()` panicked on
+  any existing dotfile, which made authz fail and Caddy answer 502.
