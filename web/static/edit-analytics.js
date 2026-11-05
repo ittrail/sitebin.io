@@ -37,6 +37,7 @@ const analyticsTab = (() => {
   const PAGE = 100;        // rows a page of "More" shows
   const POLL_MS = 10000;   // the realtime refresh
   const MAX_FILTERS = 20;  // the API's cap
+  const MAX_SPAN = 760;    // days a range spans at most, unless the retention is shorter
   const RELOAD_MS = 60000; // re-showing a view this soon keeps what is shown
   const UTM = ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"];
   // Rows the engine writes itself (internal/analytics): the visits without a
@@ -80,7 +81,8 @@ const analyticsTab = (() => {
     expanded: null,  // {group, offset}: the table opened with "More"
     cards: {},       // group id -> its card in the overview
     event: "",       // the event whose data the Events sub-tab shows
-    eventOffset: 0,
+    eventOffset: 0,  // the Events sub-tab's page...
+    eventKey: "",    // ...within this range and these filters
     editing: null,   // {kind: "funnel"|"goal", id}: the editor open, id "" for a new one
     poll: null,      // the realtime timer
     pollGen: 0,
@@ -233,12 +235,32 @@ const analyticsTab = (() => {
   const addDays = (s, n) => dayStr(dayNum(s) + n);
   const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || "") && !isNaN(dayNum(s));
 
+  // maxSpan is the longest range the API answers, in days: the retention,
+  // at most 760 (a retention of 0 keeps every day).
+  function maxSpan() {
+    const r = (S.state && S.state.retention_days) || 0;
+    return r > 0 && r < MAX_SPAN ? r : MAX_SPAN;
+  }
+
+  // clampSpan moves a range's first day up so that it spans at most
+  // maxSpan() days: "This year" or "Last 12 months" on a site kept for 30
+  // days asks for the 30 days there are, never for a range the API refuses.
+  function clampSpan(per) {
+    if (!per.from || !per.to) return per;
+    const earliest = addDays(per.to, -(maxSpan() - 1));
+    return per.from < earliest ? { from: earliest, to: per.to } : per;
+  }
+
   // period is the API's range for the view: range=last24h, or from and to.
   function period() {
-    if (S.range === "last24h") return { range: "last24h" };
-    if (S.range === "custom") return { from: S.from, to: S.to };
+    return S.range === "last24h" ? { range: "last24h" } : clampSpan(datesOf(S.range));
+  }
+
+  // datesOf is a range's first and last local date, before clampSpan.
+  function datesOf(range) {
+    if (range === "custom") return { from: S.from, to: S.to };
     const t = todayIn(tz());
-    switch (S.range) {
+    switch (range) {
       case "today": return { from: t, to: t };
       case "yesterday": { const y = addDays(t, -1); return { from: y, to: y }; }
       case "week": return { from: addDays(t, -((new Date(dayNum(t) * DAY).getUTCDay() + 6) % 7)), to: t }; // from Monday
@@ -374,7 +396,9 @@ const analyticsTab = (() => {
     to.setAttribute("aria-label", "To");
     const apply = button("Apply", "", () => {
       if (!isDate(from.value) || !isDate(to.value) || from.value > to.value) { toast("Pick a first and a last day, in that order", true); return; }
-      S.range = "custom"; S.from = from.value; S.to = to.value;
+      const per = clampSpan({ from: from.value, to: to.value });
+      if (per.from !== from.value) toast("A range spans at most " + maxSpan() + " days here, so it starts on " + per.from);
+      S.range = "custom"; S.from = per.from; S.to = per.to;
       S.expanded = null;
       navigate(true);
     });
@@ -416,6 +440,8 @@ const analyticsTab = (() => {
     const body = el("div", "an-body");
     body.id = "an-body";
     body.setAttribute("role", "tabpanel");
+    // The frame shows once the state is loaded: nothing in it works before.
+    for (const e of [head, nav, body]) e.classList.add("hidden");
     panel.append(err, notice, head, nav, body);
 
     // Realtime polls only while it can be seen: another tab, another
@@ -454,7 +480,7 @@ const analyticsTab = (() => {
     }
     q("an-range").value = S.range;
     q("an-custom").classList.toggle("hidden", S.range !== "custom");
-    if (S.range === "custom") { q("an-from").value = S.from; q("an-to").value = S.to; }
+    if (S.range === "custom") { const per = period(); q("an-from").value = per.from; q("an-to").value = per.to; }
     q("an-cmp").classList.toggle("hidden", S.sub !== "overview");
     q("an-cmp").querySelector("input").checked = S.cmp;
 
@@ -489,10 +515,21 @@ const analyticsTab = (() => {
     note.classList.toggle("hidden", !note.textContent);
   }
 
-  function showError(msg) {
+  // showError shows msg above the frame ("" hides it), with a button that
+  // tries again when retry is given.
+  function showError(msg, retry) {
     const p = q("an-error");
     p.textContent = msg;
+    if (msg && retry) {
+      p.appendChild(document.createTextNode(" "));
+      p.appendChild(button("Try again", "", retry));
+    }
     p.classList.toggle("hidden", !msg);
+  }
+
+  // frame shows or hides the header, the sub-tabs and the body.
+  function frame(on) {
+    for (const id of ["an-head", "an-subtabs", "an-body"]) q(id).classList.toggle("hidden", !on);
   }
 
   // ---- the tab ----
@@ -507,14 +544,21 @@ const analyticsTab = (() => {
     if (/^#analytics\/?$/.test(location.hash) && S.lastHash) {
       history.replaceState(null, "", location.pathname + location.search + S.lastHash);
     }
+    const was = S.sub;
     readHash();
+    // Back or Forward to another sub-tab leaves an open editor behind.
+    if (S.sub !== was) S.editing = null;
     try {
       await loadState();
     } catch (err) {
-      showError(err.message);
+      // Without a state nothing in the frame can work: it stays hidden
+      // until a retry loads one. A later failure keeps the last view.
+      if (!S.state) frame(false);
+      showError(err.message, () => { showError(""); show(); });
       return;
     }
     showError("");
+    frame(true);
     if (tabs.active !== "analytics") return; // left while it loaded
     const h = hashOf();
     S.lastHash = h;
@@ -525,7 +569,9 @@ const analyticsTab = (() => {
   // render paints the frame and the sub-tab. Without force, a view shown
   // less than a minute ago is kept as it is.
   function render(force) {
+    if (!S.state) return; // show() loads it first, and retries
     stopPoll();
+    showError(""); // an error belongs to the view it came from
     paintFrame();
     const key = hashOf();
     if (!force && key === S.key && Date.now() - S.loadedAt < RELOAD_MS && S.sub !== "realtime" && S.sub !== "settings") return;
@@ -767,16 +813,31 @@ const analyticsTab = (() => {
         sel.appendChild(o);
       }
       sel.value = names.includes(S.utm) ? S.utm : "utm_source";
-      sel.addEventListener("change", () => { S.utm = sel.value; loadPanel(g); });
+      sel.addEventListener("change", () => {
+        S.utm = sel.value;
+        if (S.expanded && S.expanded.group === g.id) S.expanded.offset = 0; // another list starts at its top
+        loadPanel(g);
+      });
       card.appendChild(sel);
     }
     card.appendChild(el("div", "an-tbl"));
     card.appendChild(el("div", "an-foot"));
     if (g.id === "location") {
+      // The attribution the database's licence asks for: DB-IP's with its
+      // link (the server names it; only an https link is made one).
       const geo = S.state.geo || {};
       const p = el("p", "an-attr");
-      p.textContent = geo.present ? (geo.attribution || "") :
-        "This instance has no GeoIP database, so visits carry no location (SITEBIN_ANALYTICS_GEOIP).";
+      if (!geo.present) {
+        p.textContent = "This instance has no GeoIP database, so visits carry no location (SITEBIN_ANALYTICS_GEOIP).";
+      } else if (geo.attribution && /^https:\/\/[^\/]/.test(geo.attribution_url || "")) {
+        const a = el("a", "", geo.attribution);
+        a.href = geo.attribution_url;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        p.appendChild(a);
+      } else {
+        p.textContent = geo.attribution || "";
+      }
       if (p.textContent) card.appendChild(p);
     }
     return card;
@@ -1074,6 +1135,9 @@ const analyticsTab = (() => {
 
   async function renderEvents(gen) {
     if (noData()) { busy(false); body().replaceChildren(emptyCard()); return; }
+    // Another range or other filters: the list starts at its first page.
+    const key = query();
+    if (key !== S.eventKey) { S.eventKey = key; S.eventOffset = 0; }
     busy(true);
     let res;
     try {
@@ -1081,6 +1145,11 @@ const analyticsTab = (() => {
     } catch (err) { return loadFailed(gen, err); }
     if (gen !== S.gen) return;
     const rows = res.rows || [];
+    if (!rows.length && S.eventOffset > 0 && res.total > 0) {
+      // A page past the end (the list shrank meanwhile): the last one.
+      S.eventOffset = Math.floor((res.total - 1) / PAGE) * PAGE;
+      return render(true);
+    }
     if (!rows.some((r) => r.value === S.event)) S.event = (rows.find((r) => r.value !== OTHER) || {}).value || "";
     const frag = document.createDocumentFragment();
     const off = offNote();
@@ -1514,6 +1583,13 @@ const analyticsTab = (() => {
       } catch (err) {
         if (g !== S.pollGen) return;
         showError(err.message);
+        if (err.status === 401 || err.status === 403) {
+          // Signed out, or no longer allowed: asking again cannot help.
+          // Showing the sub-tab again starts over.
+          S.poll = null;
+          paintRealtime = null;
+          return;
+        }
       }
       if (g === S.pollGen && pollWanted()) S.poll = setTimeout(tick, POLL_MS);
       else if (g === S.pollGen) S.poll = null;
@@ -1610,12 +1686,14 @@ const analyticsTab = (() => {
   }
 
   const PRIVACY = [
-    ["English", "This site counts visits with Sitebin Analytics, run by our host on our behalf. It sets no cookies, " +
-      "stores no IP addresses, and cannot recognise you on another day or on another site. We see which pages are read, " +
-      "where visitors came from, and their browser, device and country."],
-    ["Deutsch", "Diese Website zählt Besuche mit Sitebin Analytics, das unser Hoster in unserem Auftrag betreibt. Es setzt " +
-      "keine Cookies, speichert keine IP-Adressen und kann Sie weder an einem anderen Tag noch auf einer anderen Website " +
-      "wiedererkennen. Wir sehen, welche Seiten gelesen werden, woher Besucher kommen, sowie Browser, Gerät und Land."],
+    ["English", "This site counts visits with Sitebin Analytics, run by our host on our behalf. It stores no IP " +
+      "addresses and cannot recognise you on another day or on another site. It sets no cookies, except one if you ask " +
+      "not to be counted. We see which pages are read, where visitors came from, their browser, device and country, " +
+      "and actions such as sending a form."],
+    ["Deutsch", "Diese Website zählt Besuche mit Sitebin Analytics, das unser Hoster in unserem Auftrag betreibt. Es " +
+      "speichert keine IP-Adressen und kann Sie weder an einem anderen Tag noch auf einer anderen Website wiedererkennen. " +
+      "Es setzt keine Cookies, außer einem, wenn Sie nicht gezählt werden möchten. Wir sehen, welche Seiten gelesen " +
+      "werden, woher Besucher kommen, Browser, Gerät und Land sowie Aktionen wie das Absenden eines Formulars."],
   ];
 
   function lines(text, sep) {
