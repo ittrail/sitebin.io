@@ -1,45 +1,22 @@
 // Sitebin viewer runtime. Loaded by the generated wrapper page on a site's
-// own origin; reads its config from the inline JSON and renders the entry
-// file fetched from /_raw/.
+// own origin; reads its config from the inline JSON. With no file chosen it
+// opens on the file list (browser.js); every folder and file has its own
+// address in the URL fragment (#/docs/, #/docs/report.pdf), and files render
+// from /_raw/.
 "use strict";
+
+import {
+  rendererFor, buildTree, findFolder, parseRoute, folderHash, fileHash,
+  baseName, dirName, resolveRelative, fmtBytes,
+} from "./files.js";
+import { renderFolderView, loadPrefs, savePrefs, orderedFiles, icon } from "./browser.js";
 
 const ASSETS = "/_sitebin/assets";
 const cfg = JSON.parse(document.getElementById("sitebin-config").textContent);
 const app = document.getElementById("viewer-app");
-
-const rendererByExt = {
-  pdf: "pdf",
-  md: "markdown", markdown: "markdown", mdown: "markdown",
-  docx: "docx",
-  csv: "table", tsv: "table",
-  ipynb: "notebook",
-  png: "image", jpg: "image", jpeg: "image", gif: "image", webp: "image",
-  svg: "image", avif: "image", bmp: "image", ico: "image",
-  mp4: "video", webm: "video", mov: "video", m4v: "video",
-  mp3: "audio", wav: "audio", ogg: "audio", m4a: "audio", flac: "audio",
-  // Files the browser cannot show: a download, never printed as text. Kept
-  // equal to internal/viewer's table by TestViewerJSMirrorsRenderers.
-  exe: "download", msi: "download", dmg: "download", pkg: "download",
-  app: "download", apk: "download", ipa: "download", deb: "download",
-  rpm: "download", appimage: "download",
-  zip: "download", "7z": "download", rar: "download", tar: "download",
-  gz: "download", tgz: "download", bz2: "download", xz: "download",
-  zst: "download", iso: "download", img: "download", bin: "download",
-  dll: "download", so: "download", dylib: "download", jar: "download",
-  wasm: "download", woff: "download", woff2: "download", ttf: "download",
-  otf: "download", eot: "download", psd: "download", ai: "download",
-  sketch: "download", fig: "download", blend: "download",
-  xlsx: "download", xls: "download", pptx: "download", ppt: "download",
-  doc: "download", odt: "download", ods: "download", odp: "download",
-  epub: "download", heic: "download", tif: "download", tiff: "download",
-  mkv: "download", avi: "download", wmv: "download", flv: "download",
-  sqlite: "download", db: "download",
-};
-
-function rendererFor(name) {
-  const ext = (name.split(".").pop() || "").toLowerCase();
-  return rendererByExt[ext] || "text";
-}
+const files = Array.isArray(cfg.files) ? cfg.files : [];
+const tree = buildTree(files);
+const fileIndex = new Map(files.map((f) => [f.path, f]));
 
 // RAW_BASE is the wrapper's own directory, so raw-file URLs work whether the
 // site is served at a subdomain root ("/") or a /v/<id>/ path.
@@ -49,14 +26,7 @@ function rawURL(path) {
   return RAW_BASE + "_raw/" + path.split("/").map(encodeURIComponent).join("/");
 }
 
-function fmtBytes(n) {
-  if (n == null) return "";
-  if (n < 1024) return n + " B";
-  const units = ["KB", "MB", "GB"];
-  let u = -1;
-  do { n /= 1024; u++; } while (n >= 1024 && u < units.length - 1);
-  return n.toFixed(n >= 10 ? 0 : 1) + " " + units[u];
-}
+const prefs = loadPrefs(RAW_BASE);
 
 const loaded = {};
 function loadScript(src) {
@@ -81,40 +51,97 @@ function el(tag, cls, text) {
 
 // ---- chrome ----
 
-function buildChrome(current) {
-  const bar = el("header", "v-chrome");
-  const mark = el("a", "v-mark");
-  mark.href = "/";
-  mark.title = "Site home";
-  mark.innerHTML =
+function mark() {
+  const a = el("a", "v-mark");
+  a.href = folderHash("");
+  a.title = "All files";
+  a.setAttribute("aria-label", "All files");
+  a.innerHTML =
     '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="4" y="4" width="56" height="56" rx="14" fill="#101725" stroke="#2A3550" stroke-width="2"/><rect x="16" y="16" width="32" height="6" rx="3" fill="#F5B84D"/><path d="M32 30v14M25 38l7 7 7-7" stroke="#5B8CFF" stroke-width="4.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-  bar.appendChild(mark);
+  return a;
+}
 
-  const info = cfg.files.find((f) => f.path === current);
-  bar.appendChild(el("span", "v-name", current || "no file"));
+// crumbs is the way up: "Files / docs / 2024 / report.pdf", every folder a
+// link, the last part the current place.
+function crumbs(path, isFile) {
+  const nav = el("nav", "v-crumbs");
+  nav.setAttribute("aria-label", "Location");
+  const segs = path ? path.split("/") : [];
+  const last = segs.length - 1;
+  const add = (label, href, here) => {
+    if (nav.childNodes.length) nav.appendChild(el("span", "v-crumb-sep", "/"));
+    if (here) {
+      const c = el("span", "v-crumb is-current" + (isFile ? " is-file" : ""), label);
+      c.setAttribute("aria-current", "page");
+      nav.appendChild(c);
+    } else {
+      const a = el("a", "v-crumb", label);
+      a.href = href;
+      nav.appendChild(a);
+    }
+  };
+  add("Files", folderHash(""), segs.length === 0);
+  segs.forEach((seg, i) => add(seg, folderHash(segs.slice(0, i + 1).join("/")), i === last));
+  return nav;
+}
+
+function navButton(label, iconName, href) {
+  const a = el("a", "v-navbtn");
+  a.setAttribute("aria-label", label);
+  a.title = label;
+  if (href) a.href = href;
+  else a.setAttribute("aria-disabled", "true");
+  a.appendChild(icon(iconName));
+  return a;
+}
+
+// neighbours are the previous and next file in the file's folder, in the
+// order the visitor sorted that folder.
+function neighbours(path) {
+  const node = findFolder(tree, dirName(path));
+  if (!node) return null;
+  const list = orderedFiles(node, prefs);
+  const i = list.findIndex((f) => f.path === path);
+  if (i < 0 || list.length < 2) return null;
+  return { prev: list[i - 1] || null, next: list[i + 1] || null, pos: i + 1, total: list.length };
+}
+
+function fileChrome(path) {
+  const bar = el("header", "v-chrome");
+  bar.appendChild(mark());
+  bar.appendChild(crumbs(path, true));
+  const info = fileIndex.get(path);
   if (info) bar.appendChild(el("span", "v-size", fmtBytes(info.size)));
   bar.appendChild(el("span", "v-spacer"));
-
-  if (cfg.files.length > 1) {
-    const sel = document.createElement("select");
-    sel.setAttribute("aria-label", "Choose file");
-    for (const f of cfg.files) {
-      const opt = document.createElement("option");
-      opt.value = f.path;
-      opt.textContent = f.path;
-      if (f.path === current) opt.selected = true;
-      sel.appendChild(opt);
-    }
-    sel.addEventListener("change", () => show(sel.value));
-    bar.appendChild(sel);
+  const n = neighbours(path);
+  if (n) {
+    const step = el("div", "v-step");
+    step.appendChild(navButton("Previous file", "prev", n.prev && fileHash(n.prev.path)));
+    step.appendChild(el("span", "v-pos", n.pos + " / " + n.total));
+    step.appendChild(navButton("Next file", "next", n.next && fileHash(n.next.path)));
+    bar.appendChild(step);
   }
+  const all = el("a", "v-dl v-files-btn");
+  all.href = folderHash(dirName(path));
+  all.title = "Show the files in this folder";
+  all.appendChild(icon("grid"));
+  all.appendChild(el("span", "v-btnlabel", "Files"));
+  bar.appendChild(all);
+  const dl = el("a", "v-dl");
+  dl.href = rawURL(path);
+  dl.setAttribute("download", baseName(path));
+  dl.title = "Download";
+  dl.appendChild(icon("download"));
+  dl.appendChild(el("span", "v-btnlabel", "Download"));
+  bar.appendChild(dl);
+  return bar;
+}
 
-  if (current) {
-    const dl = el("a", "v-dl", "Download");
-    dl.href = rawURL(current);
-    dl.setAttribute("download", current.split("/").pop());
-    bar.appendChild(dl);
-  }
+function folderChrome(path) {
+  const bar = el("header", "v-chrome");
+  bar.appendChild(mark());
+  bar.appendChild(crumbs(path, false));
+  bar.appendChild(el("span", "v-spacer"));
   return bar;
 }
 
@@ -167,7 +194,33 @@ async function renderMarkdown(stage, path) {
   });
   const article = el("article", "paper");
   article.innerHTML = window.DOMPurify.sanitize(md.render(src));
+  linkSiblings(article, path);
   stage.appendChild(article);
+}
+
+// linkSiblings points a document's relative links and images at the site:
+// a link to another file of the site opens it in the viewer, an image loads
+// from /_raw/. Absolute URLs, site-absolute paths and anchors stay as written.
+function linkSiblings(root, docPath) {
+  const dir = dirName(docPath);
+  const target = (ref) => {
+    if (!ref || /^[a-z][a-z0-9+.-]*:/i.test(ref) || ref.startsWith("#") || ref.startsWith("/")) return null;
+    const bare = ref.split(/[?#]/)[0];
+    if (!bare) return null;
+    let decoded;
+    try { decoded = decodeURIComponent(bare); } catch { return null; }
+    return resolveRelative(dir, decoded);
+  };
+  for (const a of root.querySelectorAll("a[href]")) {
+    const p = target(a.getAttribute("href"));
+    if (p == null) continue;
+    if (fileIndex.has(p)) a.setAttribute("href", fileHash(p));
+    else if (findFolder(tree, p)) a.setAttribute("href", folderHash(p));
+  }
+  for (const img of root.querySelectorAll("img[src]")) {
+    const p = target(img.getAttribute("src"));
+    if (p != null && fileIndex.has(p)) img.setAttribute("src", rawURL(p));
+  }
 }
 
 async function renderDocx(stage, path) {
@@ -217,7 +270,7 @@ async function renderText(stage, path) {
 // renderDownload is the view for a file the browser cannot show: its name,
 // its size and the download, nothing fetched.
 function renderDownload(stage, path) {
-  const info = cfg.files.find((f) => f.path === path);
+  const info = fileIndex.get(path);
   const box = el("div", "v-download");
   box.appendChild(el("p", "v-download-name", path.split("/").pop()));
   if (info) box.appendChild(el("p", "v-download-size", fmtBytes(info.size)));
@@ -358,20 +411,44 @@ function loadCSS(href) {
   });
 }
 
-// ---- boot ----
+// ---- views ----
 
-async function show(path) {
+let current = { kind: "", path: "" };
+let folderView = null;
+const scrollByFolder = new Map();
+
+function leave() {
+  if (current.kind === "folder") scrollByFolder.set(current.path, window.scrollY);
+  if (folderView) { folderView.cleanup(); folderView = null; }
+}
+
+function showFolder(path) {
+  leave();
+  current = { kind: "folder", path };
+  const node = findFolder(tree, path);
   app.innerHTML = "";
-  app.appendChild(buildChrome(path));
+  app.appendChild(folderChrome(path));
+  const stage = el("main", "v-stage v-stage-files");
+  app.appendChild(stage);
+  document.title = path ? baseName(path) : "Files";
+  folderView = renderFolderView(stage, node, {
+    prefs, rawURL, isRoot: path === "",
+    onPrefs: (p) => savePrefs(RAW_BASE, p),
+  });
+  const y = scrollByFolder.get(path) || 0;
+  requestAnimationFrame(() => window.scrollTo(0, y));
+}
+
+async function showFile(path) {
+  leave();
+  current = { kind: "file", path };
+  app.innerHTML = "";
+  app.appendChild(fileChrome(path));
   const stage = el("main", "v-stage");
   app.appendChild(stage);
-
-  if (!path) {
-    stage.appendChild(el("p", "v-msg", "This site has no files yet. Add one via its edit page."));
-    return;
-  }
-  document.title = path.split("/").pop();
-  const loading = el("p", "v-msg", "Rendering " + path.split("/").pop() + "…");
+  window.scrollTo(0, 0);
+  document.title = baseName(path);
+  const loading = el("p", "v-msg", "Rendering " + baseName(path) + "…");
   stage.appendChild(loading);
   try {
     const kind = rendererFor(path);
@@ -392,4 +469,63 @@ async function show(path) {
   }
 }
 
-show(cfg.entry || (cfg.files[0] && cfg.files[0].path) || "");
+function showMissing() {
+  leave();
+  current = { kind: "missing", path: "" };
+  app.innerHTML = "";
+  app.appendChild(folderChrome(""));
+  const stage = el("main", "v-stage");
+  app.appendChild(stage);
+  document.title = "Not found";
+  const box = el("div", "v-msg");
+  box.appendChild(el("p", null, "There is no file at this address."));
+  const a = el("a", "v-dl v-missing-link", "Show all files");
+  a.href = folderHash("");
+  box.appendChild(a);
+  stage.appendChild(box);
+}
+
+// route shows what the fragment names. No fragment: the start page — the
+// chosen file, or the list.
+function route() {
+  const r = parseRoute(location.hash);
+  if (r.type === "start") {
+    if (cfg.entry) return showFile(cfg.entry);
+    return showFolder("");
+  }
+  if (r.type === "folder") return findFolder(tree, r.path) ? showFolder(r.path) : showMissing();
+  if (r.type === "file") {
+    if (fileIndex.has(r.path) || (cfg.entry && r.path === cfg.entry)) return showFile(r.path);
+    if (findFolder(tree, r.path)) return showFolder(r.path);
+  }
+  return showMissing();
+}
+
+// Keys: left/right step through a folder's files, Escape goes up to the
+// folder, "/" finds a file. Never while typing or while a control or player
+// has the focus.
+document.addEventListener("keydown", (e) => {
+  if (e.altKey || e.ctrlKey || e.metaKey || e.defaultPrevented) return;
+  const t = e.target;
+  if (t && (t.isContentEditable || /^(INPUT|SELECT|TEXTAREA|VIDEO|AUDIO|BUTTON)$/.test(t.tagName))) return;
+  if (current.kind === "file") {
+    // The address is ahead of the view: a second key press can come before
+    // the hashchange of the first, and must step on from where that went.
+    const r = parseRoute(location.hash);
+    const here = r.type === "file" && fileIndex.has(r.path) ? r.path : current.path;
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      const n = neighbours(here);
+      const to = n && (e.key === "ArrowLeft" ? n.prev : n.next);
+      if (to) { e.preventDefault(); location.hash = fileHash(to.path); }
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      location.hash = folderHash(dirName(here));
+    }
+  } else if (current.kind === "folder" && e.key === "/" && folderView) {
+    e.preventDefault();
+    folderView.focusFilter();
+  }
+});
+
+window.addEventListener("hashchange", route);
+route();

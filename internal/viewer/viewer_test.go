@@ -2,6 +2,7 @@ package viewer
 
 import (
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ittrail/sitebin.io/internal/store"
+	"github.com/ittrail/sitebin.io/web"
 )
 
 func TestRendererFor(t *testing.T) {
@@ -284,7 +286,7 @@ func TestRendererForBinaries(t *testing.T) {
 // The browser decides with its own copy of the table (web/viewer/viewer.js);
 // the two must never drift apart.
 func TestViewerJSMirrorsRenderers(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join("..", "..", "web", "viewer", "viewer.js"))
+	src, err := os.ReadFile(filepath.Join("..", "..", "web", "viewer", "files.js"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +294,7 @@ func TestViewerJSMirrorsRenderers(t *testing.T) {
 	start := strings.Index(s, "const rendererByExt = {")
 	end := strings.Index(s[start:], "};")
 	if start < 0 || end < 0 {
-		t.Fatal("no rendererByExt table in viewer.js")
+		t.Fatal("no rendererByExt table in files.js")
 	}
 	js := map[string]string{}
 	// A key may be quoted ("7z": a bare 7z is not a JavaScript name).
@@ -301,12 +303,12 @@ func TestViewerJSMirrorsRenderers(t *testing.T) {
 	}
 	for ext, kind := range rendererByExt {
 		if js[ext] != kind {
-			t.Errorf("viewer.js: %s = %q, Go says %q", ext, js[ext], kind)
+			t.Errorf("files.js: %s = %q, Go says %q", ext, js[ext], kind)
 		}
 	}
 	for ext, kind := range js {
 		if rendererByExt[ext] != kind {
-			t.Errorf("viewer.js has %s = %q, Go says %q", ext, kind, rendererByExt[ext])
+			t.Errorf("files.js has %s = %q, Go says %q", ext, kind, rendererByExt[ext])
 		}
 	}
 }
@@ -336,6 +338,26 @@ func TestDropFormSuggestsViewerForEveryDownload(t *testing.T) {
 	for ext := range js {
 		if rendererByExt[ext] != "download" {
 			t.Errorf("embed.js DOWNLOAD_EXTS has %s, which the viewer does not offer as a download (%q)", ext, rendererByExt[ext])
+		}
+	}
+}
+
+// The file list ships as two modules beside viewer.js, which imports both.
+// They are embedded with the rest of the viewer; a missing one would leave
+// every viewer site on a blank page.
+func TestViewerModulesShip(t *testing.T) {
+	for _, name := range []string{"viewer/files.js", "viewer/browser.js"} {
+		if _, err := fs.ReadFile(web.Assets, name); err != nil {
+			t.Errorf("%s not embedded: %v", name, err)
+		}
+	}
+	src, err := fs.ReadFile(web.Assets, "viewer/viewer.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, imp := range []string{`from "./files.js"`, `from "./browser.js"`} {
+		if !strings.Contains(string(src), imp) {
+			t.Errorf("viewer.js does not import %s", imp)
 		}
 	}
 }
