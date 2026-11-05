@@ -139,6 +139,8 @@ $own = AddressOf $s "app:3000"; $second = AddressOf $s "app:3001"; $probe = Addr
 Assert "every http: port has a generated address, the first one the site's own" ($own -and $own.own -and $second -and $probe -and -not $second.own -and @($s.addresses).Count -eq 3) "addresses: $($s.addresses | ConvertTo-Json -Compress)"
 $r = WaitHost $second.url "second port" 60
 Assert "a second port's generated address reaches it" ($r.code -eq 200 -and $r.body.Contains("second port")) "got $($r.code): $($r.body)"
+$r = Req "GET" ($second.url.TrimEnd('/') + "/app-404")
+Assert "an app's own 404 reaches the visitor untouched" ($r.code -eq 404 -and $r.body.Contains("app-own-404") -and $r.body -notmatch "Page not found") "got $($r.code): $($r.body)"
 $r = WaitHost $probe.url "egress" 60
 Assert "a service without egress cannot reach the internet" ($r.body -eq "egress blocked") "got $($r.code): $($r.body)"
 

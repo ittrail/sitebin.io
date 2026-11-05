@@ -43,7 +43,7 @@ New-Item -ItemType Directory -Force $work | Out-Null
 
 # Every assertion must run; the count is checked at the end. Update it when
 # you add or remove one.
-$ExpectedAssertions = 33
+$ExpectedAssertions = 36
 if (-not $NoContainers) { $ExpectedAssertions += 11 }
 
 $script:pass = 0; $script:fail = 0
@@ -156,6 +156,7 @@ $k1 = NewSite @{ "index.html" = '<link rel="stylesheet" href="/demos/k1/app.css"
 $files = NewSite @{ "sub/readme.txt" = "readme-ok" } @("-F", "mode=viewer")
 $warn = NewSite @{ "index.html" = '<link rel="stylesheet" href="/_astro/x.css">' }
 $only = NewSite @{ "index.html" = "only-a" }
+$nf = NewSite @{ "index.html" = "nf-home"; "404.html" = "<h1>mount-404</h1>"; "img/x.txt" = "x" }
 
 Write-Host "== attaching m.e2e.test and paths under it" -ForegroundColor Cyan
 $r = Attach $root "m.e2e.test"
@@ -179,6 +180,14 @@ $r = Visit "m.e2e.test" "/files"
 Assert "a file site's bare prefix redirects to the slash form" ($r.code -eq 308 -and (Header $r "Location") -eq "/files/") "got $($r.code) $(Header $r 'Location')"
 $r = Visit "m.e2e.test" "/demos/k10"
 Assert "a sibling path belongs to the root site" ($r.code -eq 404 -and $r.body -notmatch "k1-ok") "got $($r.code)"
+
+Write-Host "== a 404 under a path" -ForegroundColor Cyan
+$r = Attach $nf "m.e2e.test/nf"
+Assert "a site with its own 404.html takes a path (200)" ($r.code -eq 200) "got $($r.code): $($r.body)"
+$r = Visit "m.e2e.test" "/nf/missing"
+Assert "a missing page under the path shows the site's 404.html" ($r.code -eq 404 -and $r.body -eq "<h1>mount-404</h1>" -and (Header $r "Cache-Control") -eq "no-store") "got $($r.code) '$(Header $r 'Cache-Control')': $($r.body)"
+$r = Visit "m.e2e.test" "/nf/img/"
+Assert "a folder under the path is never listed" ($r.code -eq 404 -and $r.body -eq "<h1>mount-404</h1>") "got $($r.code): $($r.body)"
 
 Write-Host "== a view password under a path" -ForegroundColor Cyan
 $r = Visit "m.e2e.test" "/demos/k1/"

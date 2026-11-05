@@ -29,4 +29,13 @@ http.createServer(async (req, res) => {
   }
 }).listen(3000);
 
-http.createServer((req, res) => res.end("second port\n")).listen(3001);
+// The second port answers one path with a 404 of its own, which must reach
+// the visitor untouched: an app's 404 is never replaced by Sitebin's page.
+http.createServer((req, res) => {
+  if (req.url === "/app-404") {
+    res.statusCode = 404;
+    res.end("app-own-404\n");
+    return;
+  }
+  res.end("second port\n");
+}).listen(3001);
