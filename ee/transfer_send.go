@@ -636,7 +636,9 @@ func (p *provider) handleTransferPage(w http.ResponseWriter, r *http.Request) {
 	host := strings.ToLower(strings.TrimSpace(q.Get("host")))
 	tag := store.TagKey(q.Get("tag"))
 	for _, info := range infos {
-		if info.ViewID == q.Get("site") {
+		// Every site named: one from a site row, several from the
+		// workspace's bulk selection.
+		if slices.Contains(q["site"], info.ViewID) {
 			add(info.ViewID)
 		}
 		if host != "" {

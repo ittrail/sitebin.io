@@ -1792,6 +1792,40 @@ answers `{"signed_in":true|false}` (with CORS credentials only for a session
 origin), never slides the session and sets no cookie; without accounts it is
 a `404`.
 
+### The workspace interface *(Enterprise)*
+
+Every account chooses between two dashboards: **Classic** (the pages above,
+the default) and **Workspace**. "Try the new interface" on the classic
+dashboard switches; "Classic interface" in the workspace's sidebar and on its
+Account view switches back. The choice is stored on the account
+(`account.json`, `ui`), so it holds on every device and at every sign-in.
+
+The workspace shows the account's sites in one table — status, address, type,
+tags, visitors of the last 7 days, last change, expiry — with tag groups as
+filters in a sidebar, status chips, grouping, sorting, a filter field, bulk
+actions (tags, expiry, transfer, download, delete), a "needs you" strip
+(expiring sites, missing DNS records, offers, invitations, locks) and Ctrl+K
+to jump to any site, domain or view. A click opens the site on a page of its
+own: the claim ticket across the top and tabs for Overview, Files, Addresses,
+Forms, Analytics, Git, Containers, People, Activity and Settings; J and K step
+through the list, Esc goes back. Inbox, Domains & zones, API tokens & agents,
+Plan & usage and Account are views of their own. For the operator, the
+instance section has an Overview (what needs a decision, and the instance's
+health), the Register (every action in a side ticket), Reports and Containers.
+
+It is a presentation, not a second implementation. Every action posts to the
+route the classic page posts to, asking for a JSON answer with the header
+`X-Sitebin-UI: json`; the site page runs the core's own `edit.js`,
+`edit-git.js` and `edit-analytics.js`, and the core serves it at `/e/{editID}`
+only to a signed-in workspace account (`ext.EditPages`) — everyone else,
+including an edit-password visitor, gets the classic edit page. Multi-step
+pages (transfer, tag management, account deletion, the register's trail) open
+inside the workspace frame. Two reads are new: `GET /account/api/state` (the
+dashboard's data as JSON, without the lock holder, abuse findings or CSP data
+the owner never sees) and `GET /account/api/sites/{id}/activity` (the site's
+log for its owner and admins, without addresses or user agents); the
+operator's console data is at `/account/api/admin/{register,reports,containers,health}`.
+
 ### Site ownership *(Enterprise)*
 
 On an instance running open, with no accounts, none of this exists. A signed-in account can take an anonymous drop into its account, hand sites to

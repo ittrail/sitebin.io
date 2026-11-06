@@ -1,0 +1,170 @@
+# The workspace UI: a second account interface, chosen per account
+
+Date: 2026-11-06. Status: approved by the operator through the clickable
+mockup ("v2", `Sitebin-Project/mockups/2026-11-06-site-management/index.html`,
+first version kept as `index-v1.html`). The operator's words: build *exactly
+this* UI, with *all* the functions the current one has, as an alternative to
+it, switchable per account at any time, and remembered for the account.
+
+## Why
+
+The account dashboard grew one card at a time: a 720 px column in which every
+site carries up to seven buttons and three inline forms, followed by tokens,
+zones, billing, plan and the danger zone. The edit page is a second long
+column. The admin console's register puts expiry, lock and delete into every
+row. With dozens of sites, finding and changing one is slow.
+
+## What the operator decided
+
+- **Two interfaces, one product.** "Classic" (today's pages, unchanged) and
+  "Workspace" (the mockup). The account chooses; the choice is stored on the
+  account (`account.json`, field `ui`), so it follows the person to every
+  device and every sign-in, and a toggle switches it at any time, both ways.
+  Default: classic, so nobody's interface changes under them.
+- **Look and behaviour of the mockup v2**: sidebar (sites, shared, inbox, tag
+  groups as filters, domains & zones, tokens & agents, plan & usage, account;
+  the instance section for the operator), a dense site table with status
+  chips, grouping, sorting, filter and bulk actions, a "needs you" strip,
+  Ctrl+K search; a click on a site opens a **full-width site page**: the claim
+  ticket across the top (stamps, name, address, tags | facts, actions) and
+  tabs Overview, Files, Addresses, Forms, Analytics, Git, Containers, People,
+  Activity, Settings; J/K steps through the filtered list, Esc goes back. The
+  operator's overview is a triage list with the health of the instance; the
+  register opens a side ticket with the operator's actions.
+- **Every function the classic UI has works in the workspace** (list below).
+
+## Architecture
+
+The rule that shapes it: **no authorization or business rule is written a
+second time.** The workspace is a different *presentation* of the same
+server routes and the same site client.
+
+1. **Preference.** `account.Account.UI` (`""` classic, `"workspace"`),
+   `POST /account/ui` (CSRF, `ui=classic|workspace`) stores it and returns to
+   `/account`. Classic pages show "Try the new interface"; the workspace has
+   the way back in its sidebar and on the Account view.
+2. **The account shell** (`ee/ui/`, ELv2, embedded): `GET /account` serves
+   `app.html` to a workspace account instead of the dashboard template; the
+   assets are served at `/account/ui/{file}` (versioned like the core's
+   `?v=`). The page boots from `GET /account/api/state` — an explicit JSON
+   view of what the dashboard renders (never `ext.SiteInfo` wholesale: the
+   owner must not see who placed a lock, the abuse findings or the CSP
+   report data). The CSP is the dashboard's with `script-src 'self'`.
+3. **Actions reuse the existing POST routes.** The shell posts the same forms
+   with `fetch` plus the header `X-Sitebin-UI: json` (a custom header, so a
+   cross-site form cannot send it). A middleware on every `/account` route
+   wraps the response writer for such a request; `p.redirect`, `renderMessage`
+   (a secret shown once — new token, new edit password — rides in `detail`)
+   and `leaveTo` answer JSON instead of HTML; `http.Error` stays text with
+   its status. Nothing else in the handlers changes.
+4. **Server-rendered flows in the workspace frame.** Multi-step pages that
+   stay server-rendered (transfer wizard, its confirmations, tag merge steps,
+   account deletion confirm, adopt, messages) are rendered with a workspace
+   head when the account prefers it: every ee template is parsed twice
+   (classic head and workspace head, same body), and the middleware marks
+   the writer. The workspace head carries the sidebar and the workspace CSS,
+   which restyles the classic markup.
+5. **The site page.** The core's `/e/{editID}` asks the optional seam
+   `ext.EditPages` first; the extension serves `ee/ui/site.html` to a
+   signed-in workspace account. That page contains every element id
+   `edit.html` has, arranged in the workspace tabs, and loads the core's own
+   `edit.js`, `edit-git.js` and `edit-analytics.js` unchanged in their rules;
+   `site.js` (ee) renders the ticket header, the tab bar, Overview, People and
+   Activity, and maps the tabs onto edit.js's ("live" holds the file, address,
+   form, container and settings tabs; "git" and "analytics" are edit.js's).
+   Anyone without a workspace account (password visitors, community build)
+   gets `edit.html` exactly as before.
+6. **New reads the mockup needs**, all behind the existing standing rules:
+   - `GET /account/api/sites/{id}/activity`: the site's provenance for its
+     owner or admin, without addresses or user agents (like the GDPR export's
+     redaction of foreign entries).
+   - `ext.SiteInfo` gains `UpdatedAt`, `ContainerEnabled` and
+     `ContainerStatus` (core, additive) for the list's Changed and Status
+     columns.
+   - Operator JSON (`/account/api/admin/…`: register, reports, containers,
+     trail, account) built by the same functions the HTML console uses, plus
+     the instance health (licence, data volume free space, containers,
+     mailers).
+   - Visitors in the list come from the site's own analytics API, fetched per
+     visible row by the browser (session standing), never computed for every
+     site on the server.
+
+## Every function, and where it lives in the workspace
+
+| Function today | Workspace |
+|---|---|
+| Sign out, Manage account (IdP console), Instance register link | Account view; sidebar |
+| Licence notice | banner above every view |
+| Takeovers (accept all / decline), invitations (accept / decline) | Inbox |
+| Site list, tag filter (all, untagged, group, tag), counts | Sites table, sidebar tags, status chips |
+| Rename, add/remove tag (new tag with group) | Settings tab; row menu; bulk Tags |
+| Manage (edit page) | the site page |
+| Leave a shared site | People tab; row menu |
+| Share with admin, end share, cancel invitation | People tab |
+| Transfer (wizard, bundles, dates, cancel) | People tab / bulk → transfer pages in the workspace frame |
+| Reset edit password (shown once) | People tab; row menu → secret dialog |
+| Delete site (with Git note) | Settings danger zone; row menu; bulk |
+| Adopt an anonymous drop | Inbox |
+| API tokens: create (shown once), revoke, MCP endpoint | API tokens & agents |
+| Zones: add, check now, remove, records | Domains & zones |
+| Billing portal, cancel contracts link, plans (upgrade, switch) | Plan & usage |
+| Delete account (local confirm / stack) | Account view |
+| Tag management (groups, colours, rename, merge, delete, order) | Tags view (sidebar "Manage") |
+| Edit page: files (browse, upload, ZIP, folder, replace all, delete, editor, download ZIP), usage | Files tab |
+| Containers (start/restart/stop, services, logs, stats) | Containers tab |
+| Name, tags, behaviour (mode, viewer entry, SPA fallback, not-found page, caching), start-page note | Settings tab |
+| Access (view password, WebDAV, FTP, expiry) | Settings tab (WebDAV/FTP also under Files "other ways in") |
+| Custom domains (add, proof, check now, remove, redirects, targets, generated address, per-port addresses) | Addresses tab |
+| Forms (add, edit, remove, resend confirmation, snippet) | Forms tab |
+| Git tab, Analytics tab (all sub-tabs) | Git, Analytics tabs (the same modules) |
+| Admin banner for a shared site | stamps + People tab |
+| Locked site (held page), password unlock | unchanged: workspace only for signed-in accounts; held page shown in the frame |
+| Register: search (text, IP/CIDR), filters, figures, lock (reason), keep, unlock, hold, release, expiry, delete, dismiss findings, provenance, trail, account page | Instance → Register (side ticket), Overview |
+| Reports (lock from a report) | Instance → Reports |
+| Containers console (defaults, per-service limits, usage) | Instance → Containers |
+
+## Non-goals
+
+- No change to any rule, quota, permission or API shape.
+- The classic UI stays the default and stays fully supported.
+- No mobile app; the workspace is responsive like the mockup.
+- Password-only (anonymous) site management stays classic.
+
+## Testing
+
+- Go (both tags): preference round trip; `/account` serves the shell only to a
+  workspace account; JSON mode for redirect/message/leaveTo and its absence
+  without the header; the state JSON hides lock holder and findings; the edit
+  page seam (community path unchanged); activity redacts IP/UA and refuses a
+  stranger; SiteInfo's new fields; operator JSON refuses a non-admin.
+- Browser: every row of the table above exercised against a local enterprise
+  instance (local auth), both interfaces.
+- The existing e2e suites (`accounts.ps1`, `ownership.ps1`, `tiers.ps1`) stay
+  green: classic is the default.
+
+## Corrections (post-implementation)
+
+What building it changed or settled, 2026-11-06:
+
+- **The console's JSON reuses the HTML handlers whole.** Instead of
+  refactoring each console handler, `uiCapture` runs it with a writer the twin
+  template recognises, which keeps the view the page would have rendered. The
+  JSON is therefore exactly what the HTML console shows (same filters, same
+  refusals); its field names are the Go field names.
+- **Refusal pages read as text.** Some routes answer a refusal with a page of
+  their own (share and transfer plan checks). In JSON mode the shell parses
+  such an answer's heading and text with `DOMParser` and shows them in a
+  dialog; nothing in the page is executed or inserted as HTML.
+- **The site page's delete is a dialog.** edit.js deletes on a second click
+  and replaces the page; the workspace catches the button first, asks in a
+  dialog, calls the same `DELETE /api/sites/{editID}` and returns to the list.
+- **Containers are shown only where the runtime is** (`account.containers` in
+  the state), as the classic console hides its tab.
+- **The transfer page preselects every `site` parameter**, so the bulk
+  "Transfer" opens one offer for the whole selection (a single `site` is
+  unchanged).
+- **`TestWorkspaceSitePageCarriesEveryEditPageID`** fails when edit.html gains
+  an id that ee/ui/site.html lacks: such a control would silently do nothing
+  in the workspace.
+- **Not verified:** the narrow (phone) layout was ported from the mockup's
+  breakpoints and not exercised on a device.

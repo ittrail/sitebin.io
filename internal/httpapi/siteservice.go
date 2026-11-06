@@ -31,7 +31,7 @@ func (s siteService) infoOf(site *store.Site) ext.SiteInfo {
 	u, _ := s.a.st.SiteUsage(site)
 	st := s.a.st.Stats(site)
 	view := site.Meta.ViewRule()
-	return ext.SiteInfo{
+	info := ext.SiteInfo{
 		ViewOff:        view.Mode != store.ViewServe,
 		ViewRedirectTo: view.To,
 		Violations:     st.CSPViolations,
@@ -58,7 +58,12 @@ func (s siteService) infoOf(site *store.Site) ext.SiteInfo {
 		ViewPassword:   site.Meta.ViewPasswordProtected,
 		Locked:         s.a.extLock(site.Meta.Locked),
 		Findings:       extFindings(site.Meta.Abuse),
+		UpdatedAt:      site.Meta.UpdatedAt,
 	}
+	if c := site.Meta.Container; c != nil {
+		info.ContainerEnabled, info.ContainerStatus = c.Enabled, c.Status
+	}
+	return info
 }
 
 // extFindings maps the abuse guard's unreviewed findings onto the seam's.

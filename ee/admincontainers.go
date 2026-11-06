@@ -5,7 +5,6 @@ package ee
 import (
 	"errors"
 	"fmt"
-	"html/template"
 	"log/slog"
 	"maps"
 	"math"
@@ -495,7 +494,7 @@ const containersCSS = `
   @media (max-width: 900px) { .adm form.svc { grid-template-columns: 1fr; } .adm .svc .acts { justify-content: flex-start; } }
 </style>`
 
-var containersTmpl = template.Must(template.New("containers").Parse(pageHead + adminConsoleCSS + containersCSS + `
+var containersTmpl = twin("containers", nil, adminConsoleCSS+containersCSS+`
 <main class="adm">
   <h1>Containers</h1>
   <p class="lede">The memory, CPU and process limits of every customer container. Signed in as {{.Email}} · <a href="/account">back to your account</a></p>
@@ -571,4 +570,4 @@ var containersTmpl = template.Must(template.New("containers").Parse(pageHead + a
     {{end}}
   </section>
 </main>
-` + pageFoot))
+`)

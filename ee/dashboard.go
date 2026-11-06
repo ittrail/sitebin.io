@@ -70,6 +70,12 @@ func (p *provider) PublicRoutes() map[string]http.Handler {
 	p.zoneRoutes(routes)
 	p.transferRoutes(routes)
 	p.shareRoutes(routes)
+	p.workspaceRoutes(routes)
+	// Every account route learns which interface the account chose (the
+	// workspace frame) and whether the request wants JSON answers.
+	for pat, h := range routes {
+		routes[pat] = p.withUI(h)
+	}
 	return routes
 }
 
@@ -113,6 +119,10 @@ func (p *provider) handleRoot(w http.ResponseWriter, r *http.Request) {
 	}
 	// Sliding lifetime: a render re-issues the cookie for a full term.
 	http.SetCookie(w, p.sessions.Cookie(acc.ID, acc.TokenVersion))
+	if acc.UI == uiWorkspace {
+		p.renderWorkspace(w, r, acc)
+		return
+	}
 	p.renderDashboard(w, r, acc, p.takeNotice(w, r, acc))
 }
 
@@ -642,21 +652,33 @@ func (p *provider) cancelSubscription(r *http.Request, acc *account.Account) err
 // ---- rendering ----
 
 func (p *provider) redirect(w http.ResponseWriter, r *http.Request, path string) {
+	if u, ok := uiJSON(w); ok {
+		u.answer(uiAnswer{OK: u.status < 400, Redirect: path})
+		return
+	}
 	http.Redirect(w, r, path, http.StatusSeeOther)
 }
 
 // leaveTo answers a form submission whose destination is another origin.
 // Not a redirect: see handoffTmpl for why the browser would drop one.
 func (p *provider) leaveTo(w http.ResponseWriter, url, title, body string) {
+	if u, ok := uiJSON(w); ok {
+		u.answer(uiAnswer{OK: true, Leave: url})
+		return
+	}
 	p.securityHeaders(w)
 	w.WriteHeader(http.StatusOK)
 	handoffTmpl.Execute(w, struct{ URL, Title, Body string }{url, title, body})
 }
 
 func (p *provider) securityHeaders(w http.ResponseWriter) {
-	w.Header().Set("Content-Security-Policy",
-		"default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "+
-			"script-src "+copyScriptCSP+"; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+	csp := "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " +
+		"script-src " + copyScriptCSP + "; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+	if uiFrame(w) {
+		// The workspace frame runs its own scripts (shell.js) as well.
+		csp = workspaceCSP()
+	}
+	w.Header().Set("Content-Security-Policy", csp)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Referrer-Policy", "no-referrer")
@@ -814,32 +836,7 @@ func (p *provider) renderDashboard(w http.ResponseWriter, r *http.Request, acc *
 	// visible, and it restamps every site's expiry. Reading the rows before it
 	// would show the owner the pre-change dates on the one render that matters.
 	p.syncTier(acc)
-	infos, _ := p.ownedSiteInfos(acc)
-	rows := make([]siteRow, 0, len(infos))
-	canShare, openInvites, plans := p.canShareFrom(acc), p.liveInvitesBySite(acc), sharingMemo{}
-	owned := map[string]bool{}
-	for _, info := range infos {
-		owned[info.ViewID] = true
-		row := siteRow{
-			SiteInfo:   info,
-			SizeText:   humanBytes(info.Bytes + info.GitBytes),
-			ExpiryText: expiryText(info.ExpiresAt),
-			CSRF:       token,
-		}
-		if info.GitBytes > 0 {
-			row.GitText = humanBytes(info.GitBytes)
-		}
-		if info.Locked != nil {
-			row.LockedText = info.Locked.At.Local().Format("2006-01-02")
-			// A lock outlives the expiry; saying the date would promise
-			// a deletion that is not coming.
-			row.ExpiryText = "kept while locked"
-		}
-		p.shareRowsFor(&row, canShare, openInvites, plans)
-		rows = append(rows, row)
-	}
-	// Sites shared with the account sit among its own.
-	rows = append(rows, p.sharedRows(acc, token, owned)...)
+	rows := p.dashboardRows(acc, token)
 	tags := p.applyTags(r, acc, rows)
 	current := p.effectiveTierFresh(acc)
 	tier := current.Label

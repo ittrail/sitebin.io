@@ -80,6 +80,14 @@ func (a *API) editPage(w http.ResponseWriter, r *http.Request) {
 		a.notFoundPage(w, r)
 		return
 	}
+	// A provider may serve its own page to some visitors (the workspace
+	// interface of a signed-in account); it uses the same API, so the
+	// gate below every call stays the one in withEditAuth.
+	if p, ok := ext.Get(); ok && p.AccountsEnabled() {
+		if ep, ok := p.(ext.EditPages); ok && ep.ServeEditPage(w, r) {
+			return
+		}
+	}
 	a.servePage(w, "static/edit.html")
 }
 

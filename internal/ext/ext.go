@@ -849,6 +849,23 @@ type SiteInfo struct {
 	// Findings are the abuse guard's hits not yet reviewed, newest last. The
 	// register shows them; the owner never sees them.
 	Findings []ScanFinding
+	// UpdatedAt is the site's last content or settings change, as meta.json
+	// records it. The workspace list sorts and shows by it.
+	UpdatedAt time.Time
+	// ContainerEnabled and ContainerStatus are a container site's desired
+	// state and the runtime's last observed word for it ("running",
+	// "stopped", "error"…), for the list's status column.
+	ContainerEnabled bool
+	ContainerStatus  string
+}
+
+// EditPages is implemented by a Provider that serves its own page at
+// /e/{editID} to some visitors — the enterprise workspace interface, for a
+// signed-in account that chose it. OPTIONAL: the core asks it after the
+// site is known to exist; false (and no provider) serves edit.html as
+// always. The page it serves must use the same site API, so no rule moves.
+type EditPages interface {
+	ServeEditPage(w http.ResponseWriter, r *http.Request) bool
 }
 
 // SiteAdmin is one account a site is shared with; Until, when set, is when

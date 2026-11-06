@@ -51,8 +51,14 @@ type Account struct {
 	// Nil — every account written before suspensions existed — is active.
 	SuspendedAt     *time.Time `json:"suspended_at,omitempty"`
 	SuspendedReason string     `json:"suspended_reason,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	// UI is the account dashboard the person chose: "" the classic pages,
+	// "workspace" the workspace interface (ee/workspace.go). Stored here,
+	// not in a cookie, so the choice follows the account to every device
+	// and every sign-in. Missing (every account before the choice existed)
+	// is classic.
+	UI        string    `json:"ui,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Suspended reports whether the account is suspended.

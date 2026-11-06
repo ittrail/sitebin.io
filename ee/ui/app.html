@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#0a0e18">
+<title>Sites — Sitebin</title>
+<link rel="icon" href="/_sitebin/assets/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/_sitebin/assets/static/app.css">
+<link rel="stylesheet" href="{{.Asset.app_css}}">
+</head>
+<body class="ws ws-app" data-notice="{{.Notice}}">
+<div class="app" id="app">
+  <aside class="side" id="side" aria-label="Navigation"></aside>
+  <div class="main">
+    <main class="view" id="view"><p class="loading">Loading your sites…</p></main>
+    <aside class="insp" id="insp" aria-label="Details"></aside>
+  </div>
+</div>
+<div id="toast" role="status"></div>
+<script src="{{.Asset.shell_js}}"></script>
+<script src="{{.Asset.app_js}}"></script>
+</body>
+</html>

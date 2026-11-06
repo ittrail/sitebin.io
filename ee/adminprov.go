@@ -386,7 +386,7 @@ const provTableTmpl = `{{define "log"}}{{if .}}
 {{template "log" .Rows}}
 {{end}}`
 
-var trailTmpl = template.Must(template.New("trail").Funcs(provFuncs).Parse(pageHead + adminConsoleCSS + provConsoleCSS + provTableTmpl + `
+var trailTmpl = twin("trail", provFuncs, adminConsoleCSS+provConsoleCSS+provTableTmpl+`
 <main class="adm">
   <a class="back" href="/account/admin">&larr; instance register</a>
   <h1>Trail of {{if .Site.Name}}{{.Site.Name}} · {{end}}{{.Site.ViewID}}</h1>
@@ -402,13 +402,13 @@ var trailTmpl = template.Must(template.New("trail").Funcs(provFuncs).Parse(pageH
   {{template "log" .Rows}}
   {{with .Account}}<h2>Owner</h2>{{template "account" .}}{{end}}
 </main>
-` + pageFoot))
+`)
 
-var accountProvTmpl = template.Must(template.New("accountprov").Funcs(provFuncs).Parse(pageHead + adminConsoleCSS + provConsoleCSS + provTableTmpl + `
+var accountProvTmpl = twin("accountprov", provFuncs, adminConsoleCSS+provConsoleCSS+provTableTmpl+`
 <main class="adm">
   <a class="back" href="/account/admin">&larr; instance register</a>
   <h1>Account {{.Email}}</h1>
   <p class="lede">Where this account signed up and signs in from, the tokens it minted, and its sites' creation and deletion. Kept 90 days; a suspended account's log is kept. <a href="/account/admin?q={{.Email}}">Its sites in the register</a>.</p>
   {{template "account" .}}
 </main>
-` + pageFoot))
+`)

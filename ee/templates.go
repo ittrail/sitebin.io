@@ -8,14 +8,19 @@ import "html/template"
 // on the main domain) so the enterprise UI matches the rest of Sitebin, with a
 // little page-specific layout inline.
 
-const pageHead = `<!doctype html>
+// pageHeadStart is the head every account page shares, up to its styles.
+const pageHeadStart = `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>{{block "title" .}}Account — Sitebin{{end}}</title>
 <link rel="icon" href="/_sitebin/assets/static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/_sitebin/assets/static/app.css">
-<style>
+`
+
+// acctCSS is the classic pages' own layout. The workspace frame keeps it,
+// so a page rendered inside the workspace still lays out (see frameHead).
+const acctCSS = `<style>
   .acct { width: min(720px, 100%); margin: 6vh auto; padding: 0 18px; }
   .acct .card { margin-bottom: 18px; }
   .acct h1 { font: 650 26px "Space Grotesk", system-ui, sans-serif; letter-spacing: -.02em; margin-bottom: 4px; }
@@ -95,7 +100,9 @@ const pageHead = `<!doctype html>
   .acct .licnotice { border-left: 4px solid var(--accent, #F5B84D); }
   .acct .licnotice.err { border-left-color: #E5534B; }
 </style>
-</head><body>
+`
+
+const pageHead = pageHeadStart + acctCSS + `</head><body>
 <header class="topbar">
   <a class="wordmark" href="/"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="4" y="4" width="56" height="56" rx="14" fill="#101725" stroke="#2A3550" stroke-width="2"/><rect x="16" y="16" width="32" height="6" rx="3" fill="#F5B84D"/><path d="M32 30v14M25 38l7 7 7-7" stroke="#5B8CFF" stroke-width="4.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg> sitebin</a>
   <span class="tag">account</span><span class="spacer"></span>
@@ -104,7 +111,7 @@ const pageHead = `<!doctype html>
 
 const pageFoot = `</body></html>`
 
-var authTmpl = template.Must(template.New("auth").Parse(pageHead + `
+var authTmpl = twin("auth", nil, `
 <main class="acct"><div class="authwrap"><div class="card">
   {{if eq .Mode "signup"}}
     <h1>Create your account</h1>
@@ -139,13 +146,13 @@ var authTmpl = template.Must(template.New("auth").Parse(pageHead + `
   </div>
   {{end}}
 </div></div></main>
-` + pageFoot))
+`)
 
 // signedOutTmpl is where every sign-out ends. No script, no refresh: it must
 // never send the browser anywhere by itself (see handleSignedOut). With one
 // provider and no password form it is a single "Sign in"; otherwise each
 // provider, and the password form where there is one.
-var signedOutTmpl = template.Must(template.New("signedout").Parse(pageHead + `
+var signedOutTmpl = twin("signedout", nil, `
 <main class="acct"><div class="authwrap"><div class="card">
   <h1>You are signed out</h1>
   <p class="muted">Your Sitebin session has ended on every device. Sign in again to come back — as yourself or with a different account.</p>
@@ -159,9 +166,9 @@ var signedOutTmpl = template.Must(template.New("signedout").Parse(pageHead + `
   </div>
   {{if .Providers}}<p class="muted" style="margin-top:14px">You will be asked which account to use.</p>{{end}}
 </div></div></main>
-` + pageFoot))
+`)
 
-var resetReqTmpl = template.Must(template.New("resetreq").Parse(pageHead + `
+var resetReqTmpl = twin("resetreq", nil, `
 <main class="acct"><div class="authwrap"><div class="card">
   <h1>Reset your password</h1>
   <p class="muted">Enter your email and we'll send a reset link.</p>
@@ -172,9 +179,9 @@ var resetReqTmpl = template.Must(template.New("resetreq").Parse(pageHead + `
   </form>
   <div class="switch-link"><a href="/account/login">Back to sign in</a></div>
 </div></div></main>
-` + pageFoot))
+`)
 
-var resetConfirmTmpl = template.Must(template.New("resetconfirm").Parse(pageHead + `
+var resetConfirmTmpl = twin("resetconfirm", nil, `
 <main class="acct"><div class="authwrap"><div class="card">
   <h1>Choose a new password</h1>
   <form method="post" action="/account/reset/confirm">
@@ -185,14 +192,15 @@ var resetConfirmTmpl = template.Must(template.New("resetconfirm").Parse(pageHead
     <div style="margin-top:16px"><button class="btn primary" type="submit">Update password</button></div>
   </form>
 </div></div></main>
-` + pageFoot))
+`)
 
-var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
+var dashTmpl = twin("dash", nil, `
 <main class="acct">
   <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:18px">
     <h1 style="margin:0">Your account</h1>
     <span class="muted">{{.Email}}{{if .Tier}} · {{.Tier}} tier{{end}}</span>
     <span class="spacer" style="flex:1"></span>
+    <form class="inline" method="post" action="/account/ui" title="The new workspace: your sites in one table, each site on a page of its own. Switch back at any time."><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="ui" value="workspace"><button class="btn small primary" type="submit">Try the new interface</button></form>
     {{if .IsAdmin}}<a class="btn small" href="/account/admin">Instance register</a>{{end}}
     {{if .AccountURL}}<a class="btn small" href="{{.AccountURL}}" rel="noopener" title="Password, sign-in methods, sessions, data export and account deletion">Manage account</a>{{end}}
     <form class="inline" method="post" action="/account/logout"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn small" type="submit">Sign out</button></form>
@@ -525,12 +533,12 @@ var dashTmpl = template.Must(template.New("dash").Parse(pageHead + `
   </div>
   {{if .CancelURL}}<p class="muted" style="text-align:center;margin-top:22px"><a href="{{.CancelURL}}" rel="noopener">Cancel contracts here</a></p>{{end}}
 </main>
-` + pageFoot))
+`)
 
 // deleteConfirmTmpl is the second step of a local account deletion. It is a
 // page, not a confirm() dialog, because the dashboard's CSP has no
 // 'unsafe-inline' and an inline handler would silently never run.
-var deleteConfirmTmpl = template.Must(template.New("deleteconfirm").Parse(pageHead + `
+var deleteConfirmTmpl = twin("deleteconfirm", nil, `
 <main class="acct"><div class="authwrap"><div class="card" style="border-color:rgba(242,109,109,.4)">
   <h1 style="color:var(--danger)">Delete your account?</h1>
   <p class="muted">This removes the account <strong>{{.Email}}</strong> together with
@@ -543,7 +551,7 @@ var deleteConfirmTmpl = template.Must(template.New("deleteconfirm").Parse(pageHe
     <a class="btn" href="/account">Cancel</a>
   </form>
 </div></div></main>
-` + pageFoot))
+`)
 
 // handoffTmpl is the page a POST answers with when its destination is
 // another origin -- the stack's plan page, the backend's checkout. The
@@ -569,7 +577,7 @@ var handoffTmpl = template.Must(template.New("handoff").Parse(`<!doctype html>
 // adoptTmpl is the adopt page: the form (prefilled from the ticket's link), the
 // answer to a refusal, and the page a plan without sharing gets. The password
 // is never rendered back. No script.
-var adoptTmpl = template.Must(template.New("adopt").Parse(pageHead + `
+var adoptTmpl = twin("adopt", nil, `
 <main class="acct"><div class="authwrap"><div class="card">
   {{if .NeedsPlan}}
   <h1>Adopting needs Pro or Studio</h1>
@@ -590,9 +598,9 @@ var adoptTmpl = template.Must(template.New("adopt").Parse(pageHead + `
   </form>
   {{end}}
 </div></div></main>
-` + pageFoot))
+`)
 
-var msgTmpl = template.Must(template.New("msg").Parse(pageHead + `
+var msgTmpl = twin("msg", nil, `
 <main class="acct"><div class="authwrap"><div class="card">
   <h1>{{.Title}}</h1>
   <p class="muted">{{.Body}}</p>
@@ -604,12 +612,12 @@ var msgTmpl = template.Must(template.New("msg").Parse(pageHead + `
       <a class="btn small" href="{{.Back}}">Back</a>
     </div>
   </div>
-  <script>` + copyScript + `</script>
+  <script>`+copyScript+`</script>
   {{else}}
   <div style="margin-top:18px"><a class="btn" href="{{.Back}}">Back</a></div>
   {{end}}
 </div></div></main>
-` + pageFoot))
+`)
 
 // tagsManageCSS is the tag manager's own layout, on the dashboard's tokens
 // and the palette classes in pageHead (a colour is only ever a class name).
@@ -677,7 +685,7 @@ const tagsManageCSS = `
 // tagsTmpl is the tag manager: the groups alphabetically, each with its
 // colour as eight radio dots and its tags beneath, then "No group". Every
 // action is a POST form with the CSRF token; there is no script.
-var tagsTmpl = template.Must(template.New("tags").Parse(pageHead + tagsManageCSS + `
+var tagsTmpl = twin("tags", nil, tagsManageCSS+`
 <main class="acct tagsmgr">
   <div class="tmhead">
     <h1>Manage tags</h1>
@@ -772,13 +780,13 @@ var tagsTmpl = template.Must(template.New("tags").Parse(pageHead + tagsManageCSS
     {{else}}<p class="muted tmnew">An account has at most {{.MaxGroups}} tag groups.</p>{{end}}
   </div>
 </main>
-` + pageFoot))
+`)
 
 // tagStepTmpl is a confirmation — a tag's rename or delete, a group's
 // delete — with the form that confirms it, or the result of a change that
 // could not change every site, with those sites. Rendering it changes
 // nothing.
-var tagStepTmpl = template.Must(template.New("tagstep").Parse(pageHead + tagsManageCSS + `
+var tagStepTmpl = twin("tagstep", nil, tagsManageCSS+`
 <main class="acct"><div class="authwrap"><div class="card{{if .Danger}} tmdanger{{end}}">
   <h1>{{.Title}}</h1>
   {{range .Lines}}<p class="muted">{{.}}</p>{{end}}
@@ -797,7 +805,7 @@ var tagStepTmpl = template.Must(template.New("tagstep").Parse(pageHead + tagsMan
   <div class="tmconfirm"><a class="btn" href="/account/tags">Back to your tags</a></div>
   {{end}}
 </div></div></main>
-` + pageFoot))
+`)
 
 // adminConsoleCSS is the console's own layout. It rides on the community
 // app.css tokens like the rest of the dashboard; only the wide shell, the
@@ -927,7 +935,7 @@ const adminConsoleCSS = `
   }
 </style>`
 
-var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsoleCSS + `
+var adminTmpl = twin("admin", nil, adminConsoleCSS+`
 <main class="adm">
   <h1>Instance register</h1>
   <p class="lede">Every site on this instance — yours, other accounts', and anonymous drops. Signed in as {{.Email}} · <a href="/account">back to your account</a></p>
@@ -1068,9 +1076,9 @@ var adminTmpl = template.Must(template.New("admin").Parse(pageHead + adminConsol
     {{end}}
   </section>
 </main>
-` + pageFoot))
+`)
 
-var reportsTmpl = template.Must(template.New("reports").Parse(pageHead + adminConsoleCSS + `
+var reportsTmpl = twin("reports", nil, adminConsoleCSS+`
 <main class="adm">
   <h1>Abuse reports</h1>
   <p class="lede">Filed through the report page and POST /api/report, newest first, and kept for 14 days. Signed in as {{.Email}} · <a href="/account">back to your account</a></p>
@@ -1090,26 +1098,26 @@ var reportsTmpl = template.Must(template.New("reports").Parse(pageHead + adminCo
     {{end}}
   </section>
 </main>
-` + pageFoot))
+`)
 
 // ---- transfer (the sender's side) ----
 
 // sharePlanTmpl answers a sharing request the plan does not cover.
-var sharePlanTmpl = template.Must(template.New("shareplan").Parse(pageHead + `
+var sharePlanTmpl = twin("shareplan", nil, `
 <main class="acct"><div class="authwrap"><div class="card">
   <h1>{{.Title}}</h1>
   <p class="muted">{{.Body}}</p>
   <div style="margin-top:18px"><a class="btn primary" href="/account#plan">See the plans</a> <a class="btn" href="/account">Back</a></div>
 </div></div></main>
-` + pageFoot))
+`)
 
-var transferPlanTmpl = template.Must(template.New("transferplan").Parse(pageHead + `
+var transferPlanTmpl = twin("transferplan", nil, `
 <main class="acct"><div class="authwrap"><div class="card">
   <h1>Transferring needs Pro or Studio</h1>
   <p class="muted">Handing sites over to another account is part of the Pro and Studio plans.</p>
   <div style="margin-top:18px"><a class="btn primary" href="/account#plan">See the plans</a> <a class="btn" href="/account">Back</a></div>
 </div></div></main>
-` + pageFoot))
+`)
 
 // transferNoticesBlock is what the sender is told before an offer goes out.
 const transferNoticesBlock = `{{if .Notices.NotMove}}
@@ -1122,7 +1130,7 @@ const transferNoticesBlock = `{{if .Notices.NotMove}}
     </div>{{end}}
     <p class="muted" style="margin-top:12px">Any pending domain claims on a host that moves are not moved with it; the sweep drops them later. The edit password, API tokens, tags and shares do not travel: the new owner gets a fresh edit password when they accept.</p>`
 
-var transferTmpl = template.Must(template.New("transfer").Parse(pageHead + `
+var transferTmpl = twin("transfer", nil, `
 <main class="acct">
   <div class="card">
     <h1>Transfer sites</h1>
@@ -1144,7 +1152,7 @@ var transferTmpl = template.Must(template.New("transfer").Parse(pageHead + `
       <input type="date" id="tr-accept" name="accept_by" required value="{{.AcceptBy}}">
       <label class="f" for="tr-avail">Available from (optional, before the accept-by date)</label>
       <input type="date" id="tr-avail" name="available_from" value="{{.AvailableFrom}}">
-      {{if .HasNotices}}` + transferNoticesBlock + `{{end}}
+      {{if .HasNotices}}`+transferNoticesBlock+`{{end}}
       <div style="margin-top:16px"><button class="btn primary" type="submit">Review the offer</button> <a class="btn" href="/account">Back</a></div>
     </form>
   </div>
@@ -1178,9 +1186,9 @@ var transferTmpl = template.Must(template.New("transfer").Parse(pageHead + `
   </div>
   {{end}}
 </main>
-` + pageFoot))
+`)
 
-var transferConfirmTmpl = template.Must(template.New("transferconfirm").Parse(pageHead + `
+var transferConfirmTmpl = twin("transferconfirm", nil, `
 <main class="acct"><div class="authwrap"><div class="card">
   <h1>Offer these sites?</h1>
   <p class="muted">To {{.Email}}. They can accept until {{.AcceptBy}}{{if .AvailableFrom}}, from {{.AvailableFrom}} on{{end}}.</p>
@@ -1190,7 +1198,7 @@ var transferConfirmTmpl = template.Must(template.New("transferconfirm").Parse(pa
     <ul style="margin:6px 0 0 18px">{{range .Sites}}<li style="overflow-wrap:anywhere">{{.Label}}</li>{{end}}</ul>
     Confirming cancels that offer.
   </div>{{end}}
-  ` + transferNoticesBlock + `
+  `+transferNoticesBlock+`
   <form method="post" action="/account/transfer" style="margin-top:16px;display:inline">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     {{range .Fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}
@@ -1205,9 +1213,9 @@ var transferConfirmTmpl = template.Must(template.New("transferconfirm").Parse(pa
     <button class="btn" type="submit">Change</button>
   </form>
 </div></div></main>
-` + pageFoot))
+`)
 
-var transferConflictTmpl = template.Must(template.New("transferconflict").Parse(pageHead + `
+var transferConflictTmpl = twin("transferconflict", nil, `
 <main class="acct"><div class="authwrap"><div class="card">
   <h1>These sites share a host</h1>
   <p class="muted">A host travels whole: an address cannot stay with you while another address on the same host moves. These other sites of yours use a host the bundle uses:</p>
@@ -1228,14 +1236,14 @@ var transferConflictTmpl = template.Must(template.New("transferconflict").Parse(
   </form>
   {{end}}
 </div></div></main>
-` + pageFoot))
+`)
 
-var transferAddConfirmTmpl = template.Must(template.New("transferaddconfirm").Parse(pageHead + `
+var transferAddConfirmTmpl = twin("transferaddconfirm", nil, `
 <main class="acct"><div class="authwrap"><div class="card">
   <h1>Add these sites to the offer?</h1>
   <p class="muted">The offer to {{.Email}} gets:</p>
   <ul style="margin:10px 0 0 18px">{{range .Added}}<li style="overflow-wrap:anywhere">{{.Label}}</li>{{end}}</ul>
-  ` + transferNoticesBlock + `
+  `+transferNoticesBlock+`
   <form method="post" action="{{.Action}}" style="margin-top:16px">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     {{range .Fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}
@@ -1243,25 +1251,25 @@ var transferAddConfirmTmpl = template.Must(template.New("transferaddconfirm").Pa
     <a class="btn" href="/account/transfer">Back</a>
   </form>
 </div></div></main>
-` + pageFoot))
+`)
 
 // ---- transfer (the recipient's side) ----
 
 // takeoverRefusedTmpl answers an accept the plan or its limits refuse. Each
 // line names what stands in the way and, for a per-site cap, the site.
-var takeoverRefusedTmpl = template.Must(template.New("takeoverrefused").Parse(pageHead + `
+var takeoverRefusedTmpl = twin("takeoverrefused", nil, `
 <main class="acct"><div class="authwrap"><div class="card">
   <h1>{{.Title}}</h1>
   <p class="muted">{{.Body}}</p>
   {{if .Lines}}<ul class="muted" style="margin:10px 0 0 18px">{{range .Lines}}<li style="overflow-wrap:anywhere"><strong>{{.Label}}</strong>{{if .Site}} &middot; {{.Site}}{{end}}: {{.Detail}}</li>{{end}}</ul>{{end}}
   <div style="margin-top:18px">{{if .Plan}}<a class="btn primary" href="/account#plan">See the plans</a> {{end}}<a class="btn" href="/account">Back</a></div>
 </div></div></main>
-` + pageFoot))
+`)
 
 // takeoverResultTmpl is the result of an accept: every site that moved, with
 // its new edit password when this very response moved it (shown once, never
 // stored), and who its forms mail. No script.
-var takeoverResultTmpl = template.Must(template.New("takeoverresult").Parse(pageHead + `
+var takeoverResultTmpl = twin("takeoverresult", nil, `
 <main class="acct"><div class="card">
   <h1>{{.Title}}</h1>
   <p class="muted">{{.Lede}}</p>
@@ -1280,4 +1288,4 @@ var takeoverResultTmpl = template.Must(template.New("takeoverresult").Parse(page
     <ul style="margin:6px 0 0 18px">{{range .Stayed}}<li style="overflow-wrap:anywhere">{{.}}</li>{{end}}</ul></div>{{end}}
   <div style="margin-top:18px"><a class="btn" href="/account">Back to your account</a></div>
 </div></main>
-` + pageFoot))
+`)

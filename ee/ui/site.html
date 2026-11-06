@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0a0e18">
+<meta name="robots" content="noindex">
+<title>Manage site — Sitebin</title>
+<link rel="icon" href="/_sitebin/assets/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/_sitebin/assets/static/app.css">
+<link rel="stylesheet" href="{{.Asset.app_css}}">
+</head>
+<!-- The workspace's site page (ELv2). It holds every element id the core's
+     edit.html has, arranged in the workspace's tabs, and runs the core's own
+     edit.js, edit-git.js and edit-analytics.js: every rule and every control
+     of the edit page works here as it does there. site.js adds the ticket
+     header, the tab bar, Overview, People and Activity. -->
+<body class="ws ws-site">
+<div class="app">
+  <aside class="side" id="side" aria-label="Navigation"></aside>
+  <div class="main"><div class="view" id="view">
+    <nav class="wcrumbs" id="ws-crumbs" aria-label="Breadcrumb"><button class="btn ghost icon burger" type="button" data-ws-burger aria-label="Menu"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button></nav>
+
+    <div class="ctmsg note hidden" id="boot-error" role="alert" style="max-width:520px;margin:48px auto"></div>
+    <div class="lockwrap hidden" id="lock">
+      <div class="card">
+        <h1>Unlock this site</h1>
+        <p>Enter the edit password from your claim ticket. It was shown once when the site was published.</p>
+        <form id="lockform">
+          <input type="password" id="lockpw" placeholder="Edit password" autocomplete="current-password">
+          <div class="inline-status err" id="lockerr"></div>
+          <button class="btn primary" type="submit">Unlock</button>
+        </form>
+        <p class="sub hidden" id="lock-account" style="margin-top:16px">Your own site?
+          <a id="lock-account-link" href="/account">Sign in to your account</a> — its owner opens it here without a password.</p>
+      </div>
+    </div>
+    <div class="lockwrap hidden" id="held">
+      <div class="card">
+        <h1>This site is locked</h1>
+        <p id="held-site" class="sub"></p>
+        <p id="held-text"></p>
+      </div>
+    </div>
+
+    <main class="stage hidden" id="app">
+      <header class="wticket" id="wticket">
+        <div class="stub">
+          <div class="stamps" id="ws-stamps"></div>
+          <h1 id="site-id">…</h1>
+          <div class="addr"><a class="viewlink" id="view-link" href="#" target="_blank" rel="noopener"></a><button class="btn ghost" id="ws-copy" type="button" aria-label="Copy the address" title="Copy the address"></button></div>
+          <span class="meta" id="site-meta"></span>
+          <div class="tags" id="ws-head-tags"></div>
+        </div>
+        <div class="foil">
+          <div class="facts" id="ws-facts"></div>
+          <div class="acts" id="ws-acts"></div>
+        </div>
+      </header>
+      <div class="ctmsg note hidden" id="admin-banner">
+        <strong id="admin-shared-by"></strong>
+        <div>You manage this site as an admin. Only the owner can delete it, change its expiry or transfer it.</div>
+      </div>
+
+      <nav class="tabs hidden" role="tablist" aria-label="Site sections" id="tabs"></nav>
+      <nav class="wtabs" id="ws-tabs" role="tablist" aria-label="Site sections"></nav>
+
+      <div class="tabpanel" id="panel-live" role="tabpanel" aria-labelledby="tab-live">
+        <div class="wpane" data-pane="overview" id="pane-overview"></div>
+
+        <div class="wpane" data-pane="files"><div class="wgrid"><div class="wcol">
+          <section class="card" id="card-files">
+            <h3>Files <span class="count" id="file-count"></span>
+              <span style="flex:1"></span>
+              <button class="btn small" id="download-zip" type="button">Download ZIP</button>
+            </h3>
+            <nav class="crumbs" id="crumbs" aria-label="Folder"></nav>
+            <table class="filetable"><tbody id="filerows"></tbody></table>
+            <div class="dropmini" id="dropmini">
+              Drop files here<span id="drop-into"></span> to add or replace — or pick
+              <button type="button" id="e-pick-files">files</button> /
+              <button type="button" id="e-pick-folder">folder</button> /
+              <button type="button" id="e-pick-zip">.zip</button>
+            </div>
+            <label class="switch" style="margin-top:12px">
+              <input type="checkbox" id="replace-all">
+              <span class="knob"></span>
+              <span class="lbl">Replace everything with the next upload</span>
+            </label>
+            <input type="file" id="e-input-files" multiple class="hidden">
+            <input type="file" id="e-input-folder" webkitdirectory class="hidden">
+            <input type="file" id="e-input-zip" accept=".zip,application/zip" class="hidden">
+            <div class="usagebar"><div class="fill" id="usage-fill" style="width:0%"></div></div>
+            <div class="usagenote" id="usage-note"></div>
+          </section>
+        </div><div class="wcol">
+          <section class="card" id="ws-ways">
+            <h3>Other ways in</h3>
+            <p class="sub" style="margin:0 0 12px">Each one writes to the same files.</p>
+            <div class="opt">
+              <label class="switch">
+                <input type="checkbox" id="e-webdav">
+                <span class="knob"></span>
+                <span class="lbl">WebDAV network drive</span>
+              </label>
+              <div id="davinfo" class="dnshint hidden">
+                Mount <span class="dav-url" id="dav-url"></span><br>
+                Any username · password = your <strong>edit password</strong>.
+                <div id="dav-http-note" class="hidden" style="margin-top:10px;color:#ffd9a0">
+                  <strong>On plain HTTP:</strong> Windows Explorer and macOS Finder refuse to send
+                  the password over an unencrypted connection, so mounting fails with a 401. Use an
+                  HTTPS instance, or a client that allows it — <code>rclone</code>, WinSCP, Cyberduck,
+                  or <code>curl</code>. (Windows: set <code>BasicAuthLevel</code> to 2 and restart the
+                  WebClient service.)
+                </div>
+              </div>
+            </div>
+            <div class="opt hidden" id="ftp-opt" style="margin-top:16px">
+              <label class="switch">
+                <input type="checkbox" id="e-ftp">
+                <span class="knob"></span>
+                <span class="lbl">FTP access</span>
+              </label>
+              <div id="ftpinfo" class="dnshint hidden">
+                Connect <span class="dav-url" id="ftp-url"></span><br>
+                Username = your site's <strong>edit UUID</strong> · password = your <strong>edit password</strong>.
+                <div style="margin-top:10px;color:#ffd9a0">
+                  <strong>Heads-up:</strong> plain FTP sends your password unencrypted — use it only on a
+                  trusted network (or an FTPS-configured instance). Clients: FileZilla, WinSCP, <code>curl</code>, rclone.
+                </div>
+              </div>
+            </div>
+            <div class="opt" style="margin-top:16px" id="ws-ways-more"></div>
+          </section>
+        </div></div></div>
+
+        <div class="wpane" data-pane="addresses">
+          <section class="card" id="card-domains">
+            <h3>Addresses</h3>
+            <div id="domainrows"></div>
+            <div class="row" style="margin-top:12px">
+              <input type="text" id="e-domain" placeholder="docs.example.com or example.com/docs" style="max-width:280px">
+              <select id="e-domain-target" class="hidden" style="max-width:200px" aria-label="The port the domain serves"></select>
+              <button class="btn small primary" id="e-add-domain" type="button">Add domain</button>
+            </div>
+            <div class="dnshint">
+              A domain is attached once its DNS proves it belongs to this site: a TXT record with the token shown
+              after you add it, or a <code>CNAME</code> at the domain pointing at this site's own address. Route it with
+              <code>A → your server IP</code> or that <code>CNAME</code> (<span id="dns-target"></span> also works for routing,
+              but only the site's own address counts as proof). The certificate is issued automatically on the first visit.
+              <br><br>
+              A domain can <strong>redirect</strong> to another of this site's domains &mdash; <code>example.de &rarr; example.at</code>,
+              <code>www.example.com &rarr; example.com</code> &mdash; with the status code you pick; the path and query are kept,
+              and the redirect is answered here, on the domain's own certificate. Once a domain serves the site, its
+              <strong>generated address</strong> can be switched off or redirected too.
+              <br><br>
+              A domain can carry a <strong>path</strong> &mdash; <code>example.com/docs</code> &mdash; to serve this site
+              under it while your other projects serve the rest of the domain; the longest matching path wins. A domain
+              another of your projects already holds needs no new record. The site must be built for its path (Astro:
+              <code>base: '/docs'</code>), or it will not find its own files; a warning appears here when it is not.
+              <span id="dns-container" class="hidden"><br><br>
+              An app has one generated address per HTTP port its compose file lists under <code>http:</code>, and each
+              domain serves the port you pick. A port's generated address can be switched off once a domain serves that
+              same port. A domain whose port leaves the file stays attached and serves nothing until you point it
+              at another.</span>
+            </div>
+          </section>
+        </div>
+
+        <div class="wpane" data-pane="forms">
+          <section class="card hidden" id="card-forms">
+            <h3>Forms <span class="count" id="forms-count"></span></h3>
+            <p class="sub hidden" id="forms-none">This site's plan includes no forms.</p>
+            <div id="formrows"></div>
+            <div class="formedit" id="form-edit">
+              <div class="row">
+                <input type="text" id="f-name" placeholder="Form name, e.g. Contact" maxlength="60" style="max-width:220px">
+                <input type="email" id="f-recipient" placeholder="recipient@example.com" style="max-width:260px">
+              </div>
+              <div class="row" style="margin-top:10px">
+                <label class="chk"><input type="checkbox" id="f-captcha"> Captcha</label>
+                <label class="chk" id="f-files-wrap"><input type="checkbox" id="f-files"> Attachments</label>
+                <input type="text" id="f-redirect" placeholder="Thank-you page, e.g. /thanks.html (optional)" style="max-width:300px">
+              </div>
+              <div class="row" style="margin-top:10px">
+                <button class="btn small primary" id="f-save" type="button">Add form</button>
+                <button class="btn small hidden" id="f-cancel" type="button">Cancel</button>
+              </div>
+            </div>
+            <div class="dnshint">
+              A form mails what visitors submit to its recipient, who confirms once by email before the form goes live.
+              Paste its snippet into any page of this site: it is plain HTML and needs no script unless the captcha is on.
+              Every mail lays out the fields, carries the attachments, and includes a <code>submission.json</code> for machines.
+            </div>
+          </section>
+          <div class="card hidden" id="ws-forms-off"><div class="empty">Forms are not available on this instance.</div></div>
+        </div>
+
+        <div class="wpane" data-pane="containers">
+          <section class="card hidden" id="card-container">
+            <h3>Containers <span class="ctstatus" id="ct-status"></span>
+              <span style="flex:1"></span>
+              <button class="btn small" id="ct-start" type="button">Start</button>
+              <button class="btn small" id="ct-restart" type="button">Restart</button>
+              <button class="btn small danger" id="ct-stop" type="button">Stop</button>
+            </h3>
+            <div class="ctmsg hidden" id="ct-message"></div>
+            <div id="ct-services"></div>
+            <div class="row hidden" id="ct-logrow" style="margin-top:14px">
+              <select id="ct-logsvc" style="max-width:200px"></select>
+              <button class="btn small" id="ct-logs" type="button">Show log</button>
+            </div>
+            <pre class="ctlog hidden" id="ct-log"></pre>
+            <div class="dnshint">
+              The project runs what <code>sitebin-container-compose.yaml</code> in the site's root declares, and
+              <strong>every change to that file restarts it</strong> &mdash; however you save it. Each root folder is a
+              volume: upload your app into the folder a service mounts. A service lists the ports it speaks HTTP on
+              under <code>http:</code>; each gets an address of its own, and which domain serves which port is set on the
+              <strong>Addresses</strong> tab &mdash; that never restarts the app.
+            </div>
+          </section>
+        </div>
+
+        <div class="wpane" data-pane="people" id="pane-people"></div>
+        <div class="wpane" data-pane="activity" id="pane-activity"></div>
+
+        <div class="wpane" data-pane="settings">
+          <div class="wgrid2"><div class="wcol">
+            <section class="card">
+              <h3>Name</h3>
+              <div class="opt">
+                <div class="row">
+                  <input type="text" id="e-name" maxlength="60" placeholder="e.g. Client docs" autocomplete="off">
+                  <button class="btn small primary" id="save-name" type="button">Save</button>
+                  <button class="btn small hidden" id="clear-name" type="button">Clear</button>
+                </div>
+                <span class="sub">An optional private label, so you can tell your sites apart. Never shown to visitors.</span>
+              </div>
+            </section>
+            <section class="card">
+              <h3>Tags</h3>
+              <div class="opt">
+                <div class="filelist" id="e-tags" style="justify-content:flex-start;margin-top:0"></div>
+                <div class="row">
+                  <input type="text" id="e-tag" maxlength="30" placeholder="e.g. mockup" autocomplete="off">
+                  <button class="btn small" id="add-tag" type="button">Add</button>
+                  <button class="btn small primary" id="save-tags" type="button" disabled>Save tags</button>
+                  <span class="sub hidden" id="tags-unsaved">Unsaved changes</span>
+                </div>
+                <span class="sub">Private labels, up to 10 per site. Press Enter or type a comma to add one, then save.</span>
+              </div>
+            </section>
+            <section class="card">
+              <h3>Site type</h3>
+              <div class="opt">
+                <div class="seg" role="radiogroup" aria-label="Site mode">
+                  <label><input type="radio" name="emode" value="webserver"><span>Web server</span></label>
+                  <label><input type="radio" name="emode" value="viewer"><span>File viewer</span></label>
+                  <label class="hidden" id="mode-container"><input type="radio" name="emode" value="container"><span>Container</span></label>
+                </div>
+                <span class="sub" id="mode-sub">Web server serves files as-is. File viewer lists the files by folder and shows each one in the browser.</span>
+              </div>
+              <div class="startnote hidden" id="startpage-note" role="status">
+                <span>This site has files but no <code>index.html</code> at its root, so visitors see a 404 there.
+                  Upload an <code>index.html</code>, or show the files in the File viewer.</span>
+                <button class="btn small" id="startpage-viewer" type="button">Switch to File viewer</button>
+              </div>
+              <div class="opt hidden" id="entrywrap" style="margin-top:14px">
+                <label for="entry-file">Viewer shows</label>
+                <div class="row"><select id="entry-file"></select></div>
+                <span class="sub">The file list lets visitors browse every folder; a chosen file opens first, with the list one click away.</span>
+              </div>
+              <div class="opt hidden" id="spawrap" style="margin-top:16px">
+                <label class="switch">
+                  <input type="checkbox" id="e-spa">
+                  <span class="knob"></span>
+                  <span class="lbl">SPA fallback</span>
+                </label>
+                <span class="sub">Serve <code>index.html</code> for unknown paths — needed for single-page apps
+                  (React/Vue/etc.) so deep links and reloads work. Use relative asset paths.</span>
+              </div>
+              <div class="opt hidden" id="notfoundwrap" style="margin-top:16px">
+                <label for="e-notfound">Page for missing addresses</label>
+                <div class="row">
+                  <input type="text" id="e-notfound" maxlength="1024" placeholder="404.html" autocomplete="off">
+                  <button class="btn small" id="save-notfound" type="button">Save</button>
+                  <button class="btn small hidden" id="clear-notfound" type="button">Automatic</button>
+                </div>
+                <span class="sub"><span id="notfound-status"></span> An address that does not exist answers with status 404
+                  and this page; a folder without an <code>index.html</code> counts as missing. Without a setting, a
+                  <code>404.html</code> at the root is used. Link its styles and images from the root
+                  (<code>/assets/site.css</code>), because it is shown at whatever address was asked for.</span>
+              </div>
+            </section>
+          </div><div class="wcol">
+            <section class="card">
+              <h3>Access</h3>
+              <div class="opt">
+                <label for="e-viewpw">View password</label>
+                <div class="row">
+                  <input type="password" id="e-viewpw" autocomplete="new-password" placeholder="New view password">
+                  <button class="btn small" id="set-viewpw" type="button">Set password</button>
+                  <button class="btn small hidden" id="clear-viewpw" type="button">Remove protection</button>
+                </div>
+                <span class="sub" id="viewpw-status"></span>
+              </div>
+              <div class="opt" id="expiry-opt" style="margin-top:16px">
+                <label for="e-expires">Expires</label>
+                <div class="row">
+                  <input type="datetime-local" id="e-expires">
+                  <button class="btn small primary" id="save-expiry" type="button">Save</button>
+                  <button class="btn small" id="clear-expiry" type="button">Clear</button>
+                </div>
+                <span class="sub" id="expiry-status"></span>
+              </div>
+            </section>
+            <section class="card" id="ws-cachecard">
+              <h3>Browser caching</h3>
+              <div class="opt" id="cachewrap">
+                <div class="row">
+                  <select id="e-cache" aria-label="Browser caching">
+                    <option value="auto">Automatic &mdash; pages always fresh, hashed build files cached for a year</option>
+                    <option value="revalidate">Always check &mdash; browsers re-check every file on every visit</option>
+                    <option value="hour">Cache files for an hour</option>
+                    <option value="day">Cache files for a day</option>
+                    <option value="week">Cache files for a week</option>
+                    <option value="year">Cache files for a year</option>
+                    <option value="off">Off &mdash; send no cache headers</option>
+                  </select>
+                </div>
+                <span class="sub">Pages and data (HTML, JSON, XML, TXT) always revalidate, so visitors see an upload at once.
+                  <em>Automatic</em> caches files whose names carry a content hash (<code>index-BqCz7v8e.js</code>) for a year.
+                  The fixed times cache every other file that long: only pick one if those files never change under the same name.</span>
+              </div>
+            </section>
+          </div></div>
+          <section class="card" id="danger-zone" style="margin-top:16px">
+            <h3 style="color:var(--danger)">Danger zone</h3>
+            <div class="row">
+              <button class="btn danger" id="delete-site" type="button">Delete this site</button>
+              <span class="sub" id="delete-hint" style="margin:0">Removes all files, domains and URLs. There is no undo.</span>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <div class="tabpanel hidden" id="panel-git" role="tabpanel" aria-labelledby="tab-git">
+        <div class="wgrid"><div class="wcol">
+          <section class="card" id="git-sec-connect"><h3>Connect</h3><div id="git-connect"></div></section>
+          <section class="card" id="git-sec-history"><h3>History</h3><div id="git-commit" class="gitdetail hidden"></div><div id="git-log"></div></section>
+          <section class="card" id="git-sec-files"><h3>Files <span style="flex:1"></span><button class="btn small" id="git-zip" type="button">Download ZIP</button></h3>
+            <div class="crumbs"><div class="trail" id="git-crumbs"></div></div><div id="git-tree"></div></section>
+        </div><div class="wcol">
+          <section class="card"><h3>Status</h3>
+            <p class="sub" id="git-lifecycle">This repository belongs to this site. Deleting the site deletes the repository. <span id="git-expiry"></span></p>
+            <div id="git-status"></div></section>
+          <section class="card" id="git-sec-refs"><h3>Branches and tags</h3><div id="git-refs"></div></section>
+          <section class="card hidden" id="git-danger" style="border-color:rgba(242,109,109,.3)">
+            <h3 style="color:var(--danger)">Delete repository</h3>
+            <div class="row"><button class="btn danger" id="git-delete" type="button">Delete repository</button><span class="sub" id="git-delete-hint"></span></div>
+          </section>
+        </div></div>
+      </div>
+
+      <div class="tabpanel hidden" id="panel-analytics" role="tabpanel" aria-labelledby="tab-analytics"></div>
+    </main>
+  </div></div>
+</div>
+
+<div id="editor-overlay" class="hidden">
+  <div class="editor-box">
+    <div class="editor-head">
+      <span class="editor-name" id="editor-name"></span>
+      <span style="flex:1"></span>
+      <button class="btn small" id="editor-cancel" type="button">Cancel</button>
+      <button class="btn small primary" id="editor-save" type="button">Save</button>
+    </div>
+    <textarea id="editor-text" spellcheck="false" wrap="off"></textarea>
+  </div>
+</div>
+
+<div id="toast" role="status"></div>
+<script src="/_sitebin/assets/static/edit.js" defer></script>
+<script src="/_sitebin/assets/static/edit-git.js" defer></script>
+<script src="/_sitebin/assets/static/edit-analytics.js" defer></script>
+<script src="{{.Asset.shell_js}}" defer></script>
+<script src="{{.Asset.site_js}}" defer></script>
+</body>
+</html>
