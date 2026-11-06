@@ -781,6 +781,9 @@ type SiteInfo struct {
 	// the admin console's instance-wide list needs it as a column.
 	Owner string
 	Mode  string
+	// SPA is the web server's single-page-app fallback, so a list can name
+	// the site's type as its settings do.
+	SPA bool
 	// Name is the owner's optional label for the site; empty when unnamed.
 	// Private: the dashboard and the admin console show it, nothing served
 	// ever does.

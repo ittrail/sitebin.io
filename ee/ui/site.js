@@ -10,7 +10,16 @@
   const el = (id) => document.getElementById(id);
   const WD = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   const LIVE = ["overview", "files", "addresses", "forms", "containers", "people", "activity", "settings"];
-  let pane = "overview", me = null, activity = null, chart = null, analyticsState = null, formsLoaded = false;
+  let pane = "overview", me = null, activity = null, chart = null, analyticsState = null, formsLoaded = false, week = null;
+  // The four site types of the mockup are edit.js's mode plus its SPA switch.
+  const TYPES = [
+    ["static", "Static", "Serves your files as they are.", { mode: "webserver", spa_fallback: false }],
+    ["spa", "Single-page app", "Unknown paths get index.html.", { mode: "webserver", spa_fallback: true }],
+    ["viewer", "File viewer", "Shows the files with previews and a file list.", { mode: "viewer" }],
+    ["container", "Container", "Runs the project its compose file declares.", { mode: "container" }],
+  ];
+  const typeOf = WS.typeKey;
+  const CACHE = { auto: "Automatic", revalidate: "Always check", hour: "An hour", day: "A day", week: "A week", year: "A year", off: "Off" };
 
   // ---- the shell: sidebar, and this site's row in the account state ----
   WS.load().then(() => {
@@ -50,10 +59,33 @@
   // ---- painting ----
   function paint() {
     if (!site) return;
+    loadChart();
     header();
     crumbs();
+    settings();
     bar();
     showPane();
+  }
+
+  // ---- Settings: the parts the workspace arranges itself ----
+  function settings() {
+    const s = site, cur = typeOf(s);
+    colourTagEditor();
+    const ctOK = !el("mode-container").classList.contains("hidden");
+    el("ws-types").innerHTML = TYPES.filter(([k]) => k !== "container" || ctOK || cur === "container").map(([k, l, d]) =>
+      '<button type="button" role="radio" class="tcard' + (cur === k ? " on" : "") + '" aria-checked="' + (cur === k) + '" data-type="' + k + '"><b>' + esc(l) + "</b><span>" + esc(d) + "</span></button>").join("");
+    el("ws-notfoundcard").classList.toggle("hidden", el("notfoundwrap").classList.contains("hidden"));
+    const admin = s.role === "admin";
+    el("ws-expiry-ro").classList.toggle("hidden", !admin);
+    if (admin) el("ws-expiry-ro").textContent = (s.expires_at ? fmtDate(s.expires_at, true) : "Never") + ". Only the owner can change it.";
+  }
+  function setType(k) {
+    const t = TYPES.find((x) => x[0] === k);
+    if (!t || typeOf(site) === k) return;
+    const body = Object.assign({}, t[3]);
+    // the SPA switch belongs to the web server; leaving it alone elsewhere
+    if (body.mode !== "webserver") delete body.spa_fallback;
+    put(body, "Site type: " + t[1]);
   }
 
   function addr() { return (site.primary_url || site.view_url || "").replace(/^https?:\/\//, "").replace(/\/$/, ""); }
@@ -74,21 +106,19 @@
     document.title = (s.name || s.id) + " — Sitebin";
     el("view-link").textContent = addr();
     el("ws-copy").innerHTML = ic("copy");
+    el("ws-open").innerHTML = ic("ext");
+    el("ws-open").href = s.primary_url || s.view_url;
     // The site's own list, current after every save (edit.js re-renders);
     // the colours come from the account's tags.
-    const reg = (WS.state && WS.state.tags) || [];
-    const tags = (s.tags || []).map((n) => {
-      const t = reg.find((x) => x.name.toLowerCase() === String(n).toLowerCase());
-      return { name: n, color: t ? t.color : "grey" };
-    });
+    const tags = (s.tags || []).map((n) => ({ name: n, color: tagColor(n) }));
     el("ws-head-tags").innerHTML = tags.map((t) => '<span class="tchip tag-' + esc(t.color || "grey") + '">' + esc(t.name) + "</span>").join("") +
       '<button class="btn ghost sm" type="button" data-go="settings">' + ic("plus") + "Tag</button>";
     const expSoon = s.expires_at && daysTo(s.expires_at) <= 7;
     el("ws-facts").innerHTML = [
-      ["Type", WS.TYPE[s.mode] || s.mode],
+      ["Type", WS.typeShort(s)],
       ["Size", fmtBytes(s.usage.bytes)],
       ["Files", (s.usage.files || 0).toLocaleString("en")],
-      ["Views", typeof s.views === "number" ? s.views.toLocaleString("en") : "—"],
+      week != null ? ["Visitors 7d", week.toLocaleString("en")] : ["Views", typeof s.views === "number" ? s.views.toLocaleString("en") : "—"],
       ["Expires", s.expires_at ? fmtDate(s.expires_at) : "Never", expSoon],
     ].map(([k, v, w]) => '<div><span class="k">' + k + '</span><span class="v' + (w ? " warn" : "") + '">' + esc(v) + "</span></div>").join("");
     el("ws-acts").innerHTML =
@@ -97,6 +127,19 @@
       '<button class="btn" type="button" data-act="download">' + ic("download") + "Download</button>" +
       '<button class="btn icon" type="button" data-act="more" aria-label="More actions" title="More actions">' + ic("dots") + "</button>";
   }
+
+  function tagColor(n) {
+    const t = ((WS.state && WS.state.tags) || []).find((x) => x.name.toLowerCase() === String(n).toLowerCase());
+    return t ? t.color : "grey";
+  }
+  // edit.js redraws its tag editor on every change, a draft included.
+  function colourTagEditor() {
+    for (const c of el("e-tags").querySelectorAll(".chip")) {
+      const want = "tag-" + tagColor(c.querySelector(".name")?.textContent || "");
+      if (!c.classList.contains(want)) { c.className = "chip " + want; }
+    }
+  }
+  new MutationObserver(colourTagEditor).observe(el("e-tags"), { childList: true });
 
   function crumbs() {
     let o = WS.order();
@@ -197,6 +240,9 @@
       const local = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
       const ov = await api("GET", "/analytics/overview?from=" + local(new Date(Date.now() - 13 * WS.DAY)) + "&to=" + local(new Date()));
       chart = { series: ov.series || [], totals: ov.totals };
+      // the header's figure is the list's: unique visitors over the last 7 days
+      const wk = await api("GET", "/analytics/overview?from=" + local(new Date(Date.now() - 6 * WS.DAY)) + "&to=" + local(new Date()));
+      if (wk && wk.totals) { week = wk.totals.visitors; header(); }
     } catch { chart = { off: true, err: true }; }
     if (pane === "overview" && (!tabs.active || tabs.active === "live")) overview();
   }
@@ -228,12 +274,13 @@
       '<section class="panel"><h3>Needs attention</h3>' + (att.length ? '<ul class="attn">' + att.map(([c, i, t, b, tab]) => '<li><span class="' + c + '">' + ic(i) + '</span><span class="t">' + esc(t) + "</span>" + (b ? '<button class="btn sm" type="button" data-go="' + tab + '">' + esc(b) + "</button>" : "") + "</li>").join("") + "</ul>" : '<p class="allgood">' + ic("check") + "Nothing here needs you.</p>") + "</section>" +
       '<section class="panel"><h3>At a glance</h3><dl class="kv">' +
       "<dt>Owner</dt><dd>" + (s.role === "admin" ? esc(s.shared_by || "another account") : "You") + (me && (me.admins || []).length ? ' <span class="faint">+ ' + me.admins.length + " admin" + (me.admins.length > 1 ? "s" : "") + "</span>" : "") + "</dd>" +
-      "<dt>Type</dt><dd>" + esc(WS.TYPE[s.mode] || s.mode) + (s.mode === "webserver" && s.spa_fallback ? " · single-page app" : "") + "</dd>" +
+      "<dt>Type</dt><dd>" + esc(WS.typeLong(s)) + "</dd>" +
       "<dt>Created</dt><dd>" + esc(fmtDate(s.created_at, true)) + "</dd>" +
       "<dt>Last change</dt><dd>" + esc(ago(s.updated_at)) + "</dd>" +
-      "<dt>Expires</dt><dd>" + (s.expires_at ? esc(fmtDate(s.expires_at, true)) + (s.expiry_renews ? ' <span class="faint">renews on every change</span>' : "") : "Never") + "</dd>" +
+      "<dt>Expires</dt><dd>" + (s.expires_at ? esc(fmtDate(s.expires_at, true)) + ' <span class="faint">' + (s.expiry_renews ? "by your plan, renews on every change" : s.role === "admin" ? "set by the owner" : "set by you") + "</span>" : "Never") + "</dd>" +
       "<dt>View password</dt><dd>" + (s.view_password_protected ? "On" : "Off") + "</dd>" +
-      (s.mode !== "container" ? "<dt>Caching</dt><dd>" + esc(s.cache || "auto") + "</dd>" : "") +
+      (s.mode !== "container" ? "<dt>Caching</dt><dd>" + esc(CACHE[s.cache || "auto"] || s.cache) + "</dd>" : "") +
+      (s.git_available ? "<dt>Git</dt><dd>" + (s.usage.git_bytes ? "Repository, " + esc(fmtBytes(s.usage.git_bytes)) : "No repository yet") + "</dd>" : "") +
       "<dt>Storage</dt><dd>" + esc(fmtBytes(s.usage.bytes)) + " of " + esc(fmtBytes(s.usage.max_bytes)) + "</dd>" +
       (typeof s.views === "number" ? "<dt>Views</dt><dd>" + s.views.toLocaleString("en") + (s.last_seen ? ' <span class="faint">last ' + esc(ago(s.last_seen)) + "</span>" : "") + "</dd>" : "") +
       "</dl></section>" +
@@ -379,6 +426,8 @@
       return;
     }
     if (e.target.closest("#ws-copy")) { navigator.clipboard?.writeText(site.primary_url || site.view_url).then(() => toast("Copied.")); return; }
+    const ty = e.target.closest("[data-type]");
+    if (ty) { setType(ty.dataset.type); return; }
     const st = e.target.closest("[data-step]");
     if (st) { step(+st.dataset.step); return; }
     const p = e.target.closest("[data-people]");

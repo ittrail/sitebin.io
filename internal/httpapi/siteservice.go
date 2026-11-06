@@ -40,6 +40,7 @@ func (s siteService) infoOf(site *store.Site) ext.SiteInfo {
 		ViewID:         site.ViewID,
 		Owner:          site.Meta.OwnerAccountID,
 		Mode:           site.Meta.Mode,
+		SPA:            site.Meta.Mode == store.ModeWebserver && site.Meta.SPAFallback,
 		Name:           site.Meta.Name,
 		Tags:           append([]string(nil), site.Meta.Tags...),
 		Admins:         extAdmins(site.Meta.Admins),

@@ -219,6 +219,10 @@ type adminView struct {
 	// Containers shows the Containers tab: the instance runs container
 	// sites.
 	Containers bool
+	// Counts is how many of the instance's sites each filter holds, by the
+	// filter's value ("" for all), whatever the query: the workspace's
+	// register shows them on its filter chips.
+	Counts map[string]int
 }
 
 // matches decides whether a site survives the text query. It searches the
@@ -286,6 +290,7 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 
 	offersBySite := p.openOffersBySite()
 	rows := make([]adminRow, 0, len(sites))
+	counts := map[string]int{}
 	for _, s := range sites {
 		row := adminRow{
 			SiteInfo:       s,
@@ -328,6 +333,24 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 			row.ExpiringNow = s.ExpiresAt.Before(cutoff)
 			row.ExpiryValue = s.ExpiresAt.Local().Format("2006-01-02")
 			row.ExpiryText = row.ExpiryValue
+		}
+		counts[""]++
+		if s.Owner != "" {
+			counts["owned"]++
+		} else {
+			counts["anon"]++
+		}
+		if row.ExpiringNow {
+			counts["expiring"]++
+		}
+		if s.Origin == store.OriginMCP {
+			counts["mcp"]++
+		}
+		if s.Violations > 0 || len(s.Findings) > 0 {
+			counts["flagged"]++
+		}
+		if s.Locked != nil {
+			counts["locked"]++
 		}
 		switch filter {
 		case "owned":
@@ -382,6 +405,7 @@ func (p *provider) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	adminTmpl.Execute(w, adminView{
 		RetentionDays: int(p.host.LockRetention() / (24 * time.Hour)),
 		Containers:    p.containerLimits != nil,
+		Counts:        counts,
 		Prov:          p.rowProvenance(rows),
 		IP:            panel,
 		Email:         acc.Email,

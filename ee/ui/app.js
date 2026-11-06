@@ -143,8 +143,8 @@
       '<td><span class="sname' + (s.name ? "" : " unnamed") + '">' + (s.name ? esc(s.name) : "Untitled site") + " " + marks + '</span><span class="saddr">' + esc((s.view_url || "").replace(/^https?:\/\//, "")) + "</span></td>" +
       '<td><span class="st ' + t.cls + '">' + ic(t.icon) + esc(t.label) + "</span></td>" +
       '<td class="hide-sm">' + dom + "</td>" +
-      '<td class="hide-md num">' + esc(WS.TYPE[s.mode] || s.mode) + "</td>" +
-      '<td class="hide-sm"><div class="tags">' + s.tags.map(tagChip).join("") + "</div></td>" +
+      '<td class="hide-md num">' + esc(WS.typeShort(s)) + "</td>" +
+      '<td class="hide-sm"><div class="tags">' + s.tags.slice(0, 2).map(tagChip).join("") + (s.tags.length > 2 ? '<span class="tchip tmore" title="' + esc(s.tags.slice(2).map((t) => t.name).join(", ")) + '">+' + (s.tags.length - 2) + "</span>" : "") + "</div></td>" +
       '<td class="hide-md num r" data-vis="' + s.id + '">' + (vis == null ? "—" : vis.toLocaleString("en")) + "</td>" +
       '<td class="hide-md num">' + esc(ago(upd)) + "</td>" +
       "<td>" + exp + "</td>" +
@@ -178,7 +178,14 @@
       st().sites.length + (st().sites.length === 1 ? " site, " : " sites, ") + fmtBytes(total) + " in use.";
     const cnt = (k) => all.filter(FILTERS[k]).length;
     const chip = (k, l) => (k !== "all" && k !== "live" && !cnt(k) ? "" : '<button class="wchip' + (S.status === k ? " on" : "") + '" type="button" data-status="' + k + '">' + l + " <small>" + cnt(k) + "</small></button>");
-    const segs = [["none", ic("list") + "List"]].concat(groups.map((g) => ["g:" + g.id, ic("tag") + "By " + esc(g.name)])).concat([["status", "By status"], ["type", "By type"]]);
+    // Grouping by a tag group is offered for the groups these sites use;
+    // past two, they share one button with a menu, so the bar stays one row.
+    const used = groups.filter((g) => all.some((s) => s.tags.some((x) => groupOfKey(x.key) === g.id)));
+    if (S.group.startsWith("g:") && !used.some((g) => "g:" + g.id === S.group)) S.group = "none";
+    const curG = used.find((g) => "g:" + g.id === S.group);
+    const segs = [["none", ic("list") + "List"]]
+      .concat(used.length <= 2 ? used.map((g) => ["g:" + g.id, ic("tag") + "By " + esc(g.name)]) : [[curG ? S.group : "g:*", ic("tag") + (curG ? "By " + esc(curG.name) : "By tag group") + ic("chevd")]])
+      .concat([["status", "By status"], ["type", "By type"]]);
     if (!segs.some(([k]) => k === S.group)) S.group = "none";
 
     let body;
@@ -190,7 +197,7 @@
       body = rows.map(rowHTML).join("");
     } else {
       const key = S.group.startsWith("g:") ? (s) => { const gid = S.group.slice(2); const c = s.tags.find((x) => groupOfKey(x.key) === gid); return c ? c.name : "No " + (groups.find((g) => g.id === gid) || {}).name; }
-        : S.group === "status" ? (s) => statusOf(s).label.replace(/\d+ d$/, "soon") : (s) => WS.TYPE[s.mode] || s.mode;
+        : S.group === "status" ? (s) => statusOf(s).label.replace(/\d+ d$/, "soon") : (s) => WS.typeLong(s);
       const by = {};
       rows.forEach((s) => (by[key(s)] ||= []).push(s));
       body = Object.entries(by).map(([k, list]) => {
@@ -217,7 +224,11 @@
     view.onclick = (e) => {
       const el = e.target;
       if (el.closest("[data-status]")) { S.status = el.closest("[data-status]").dataset.status; renderSites(route()); return; }
-      if (el.closest("[data-group]")) { S.group = el.closest("[data-group]").dataset.group; renderSites(route()); return; }
+      if (el.closest("[data-group]")) {
+        const b = el.closest("[data-group]");
+        if (used.length > 2 && b.dataset.group.startsWith("g:")) { menu(b, used.map((g) => ({ label: "By " + g.name, icon: "tag", run: () => { S.group = "g:" + g.id; renderSites(route()); } }))); return; }
+        S.group = b.dataset.group; renderSites(route()); return;
+      }
       if (el.closest("[data-clear]")) { S.status = "all"; S.q = ""; renderSites(route()); return; }
       if (el.closest("[data-hide-needs]")) { localStorage.setItem("ws-needs-hidden", new Date().toDateString()); renderSites(route()); toast("Hidden until tomorrow. Nothing in it is lost."); return; }
       if (el.closest("[data-need]")) { shown[+el.closest("[data-need]").dataset.need][3](); return; }
@@ -573,7 +584,7 @@
   function rowFor(id) { return (S.regRows || []).find((r) => r.ViewID === id) || (S.reg && S.reg.Rows.find((r) => r.ViewID === id)); }
 
   async function renderOp() {
-    view.innerHTML = head("Instance", "Everything that needs a decision first.") + '<p class="loading">Reading the instance…</p>';
+    view.innerHTML = head("Instance", esc(location.hostname) + ", as the operator. Everything that needs a decision first.") + '<p class="loading">Reading the instance…</p>';
     let reg, rep, health;
     try { [reg, rep, health] = await Promise.all([adminGet("register"), adminGet("reports"), adminGet("health")]); } catch (err) { view.innerHTML = head("Instance", "") + '<div class="banner err">' + esc(err.message) + "</div>"; return; }
     S.reg = reg; S.regRows = reg.Rows; S.reports = rep; S.health = health;
@@ -591,7 +602,7 @@
     if (anonSoon) tri.push(["s-off", "clock", anonSoon + " anonymous drops expire this week", "Nothing to do: the sweep removes them", "", "Show"]);
     const word = { "s-bad": "Act now", "s-warn": "Look soon", "s-info": "Open case", "s-off": "FYI" };
     const L = health.license;
-    view.innerHTML = head("Instance", "Everything that needs a decision first.") +
+    view.innerHTML = head("Instance", esc(location.hostname) + ", as the operator. Everything that needs a decision first.") +
       '<section class="figures">' + [["Sites", f.Sites, ""], ["Account-owned", f.Owned, "owned"], ["Anonymous", f.Anonymous, "anon"], ["Stored", fmtBytes(f.Bytes), null], ["Flagged", f.Flagged + f.Scanner, "flagged", f.Flagged + f.Scanner ? "bad" : ""], ["Locked", f.Locked, "locked"]]
         .map(([k, v, flt, cls]) => (flt === null ? '<div class="fig">' : '<button class="fig ' + (cls || "") + '" type="button" data-regfilter="' + flt + '">') + '<span class="k">' + k + '</span><span class="v">' + esc(v) + "</span>" + (flt === null ? "</div>" : "</button>")).join("") + "</section>" +
       '<div class="cols2"><section class="panel" style="padding:6px 4px"><h3 style="padding:10px 14px 4px">Needs a decision</h3>' +
@@ -619,11 +630,18 @@
     renderInsp();
   }
 
+  // The trail's words: provenance records a surface and a credential.
+  const human = (a) => (a || "").replace(/[-_]/g, " ").replace(/^./, (c) => c.toUpperCase());
+  const SURF = { ui: "in the browser", api: "through the API", mcp: "by an agent (MCP)", "upload-token": "with an upload token", webdav: "over WebDAV", ftp: "over FTP", git: "by a Git push", dashboard: "from the dashboard" };
+  const AUTH = { none: "anonymously", session: "signed in", token: "with an API token", oauth: "with OAuth", password: "with the edit password" };
+  const createdHow = (t) => { const [sf, au] = (t || "").split(" · "); return [SURF[sf] || sf, AUTH[au] || au].filter(Boolean).join(", "); };
+
   async function renderRegister() {
     const flt = [["", "All"], ["owned", "Account-owned"], ["anon", "Anonymous"], ["mcp", "Agent (MCP)"], ["flagged", "Flagged"], ["locked", "Locked"], ["expiring", "Expiring 7d"]];
+    const chipsHTML = (n) => flt.map(([k, l]) => '<button class="wchip' + (S.regFilter === k ? " on" : "") + '" type="button" data-f="' + k + '">' + l + (n ? " <small>" + (n[k] || 0) + "</small>" : "") + "</button>").join("");
     view.innerHTML = head("Register", "Every site on this instance: yours, other accounts’ and anonymous drops.") +
       '<form class="toolbar" id="regform"><label class="search" style="max-width:440px">' + ic("search") + '<input id="rq" type="search" placeholder="Name, view id, owner, domain — or an IP / CIDR" value="' + esc(S.regQ) + '" aria-label="Search the register"></label>' +
-      '<div class="wchips">' + flt.map(([k, l]) => '<button class="wchip' + (S.regFilter === k ? " on" : "") + '" type="button" data-f="' + k + '">' + l + "</button>").join("") + "</div></form>" +
+      '<div class="wchips">' + chipsHTML(S.regCounts) + "</div></form>" +
       '<div id="regbody"><p class="loading">Reading the register…</p></div>';
     view.querySelector("#regform").addEventListener("submit", (e) => { e.preventDefault(); S.regQ = view.querySelector("#rq").value.trim(); renderRegister(); });
     view.onclick = (e) => {
@@ -637,6 +655,8 @@
     let reg;
     try { reg = await adminGet("register?q=" + encodeURIComponent(S.regQ) + "&filter=" + encodeURIComponent(S.regFilter)); } catch (err) { view.querySelector("#regbody").innerHTML = '<div class="banner err">' + esc(err.message) + "</div>"; return; }
     S.regRows = reg.Rows;
+    S.regCounts = reg.Counts || null;
+    view.querySelector("#regform .wchips").innerHTML = chipsHTML(S.regCounts);
     const ipPanel = reg.IP ? '<section class="panel" style="border-style:dashed;border-color:rgba(245,184,77,.45)"><h3>Seen from ' + esc(reg.IP.Query) + ": " + reg.IP.Sites + " site(s), " + (reg.IP.Accounts || []).length + " account(s)</h3>" +
       ((reg.IP.Accounts || []).length ? (reg.IP.Accounts || []).map((a) => '<div class="line" style="align-items:flex-start">' + ic("user") + '<div class="grow"><a href="/account/admin/accounts/' + encodeURIComponent(a.ID) + '"><b>' + esc(a.Email) + "</b></a>" + (a.Suspended ? '<span class="susp">Suspended</span>' : "") +
         (a.Rows || []).map((x) => '<span class="s mono">' + esc(x.When) + " · " + esc(x.Action) + (x.Site ? " " + esc(x.Site) : "") + (x.What ? " · " + esc(x.What) : "") + " · " + esc(x.IP) + "</span>").join("") + "</div></div>").join("") : '<p class="d">No account was seen from this address.</p>') + "</section>" : "";
@@ -647,7 +667,7 @@
         '<td><span class="owner' + (r.Owner ? "" : " anon") + '">' + esc(r.OwnerLabel) + (r.OwnerSuspended ? '<span class="susp" title="' + esc(r.OwnerSuspended) + '">Suspended</span>' : "") + "</span></td>" +
         '<td><span class="st ' + t.cls + '">' + ic(t.icon) + esc(t.label) + "</span></td>" +
         '<td class="hide-md"><span class="orig' + (r.Origin === "mcp" ? " mcp" : "") + '">' + esc(r.Origin || "—") + "</span></td>" +
-        '<td class="hide-md num">' + esc(WS.TYPE[r.Mode] || r.Mode) + "</td>" +
+        '<td class="hide-md num">' + esc(WS.typeShort({ mode: r.Mode })) + "</td>" +
         '<td class="hide-sm num r">' + esc(r.SizeText) + " · " + r.Files + "f</td>" +
         '<td class="hide-md num">' + esc(r.CreatedText) + "</td>" +
         "<td>" + (r.Locked ? '<span class="exp faint">held</span>' : '<span class="exp' + (r.ExpiringNow ? " soon" : "") + '">' + esc(r.ExpiryText) + "</span>") + "</td></tr>"; }).join("") :
@@ -700,8 +720,8 @@
       ((r.DomainsText || (r.ShareLines || []).length) ? '<div class="sec"><h4>Addresses and sharing</h4><p>' + esc(r.DomainsText) + "</p>" + (r.ShareLines || []).map((x) => "<p>" + esc(x) + "</p>").join("") + "</div>" : "") +
       '<div class="sec"><h4>Owner</h4><div class="lines"><div class="line">' + ic("user") + '<div class="grow"><span class="a">' + esc(r.OwnerLabel) + "</span>" + (r.OwnerSuspended ? '<span class="s warn">' + esc(r.OwnerSuspended) + "</span>" : "") + "</div>" + (r.Owner ? '<a class="btn sm" href="/account/admin/accounts/' + encodeURIComponent(r.Owner) + '">Account</a>' : "") + "</div></div></div>" +
       (prov ? '<div class="sec"><h4>Trail<a class="btn ghost sm" href="' + esc(prov.Trail) + '">Full trail</a></h4><ul class="timeline">' +
-        (prov.LastText ? '<li class="' + ((r.FindingLines || []).length ? "hot" : "") + '"><b>Last: ' + esc(prov.LastText) + "</b>" + (prov.LastIP ? '<span class="w"><a href="#" data-ip="' + esc(prov.LastIP) + '" title="' + esc(prov.LastUA) + '">' + esc(prov.LastIP) + "</a></span>" : "") + "</li>" : "") +
-        (prov.CreatedIP || prov.CreatedText ? "<li><b>Created " + esc(prov.CreatedText) + "</b>" + (prov.CreatedIP ? '<span class="w"><a href="#" data-ip="' + esc(prov.CreatedIP) + '" title="' + esc(prov.CreatedUA) + '">' + esc(prov.CreatedIP) + "</a> · everything from this address</span>" : "") + "</li>" : "") + "</ul></div>" :
+        (prov.LastText ? (() => { const [act, ...when] = prov.LastText.split(" · "); return '<li class="' + ((r.FindingLines || []).length ? "hot" : "") + '"><b>' + esc(human(act)) + '</b><span class="w">' + esc(when.join(" · ")) + (prov.LastIP ? ' · <a href="#" data-ip="' + esc(prov.LastIP) + '" title="' + esc(prov.LastUA) + '">' + esc(prov.LastIP) + "</a>" : "") + "</span></li>"; })() : "") +
+        (prov.CreatedIP || prov.CreatedText ? "<li><b>Created " + esc(createdHow(prov.CreatedText)) + '</b><span class="w">' + esc(r.CreatedText) + (prov.CreatedIP ? ' · <a href="#" data-ip="' + esc(prov.CreatedIP) + '" title="' + esc(prov.CreatedUA) + '">' + esc(prov.CreatedIP) + "</a> · everything from this address" : "") + "</span></li>" : "") + "</ul></div>" :
         '<div class="sec"><h4>Trail<a class="btn ghost sm" href="/account/admin/sites/' + encodeURIComponent(r.ViewID) + '/trail">Full trail</a></h4></div>') +
       '<div class="sec"><h4>Operator actions</h4>' + acts + "</div></div></article>";
     insp.onclick = async (e) => {

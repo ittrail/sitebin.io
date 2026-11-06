@@ -373,6 +373,7 @@ type wsSite struct {
 	EditURL        string           `json:"edit_url,omitempty"`
 	Name           string           `json:"name"`
 	Mode           string           `json:"mode"`
+	SPA            bool             `json:"spa,omitempty"`
 	ViewURL        string           `json:"view_url"`
 	ViewOff        bool             `json:"view_off"`
 	ViewRedirectTo string           `json:"view_redirect_to,omitempty"`
@@ -520,7 +521,7 @@ func (p *provider) handleUIState(w http.ResponseWriter, r *http.Request) {
 	counts := map[string]int{}
 	for _, row := range rows {
 		s := wsSite{
-			ID: row.ViewID, EditURL: row.EditURL, Name: row.Name, Mode: row.Mode,
+			ID: row.ViewID, EditURL: row.EditURL, Name: row.Name, Mode: row.Mode, SPA: row.SPA,
 			ViewURL: row.ViewURL, ViewOff: row.ViewOff, ViewRedirectTo: row.ViewRedirectTo,
 			Domains: row.DomainLinks, Bytes: row.Bytes, GitBytes: row.GitBytes, Files: row.Files, Forms: row.Forms,
 			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, ExpiresAt: row.ExpiresAt, ExpiryByOwner: row.ExpiryByOwner,

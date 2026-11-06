@@ -190,3 +190,34 @@ What building it changed or settled, 2026-11-06:
 - **A fresh SSO sign-in** is covered by
   `TestSSOSignInOfAWorkspaceAccountLandsInTheWorkspace`; in a browser it
   needs the person's own credentials at the identity provider.
+- **Side-by-side with Mockup v2 (2026-11-07):** the same five views of the
+  mockup and the workspace at 1440×900 (sites, a site, its Settings, the
+  operator's overview, the register with its side ticket). Lists, overview
+  and register matched; the site page did not, and now does:
+  - the ticket's fact is **Visitors 7d** (the list's figure: unique
+    visitors over the last seven days) when analytics are on, else Views;
+    edit.js's meta line is hidden (At a glance has it), and the address has
+    an open-in-new-tab button beside Copy;
+  - **Settings** is arranged as the mockup: "Name and tags", **Site type as
+    four cards** (Static, Single-page app, File viewer, Container — the
+    mode plus the SPA switch, written in one settings PUT; edit.js's radios
+    and switch stay in the page, hidden), "Missing pages" (shown where
+    edit.js shows the not-found field), Expiry (read-only for an admin),
+    View password, Browser caching, and a one-line Danger zone;
+  - the tag editor's chips wear the account's tag colours;
+  - At a glance names the caching policy (Automatic, not `auto`), who set
+    the expiry, and the Git repository.
+  Elsewhere: types read Static / SPA / Viewer / Container in lists and the
+  ticket (`ext.SiteInfo.SPA`, `wsSite.spa`), long names in grouping; "By
+  <tag group>" is offered only for groups the sites use, and past two they
+  share one button with a menu; a row shows two tags and "+N"; the
+  register's filter chips carry counts (`adminView.Counts`, over the whole
+  instance) and its trail reads "Created in the browser, anonymously"
+  instead of `ui · none`; the operator overview names the host.
+- **Container sites, in depth (same day):** a scripted run against real
+  Docker switched a site to Container with the type card, saw it run with
+  one generated address per `http:` port (each reaching its own port),
+  restarted it from the Containers tab, changed the compose file in the
+  editor and saw both ports answer with the change, stopped it and switched
+  back to Static — 15 checks. With it, the e2e (19) and parity (26) runs
+  pass on a fresh seed.

@@ -48,7 +48,7 @@
         <div class="stub">
           <div class="stamps" id="ws-stamps"></div>
           <h1 id="site-id">…</h1>
-          <div class="addr"><a class="viewlink" id="view-link" href="#" target="_blank" rel="noopener"></a><button class="btn ghost" id="ws-copy" type="button" aria-label="Copy the address" title="Copy the address"></button></div>
+          <div class="addr"><a class="viewlink" id="view-link" href="#" target="_blank" rel="noopener"></a><button class="btn ghost" id="ws-copy" type="button" aria-label="Copy the address" title="Copy the address"></button><a class="btn ghost" id="ws-open" href="#" target="_blank" rel="noopener" aria-label="Open the site" title="Open the site"></a></div>
           <span class="meta" id="site-meta"></span>
           <div class="tags" id="ws-head-tags"></div>
         </div>
@@ -227,38 +227,43 @@
         <div class="wpane" data-pane="settings">
           <div class="wgrid2"><div class="wcol">
             <section class="card">
-              <h3>Name</h3>
+              <h3>Name and tags</h3>
               <div class="opt">
+                <label for="e-name">Name</label>
                 <div class="row">
                   <input type="text" id="e-name" maxlength="60" placeholder="e.g. Client docs" autocomplete="off">
                   <button class="btn small primary" id="save-name" type="button">Save</button>
                   <button class="btn small hidden" id="clear-name" type="button">Clear</button>
                 </div>
-                <span class="sub">An optional private label, so you can tell your sites apart. Never shown to visitors.</span>
+                <span class="sub">A private label, so you can tell your sites apart. Never shown to visitors.</span>
               </div>
-            </section>
-            <section class="card">
-              <h3>Tags</h3>
-              <div class="opt">
+              <div class="opt" style="margin-top:14px">
+                <label for="e-tag">Tags</label>
                 <div class="filelist" id="e-tags" style="justify-content:flex-start;margin-top:0"></div>
                 <div class="row">
-                  <input type="text" id="e-tag" maxlength="30" placeholder="e.g. mockup" autocomplete="off">
+                  <input type="text" id="e-tag" maxlength="30" placeholder="Add a tag" autocomplete="off">
                   <button class="btn small" id="add-tag" type="button">Add</button>
                   <button class="btn small primary" id="save-tags" type="button" disabled>Save tags</button>
                   <span class="sub hidden" id="tags-unsaved">Unsaved changes</span>
                 </div>
-                <span class="sub">Private labels, up to 10 per site. Press Enter or type a comma to add one, then save.</span>
+                <span class="sub">Up to 10 per site. Press Enter or type a comma to add one, then save.</span>
               </div>
             </section>
             <section class="card">
               <h3>Site type</h3>
-              <div class="opt">
+              <p class="d">Decides how addresses are answered. Files stay as they are.</p>
+              <div class="wtypes" id="ws-types" role="radiogroup" aria-label="Site type"></div>
+              <!-- edit.js's own controls: the cards above set them -->
+              <div class="wsrc" hidden>
                 <div class="seg" role="radiogroup" aria-label="Site mode">
                   <label><input type="radio" name="emode" value="webserver"><span>Web server</span></label>
                   <label><input type="radio" name="emode" value="viewer"><span>File viewer</span></label>
                   <label class="hidden" id="mode-container"><input type="radio" name="emode" value="container"><span>Container</span></label>
                 </div>
-                <span class="sub" id="mode-sub">Web server serves files as-is. File viewer lists the files by folder and shows each one in the browser.</span>
+                <span class="sub" id="mode-sub"></span>
+                <div class="opt hidden" id="spawrap">
+                  <label class="switch"><input type="checkbox" id="e-spa"><span class="knob"></span><span class="lbl">SPA fallback</span></label>
+                </div>
               </div>
               <div class="startnote hidden" id="startpage-note" role="status">
                 <span>This site has files but no <code>index.html</code> at its root, so visitors see a 404 there.
@@ -270,42 +275,27 @@
                 <div class="row"><select id="entry-file"></select></div>
                 <span class="sub">The file list lets visitors browse every folder; a chosen file opens first, with the list one click away.</span>
               </div>
-              <div class="opt hidden" id="spawrap" style="margin-top:16px">
-                <label class="switch">
-                  <input type="checkbox" id="e-spa">
-                  <span class="knob"></span>
-                  <span class="lbl">SPA fallback</span>
-                </label>
-                <span class="sub">Serve <code>index.html</code> for unknown paths — needed for single-page apps
-                  (React/Vue/etc.) so deep links and reloads work. Use relative asset paths.</span>
-              </div>
-              <div class="opt hidden" id="notfoundwrap" style="margin-top:16px">
-                <label for="e-notfound">Page for missing addresses</label>
+            </section>
+            <section class="card" id="ws-notfoundcard">
+              <h3>Missing pages</h3>
+              <p class="d">What a visitor sees at an address that has no file.</p>
+              <div class="opt hidden" id="notfoundwrap">
+                <label for="e-notfound" class="wsr">Page for missing addresses</label>
                 <div class="row">
                   <input type="text" id="e-notfound" maxlength="1024" placeholder="404.html" autocomplete="off">
                   <button class="btn small" id="save-notfound" type="button">Save</button>
                   <button class="btn small hidden" id="clear-notfound" type="button">Automatic</button>
                 </div>
-                <span class="sub"><span id="notfound-status"></span> An address that does not exist answers with status 404
-                  and this page; a folder without an <code>index.html</code> counts as missing. Without a setting, a
-                  <code>404.html</code> at the root is used. Link its styles and images from the root
-                  (<code>/assets/site.css</code>), because it is shown at whatever address was asked for.</span>
+                <span class="sub"><span id="notfound-status"></span> A missing address answers with status 404 and this page;
+                  a folder without an <code>index.html</code> counts as missing. Without a setting, a <code>404.html</code> at the
+                  root is used. Link its styles and images from the root (<code>/assets/site.css</code>).</span>
               </div>
             </section>
           </div><div class="wcol">
             <section class="card">
-              <h3>Access</h3>
-              <div class="opt">
-                <label for="e-viewpw">View password</label>
-                <div class="row">
-                  <input type="password" id="e-viewpw" autocomplete="new-password" placeholder="New view password">
-                  <button class="btn small" id="set-viewpw" type="button">Set password</button>
-                  <button class="btn small hidden" id="clear-viewpw" type="button">Remove protection</button>
-                </div>
-                <span class="sub" id="viewpw-status"></span>
-              </div>
-              <div class="opt" id="expiry-opt" style="margin-top:16px">
-                <label for="e-expires">Expires</label>
+              <h3>Expiry</h3>
+              <div class="opt" id="expiry-opt">
+                <label for="e-expires" class="wsr">Expires</label>
                 <div class="row">
                   <input type="datetime-local" id="e-expires">
                   <button class="btn small primary" id="save-expiry" type="button">Save</button>
@@ -313,19 +303,33 @@
                 </div>
                 <span class="sub" id="expiry-status"></span>
               </div>
+              <p class="d hidden" id="ws-expiry-ro" style="margin:0"></p>
+            </section>
+            <section class="card">
+              <h3>View password</h3>
+              <p class="d">Visitors type it once before they see the site.</p>
+              <div class="opt">
+                <label for="e-viewpw" class="wsr">View password</label>
+                <div class="row">
+                  <input type="password" id="e-viewpw" autocomplete="new-password" placeholder="New view password">
+                  <button class="btn small" id="set-viewpw" type="button">Set</button>
+                  <button class="btn small hidden" id="clear-viewpw" type="button">Remove</button>
+                </div>
+                <span class="sub" id="viewpw-status"></span>
+              </div>
             </section>
             <section class="card" id="ws-cachecard">
               <h3>Browser caching</h3>
               <div class="opt" id="cachewrap">
                 <div class="row">
                   <select id="e-cache" aria-label="Browser caching">
-                    <option value="auto">Automatic &mdash; pages always fresh, hashed build files cached for a year</option>
-                    <option value="revalidate">Always check &mdash; browsers re-check every file on every visit</option>
+                    <option value="auto">Automatic: pages always fresh, hashed files for a year</option>
+                    <option value="revalidate">Always check: browsers re-check every file on every visit</option>
                     <option value="hour">Cache files for an hour</option>
                     <option value="day">Cache files for a day</option>
                     <option value="week">Cache files for a week</option>
                     <option value="year">Cache files for a year</option>
-                    <option value="off">Off &mdash; send no cache headers</option>
+                    <option value="off">Off: send no cache headers</option>
                   </select>
                 </div>
                 <span class="sub">Pages and data (HTML, JSON, XML, TXT) always revalidate, so visitors see an upload at once.
@@ -336,9 +340,9 @@
           </div></div>
           <section class="card" id="danger-zone" style="margin-top:16px">
             <h3 style="color:var(--danger)">Danger zone</h3>
-            <div class="row">
-              <button class="btn danger" id="delete-site" type="button">Delete this site</button>
-              <span class="sub" id="delete-hint" style="margin:0">Removes all files, domains and URLs. There is no undo.</span>
+            <div class="dzline">
+              <div class="grow"><b>Delete this site</b><span class="sub" id="delete-hint">Files, addresses and repository. There is no undo.</span></div>
+              <button class="btn small danger" id="delete-site" type="button">Delete</button>
             </div>
           </section>
         </div>

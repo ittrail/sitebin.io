@@ -41,6 +41,7 @@ const WS = (() => {
     arrowl: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
     chevl: '<path d="m15 6-6 6 6 6"/>',
     chevr: '<path d="m9 6 6 6-6 6"/>',
+    chevd: '<path d="m6 9 6 6 6-6"/>',
     git: '<circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="9" r="2.2"/><path d="M6 8.2v7.6M18 11.2c0 3-3 3.8-9.8 5.6"/>',
     mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
     chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
@@ -90,6 +91,13 @@ const WS = (() => {
     return n.toFixed(n >= 10 ? 0 : 1) + " " + u[i];
   }
   const TYPE = { webserver: "Static", viewer: "File viewer", container: "Container" };
+  // A site's type as the mockup names it: the web server splits into Static
+  // and Single-page app. Short in lists and the ticket, long elsewhere.
+  const typeKey = (s) => s.mode === "webserver" ? (s.spa || s.spa_fallback ? "spa" : "static") : s.mode;
+  const TYPE_SHORT = { static: "Static", spa: "SPA", viewer: "Viewer", container: "Container" };
+  const TYPE_LONG = { static: "Static", spa: "Single-page app", viewer: "File viewer", container: "Container" };
+  const typeShort = (s) => TYPE_SHORT[typeKey(s)] || s.mode || "";
+  const typeLong = (s) => TYPE_LONG[typeKey(s)] || s.mode || "";
   const editIDOf = (url) => (url || "").split("/").filter(Boolean).pop() || "";
   const pathOf = (url) => { try { return new URL(url, location.href).pathname; } catch { return url || ""; } };
 
@@ -446,7 +454,7 @@ const WS = (() => {
   }
 
   return {
-    ic, esc, $, fmtDate, ago, daysTo, fmtBytes, TYPE, editIDOf, pathOf, DAY,
+    ic, esc, $, fmtDate, ago, daysTo, fmtBytes, TYPE, typeKey, typeShort, typeLong, editIDOf, pathOf, DAY,
     load, get state() { return state; }, statusOf, primaryAddr, primaryURL,
     post, submit, siteAPI, download, toast, fail, dialog, confirm, closeOverlay, menu, closeMenu,
     renderSide, link, paletteOpen, openSite, saveOrder, order, setUI,
