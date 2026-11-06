@@ -43,7 +43,14 @@
   })();
   // A hash change before the state arrived (a link straight to #/…) waits
   // for the boot, which renders the hash it finds.
-  window.addEventListener("hashchange", () => { if (!WS.state) return; S.picked.clear(); S.confirm = null; render(); view.scrollTop = 0; });
+  // Every view switch also reloads the account's state quietly, so an offer,
+  // an invitation or another device's change shows without a reload.
+  window.addEventListener("hashchange", () => {
+    if (!WS.state) return;
+    S.picked.clear(); S.confirm = null; render(); view.scrollTop = 0;
+    const at = location.hash;
+    WS.load().then(() => { if (location.hash === at && !document.querySelector(".scrim.on")) render(); }).catch(() => {});
+  });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && S.regOpen) { S.regOpen = null; S.confirm = null; renderInsp(); }
     if (e.key === "/" && !/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) {

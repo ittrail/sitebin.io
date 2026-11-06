@@ -74,7 +74,13 @@
     document.title = (s.name || s.id) + " — Sitebin";
     el("view-link").textContent = addr();
     el("ws-copy").innerHTML = ic("copy");
-    const tags = (me && me.tags) || (s.tags || []).map((t) => ({ name: t, color: "grey" }));
+    // The site's own list, current after every save (edit.js re-renders);
+    // the colours come from the account's tags.
+    const reg = (WS.state && WS.state.tags) || [];
+    const tags = (s.tags || []).map((n) => {
+      const t = reg.find((x) => x.name.toLowerCase() === String(n).toLowerCase());
+      return { name: n, color: t ? t.color : "grey" };
+    });
     el("ws-head-tags").innerHTML = tags.map((t) => '<span class="tchip tag-' + esc(t.color || "grey") + '">' + esc(t.name) + "</span>").join("") +
       '<button class="btn ghost sm" type="button" data-go="settings">' + ic("plus") + "Tag</button>";
     const expSoon = s.expires_at && daysTo(s.expires_at) <= 7;
