@@ -394,7 +394,7 @@ const WS = (() => {
     const sites = state.sites.filter((s) => !q || hay(s).includes(q)).slice(0, 8);
     const doms = q ? state.sites.flatMap((s) => (s.domains || []).map((d) => [d.Domain, s])).filter(([d]) => d.includes(q)).slice(0, 5) : [];
     const views = VIEWS.concat(state.account.is_admin ? OPVIEWS : []).filter(([l]) => !q || l.toLowerCase().includes(q));
-    pItems = sites.map((s) => ["Sites", s.name || "Untitled site", primaryAddr(s), "sites", () => openSite(s)])
+    pItems = sites.map((s) => ["Sites", s.name || "Untitled drop", primaryAddr(s), "sites", () => openSite(s)])
       .concat(doms.map(([d, s]) => ["Domains", d, s.name || primaryAddr(s), "globe", () => openSite(s, "addresses")]))
       .concat(views.map(([l, i, h]) => ["Go to", l, "", i, () => { location.href = h.startsWith("#") ? link(h) : h; }]));
     pSel = Math.min(pSel, Math.max(0, pItems.length - 1));

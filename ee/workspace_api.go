@@ -10,6 +10,8 @@ import (
 
 	"github.com/ittrail/sitebin.io/ee/licensing"
 	"github.com/ittrail/sitebin.io/internal/analytics"
+	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 // ---- a site's activity, for its owner and its admins ----
@@ -127,14 +129,19 @@ func (p *provider) adminAPIRoutes(routes map[string]http.Handler) {
 }
 
 type wsHealth struct {
-	License       wsLicense `json:"license"`
-	DataFree      int64     `json:"data_free"` // bytes free on the data volume, -1 unknown
-	Mailer        bool      `json:"mailer"`
-	Containers    bool      `json:"containers"`
-	Running       int       `json:"running"`
-	Stopped       int       `json:"stopped"`
-	Failing       int       `json:"failing"`
-	RetentionDays int       `json:"retention_days"`
+	License   wsLicense `json:"license"`
+	DataFree  int64     `json:"data_free"`  // bytes free on the data volume, -1 unknown
+	DataTotal int64     `json:"data_total"` // the volume's size, -1 unknown
+	// Backup is the last complete `sitebin backup`, from the note it leaves
+	// in the data folder; nil when none has run on this data.
+	Backup        *store.BackupMark `json:"backup"`
+	Mailer        bool              `json:"mailer"`
+	FormsMail     bool              `json:"forms_mail"`
+	Containers    bool              `json:"containers"`
+	Running       int               `json:"running"`
+	Stopped       int               `json:"stopped"`
+	Failing       int               `json:"failing"`
+	RetentionDays int               `json:"retention_days"`
 }
 
 type wsLicense struct {
@@ -164,6 +171,16 @@ func (p *provider) handleAdminHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	if free, err := analytics.DiskFree(p.host.DataDir()); err == nil {
 		h.DataFree = int64(free)
+	}
+	h.DataTotal = -1
+	if total, err := analytics.DiskSize(p.host.DataDir()); err == nil {
+		h.DataTotal = int64(total)
+	}
+	if m, ok, err := store.ReadBackupMark(p.host.DataDir()); err == nil && ok {
+		h.Backup = &m
+	}
+	if fm, ok := p.host.(ext.FormsMailHost); ok {
+		h.FormsMail = fm.FormsMailConfigured()
 	}
 	if h.Containers {
 		if cs, err := p.host.Sites().ContainerSites(); err == nil {

@@ -140,7 +140,7 @@
     const upd = s.updated_at && !s.updated_at.startsWith("0001") ? s.updated_at : s.created_at;
     return '<tr class="row' + (S.picked.has(s.id) ? " picked" : "") + (s.locked ? " locked" : "") + (WS.order()?.last === s.id ? " open" : "") + '" data-site="' + s.id + '">' +
       '<td class="cb"><input type="checkbox" data-pick="' + s.id + '"' + (S.picked.has(s.id) ? " checked" : "") + ' aria-label="Select ' + esc(label(s)) + '"></td>' +
-      '<td><span class="sname' + (s.name ? "" : " unnamed") + '">' + (s.name ? esc(s.name) : "Untitled site") + " " + marks + '</span><span class="saddr">' + esc((s.view_url || "").replace(/^https?:\/\//, "")) + "</span></td>" +
+      '<td><span class="sname' + (s.name ? "" : " unnamed") + '">' + (s.name ? esc(s.name) : "Untitled drop") + " " + marks + '</span><span class="saddr">' + esc((s.view_url || "").replace(/^https?:\/\//, "")) + "</span></td>" +
       '<td><span class="st ' + t.cls + '">' + ic(t.icon) + esc(t.label) + "</span></td>" +
       '<td class="hide-sm">' + dom + "</td>" +
       '<td class="hide-md num">' + esc(WS.typeShort(s)) + "</td>" +
@@ -583,6 +583,16 @@
   }
   function rowFor(id) { return (S.regRows || []).find((r) => r.ViewID === id) || (S.reg && S.reg.Rows.find((r) => r.ViewID === id)); }
 
+  // The last complete backup, from the note `sitebin backup` leaves. A day
+  // and a bit is the nightly rhythm; older than that, something stopped it.
+  function backupLine(b) {
+    if (!b) return '<div class="line">' + ic("download") + '<div class="grow"><b>Backups</b><span class="s">None recorded on this data. <span class="mono">sitebin backup</span> leaves a note when it completes.</span></div><span class="st s-off">' + ic("dot") + "None</span></div>";
+    const age = Date.now() - new Date(b.at).getTime(), stale = age > 26 * 3600e3;
+    const when = new Date(b.at), today = new Date().toDateString() === when.toDateString();
+    const hm = String(when.getHours()).padStart(2, "0") + ":" + String(when.getMinutes()).padStart(2, "0");
+    return '<div class="line">' + ic("download") + '<div class="grow"><b>Backups</b><span class="s">Last: ' + hm + " " + (today ? "today" : fmtDate(b.at, true)) + ", " + fmtBytes(b.bytes) + (b.skipped ? ", " + b.skipped + " skipped" : "") + '.</span></div><span class="st ' + (stale ? "s-warn" : "s-ok") + '">' + ic(stale ? "alert" : "check") + (stale ? ago(b.at) : "OK") + "</span></div>";
+  }
+
   async function renderOp() {
     view.innerHTML = head("Instance", esc(location.hostname) + ", as the operator. Everything that needs a decision first.") + '<p class="loading">Reading the instance…</p>';
     let reg, rep, health;
@@ -597,7 +607,10 @@
     for (const x of (rep.Rows || []).slice(0, 5)) tri.push(["s-bad", "flag", "Abuse report: " + x.Reason, x.Target + (x.Details ? " · “" + x.Details + "”" : ""), x.Site ? x.Site.ViewID : "", x.Site ? "Review" : "Reports"]);
     const held = reg.Rows.filter((r) => r.Held);
     if (held.length) tri.push(["s-info", "hold", held.length + (held.length === 1 ? " evidence hold" : " evidence holds"), held.map((r) => r.Name || r.ViewID).join(", "), held[0].ViewID, "Show"]);
-    if (health.data_free >= 0 && health.data_free < 5 * 1024 ** 3) tri.push(["s-warn", "gauge", "Data volume nearly full", fmtBytes(health.data_free) + " free", "", "Containers"]);
+    const used = health.data_total > 0 && health.data_free >= 0 ? health.data_total - health.data_free : -1;
+    const pct = used >= 0 ? Math.round(used / health.data_total * 100) : -1;
+    const diskText = used >= 0 ? fmtBytes(used) + " used of " + fmtBytes(health.data_total) + ". Site data " + fmtBytes(f.Bytes) + (health.backup ? "; the last backup was " + fmtBytes(health.backup.bytes) + " (backups on the same disk count too)" : "") + "." : "";
+    if (pct >= 70) tri.push([pct >= 90 ? "s-bad" : "s-warn", "gauge", "Disk " + pct + " % full", "Site data " + fmtBytes(f.Bytes) + (health.backup ? ", last backup " + fmtBytes(health.backup.bytes) : "") + " on the same disk", "", "Details"]);
     const anonSoon = reg.Rows.filter((r) => !r.Owner && r.ExpiringNow).length;
     if (anonSoon) tri.push(["s-off", "clock", anonSoon + " anonymous drops expire this week", "Nothing to do: the sweep removes them", "", "Show"]);
     const word = { "s-bad": "Act now", "s-warn": "Look soon", "s-info": "Open case", "s-off": "FYI" };
@@ -608,12 +621,12 @@
       '<div class="cols2"><section class="panel" style="padding:6px 4px"><h3 style="padding:10px 14px 4px">Needs a decision</h3>' +
       (tri.length ? '<ul class="triage">' + tri.map(([c, i, t, sub, id, b], k) => '<li><span class="st ' + c + '">' + ic(i) + word[c] + '</span><div class="what"><b>' + esc(t) + "</b><span>" + esc(sub) + (id ? ' · <span class="mono">' + esc(id.slice(0, 10)) + "…</span>" : "") + '</span></div><button class="btn sm' + (c === "s-bad" ? " primary" : "") + '" type="button" data-tri="' + k + '">' + b + "</button></li>").join("") + "</ul>" :
         '<p class="allgood" style="padding:6px 14px 14px">' + ic("check") + "Nothing needs a decision.</p>") + "</section>" +
-      '<section class="panel"><h3>Health</h3><p class="d">As of now.</p><div class="lines">' +
+      '<section class="panel"><h3>Health</h3><p class="d">Checked just now.</p><div class="lines">' +
       '<div class="line">' + ic("shield") + '<div class="grow"><b>Licence</b><span class="s">' + esc(L.notice || (L.state === "licensed" ? (L.plan ? L.plan + ", " : "") + "until " + fmtDate(L.expires_at, true) + ". Renews daily." : L.state)) + '</span></div><span class="st ' + (L.restricted ? "s-bad" : L.state === "licensed" ? "s-ok" : "s-warn") + '">' + ic(L.state === "licensed" ? "check" : "alert") + esc(L.state) + "</span></div>" +
-      '<div class="line">' + ic("gauge") + '<div class="grow"><b>Data volume</b><span class="s">' + (health.data_free >= 0 ? fmtBytes(health.data_free) + " free" : "Not measured here") + "</span></div>" + (health.data_free >= 0 ? '<span class="st ' + (health.data_free < 5 * 1024 ** 3 ? "s-warn" : "s-ok") + '">' + ic(health.data_free < 5 * 1024 ** 3 ? "alert" : "check") + (health.data_free < 5 * 1024 ** 3 ? "Low" : "OK") + "</span>" : "") + "</div>" +
+      '<div class="line">' + ic("gauge") + '<div class="grow"><b>Disk</b><span class="s">' + (used >= 0 ? fmtBytes(used) + " of " + fmtBytes(health.data_total) : health.data_free >= 0 ? fmtBytes(health.data_free) + " free" : "Not measured here") + "</span></div>" + (pct >= 0 ? '<span class="st ' + (pct >= 90 ? "s-bad" : pct >= 70 ? "s-warn" : "s-ok") + '">' + ic(pct >= 70 ? "alert" : "check") + (pct >= 70 ? pct + " %" : "OK") + "</span>" : "") + "</div>" +
+      backupLine(health.backup) +
       (health.containers ? '<div class="line">' + ic("box") + '<div class="grow"><b>Containers</b><span class="s">' + health.running + " running, " + health.stopped + " stopped, " + health.failing + ' failing</span></div><span class="st ' + (health.failing ? "s-warn" : "s-ok") + '">' + ic(health.failing ? "alert" : "check") + (health.failing ? "Look" : "OK") + "</span></div>" : "") +
-      '<div class="line">' + ic("mail") + '<div class="grow"><b>Account mail</b><span class="s">' + (health.mailer ? "Configured" : "Not configured: no account mail goes out") + '</span></div><span class="st ' + (health.mailer ? "s-ok" : "s-off") + '">' + ic(health.mailer ? "check" : "dot") + (health.mailer ? "OK" : "Off") + "</span></div>" +
-      '<div class="line">' + ic("lock") + '<div class="grow"><b>Lock retention</b><span class="s">' + (health.retention_days ? health.retention_days + " days, unless held" : "Locked sites are kept until unlocked") + "</span></div></div>" +
+      '<div class="line">' + ic("mail") + '<div class="grow"><b>Mail</b><span class="s">' + (health.mailer && health.forms_mail ? "Forms and account mailer configured" : health.mailer ? "Account mailer configured; forms mail is off" : health.forms_mail ? "Forms mailer configured; no account mail goes out" : "Not configured: no mail goes out") + '</span></div><span class="st ' + (health.mailer ? "s-ok" : "s-off") + '">' + ic(health.mailer ? "check" : "dot") + (health.mailer ? "OK" : "Off") + "</span></div>" +
       "</div></section></div>";
     view.onclick = (e) => {
       const fl = e.target.closest("[data-regfilter]");
@@ -624,12 +637,28 @@
         if (x[4]) { S.regOpen = x[4]; renderInsp(); }
         else if (x[5] === "Containers") location.hash = "#/containers";
         else if (x[5] === "Reports") location.hash = "#/reports";
+        else if (x[5] === "Details") toast(diskText || "The disk could not be measured here.");
         else { S.regFilter = "expiring"; location.hash = "#/register"; }
       }
     };
     renderInsp();
   }
 
+  // A lock as the side ticket states it: who placed it, and what the
+  // retention will do (the date is the core's PurgeAt, never computed here).
+  const LOCKBY = { scanner: "by the scanner", account: "with the owner's suspension" };
+  const retention = (r) => {
+    const l = r.Locked;
+    if (l.Hold) return "Held as evidence since " + fmtDate(l.Hold.At, true) + (l.PurgeAt ? "; retention runs to " + fmtDate(l.PurgeAt, true) : "");
+    if (l.PurgeAt) return (new Date(l.PurgeAt) <= new Date() ? "Purged at the next sweep" : "Purged on " + fmtDate(l.PurgeAt, true)) + " unless you hold it";
+    return "Kept until you unlock it";
+  };
+  // The register's dates are the server's calendar days ("2026-12-16"): an
+  // operator's expiry means through that day in the server's zone, so it is
+  // written as that day, never converted to the browser's zone.
+  const dayText = (t, year) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t || ""); return m ? fmtDate(new Date(+m[1], +m[2] - 1, +m[3]), year) : t || ""; };
+  // "2026-11-06 23:12" (the register's server text) as the workspace writes dates.
+  const isoWhen = (t) => { const m = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})$/.exec(t || ""); return m ? fmtDate(m[1] + "T" + m[2], true) + ", " + m[2] : t; };
   // The trail's words: provenance records a surface and a credential.
   const human = (a) => (a || "").replace(/[-_]/g, " ").replace(/^./, (c) => c.toUpperCase());
   const SURF = { ui: "in the browser", api: "through the API", mcp: "by an agent (MCP)", "upload-token": "with an upload token", webdav: "over WebDAV", ftp: "over FTP", git: "by a Git push", dashboard: "from the dashboard" };
@@ -663,14 +692,14 @@
     view.querySelector("#regbody").innerHTML = ipPanel + '<p class="faint" style="font-size:12px;margin:-4px 0 10px">' + reg.Shown + " shown.</p>" +
       '<div class="tblwrap"><table class="tbl"><thead><tr><th>Site</th><th>Owner</th><th>Status</th><th class="hide-md">Origin</th><th class="hide-md">Type</th><th class="hide-sm r">Size</th><th class="hide-md">Created</th><th>Expires</th></tr></thead><tbody>' +
       (reg.Rows.length ? reg.Rows.map((r) => { const t = regStatus(r); return '<tr class="row' + (S.regOpen === r.ViewID ? " open" : "") + (r.Locked ? " locked" : "") + '" data-reg="' + esc(r.ViewID) + '">' +
-        '<td><span class="sname' + (r.Name ? "" : " unnamed") + '">' + (r.Name ? esc(r.Name) : "Untitled site") + '</span><span class="saddr">' + esc(r.ViewID) + (r.DomainsText ? " · " + esc(r.DomainsText) : "") + "</span></td>" +
+        '<td><span class="sname' + (r.Name ? "" : " unnamed") + '">' + (r.Name ? esc(r.Name) : "Untitled drop") + '</span><span class="saddr">' + esc(r.ViewID) + (r.DomainsText ? " · " + esc(r.DomainsText) : "") + "</span></td>" +
         '<td><span class="owner' + (r.Owner ? "" : " anon") + '">' + esc(r.OwnerLabel) + (r.OwnerSuspended ? '<span class="susp" title="' + esc(r.OwnerSuspended) + '">Suspended</span>' : "") + "</span></td>" +
         '<td><span class="st ' + t.cls + '">' + ic(t.icon) + esc(t.label) + "</span></td>" +
         '<td class="hide-md"><span class="orig' + (r.Origin === "mcp" ? " mcp" : "") + '">' + esc(r.Origin || "—") + "</span></td>" +
         '<td class="hide-md num">' + esc(WS.typeShort({ mode: r.Mode })) + "</td>" +
-        '<td class="hide-sm num r">' + esc(r.SizeText) + " · " + r.Files + "f</td>" +
-        '<td class="hide-md num">' + esc(r.CreatedText) + "</td>" +
-        "<td>" + (r.Locked ? '<span class="exp faint">held</span>' : '<span class="exp' + (r.ExpiringNow ? " soon" : "") + '">' + esc(r.ExpiryText) + "</span>") + "</td></tr>"; }).join("") :
+        '<td class="hide-sm num r" title="' + r.Files + (r.Files === 1 ? " file" : " files") + '">' + esc(r.SizeText) + "</td>" +
+        '<td class="hide-md num">' + esc(dayText(r.CreatedText)) + "</td>" +
+        "<td>" + (r.Locked ? '<span class="exp faint">held</span>' : r.ExpiryValue ? '<span class="exp' + (r.ExpiringNow ? " soon" : "") + '">' + esc(dayText(r.ExpiryValue)) + "</span>" : '<span class="exp faint">never</span>') + "</td></tr>"; }).join("") :
         '<tr><td colspan="8"><div class="empty">No site matches.</div></td></tr>') + "</tbody></table></div>";
     renderInsp();
   }
@@ -710,18 +739,18 @@
     }
     insp.innerHTML = '<article class="rticket"><div class="stub"><div class="top"><span class="stamp ' + t.cls + '">' + esc(t.label) + "</span>" + (r.Origin ? '<span class="stamp s-off">' + esc(r.Origin) + "</span>" : "") +
       '<button class="btn ghost icon close" type="button" data-close aria-label="Close">' + ic("x") + "</button></div>" +
-      '<h2 class="' + (r.Name ? "" : "unnamed") + '">' + (r.Name ? esc(r.Name) : "Untitled site") + "</h2>" +
+      '<h2 class="' + (r.Name ? "" : "unnamed") + '">' + (r.Name ? esc(r.Name) : "Untitled drop") + "</h2>" +
       '<div class="addr"><a href="' + esc(r.ViewURL) + '" target="_blank" rel="noreferrer noopener">' + esc(r.ViewID) + "</a></div>" +
-      '<div class="facts"><div><span class="k">Owner</span><span class="v" title="' + esc(r.OwnerLabel) + '">' + esc(r.Owner ? r.OwnerLabel.split("@")[0] : "Anonymous") + '</span></div><div><span class="k">Size</span><span class="v">' + esc(r.SizeText) + '</span></div><div><span class="k">Created</span><span class="v">' + esc(r.CreatedText) + '</span></div><div><span class="k">Expires</span><span class="v">' + (r.Locked ? "Held" : esc(r.ExpiryText)) + "</span></div></div></div>" +
+      '<div class="facts"><div><span class="k">Owner</span><span class="v" title="' + esc(r.OwnerLabel) + '">' + esc(r.Owner ? r.OwnerLabel.split("@")[0] : "Anonymous") + '</span></div><div><span class="k">Size</span><span class="v">' + esc(r.SizeText) + '</span></div><div><span class="k">Created</span><span class="v">' + esc(dayText(r.CreatedText)) + '</span></div><div><span class="k">Expires</span><span class="v">' + (r.Locked ? "Held" : r.ExpiryValue ? esc(dayText(r.ExpiryValue)) : "Never") + "</span></div></div></div>" +
       '<div class="perf" aria-hidden="true"></div><div class="tbody">' +
-      (r.Locked ? '<div class="sec"><h4>' + ic("lock") + "Lock</h4><dl class=\"kv\"><dt>What</dt><dd>" + esc(r.LockText) + "</dd><dt>Retention</dt><dd>" + esc(r.RetentionText) + "</dd></dl></div>" : "") +
+      (r.Locked ? '<div class="sec"><h4>' + ic("lock") + 'Lock</h4><dl class="kv"><dt>Since</dt><dd>' + esc(fmtDate(r.Locked.At, true)) + ", " + esc(LOCKBY[r.Locked.By] || "by the operator") + "</dd>" + (r.Locked.Reason ? "<dt>Reason</dt><dd>" + esc(r.Locked.Reason) + "</dd>" : "") + "<dt>Retention</dt><dd>" + esc(retention(r)) + "</dd></dl></div>" : "") +
       ((r.FindingLines || []).length ? '<div class="sec"><h4>' + ic("alert") + 'Findings<button class="btn sm" type="button" data-do="review">Dismiss</button></h4>' + r.FindingLines.map((x) => '<div class="finding bad">' + esc(x) + "</div>").join("") + (r.MoreFindings ? '<div class="finding">… and ' + r.MoreFindings + " more</div>" : "") + "</div>" : "") +
       (r.Violations ? '<div class="sec"><h4>' + ic("shield") + "CSP reports</h4><p>" + r.Violations + " blocked" + (r.Reporters ? " from " + r.Reporters + " source(s)" : "") + ": " + esc(r.BlockedText) + "</p></div>" : "") +
       ((r.DomainsText || (r.ShareLines || []).length) ? '<div class="sec"><h4>Addresses and sharing</h4><p>' + esc(r.DomainsText) + "</p>" + (r.ShareLines || []).map((x) => "<p>" + esc(x) + "</p>").join("") + "</div>" : "") +
       '<div class="sec"><h4>Owner</h4><div class="lines"><div class="line">' + ic("user") + '<div class="grow"><span class="a">' + esc(r.OwnerLabel) + "</span>" + (r.OwnerSuspended ? '<span class="s warn">' + esc(r.OwnerSuspended) + "</span>" : "") + "</div>" + (r.Owner ? '<a class="btn sm" href="/account/admin/accounts/' + encodeURIComponent(r.Owner) + '">Account</a>' : "") + "</div></div></div>" +
       (prov ? '<div class="sec"><h4>Trail<a class="btn ghost sm" href="' + esc(prov.Trail) + '">Full trail</a></h4><ul class="timeline">' +
-        (prov.LastText ? (() => { const [act, ...when] = prov.LastText.split(" · "); return '<li class="' + ((r.FindingLines || []).length ? "hot" : "") + '"><b>' + esc(human(act)) + '</b><span class="w">' + esc(when.join(" · ")) + (prov.LastIP ? ' · <a href="#" data-ip="' + esc(prov.LastIP) + '" title="' + esc(prov.LastUA) + '">' + esc(prov.LastIP) + "</a>" : "") + "</span></li>"; })() : "") +
-        (prov.CreatedIP || prov.CreatedText ? "<li><b>Created " + esc(createdHow(prov.CreatedText)) + '</b><span class="w">' + esc(r.CreatedText) + (prov.CreatedIP ? ' · <a href="#" data-ip="' + esc(prov.CreatedIP) + '" title="' + esc(prov.CreatedUA) + '">' + esc(prov.CreatedIP) + "</a> · everything from this address" : "") + "</span></li>" : "") + "</ul></div>" :
+        (prov.LastText ? (() => { const [act, ...when] = prov.LastText.split(" · "); return '<li class="' + ((r.FindingLines || []).length ? "hot" : "") + '"><b>' + esc(human(act)) + '</b><span class="w">' + esc(isoWhen(when.join(" · "))) + (prov.LastIP ? ' · <a href="#" data-ip="' + esc(prov.LastIP) + '" title="' + esc(prov.LastUA) + '">' + esc(prov.LastIP) + "</a>" : "") + "</span></li>"; })() : "") +
+        (prov.CreatedIP || prov.CreatedText ? "<li><b>Created " + esc(createdHow(prov.CreatedText)) + '</b><span class="w">' + esc(dayText(r.CreatedText, true)) + (prov.CreatedIP ? ' · <a href="#" data-ip="' + esc(prov.CreatedIP) + '" title="' + esc(prov.CreatedUA) + '">' + esc(prov.CreatedIP) + "</a> · everything from this address" : "") + "</span></li>" : "") + "</ul></div>" :
         '<div class="sec"><h4>Trail<a class="btn ghost sm" href="/account/admin/sites/' + encodeURIComponent(r.ViewID) + '/trail">Full trail</a></h4></div>') +
       '<div class="sec"><h4>Operator actions</h4>' + acts + "</div></div></article>";
     insp.onclick = async (e) => {

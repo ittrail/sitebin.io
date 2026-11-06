@@ -10,6 +10,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
+
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 func writeEvilArchive(t *testing.T, path string) {
@@ -566,5 +569,52 @@ func TestBackupIncludesRepository(t *testing.T) {
 		if got[name] != want {
 			t.Errorf("%s in the archive: %q, want %q (archive holds %d entries)", name, got[name], want, len(got))
 		}
+	}
+}
+
+// A complete backup leaves a note for the operator's health view: when, how
+// many entries, and the archive's size as written. The note is never archived
+// itself, so a restored instance does not claim the backup it came from.
+func TestBackupNotesItselfAndNeverArchivesTheNote(t *testing.T) {
+	src := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "sites", "abc", "files"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(src, "sites", "abc", "meta.json"), []byte("{}"), 0o644)
+	os.WriteFile(filepath.Join(src, "sites", "abc", "files", "index.html"), []byte("<h1>hi</h1>"), 0o644)
+
+	archive := filepath.Join(t.TempDir(), "first.tar.gz")
+	if err := backupData(src, archive); err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	m, ok, err := store.ReadBackupMark(src)
+	if err != nil || !ok {
+		t.Fatalf("no note after a complete backup: ok=%v err=%v", ok, err)
+	}
+	fi, err := os.Stat(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Bytes != fi.Size() {
+		t.Errorf("note says %d bytes, the archive has %d", m.Bytes, fi.Size())
+	}
+	if m.Entries == 0 || time.Since(m.At) > time.Minute {
+		t.Errorf("note = %+v", m)
+	}
+
+	// The second backup runs with the first one's note in the data folder.
+	second := filepath.Join(t.TempDir(), "second.tar.gz")
+	if err := backupData(src, second); err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	dst := t.TempDir()
+	if err := restoreData(dst, second); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, store.BackupMarkFile)); !os.IsNotExist(err) {
+		t.Errorf("the note was archived: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dst, "sites", "abc", "files", "index.html")); err != nil || string(b) != "<h1>hi</h1>" {
+		t.Errorf("site content lost: %q %v", b, err)
 	}
 }

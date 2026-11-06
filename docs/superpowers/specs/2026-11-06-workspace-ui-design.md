@@ -221,3 +221,26 @@ What building it changed or settled, 2026-11-06:
   editor and saw both ports answer with the change, stopped it and switched
   back to Static — 15 checks. With it, the e2e (19) and parity (26) runs
   pass on a fresh seed.
+- **The last three differences (2026-11-07, after 1e64c04):**
+  - **Health** has the mockup's five rows — Licence, Disk, Backups,
+    Containers, Mail. Disk is used of total with a percentage
+    (`analytics.DiskSize` beside `DiskFree`; warn from 70 %, bad from 90 %,
+    and a "Disk N % full" line under Needs a decision). **Backups** reads the
+    note a complete `sitebin backup` now leaves (`store.BackupMark`,
+    `<data>/backup-last.json`: time, entries, skipped, archive bytes; never
+    archived itself; written only after the tar and gzip are closed, which
+    the backup now checks instead of deferring); older than 26 h is a warning,
+    none is "None". Mail states both mailers (`ext.FormsMailHost`, optional on
+    Host). Lock retention left the panel; each lock's ticket states it.
+  - **Expiry** is a date field, as in the mockup: the workspace saves the
+    picked day at the time of day the expiry already had (a plan's term keeps
+    its hour), else at 23:59; edit.js's datetime field stays in the page,
+    hidden, and does the saving.
+  - **Register:** dates as the workspace writes them ("17 Dec"), size only,
+    "never"; a lock's ticket reads Since / Reason / Retention; unnamed sites
+    are "Untitled drop" everywhere, as in the mockup. Register dates are the
+    server's calendar days (an operator's expiry means through that day in
+    the server's zone), so they are shown as that day, never converted to
+    the browser's zone — converting showed 17 Dec for an expiry set to 16 Dec.
+  Verified: e2e 19, parity 26 (now also a date-only expiry and the register's
+  date), containers 15, both Go suites.

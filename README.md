@@ -1516,7 +1516,10 @@ Operator commands (run inside the container, e.g. `docker exec sitebin sitebin <
   `docker exec sitebin sitebin backup - > sitebin-$(date +%F).tar.gz`.
   It leaves out uploads in flight and the analytics salts
   (`analytics/salts`), which must be gone two days after their date; VM or
-  host snapshots keep salts as long as the snapshots are kept.
+  host snapshots keep salts as long as the snapshots are kept. A backup that
+  completes leaves a note, `/data/backup-last.json` (time, entries, archive
+  size), which the operator's Health panel in the workspace interface shows;
+  the note itself is never archived.
 - **Health:** the image ships a `HEALTHCHECK`.
 - **Freeze:** `SITEBIN_READONLY=true` disables new-site creation.
 - **Logs:** structured request + lifecycle logs on stdout (`docker logs`).

@@ -24,6 +24,11 @@ func (h extHost) Sites() ext.SiteService { return h.sites }
 
 func (h extHost) LockRetention() time.Duration { return h.cfg.LockRetention }
 
+// FormsMailConfigured implements ext.FormsMailHost.
+var _ ext.FormsMailHost = extHost{}
+
+func (h extHost) FormsMailConfigured() bool { return h.cfg.FormsSMTP != nil }
+
 func (h extHost) BaseURL() string        { return h.cfg.SiteURL(h.cfg.BaseDomain) }
 func (h extHost) MCPOAuthIssuer() string { return h.cfg.MCPOAuthIssuer }
 

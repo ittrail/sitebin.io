@@ -17,3 +17,16 @@ func DiskFree(path string) (uint64, error) {
 	}
 	return free, nil
 }
+
+// DiskSize is the size of the volume that holds path, in bytes.
+func DiskSize(path string) (uint64, error) {
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return 0, err
+	}
+	var total uint64
+	if err := windows.GetDiskFreeSpaceEx(p, nil, &total, nil); err != nil {
+		return 0, err
+	}
+	return total, nil
+}

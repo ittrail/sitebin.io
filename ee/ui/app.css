@@ -286,8 +286,9 @@ body.ws::before, body.ws::after { display: none; }
 .ws-site .opt > label:not(.switch) { display: block; font-size: 12.5px; color: var(--ink-dim); margin-bottom: 6px; }
 .ws-site .sub { font-size: 12.5px; color: var(--ink-faint); display: block; margin-top: 6px; }
 .ws-site .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.ws-site input[type=text], .ws-site input[type=email], .ws-site input[type=password], .ws-site input[type=datetime-local], .ws-site select { background: var(--bg-raise); border: 1px solid var(--line); border-radius: 9px; padding: 7px 10px; font-size: 13px; color: var(--ink); color-scheme: dark; }
-.ws-site .row input[type=text], .ws-site .row input[type=email], .ws-site .row input[type=password], .ws-site .row input[type=datetime-local] { flex: 1; min-width: 160px; max-width: none !important; }
+.ws-site input[type=text], .ws-site input[type=email], .ws-site input[type=password], .ws-site input[type=datetime-local], .ws-site input[type=date], .ws-site select { background: var(--bg-raise); border: 1px solid var(--line); border-radius: 9px; padding: 7px 10px; font-size: 13px; color: var(--ink); color-scheme: dark; }
+.ws-site .row input[type=text], .ws-site .row input[type=email], .ws-site .row input[type=password], .ws-site .row input[type=datetime-local], .ws-site .row input[type=date] { flex: 1; min-width: 160px; max-width: none !important; }
+.ws-site input[type=date] { width: 100%; font-family: var(--body); transition: border-color .15s, box-shadow .15s; }
 .ws-site .dnshint { font-size: 12.5px; color: var(--ink-dim); background: rgba(10,14,24,.4); border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px; margin-top: 12px; line-height: 1.55; }
 .ws-site .filetable { width: 100%; border-collapse: collapse; }
 .ws-site .filetable td { padding: 8px 10px; border-top: 1px solid var(--line-soft); font-size: 13px; }

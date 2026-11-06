@@ -375,6 +375,13 @@ type Host interface {
 	PublishURL() string
 }
 
+// FormsMailHost is optional on Host: whether the forms mailer
+// (SITEBIN_FORMS_SMTP_*) is configured. The operator's health view states
+// it next to the account mailer; nothing else asks.
+type FormsMailHost interface {
+	FormsMailConfigured() bool
+}
+
 // SiteService lets the extension read and manage sites without importing the
 // core store. Implemented by the httpapi layer (which also invalidates its
 // auth caches on mutation).

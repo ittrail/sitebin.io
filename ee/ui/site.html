@@ -295,9 +295,10 @@
             <section class="card">
               <h3>Expiry</h3>
               <div class="opt" id="expiry-opt">
-                <label for="e-expires" class="wsr">Expires</label>
+                <label for="ws-expires" class="wsr">Expires on</label>
                 <div class="row">
-                  <input type="datetime-local" id="e-expires">
+                  <input type="date" id="ws-expires">
+                  <span hidden><input type="datetime-local" id="e-expires" tabindex="-1" aria-hidden="true"></span>
                   <button class="btn small primary" id="save-expiry" type="button">Save</button>
                   <button class="btn small" id="clear-expiry" type="button">Clear</button>
                 </div>

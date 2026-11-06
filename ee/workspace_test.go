@@ -15,6 +15,7 @@ import (
 
 	"github.com/ittrail/sitebin.io/ee/account"
 	"github.com/ittrail/sitebin.io/internal/ext"
+	"github.com/ittrail/sitebin.io/internal/store"
 	"github.com/ittrail/sitebin.io/web"
 )
 
@@ -357,5 +358,41 @@ func TestSSOSignInOfAWorkspaceAccountLandsInTheWorkspace(t *testing.T) {
 	w := getAs(mux, "/account", second)
 	if strings.Contains(w.Body.String(), "Your account") || !strings.Contains(w.Header().Get("Content-Security-Policy"), "script-src 'self'") {
 		t.Fatalf("the SSO sign-in of a workspace account did not land in the workspace:\n%s", w.Body)
+	}
+}
+
+// The operator's Health panel states the last complete backup from the note
+// `sitebin backup` leaves, and the disk's size beside its free space.
+func TestHealthReportsTheLastBackupAndTheDisk(t *testing.T) {
+	p, _, mux := setupAdmin(t, "boss@example.com")
+	cookie, _ := adminUser(t, p, mux, "boss@example.com", "admin")
+	read := func() map[string]any {
+		w := getAs(mux, "/account/api/admin/health", cookie)
+		if w.Code != http.StatusOK {
+			t.Fatalf("health = %d %s", w.Code, w.Body)
+		}
+		var h map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &h); err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	if h := read(); h["backup"] != nil {
+		t.Errorf("a backup before any ran: %v", h["backup"])
+	}
+	at := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	if err := store.WriteBackupMark(p.host.DataDir(), store.BackupMark{At: at, Entries: 12, Bytes: 3456}); err != nil {
+		t.Fatal(err)
+	}
+	h := read()
+	b, _ := h["backup"].(map[string]any)
+	if b == nil || b["bytes"] != float64(3456) || b["entries"] != float64(12) {
+		t.Fatalf("backup = %v", h["backup"])
+	}
+	if got, _ := time.Parse(time.RFC3339, b["at"].(string)); !got.Equal(at) {
+		t.Errorf("backup at = %v, want %v", b["at"], at)
+	}
+	if total, _ := h["data_total"].(float64); total <= 0 {
+		t.Errorf("data_total = %v, want the volume's size", h["data_total"])
 	}
 }

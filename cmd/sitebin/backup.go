@@ -11,6 +11,9 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/ittrail/sitebin.io/internal/store"
 )
 
 // backup writes a gzip-compressed tar of the data directory to outPath.
@@ -46,6 +49,24 @@ func inFlight(rel string, isDir bool) bool {
 // visitor ids to anyone again, and a backup is kept longer than that.
 func isAnalyticsSalts(rel string) bool { return rel == "analytics/salts" }
 
+// isBackupMark reports whether rel is the last backup's note, or its temp
+// file: an archive never carries it, so a restore claims no backup.
+func isBackupMark(rel string) bool {
+	return rel == store.BackupMarkFile || (!strings.Contains(rel, "/") && strings.HasPrefix(rel, ".backup-last-"))
+}
+
+// countingWriter counts the bytes that reach w: the archive's size.
+type countingWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
+}
+
 // inSiteContent reports whether rel (slash-separated) lies inside a site's
 // files/ — content its owner, or a container, controls.
 func inSiteContent(rel string) bool {
@@ -73,6 +94,7 @@ func isSiteFilesDir(rel string) bool {
 // site or the instance's secrets.
 func backupData(root, outPath string) error {
 	var w io.Writer = os.Stdout
+	var out *os.File
 	skipRel := ""
 	if outPath != "" && outPath != "-" {
 		f, err := os.Create(outPath)
@@ -80,7 +102,7 @@ func backupData(root, outPath string) error {
 			return err
 		}
 		defer f.Close()
-		w = f
+		w, out = f, f
 		// skip the backup file itself if written inside the data dir
 		absRoot, err1 := filepath.Abs(root)
 		absOut, err2 := filepath.Abs(outPath)
@@ -91,7 +113,8 @@ func backupData(root, outPath string) error {
 			}
 		}
 	}
-	gz := gzip.NewWriter(w)
+	cw := &countingWriter{w: w}
+	gz := gzip.NewWriter(cw)
 	defer gz.Close()
 	tw := tar.NewWriter(gz)
 	defer tw.Close()
@@ -112,7 +135,7 @@ func backupData(root, outPath string) error {
 		if p == "." || p == skipRel {
 			return nil
 		}
-		if inFlight(p, d.IsDir()) || isAnalyticsSalts(p) {
+		if inFlight(p, d.IsDir()) || isAnalyticsSalts(p) || isBackupMark(p) {
 			if d.IsDir() {
 				return fs.SkipDir
 			}
@@ -129,7 +152,26 @@ func backupData(root, outPath string) error {
 	if err != nil {
 		return err
 	}
+	// Closed here, not only deferred: the archive is complete only once the
+	// tar trailer and the gzip footer are written, and a backup that exits 0
+	// must be complete.
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	if err := gz.Close(); err != nil {
+		return err
+	}
+	if out != nil {
+		if err := out.Close(); err != nil {
+			return err
+		}
+	}
 	fmt.Fprintf(os.Stderr, "backed up %d entries from %s (%d skipped)\n", a.count, root, a.skipped)
+	// The operator's health view shows the last complete backup. A note that
+	// cannot be written costs the view, never the backup.
+	if err := store.WriteBackupMark(root, store.BackupMark{At: time.Now().UTC(), Entries: a.count, Skipped: a.skipped, Bytes: cw.n}); err != nil {
+		fmt.Fprintln(os.Stderr, "could not note the backup for the health view:", err)
+	}
 	return nil
 }
 

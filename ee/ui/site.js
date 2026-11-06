@@ -71,6 +71,8 @@
   function settings() {
     const s = site, cur = typeOf(s);
     colourTagEditor();
+    // The date the owner sees; edit.js keeps date and time in #e-expires.
+    if (document.activeElement !== el("ws-expires")) el("ws-expires").value = el("e-expires").value.slice(0, 10);
     const ctOK = !el("mode-container").classList.contains("hidden");
     el("ws-types").innerHTML = TYPES.filter(([k]) => k !== "container" || ctOK || cur === "container").map(([k, l, d]) =>
       '<button type="button" role="radio" class="tcard' + (cur === k ? " on" : "") + '" aria-checked="' + (cur === k) + '" data-type="' + k + '"><b>' + esc(l) + "</b><span>" + esc(d) + "</span></button>").join("");
@@ -102,7 +104,7 @@
       (admin ? '<span class="stamp s-info">You are admin</span>' : "") +
       (me && (me.admins || []).length ? '<span class="stamp s-info">Shared</span>' : "");
     el("site-id").classList.toggle("unnamed", !s.name);
-    el("site-id").textContent = s.name || "Untitled site";
+    el("site-id").textContent = s.name || "Untitled drop";
     document.title = (s.name || s.id) + " — Sitebin";
     el("view-link").textContent = addr();
     el("ws-copy").innerHTML = ic("copy");
@@ -436,6 +438,15 @@
     if (k) { actFilter = k.dataset.actKind; activityPane(); return; }
     if (e.target.closest("[data-act-reload]")) { activity = null; activityPane(); }
   });
+  // Saving the expiry: the date picked here, at the time of day the expiry
+  // already has (a plan's term keeps its hour), else at the day's end. Runs
+  // before edit.js's own handler, which then saves #e-expires as always.
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest("#save-expiry")) return;
+    const day = el("ws-expires").value, cur = el("e-expires").value;
+    el("e-expires").value = day ? day + "T" + (cur.length >= 16 ? cur.slice(11, 16) : "23:59") : "";
+  }, true);
+  el("ws-expires").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); el("save-expiry").click(); } });
   // The workspace asks before deleting, in a dialog, and returns to the list
   // afterwards, instead of edit.js's second click and its blank page.
   el("delete-site").addEventListener("click", (e) => { e.stopImmediatePropagation(); e.preventDefault(); deleteSite(); }, true);
