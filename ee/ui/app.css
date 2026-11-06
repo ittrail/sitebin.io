@@ -438,7 +438,7 @@ body.ws::before, body.ws::after { display: none; }
 }
 @media (max-width: 820px) {
   .ws .app { grid-template-columns: 1fr; }
-  .ws .side { position: fixed; z-index: 35; top: 0; bottom: 0; left: 0; width: 270px; transform: translateX(-102%); transition: transform .2s; }
+  .ws .side { position: fixed; z-index: 35; top: 0; bottom: 0; left: 0; width: 270px; transform: translateX(-102%); transition: transform .2s; background: var(--bg-raise); }
   .ws .app.side-open .side { transform: none; box-shadow: 30px 0 60px rgba(0,0,0,.55); }
   .ws .burger, .ws .btn.burger { display: inline-flex; }
   .ws .view { padding: 18px 14px 120px; }

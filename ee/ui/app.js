@@ -41,7 +41,9 @@
     render();
     if (notice) toast(notice);
   })();
-  window.addEventListener("hashchange", () => { S.picked.clear(); S.confirm = null; render(); view.scrollTop = 0; });
+  // A hash change before the state arrived (a link straight to #/…) waits
+  // for the boot, which renders the hash it finds.
+  window.addEventListener("hashchange", () => { if (!WS.state) return; S.picked.clear(); S.confirm = null; render(); view.scrollTop = 0; });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && S.regOpen) { S.regOpen = null; S.confirm = null; renderInsp(); }
     if (e.key === "/" && !/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) {

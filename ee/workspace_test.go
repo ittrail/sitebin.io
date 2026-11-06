@@ -300,3 +300,62 @@ func TestWorkspaceSitePageRunsTheEditPageScripts(t *testing.T) {
 		}
 	}
 }
+
+// Signing in through the identity provider lands a workspace account in the
+// workspace: the choice is the account's, so it holds at every SSO sign-in,
+// and the callback itself is unchanged by the workspace's middleware.
+func TestSSOSignInOfAWorkspaceAccountLandsInTheWorkspace(t *testing.T) {
+	ti := newTestIssuer(t)
+	var nonce string
+	ti.srv.Config.Handler.(*http.ServeMux).HandleFunc("POST /token", func(w http.ResponseWriter, r *http.Request) {
+		id := ti.sign(t, func(c map[string]any) {
+			c["aud"] = "sitebin-app"
+			c["nonce"] = nonce
+			c["typ"] = "ID"
+		}, nil)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"access_token": "at", "token_type": "Bearer", "expires_in": 60, "id_token": id})
+	})
+	t.Setenv("SITEBIN_ACCOUNT_MODE", "accounts")
+	t.Setenv("SITEBIN_OAUTH_OIDC_ISSUER", ti.URL())
+	t.Setenv("SITEBIN_OAUTH_OIDC_CLIENT_ID", "sitebin-app")
+	t.Setenv("SITEBIN_OAUTH_OIDC_CLIENT_SECRET", "s3cret")
+	p := newProvider()
+	host := &fakeHost{dir: t.TempDir(), sites: &fakeSites{infos: map[string]ext.SiteInfo{}}}
+	if err := initT(t, p, host); err != nil {
+		t.Fatal(err)
+	}
+	mux := serveMux(p)
+
+	signIn := func(n string) *http.Cookie {
+		t.Helper()
+		state := "state-" + n
+		nonce = "nonce-" + n
+		cookie := p.oauthSigner().Sign("oidc|"+state+"|"+nonce, time.Now(), 10*time.Minute)
+		req := httptest.NewRequest("GET", "/account/auth/oidc/callback?code=c&state="+state, nil)
+		req.AddCookie(&http.Cookie{Name: oauthCookie, Value: cookie})
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/account" {
+			t.Fatalf("callback = %d %q %s", w.Code, w.Header().Get("Location"), w.Body)
+		}
+		return sessionCookie(t, w)
+	}
+	first := signIn("1")
+	if w := getAs(mux, "/account", first); !strings.Contains(w.Body.String(), "Your account") {
+		t.Fatal("a new SSO account should start on the classic dashboard")
+	}
+	acc, err := p.accounts.ByOAuth(account.OIDCProv, testSubject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := chooseUI(t, p, mux, acc, first, "workspace"); w.Code != http.StatusSeeOther {
+		t.Fatalf("choose workspace = %d", w.Code)
+	}
+	// A fresh sign-in, as on another device: the choice comes with the account.
+	second := signIn("2")
+	w := getAs(mux, "/account", second)
+	if strings.Contains(w.Body.String(), "Your account") || !strings.Contains(w.Header().Get("Content-Security-Policy"), "script-src 'self'") {
+		t.Fatalf("the SSO sign-in of a workspace account did not land in the workspace:\n%s", w.Body)
+	}
+}

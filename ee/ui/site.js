@@ -25,6 +25,16 @@
   tabs.show = function (id, opts) { tabsShow(id, opts); bar(); };
   const editRenderForms = window.renderForms;
   window.renderForms = function () { editRenderForms(); formsLoaded = true; formsOff(); if (site) { bar(); if (pane === "overview" && (!tabs.active || tabs.active === "live")) overview(); } };
+  // edit.js keeps the shown folder in the URL; the workspace keeps its tab
+  // there too, so a reload opens the same tab. The folder's hash is edit.js's
+  // only on Files.
+  const editSyncHash = window.syncHash;
+  window.syncHash = function () {
+    if (tabs.active !== "live") return;
+    if (pane === "files" && typeof cwd === "string" && cwd) { editSyncHash(); return; }
+    const want = pane === "overview" ? "" : "#" + pane;
+    if (location.hash !== want) history.replaceState(null, "", location.pathname + location.search + want);
+  };
   const tabsRegister = tabs.register.bind(tabs);
   tabs.register = function (t) { tabsRegister(t); bar(); };
   window.addEventListener("popstate", () => { if (site) { pane = paneFromHash(); showPane(); } });
