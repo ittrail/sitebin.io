@@ -166,5 +166,17 @@ What building it changed or settled, 2026-11-06:
 - **`TestWorkspaceSitePageCarriesEveryEditPageID`** fails when edit.html gains
   an id that ee/ui/site.html lacks: such a control would silently do nothing
   in the workspace.
-- **Not verified:** the narrow (phone) layout was ported from the mockup's
-  breakpoints and not exercised on a device.
+- **Verified after the rollout (same day):** a phone-size pass (390 px,
+  headless Chromium) found the sliding sidebar see-through; a scripted run of
+  the workspace against a local instance with a real Docker runtime and a
+  stand-in PayGate covered forms (mail confirmation), analytics with counted
+  visits, a Git push with a token made in the workspace, a transfer between
+  two accounts taken over in the workspace, deletes from the row menu and in
+  bulk, filters, grouping, the container tab and console, upgrade and portal.
+  It found that a reload lost the site page's tab (edit.js rewrites the hash
+  to the folder) — the workspace now keeps its tab there, the folder's hash
+  only on Files. The live check found the analytics switch read from the
+  wrong field (`settings.enabled`). Fixed in 0b92196 and b4944c0.
+- **A fresh SSO sign-in** is covered by
+  `TestSSOSignInOfAWorkspaceAccountLandsInTheWorkspace`; in a browser it
+  needs the person's own credentials at the identity provider.
