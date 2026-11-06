@@ -150,7 +150,7 @@
     if (!s.name) a.push(["s-info", "edit", "No name yet, so every list shows its address.", "Name it", "settings"]);
     if (s.mode === "container" && s.container && (!s.container.enabled || s.container.status !== "running")) a.push([s.container.status === "error" ? "s-bad" : "s-off", "stop", s.container.enabled ? "The project is " + (s.container.status || "not running") + "." : "The project is stopped.", "Open", "containers"]);
     if (s.mode === "webserver" && !s.spa_fallback && !s.not_found_serves && !s.start_page_missing) a.push(["s-info", "files", "No 404 page of its own: a mistyped address shows Sitebin’s.", "Add one", "settings"]);
-    if (analyticsState && s.analytics_available && !analyticsState.enabled) a.push(["s-off", "chart", "Analytics are off.", "Turn on", "analytics"]);
+    if (analyticsState && s.analytics_available && !analyticsOn()) a.push(["s-off", "chart", "Analytics are off.", "Turn on", "analytics"]);
     return a;
   }
   function addressRows() {
@@ -170,12 +170,14 @@
     }
     return rows;
   }
+  // The analytics state carries the site's switch in its settings.
+  const analyticsOn = () => !!(analyticsState && analyticsState.settings && analyticsState.settings.enabled);
   async function loadChart() {
     if (chart || !site.analytics_available) return;
     chart = { loading: true };
     try {
       analyticsState = await api("GET", "/analytics");
-      if (!analyticsState.enabled) { chart = { off: true }; return; }
+      if (!analyticsOn()) { chart = { off: true }; return; }
       const local = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
       const ov = await api("GET", "/analytics/overview?from=" + local(new Date(Date.now() - 13 * WS.DAY)) + "&to=" + local(new Date()));
       chart = { series: ov.series || [], totals: ov.totals };
