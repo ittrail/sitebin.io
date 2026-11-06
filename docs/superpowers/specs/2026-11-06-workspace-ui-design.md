@@ -177,6 +177,16 @@ What building it changed or settled, 2026-11-06:
   to the folder) — the workspace now keeps its tab there, the folder's hash
   only on Files. The live check found the analytics switch read from the
   wrong field (`settings.enabled`). Fixed in 0b92196 and b4944c0.
+- **Parity run (1e81a52):** a second scripted run drove every remaining
+  classic function through the workspace — 26 checks, all passing on a
+  freshly seeded instance: rotate, share/withdraw/end/leave, invitation and
+  offer declined, tags and tag groups, zones, token revoke, plan switch,
+  adopt, files with upload/editor/delete, rename/tags/view password/expiry/
+  caching, File viewer mode, domain add/remove, WebDAV, download, register
+  address search/lock/hold/release/expiry/trail/account page, a lock from a
+  report, container defaults, a local account's deletion. It found the
+  header's tags stale after a save in Settings and the state not refreshed
+  on a view switch; both fixed.
 - **A fresh SSO sign-in** is covered by
   `TestSSOSignInOfAWorkspaceAccountLandsInTheWorkspace`; in a browser it
   needs the person's own credentials at the identity provider.
