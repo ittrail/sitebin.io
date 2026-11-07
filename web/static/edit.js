@@ -187,6 +187,10 @@ function unlock() {
   if (site.analytics_available && !tabs.list.some((t) => t.id === "analytics")) {
     tabs.register({ id: "analytics", label: "Analytics", panel: $("panel-analytics"), onShow() { analyticsTab.show(); } });
   }
+  // The Backups tab: shown when the instance's snapshots can be read here.
+  if (site.backups_available && typeof backupsTab === "object" && !tabs.list.some((t) => t.id === "backups")) {
+    tabs.register({ id: "backups", label: "Backups", panel: $("panel-backups"), onShow() { backupsTab.show(); } });
+  }
   tabs.start();
   loadDir(dirFromHash());
   loadForms();

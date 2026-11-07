@@ -209,6 +209,7 @@
     t.push(["forms", "Forms", formsData && formsData.enabled ? formsData.forms.length : ""]);
     if (tabs.list.some((x) => x.id === "analytics")) t.push(["analytics", "Analytics"]);
     if (tabs.list.some((x) => x.id === "git")) t.push(["git", "Git"]);
+    if (tabs.list.some((x) => x.id === "backups")) t.push(["backups", "Backups"]);
     if (site.mode === "container") t.push(["containers", "Containers", (site.container && site.container.services || []).length]);
     t.push(["people", "People", me ? 1 + (me.admins || []).length + (me.role === "admin" ? 1 : 0) : ""], ["activity", "Activity"], ["settings", "Settings"]);
     return t;
@@ -221,7 +222,7 @@
   }
 
   function go(to) {
-    if (to === "git" || to === "analytics") { tabs.show(to, { push: true }); return; }
+    if (to === "git" || to === "analytics" || to === "backups") { tabs.show(to, { push: true }); return; }
     if (!LIVE.includes(to)) to = "overview";
     if (to === "containers" && site.mode !== "container") to = "overview";
     pane = to;
@@ -408,6 +409,7 @@
       case "tags": return "Changed the tags";
       case "git-push": { const m = /refs\/heads\/(\S+)/.exec(d); return "Pushed " + (m ? m[1] + " " : "") + "via Git"; }
       case "git-delete": return "Deleted the Git repository";
+      case "restore": return "Restored the files from the " + (d || "backups");
       case "transfer": return x.actor === "you" ? "Taken over from another account" : "Moved to its new owner";
       case "adopt": return x.actor === "you" ? "Adopted into your account" : "Adopted into an account";
       case "admins": { const n = +((/(\d+) admin\(s\)\s*$/.exec(d) || [])[1] || 0); return n ? "Shared with " + plural(n, "admin") : "Sharing ended"; }

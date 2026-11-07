@@ -328,10 +328,10 @@ func TestWorkspaceSitePageCarriesEveryEditPageID(t *testing.T) {
 	}
 }
 
-// The workspace's site page loads the same three scripts as edit.html.
+// The workspace's site page loads the same scripts as edit.html.
 func TestWorkspaceSitePageRunsTheEditPageScripts(t *testing.T) {
 	page := string(uiAssets["site.html"].body)
-	for _, s := range []string{"/_sitebin/assets/static/edit.js", "/_sitebin/assets/static/edit-git.js", "/_sitebin/assets/static/edit-analytics.js"} {
+	for _, s := range []string{"/_sitebin/assets/static/edit.js", "/_sitebin/assets/static/edit-git.js", "/_sitebin/assets/static/edit-analytics.js", "/_sitebin/assets/static/edit-backups.js"} {
 		if !strings.Contains(page, s) {
 			t.Errorf("site.html does not load %s", s)
 		}
