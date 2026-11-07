@@ -231,22 +231,20 @@
               <div class="opt">
                 <label for="e-name">Name</label>
                 <div class="row">
-                  <input type="text" id="e-name" maxlength="60" placeholder="e.g. Client docs" autocomplete="off">
+                  <input type="text" id="e-name" maxlength="60" placeholder="e.g. Client docs" autocomplete="off" title="A private label, so you can tell your sites apart. Never shown to visitors.">
                   <button class="btn small primary" id="save-name" type="button">Save</button>
                   <button class="btn small hidden" id="clear-name" type="button">Clear</button>
                 </div>
-                <span class="sub">A private label, so you can tell your sites apart. Never shown to visitors.</span>
               </div>
               <div class="opt" style="margin-top:14px">
                 <label for="e-tag">Tags</label>
-                <div class="filelist" id="e-tags" style="justify-content:flex-start;margin-top:0"></div>
-                <div class="row">
-                  <input type="text" id="e-tag" maxlength="30" placeholder="Add a tag" autocomplete="off">
+                <div class="wtagline"><div class="filelist" id="e-tags"></div><button class="btn ghost sm" id="ws-addtag" type="button"></button></div>
+                <div class="row hidden" id="ws-tagrow">
+                  <input type="text" id="e-tag" maxlength="30" placeholder="Add a tag" autocomplete="off" title="Up to 10 per site. Press Enter or type a comma to add one, then save.">
                   <button class="btn small" id="add-tag" type="button">Add</button>
                   <button class="btn small primary" id="save-tags" type="button" disabled>Save tags</button>
                   <span class="sub hidden" id="tags-unsaved">Unsaved changes</span>
                 </div>
-                <span class="sub">Up to 10 per site. Press Enter or type a comma to add one, then save.</span>
               </div>
             </section>
             <section class="card">
@@ -280,15 +278,14 @@
               <h3>Missing pages</h3>
               <p class="d">What a visitor sees at an address that has no file.</p>
               <div class="opt hidden" id="notfoundwrap">
-                <label for="e-notfound" class="wsr">Page for missing addresses</label>
-                <div class="row">
-                  <input type="text" id="e-notfound" maxlength="1024" placeholder="404.html" autocomplete="off">
+                <label for="ws-notfound" class="wsr">Page for missing addresses</label>
+                <div class="row"><select id="ws-notfound"></select></div>
+                <div class="row hidden" id="ws-nfcustom" style="margin-top:8px">
+                  <input type="text" id="e-notfound" maxlength="1024" placeholder="404.html" autocomplete="off" aria-label="A page of this site">
                   <button class="btn small" id="save-notfound" type="button">Save</button>
                   <button class="btn small hidden" id="clear-notfound" type="button">Automatic</button>
                 </div>
-                <span class="sub"><span id="notfound-status"></span> A missing address answers with status 404 and this page;
-                  a folder without an <code>index.html</code> counts as missing. Without a setting, a <code>404.html</code> at the
-                  root is used. Link its styles and images from the root (<code>/assets/site.css</code>).</span>
+                <span class="sub" title="A missing address answers with status 404 and this page; a folder without an index.html counts as missing. Without a setting, a 404.html at the root is used. Link its styles and images from the root (/assets/site.css)."><span id="notfound-status"></span></span>
               </div>
             </section>
           </div><div class="wcol">
@@ -312,7 +309,7 @@
               <div class="opt">
                 <label for="e-viewpw" class="wsr">View password</label>
                 <div class="row">
-                  <input type="password" id="e-viewpw" autocomplete="new-password" placeholder="New view password">
+                  <input type="password" id="e-viewpw" autocomplete="new-password" placeholder="No password">
                   <button class="btn small" id="set-viewpw" type="button">Set</button>
                   <button class="btn small hidden" id="clear-viewpw" type="button">Remove</button>
                 </div>
@@ -323,7 +320,7 @@
               <h3>Browser caching</h3>
               <div class="opt" id="cachewrap">
                 <div class="row">
-                  <select id="e-cache" aria-label="Browser caching">
+                  <select id="e-cache" aria-label="Browser caching" title="Pages and data (HTML, JSON, XML, TXT) always revalidate, so visitors see an upload at once. Automatic caches files whose names carry a content hash (index-BqCz7v8e.js) for a year. The fixed times cache every other file that long: only pick one if those files never change under the same name.">
                     <option value="auto">Automatic: pages always fresh, hashed files for a year</option>
                     <option value="revalidate">Always check: browsers re-check every file on every visit</option>
                     <option value="hour">Cache files for an hour</option>
@@ -333,9 +330,6 @@
                     <option value="off">Off: send no cache headers</option>
                   </select>
                 </div>
-                <span class="sub">Pages and data (HTML, JSON, XML, TXT) always revalidate, so visitors see an upload at once.
-                  <em>Automatic</em> caches files whose names carry a content hash (<code>index-BqCz7v8e.js</code>) for a year.
-                  The fixed times cache every other file that long: only pick one if those files never change under the same name.</span>
               </div>
             </section>
           </div></div>

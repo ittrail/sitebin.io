@@ -351,7 +351,7 @@ const WS = (() => {
       nav("account", "user", "Account") +
       (admin ? '<div class="navh">Instance<span class="stamp s-warn">Operator</span></div>' +
         nav("op", "radar", "Overview", '<span class="badge red hidden" id="ws-op-badge"></span>') +
-        nav("register", "list", "Register") + nav("reports", "flag", "Reports") + (a.containers ? nav("containers", "box", "Containers") : "") : "") +
+        nav("register", "list", "Register", '<span class="n" id="ws-op-n-register"></span>') + nav("reports", "flag", "Reports", '<span class="n" id="ws-op-n-reports"></span>') + (a.containers ? nav("containers", "box", "Containers", '<span class="n" id="ws-op-n-containers"></span>') : "") : "") +
       '<div class="spacer"></div>' +
       '<a class="btn primary publish" href="' + esc(a.publish_url || "/") + '">' + ic("plus") + "Publish a new site</a>" +
       '<button class="btn ghost uiswitch" type="button" data-ws-classic title="Your choice is kept for this account; switch back here at any time.">' + ic("layout") + "Classic interface</button>";

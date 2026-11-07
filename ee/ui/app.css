@@ -480,3 +480,10 @@ body.ws::before, body.ws::after { display: none; }
   background: color-mix(in srgb, var(--c, var(--tag-grey)) 14%, transparent); }
 .ws #e-tags .chip .name { color: color-mix(in srgb, var(--c, var(--tag-grey)) 65%, #fff); }
 .ws #e-tags .chip .x { font-size: 13px; padding: 0 4px; }
+.ws .wtagline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ws .wtagline #e-tags { margin: 0; justify-content: flex-start; }
+.ws .wtagline #e-tags:empty { display: none; }
+.ws #ws-tagrow { margin-top: 10px; }
+.ws-site #viewpw-status { display: none; }
+/* the name clears by saving it empty; the mockup has no Clear beside it */
+.ws-site #clear-name { display: none; }

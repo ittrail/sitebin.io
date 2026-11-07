@@ -579,6 +579,11 @@
       const f = S.reg.Figures, n = f.Scanner + f.Flagged + f.Reports;
       const b = document.getElementById("ws-op-badge");
       if (b) { b.textContent = n; b.classList.toggle("hidden", !n); }
+      // the counts beside Register, Reports and Containers, as the mockup has them
+      const put = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = Number(v || 0).toLocaleString("en"); };
+      put("ws-op-n-register", f.Sites);
+      put("ws-op-n-reports", f.Reports);
+      put("ws-op-n-containers", (S.reg.Rows || []).filter((r) => r.Mode === "container").length);
     } catch {}
   }
   function rowFor(id) { return (S.regRows || []).find((r) => r.ViewID === id) || (S.reg && S.reg.Rows.find((r) => r.ViewID === id)); }

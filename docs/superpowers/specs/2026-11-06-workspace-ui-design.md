@@ -252,3 +252,20 @@ What building it changed or settled, 2026-11-06:
   since the settings PUT replaces them whole (what the Analytics tab's own
   switch does). The e2e checks that a saved exclude list survives it, reads
   the chart's bars and the ticket's Visitors 7d (20 checks).
+- **Pairs pass (2026-11-07, night):** each view as one image, mockup beside
+  workspace (`pairs.js`), six views including the Overview with analytics
+  off. What it still found, now aligned: activity lines are sentences in the
+  mockup's way ("Pushed main via Git", "Changed the name, the tags and the
+  expiry", "Taken over from another account" — no account ids) with "ago ·
+  kind"; the sidebar counts Register, Reports and Containers; Settings has
+  the mockup's minimal cards — help texts became tooltips, the tag input
+  opens with "+ Tag" (and stays open while a change waits), the view
+  password field says "No password", Clear shows only for an expiry that is
+  set and not beside the name, and **Missing pages is a dropdown** (Sitebin's
+  page / your 404.html, the site's HTML files, "Choose a file…" opening
+  edit.js's field; saving stays edit.js's). Checks: e2e 21, parity 27 (the
+  dropdown, uploaded in Files and picked in Settings without a reload),
+  containers 15, phone pass.
+  Not aligned on purpose: the sites list's "838 MB **of 50 GB**" — plans
+  cap storage per site, not per account, and the pricing page says so; a
+  total would promise a pool the plans do not have (the operator decides).

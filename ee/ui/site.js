@@ -71,15 +71,33 @@
   function settings() {
     const s = site, cur = typeOf(s);
     colourTagEditor();
+    el("ws-addtag").innerHTML = ic("plus") + "Tag";
+    el("e-viewpw").placeholder = s.view_password_protected ? "••••••••" : "No password";
+    // Clear only when there is an expiry to clear, as the mockup has it
+    if (!s.expires_at) el("clear-expiry").classList.add("hidden");
     // The date the owner sees; edit.js keeps date and time in #e-expires.
     if (document.activeElement !== el("ws-expires")) el("ws-expires").value = el("e-expires").value.slice(0, 10);
     const ctOK = !el("mode-container").classList.contains("hidden");
     el("ws-types").innerHTML = TYPES.filter(([k]) => k !== "container" || ctOK || cur === "container").map(([k, l, d]) =>
       '<button type="button" role="radio" class="tcard' + (cur === k ? " on" : "") + '" aria-checked="' + (cur === k) + '" data-type="' + k + '"><b>' + esc(l) + "</b><span>" + esc(d) + "</span></button>").join("");
     el("ws-notfoundcard").classList.toggle("hidden", el("notfoundwrap").classList.contains("hidden"));
+    notFoundChoices(s);
     const admin = s.role === "admin";
     el("ws-expiry-ro").classList.toggle("hidden", !admin);
     if (admin) el("ws-expiry-ro").textContent = (s.expires_at ? fmtDate(s.expires_at, true) : "Never") + ". Only the owner can change it.";
+  }
+  // Missing pages, as the mockup's dropdown: automatic (the site's own
+  // 404.html when it has one, else Sitebin's page), one of its HTML files, or
+  // any other path through edit.js's field ("Choose a file…").
+  function notFoundChoices(s) {
+    const sel = el("ws-notfound");
+    if (document.activeElement === sel) return;
+    const cur = s.not_found_page || "";
+    const files = (s.files || []).map((f) => f.path).filter((p) => /\.html?$/i.test(p)).slice(0, 200);
+    if (cur && !files.includes(cur)) files.unshift(cur);
+    const auto = !cur && s.not_found_serves ? "Your " + s.not_found_serves : "Sitebin’s page";
+    sel.innerHTML = '<option value="">' + esc(auto) + "</option>" + files.map((p) => '<option value="' + esc(p) + '">' + esc(p) + "</option>").join("") + '<option value="__choose__">Choose a file…</option>';
+    sel.value = cur;
   }
   function setType(k) {
     const t = TYPES.find((x) => x[0] === k);
@@ -114,7 +132,7 @@
     // the colours come from the account's tags.
     const tags = (s.tags || []).map((n) => ({ name: n, color: tagColor(n) }));
     el("ws-head-tags").innerHTML = tags.map((t) => '<span class="tchip tag-' + esc(t.color || "grey") + '">' + esc(t.name) + "</span>").join("") +
-      '<button class="btn ghost sm" type="button" data-go="settings">' + ic("plus") + "Tag</button>";
+      '<button class="btn ghost sm" type="button" data-go="settings" data-tag>' + ic("plus") + "Tag</button>";
     const expSoon = s.expires_at && daysTo(s.expires_at) <= 7;
     el("ws-facts").innerHTML = [
       ["Type", WS.typeShort(s)],
@@ -135,7 +153,14 @@
     return t ? t.color : "grey";
   }
   // edit.js redraws its tag editor on every change, a draft included.
+  // The tag input opens with "+ Tag", as in the mockup, and stays open while
+  // a change waits to be saved.
+  function openTagRow(focus) {
+    el("ws-tagrow").classList.remove("hidden");
+    if (focus) el("e-tag").focus();
+  }
   function colourTagEditor() {
+    if (!el("save-tags").disabled) openTagRow(false);
     for (const c of el("e-tags").querySelectorAll(".chip")) {
       const want = "tag-" + tagColor(c.querySelector(".name")?.textContent || "");
       if (!c.classList.contains(want)) { c.className = "chip " + want; }
@@ -313,10 +338,66 @@
   // ---- Activity ----
   const KIND = (a) => /^domain|view-address/.test(a) ? "addresses" : /share|transfer|adopt|rotate|admin|invite/.test(a) ? "people" : /settings|form|analytics|container|git-delete|cache/.test(a) ? "settings" : "content";
   const human = (a) => (a || "").replace(/[-_]/g, " ").replace(/^./, (c) => c.toUpperCase());
+  // An entry as a sentence, the mockup's way ("Pushed main via Git"); the
+  // second line is when, the kind, and who — when it was not you. Account
+  // ids in a transfer's or adoption's detail are never shown.
+  const VIA = { ui: "in the browser", api: "via the API", mcp: "via MCP", "upload-token": "with an upload token", webdav: "via WebDAV", ftp: "via FTP", git: "via Git", dashboard: "from the account" };
+  const FIELD = { name: "the name", tags: "the tags", view_password: "the view password", view_protected: "view protection", expires_at: "the expiry", cache: "browser caching", mode: "the site type", spa: "the SPA fallback", spa_fallback: "the SPA fallback", webdav: "WebDAV", ftp: "FTP", entry_file: "the viewer's first file", not_found_page: "the missing-pages page" };
+  const VALUE = { webserver: "Static", viewer: "File viewer", container: "Container", auto: "Automatic", revalidate: "Always check", hour: "an hour", day: "a day", week: "a week", year: "a year", off: "off" };
+  const KINDW = { content: "Content", addresses: "Addresses", people: "People", settings: "Settings" };
+  const plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
+  const andList = (xs) => xs.length < 2 ? xs.join("") : xs.slice(0, -1).join(", ") + " and " + xs[xs.length - 1];
+  function settingsSentence(detail) {
+    const keys = [], vals = {};
+    for (const t of (detail || "").split(",").map((v) => v.trim()).filter(Boolean)) {
+      const [k, v] = t.split("=");
+      if (!keys.includes(k)) keys.push(k);
+      if (v) (vals[k] ||= []).push(VALUE[v] || v);
+    }
+    if (!keys.length) return "Changed the settings";
+    if (keys.length === 1 && vals[keys[0]] && vals[keys[0]].length === 1) return "Set " + (FIELD[keys[0]] || keys[0]) + " to " + vals[keys[0]][0];
+    return "Changed " + andList(keys.map((k) => FIELD[k] || k.replace(/_/g, " ")));
+  }
+  function sentence(x) {
+    const d = x.detail || "", via = VIA[x.surface] ? " " + VIA[x.surface] : "";
+    switch (x.action) {
+      case "create": return "Created" + (x.files > 1 ? " with " + plural(x.files, "file") : "") + via;
+      case "upload": return "Uploaded " + (x.files > 1 ? plural(x.files, "file") : d || "a file") + via;
+      case "replace": return "Replaced all files" + (x.files ? " (" + plural(x.files, "file") + ")" : "") + via;
+      case "delete-file": return "Deleted " + (d || "a file") + via;
+      case "mkdir": return "Created the folder " + d;
+      case "move": return "Moved " + d;
+      case "copy": return "Copied " + d;
+      case "proppatch": return "Changed file properties" + via;
+      case "settings": return settingsSentence(d);
+      case "domain-add": return (/\(pending\)$/.test(d) ? "Claimed " : "Added ") + d.replace(/\s*\(pending\)$/, "");
+      case "domain-remove": return "Removed " + d;
+      case "domain-redirect": return "Changed a redirect" + (d ? ": " + d : "");
+      case "domain-target": return "Changed the port a domain serves" + (d ? ": " + d : "");
+      case "view-address": return "Changed the generated address" + (d ? ": " + d : "");
+      case "form-add": return "Added the form " + d;
+      case "form-update": return "Changed the form " + d;
+      case "form-remove": return "Removed the form " + d;
+      case "form-resend": return "Sent the form " + d + " for confirmation again";
+      case "container": return /restart/i.test(d) ? "Restarted the project" : /stop/i.test(d) ? "Stopped the project" : /start/i.test(d) ? "Started the project" : "Changed the project" + (d ? ": " + d : "");
+      case "open-upload": return "Opened an upload" + via;
+      case "rename": return d ? "Renamed to " + d : "Renamed";
+      case "rotate-password": return "Reset the edit password";
+      case "tags": return "Changed the tags";
+      case "git-push": { const m = /refs\/heads\/(\S+)/.exec(d); return "Pushed " + (m ? m[1] + " " : "") + "via Git"; }
+      case "git-delete": return "Deleted the Git repository";
+      case "transfer": return x.actor === "you" ? "Taken over from another account" : "Moved to its new owner";
+      case "adopt": return x.actor === "you" ? "Adopted into your account" : "Adopted into an account";
+      case "admins": { const n = +((/(\d+) admin\(s\)\s*$/.exec(d) || [])[1] || 0); return n ? "Shared with " + plural(n, "admin") : "Sharing ended"; }
+      case "analytics-settings": return d === "off" ? "Turned analytics off" : /^on\b/.test(d) ? "Turned analytics on" + (/\((?!server)([^)]+)\)/.exec(d) ? " (" + /\(([^)]+)\)/.exec(d)[1] + ")" : "") : "Changed the analytics settings";
+      default: return human(x.action) + (d ? " · " + d : "");
+    }
+  }
   function line(x) {
-    const who = x.actor === "you" ? "you" : x.actor === "owner" ? "the owner" : x.actor === "admin" ? "an admin" : x.actor === "edit password" ? "the edit password" : "";
-    const via = [x.surface, who && "by " + who].filter(Boolean).join(" · ");
-    return { w: x.time, txt: human(x.action) + (x.files ? " · " + x.files + " file" + (x.files > 1 ? "s" : "") : "") + (x.detail ? " · " + x.detail : "") + (x.times > 1 ? " · ×" + x.times : ""), via, k: KIND(x.action) };
+    const who = x.actor === "owner" ? "the owner" : x.actor === "admin" ? "an admin" : x.actor === "edit password" ? "the edit password" : "";
+    const k = KIND(x.action);
+    const via = [KINDW[k], who && "by " + who].filter(Boolean).join(" · ");
+    return { w: x.time, txt: sentence(x) + (x.times > 1 ? " ×" + x.times : ""), via, k };
   }
   function timeline(list) {
     if (!list.length) return '<p class="d" style="margin:0">Nothing recorded yet.</p>';
@@ -387,7 +468,7 @@
     const own = site.role !== "admin";
     menu(btn, [
       { label: "Rename", icon: "edit", run: () => { go("settings"); el("e-name").focus(); } },
-      { label: "Tags", icon: "tag", run: () => { go("settings"); el("e-tag").focus(); } },
+      { label: "Tags", icon: "tag", run: () => { go("settings"); openTagRow(true); } },
       { label: "Add a domain", icon: "globe", run: () => { go("addresses"); el("e-domain").focus(); } },
       { label: "Download ZIP", icon: "download", run: () => el("download-zip").click() },
       { sep: true },
@@ -435,7 +516,8 @@
   // ---- events ----
   document.addEventListener("click", (e) => {
     const g = e.target.closest("[data-go]");
-    if (g) { e.preventDefault(); go(g.dataset.go); return; }
+    if (g) { e.preventDefault(); go(g.dataset.go); if (g.hasAttribute("data-tag")) openTagRow(true); return; }
+    if (e.target.closest("#ws-addtag")) { openTagRow(true); return; }
     const a = e.target.closest("[data-act]");
     if (a) {
       if (a.dataset.act === "upload") { go("files"); el("e-pick-files").click(); }
@@ -464,6 +546,13 @@
     const day = el("ws-expires").value, cur = el("e-expires").value;
     el("e-expires").value = day ? day + "T" + (cur.length >= 16 ? cur.slice(11, 16) : "23:59") : "";
   }, true);
+  el("ws-notfound").addEventListener("change", (e) => {
+    const v = e.target.value;
+    if (v === "__choose__") { el("ws-nfcustom").classList.remove("hidden"); el("e-notfound").focus(); return; }
+    el("ws-nfcustom").classList.add("hidden");
+    el("e-notfound").value = v;
+    el("save-notfound").click();
+  });
   el("ws-expires").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); el("save-expiry").click(); } });
   // The workspace asks before deleting, in a dialog, and returns to the list
   // afterwards, instead of edit.js's second click and its blank page.
