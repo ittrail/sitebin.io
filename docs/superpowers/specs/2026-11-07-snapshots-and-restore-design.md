@@ -108,7 +108,7 @@ site is addressed only by a view id matching `^[a-z2-7]{26}$`.
 
 **The index.** Per snapshot and per site: file count, bytes, newest mtime and
 a **fingerprint** of `sites/<id>/files/` — the XOR of SHA-256 over
-`path, size, mtime (seconds)` per regular file, so the order an archive lists
+`path, size, mtime` per regular file (the time rounded to the second, as Go's tar writer stores it), so the order an archive lists
 its files in does not matter, and hourly (ns mtimes) and nightly (tar
 seconds) archives of the same files agree. Built in the background, newest
 snapshot first, cached as `<state>/index/<snapshot>.json`; an index whose

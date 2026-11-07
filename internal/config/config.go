@@ -126,6 +126,12 @@ type Config struct {
 	SessionOrigins []string
 	FrontDoor      bool
 
+	// SnapshotsAgent (SITEBIN_SNAPSHOTS_AGENT) is the unix socket of the
+	// `sitebin agent` running on the host beside the backups; set, every site
+	// gets a Backups tab to restore its files from. Empty: no backups here.
+	// See docs/superpowers/specs/2026-11-07-snapshots-and-restore-design.md.
+	SnapshotsAgent string
+
 	// Forms (SITEBIN_FORMS_*): email form submissions for hosted sites. See
 	// docs/superpowers/specs/2026-09-24-site-forms-design.md. FormsSMTP nil
 	// means the instance has no forms at all.
@@ -526,6 +532,7 @@ func Load(getenv func(string) string) (Config, error) {
 			cfg.SessionOrigins = append(cfg.SessionOrigins, o)
 		}
 	}
+	cfg.SnapshotsAgent = strings.TrimSpace(getenv("SITEBIN_SNAPSHOTS_AGENT"))
 	if cfg.FrontDoor, err = boolVar(getenv, "SITEBIN_FRONT_DOOR", false); err != nil {
 		return cfg, err
 	}

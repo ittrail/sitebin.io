@@ -27,6 +27,7 @@ import (
 	"github.com/ittrail/sitebin.io/internal/gitrepo"
 	"github.com/ittrail/sitebin.io/internal/ids"
 	"github.com/ittrail/sitebin.io/internal/provenance"
+	"github.com/ittrail/sitebin.io/internal/snapshots"
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
@@ -77,6 +78,8 @@ type API struct {
 	imports        sync.Map          // view id → struct{}: the sites an Umami import is running into
 
 	analyticsLimiter *auth.Limiter // the script's records per (site, client network)
+
+	snap *snapshots.Client // nil: no snapshots agent (SITEBIN_SNAPSHOTS_AGENT)
 }
 
 // New wires the API. secret signs view-session cookies; webFS provides the
@@ -124,6 +127,9 @@ func New(cfg config.Config, st *store.Store, secret []byte, webFS fs.FS) (*API, 
 	// process) becomes a line in the operator's digest.
 	st.SetPurgeHook(a.onLockPurged)
 	a.git = newGitRunner(cfg, a.log)
+	if cfg.SnapshotsAgent != "" {
+		a.snap = snapshots.NewClient(cfg.SnapshotsAgent)
+	}
 	a.analyticsSalts = analytics.NewSalts(cfg.DataDir)
 	a.analyticsGeo = openAnalyticsGeo(cfg, a.log)
 	a.analytics = newAnalyticsRecorder(cfg, st, a.analyticsSalts, a.analyticsGeo, a.log)
@@ -220,6 +226,10 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("POST /api/sites/{editID}/containers/{action}", a.withEditAuth(a.recorded(provenance.ActionContainer, a.containerAction)))
 	mux.HandleFunc("GET /api/sites/{editID}/containers/{service}/logs", a.withEditAuth(a.containerLogs))
 	mux.HandleFunc("GET /api/sites/{editID}/containers/stats", a.withEditAuth(a.containerStats))
+
+	mux.HandleFunc("GET /api/sites/{editID}/backups", a.withEditAuth(a.listBackups))
+	mux.HandleFunc("GET /api/sites/{editID}/backups/{snapshot}/download", a.withEditAuth(a.downloadBackup))
+	mux.HandleFunc("POST /api/sites/{editID}/backups/{snapshot}/restore", a.withEditAuth(a.recorded(provenance.ActionRestore, a.restoreBackup)))
 
 	mux.HandleFunc("GET /api/sites/{editID}/forms", a.withEditAuth(a.listForms))
 	mux.HandleFunc("POST /api/sites/{editID}/forms", a.withEditAuth(a.recorded(provenance.ActionFormAdd, a.createForm)))

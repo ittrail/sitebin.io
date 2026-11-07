@@ -73,15 +73,33 @@ func ValidViewID(s string) bool { return viewIDRe.MatchString(s) }
 // an option, a path or a Borg location.
 func ValidSnapshotID(s string) bool { return snapshotIDRe.MatchString(s) }
 
+// Markers are Sitebin's own files at the top of a site's files/ (the store's
+// SPAMarker and TrustedMarker; internal/httpapi's tests hold them equal). They
+// say how the site is served, not what it holds: no fingerprint or count
+// includes them, and no restore brings one back.
+var Markers = []string{".sitebin-spa", ".sitebin-trusted"}
+
+// IsMarker reports whether rel (relative to files/) is one of Markers.
+func IsMarker(rel string) bool {
+	for _, m := range Markers {
+		if rel == m {
+			return true
+		}
+	}
+	return false
+}
+
 // Fingerprinter sums a set of files to a value that changes when any file's
 // path, size or modification second does. It is a set's sum — the XOR of one
 // SHA-256 per file — so the order an archive lists its files in does not
 // matter, and seconds only, so Borg's nanoseconds and a tar's seconds agree.
+// Rounded, not truncated: Go's tar writer (sitebin backup) rounds a time to
+// the nearest second.
 type Fingerprinter struct{ sum [sha256.Size]byte }
 
 // Add counts one regular file, its path relative to the site's files/.
 func (f *Fingerprinter) Add(path string, size int64, mtime time.Time) {
-	d := sha256.Sum256(fmt.Appendf(nil, "%s\x00%d\x00%d", path, size, mtime.Unix()))
+	d := sha256.Sum256(fmt.Appendf(nil, "%s\x00%d\x00%d", path, size, mtime.Round(time.Second).Unix()))
 	for i := range f.sum {
 		f.sum[i] ^= d[i]
 	}
@@ -127,7 +145,7 @@ func Summarize(ctx context.Context, src Source, id string) (map[string]SiteSumma
 			return nil
 		}
 		rel, ok := strings.CutPrefix(sub, "files/")
-		if !ok || rel == "" {
+		if !ok || rel == "" || IsMarker(rel) {
 			return nil
 		}
 		s.Files++

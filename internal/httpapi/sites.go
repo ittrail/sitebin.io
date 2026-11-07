@@ -609,13 +609,15 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"accounts_enabled": accountsEnabled,
 		// The edit page's Git tab: shown when Git works, or when only the
 		// plan lacks it (the tab then carries the upgrade notice).
-		"git_available":   gs.Available || gs.Reason == gitReasonPlan,
-		"created_at":      m.CreatedAt,
-		"updated_at":      m.UpdatedAt,
-		"files":           files,
-		"files_truncated": filesTruncated,
-		"base_domain":     a.cfg.BaseDomain,
-		"dns_target":      a.cfg.BaseDomain,
+		"git_available": gs.Available || gs.Reason == gitReasonPlan,
+		// The Backups tab: the instance has a snapshots agent.
+		"backups_available": a.snap != nil,
+		"created_at":        m.CreatedAt,
+		"updated_at":        m.UpdatedAt,
+		"files":             files,
+		"files_truncated":   filesTruncated,
+		"base_domain":       a.cfg.BaseDomain,
+		"dns_target":        a.cfg.BaseDomain,
 		"usage": map[string]any{
 			"bytes":     usage.Bytes(), // files + repository, the figure the cap is checked against
 			"git_bytes": usage.GitBytes,

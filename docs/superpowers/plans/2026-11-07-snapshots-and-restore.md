@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Snapshot ids reach a command only after matching an id the source listed; view ids match `^[a-z2-7]{26}$`.
-- Fingerprint = XOR of SHA-256(`path \x00 size \x00 mtime-unix-seconds`) over regular files under `sites/<id>/files/`.
+- Fingerprint = XOR of SHA-256(`path \x00 size \x00 mtime rounded to the second`) over regular files under `sites/<id>/files/`, Sitebin's markers left out.
 - Kinds by name prefix: `hourly-`, `nightly-`, `predeploy-`, else `archive`.
 - Copies and indexes never outlive 30 days.
 - Sitebin's markers `.sitebin-spa`, `.sitebin-trusted` are never restored into a site.

@@ -66,6 +66,14 @@ func TestFingerprintIgnoresOrderAndSubSeconds(t *testing.T) {
 	if c.Sum() == a.Sum() {
 		t.Fatal("a size change did not change the fingerprint")
 	}
+	// Go's tar writer (sitebin backup) rounds to the nearest second: a file
+	// at .6 s is stored at the next second, and both must agree.
+	var live, tarred Fingerprinter
+	live.Add("index.html", 10, t0.Add(600*time.Millisecond))
+	tarred.Add("index.html", 10, t0.Add(time.Second))
+	if live.Sum() != tarred.Sum() {
+		t.Fatal("a time the tar writer rounded up does not match the file's own")
+	}
 	var empty Fingerprinter
 	if empty.Sum() == a.Sum() || len(empty.Sum()) != 64 {
 		t.Fatalf("empty fingerprint %q", empty.Sum())
