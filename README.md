@@ -1399,6 +1399,14 @@ nothing else on the host is touched.
 > `sbe<id>`, so one rule per range covers all of them:
 > `iptables -I DOCKER-USER -i sbe+ -d 10.0.0.0/8 -j DROP` (likewise
 > `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `100.64.0.0/10`).
+> **Block the host's own LAN too when it is not one of those ranges** — a
+> network numbered from public address space reaches your router, proxies and
+> mail servers directly, and traffic inside it never passes your edge
+> firewall: `iptables -I DOCKER-USER -i sbe+ -d <your LAN>/24 -j DROP`. A
+> container also reaches the host itself through its bridge (the `INPUT`
+> chain, which `DOCKER-USER` does not cover); keep it off the host's SSH with
+> `iptables -I INPUT -i sbe+ -p tcp --dport 22 -j DROP`. Check from a
+> container on an `sbe` network that nothing internal answers.
 
 Leaving container mode stops the project and removes every symlink the
 containers left in the tree before the files are served again. Independently

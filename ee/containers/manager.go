@@ -91,7 +91,10 @@ func egressName(site string) string             { return "sb-" + site + "-egress
 // one starts with "sbe", so an operator can hold ALL customer egress to a
 // firewall rule without knowing the projects: `iptables -I DOCKER-USER -i
 // sbe+ -d 10.0.0.0/8 -j DROP` keeps customer code off private networks and
-// the cloud metadata address. Linux caps interface names at 15 characters.
+// the cloud metadata address — and the host's own LAN needs its rule too when
+// it is not an RFC 1918 range (the README says how; the hosted instance's
+// 192.103.100.0/24 was reachable until 2026-11-07). Linux caps interface
+// names at 15 characters.
 func egressBridge(site string) string { return "sbe" + site[:min(12, len(site))] }
 
 // egressIf is a service's interface on its project's egress network, named
