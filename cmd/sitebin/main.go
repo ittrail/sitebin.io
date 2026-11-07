@@ -189,6 +189,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "restore failed:", err)
 			os.Exit(1)
 		}
+	case "agent":
+		if err := runAgent(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "agent:", err)
+			os.Exit(1)
+		}
 	case "version", "--version", "-v":
 		fmt.Printf("sitebin %s (%s edition%s)\n", version, edition, editionDetail())
 	default:

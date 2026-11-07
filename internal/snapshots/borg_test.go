@@ -18,6 +18,14 @@ func TestMain(m *testing.M) {
 	if log := os.Getenv("FAKE_BORG_LOG"); log != "" {
 		os.Exit(fakeBorg(log, os.Args[1:]))
 	}
+	// …and as the agent's backup-now command: it writes a new archive.
+	if dir := os.Getenv("FAKE_BACKUP_DIR"); dir != "" {
+		if os.Getenv("FAKE_BACKUP_FAIL") != "" {
+			fmt.Fprintln(os.Stderr, "repository locked")
+			os.Exit(2)
+		}
+		os.Exit(fakeBackup(dir))
+	}
 	os.Exit(m.Run())
 }
 
