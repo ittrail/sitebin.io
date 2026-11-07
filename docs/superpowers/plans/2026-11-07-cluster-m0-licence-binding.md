@@ -46,7 +46,9 @@ bound to one cluster", §15 milestone 0.
 - **Compatibility:** a renewal with no `cluster_id` renews unbound licences
   exactly as today. Once a licence is bound, the stack refuses a renewal
   without `cluster_id`.
-- **Moving a licence:**
+- **Moving a licence** (changed by Ruling 9, see design Corrections: a
+  release names its target `cluster_id`, required for the holder, optional
+  for the operator):
   - The holder may release at most once per 7 days. The operator has no
     limit.
   - A release remembers the cluster it released (`previous_cluster_id`),
@@ -187,6 +189,10 @@ Read `AGENTS.md` and README § 16 first. Run tests with
 
 ### Task 3 (S3): The holder or the operator releases a licence's binding
 
+(Changed by Ruling 9, see design Corrections: `release` takes a target
+`cluster_id` and binds the licence to it in the same write; the holder must
+name one; `ALREADY_BOUND_THERE` is `409`; the mail names the target.)
+
 **Files:**
 - Modify: `services/paygate/src/services/license-service.ts`: add `release(appId: string, userId: string, by: 'holder' | 'operator'): Promise<ReleaseResult>`.
 - Modify: `services/paygate/src/routes/licenses.ts`: add `POST /api/v1/:appId/users/:userId/license/release`, with body `{ by: 'holder' | 'operator' }` and `requirePlatformKey` (the admin portal holds that key for both the holder's and the super-admin's pages).
@@ -236,6 +242,10 @@ Read `AGENTS.md` and README § 16 first. Run tests with
 
 ### Task 4 (S4): The portal shows the binding and offers the release
 
+(Changed by Ruling 9, see design Corrections: both confirmation pages ask for
+the new installation's id, required for the holder and optional for the
+super-admin, checked against `^[a-z2-7]{26}$` before PayGate is called.)
+
 **Files:**
 - Modify: `admin-portal/server.js`:
   - **Holder:** `GET /apps/:appId/license` and `POST /apps/:appId/license/release`, for any signed-in user, acting only on the session's own `sub`.
@@ -282,6 +292,14 @@ The e2e runs against a running stack with `PLATFORM_ADMIN_KEY`, on a throwaway u
 11. A second holder release within 7 days → 409 `RELEASE_TOO_SOON`.
 12. Operator release → ok.
 13. Clean up the throwaway user.
+
+Added by the final review (Ruling 9 and Important 3; steps 8–10 then name
+their target, see design Corrections):
+- After binding to A: an operator re-issue → the GET still shows
+  `cluster_id` A, the new key claims A, and a renewal with A → 200.
+- A holder release with target B → the GET shows B, and a renewal with A →
+  409.
+- A renewal with B → the re-signed key claims B.
 
 - [ ] **Step 1:** Write the script, and run it against the dev stack (`auth.ittrail.dev`) after deploying the branch to dev (`ssh auth01`, the stack's dev compose, `db-migrate` runs 006). Expected: every step passes; `docker compose logs db-migrate` shows 006 applied.
 - [ ] **Step 2:** Merge to `main`, push, and deploy cloud the same way. Check that `GET …/users/<operator>/license` for the hosted instance's licence still answers, with `cluster_id: null` until Sitebin ships.
@@ -341,7 +359,7 @@ Work in this worktree (branch `worktree-cluster-mode`). Run
   - `Snapshot.BoundElsewhere`;
   - `Status.BoundElsewhere`;
   - `Status.ClusterID` (the instance's own id, for the console).
-- **Notice copy:** "This Sitebin Enterprise licence is bound to another installation, so this instance runs unlicensed: a 90-day trial from its first start, then no new sites or drops. The licence holder can move the licence to this installation in the account portal (installation <first 6 characters of the cluster id>…)."
+- **Notice copy:** "This Sitebin Enterprise licence is bound to another installation, so this instance runs unlicensed: a 90-day trial from its first start, then no new sites or drops. The licence holder can move the licence to this installation in the account portal (installation <first 6 characters of the cluster id>…)." (Changed by Ruling 9, see design Corrections: the notice ends "…in the account portal with this installation's id: <full id>.")
 
 - [ ] **Step 1: Write failing tests**
   - `TestManagerKeyBoundToOwnCluster`: a cached key minted with cluster A, and the manager set to A → `StateLicensed`.

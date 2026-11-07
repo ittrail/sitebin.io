@@ -1025,8 +1025,10 @@ What is easy to get wrong:
   bound licence. A key naming another cluster is `none` (`ErrOtherCluster`),
   never `expired`, and an own-bound key is never downgraded. A stack `409
   LICENSE_BOUND` writes `<data>/license/bound-elsewhere`, cleared only by a
-  successful renewal and ignored for `SITEBIN_LICENSE_KEY`. `e2e/license.ps1`
-  covers both cases (`mintlicense -cluster-id`).
+  successful renewal and ignored for `SITEBIN_LICENSE_KEY`. A move names its
+  target: the holder enters the new installation's id in the portal, so the
+  bound-elsewhere notice must show the FULL id, never a prefix.
+  `e2e/license.ps1` covers both cases (`mintlicense -cluster-id`).
 - **Staying current:** the instance collects its licence from the stack daily,
   caches it under the data dir and applies it without a restart.
   `SITEBIN_LICENSE_KEY` wins when set, for air-gapped installs.

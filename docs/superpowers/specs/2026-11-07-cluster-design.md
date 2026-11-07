@@ -672,6 +672,33 @@ mounted, **every follower runs a replica**:
 - **Removing a node:** the writer drops it from `cluster.json`, and its
   certificate is refused from then on.
 
+### Corrections (post-implementation)
+
+Changed by the final review of milestone 0 (2026-11-07, Ruling 9 and
+Ruling 6), after the licence binding was built:
+
+- **A release names its target.** "Moving a licence" above said the holder
+  releases the binding and the next renewal binds it anew. That left the
+  licence open between the release and the next renewal: anyone holding a copy
+  of any key ever signed for the holder could renew first, take the binding
+  and keep it (the hostage race). So a release now names the installation the
+  licence moves to (`cluster_id` in the release body), and the stack binds the
+  licence to that id in the same write (`previous_cluster_id` = the old one,
+  `cluster_bound_at` = now). The target's next renewal re-signs the key with
+  its id; every other installation, the old one included, is refused.
+- **Holder releases require the target**; without one the stack answers `400`.
+  The holder finds the new installation's id in its `<data>/cluster/id`, in
+  its startup log line `cluster_id=`, or in the bound-elsewhere notice, which
+  therefore shows the FULL id. A target equal to the current binding is
+  `409 ALREADY_BOUND_THERE` and does not use up the holder's 7-day window.
+  Moving back to the previously released installation is allowed.
+- **The operator may still release without a target**, deliberately: the
+  licence is then open and the next installation that renews takes it.
+- **The `license.bound_elsewhere` mail is sent at most once per holder per
+  day** (Ruling 6), not once per foreign cluster per day: the cluster id is
+  chosen by the caller, so keying on it would let a copy of the key mint one
+  mail per invented id. It is sent without holding the `409` on the mail relay.
+
 ## 10. The distributor in front
 
 Sitebin ships no load balancer. Each node offers a plain-HTTP health

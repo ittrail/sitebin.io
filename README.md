@@ -2428,8 +2428,9 @@ A licence binds to **one installation**, identified by its **cluster id**: 26
 characters of `a-z2-7`, minted at the first enterprise start and kept in
 `<data>/cluster/id` (`/data/cluster/id` in the image). It is never regenerated,
 so keep it with the rest of the data directory. Until the `sitebin cluster id`
-command ships with the cluster CLI, read it from that file or from the
-`cluster_id=` field of the licence line in the startup log.
+command ships with the cluster CLI, read it from that file, from the
+`cluster_id=` field of the licence line in the startup log, or from the
+account UI's notice while the licence is bound elsewhere.
 
 - **Binding happens at the first renewal.** The first time the instance
   collects its licence from the stack, the stack binds the licence to the
@@ -2437,13 +2438,23 @@ command ships with the cluster CLI, read it from that file or from the
 - **A licence bound to another installation is `none`**, never `expired`: the
   instance runs unlicensed (the trial rules above), the startup log says
   `bound_elsewhere=true`, and the account UI says "This Sitebin Enterprise
-  licence is bound to another installation, so this instance runs unlicensed".
+  licence is bound to another installation, so this instance runs unlicensed",
+  ending with this installation's full cluster id to copy into the portal.
   If the stack refuses a renewal with `409 LICENSE_BOUND`, the instance records
   that and shows the same notice until a renewal succeeds.
 - **Moving a licence** to a new installation: in the stack's portal choose
-  "Move to a new installation". That releases the binding; the new installation
-  binds at its first renewal. A holder can do this once every 7 days, and the
-  released installation cannot take the licence back until the next release.
+  "Move to a new installation" and enter the **new installation's cluster id**.
+  The licence is bound to that installation at once (never left open for
+  another one to take), and the new installation collects the re-signed key at
+  its next daily renewal; the old one is refused from then on. A holder can
+  move a licence once every 7 days. For the move to reach it, the new
+  installation must be able to collect:
+  - the key is in `<data>/license/license.key` (put the one you hold there);
+  - `SITEBIN_LICENSE_KEY` is **unset**, because a key from that variable is
+    never renewed (the startup log says so at ERROR if it holds a key bound
+    elsewhere);
+  - the licence endpoint is reachable (`SITEBIN_LICENSE_URL`, by default
+    `<SITEBIN_PAYGATE_URL>/api/v1/licenses/renew`).
 - **Air-gapped installations** (`SITEBIN_LICENSE_KEY`, no renewal) never reach
   the stack, so they stay unbound: the key works wherever it is installed, as
   long as it names no cluster. A key that already names a cluster is checked
