@@ -24,8 +24,10 @@ const backupsTab = (() => {
   const panel = () => $("panel-backups");
 
   // The workspace has its own dialog; the classic page asks the browser.
+  // WS is a top-level const of the workspace's shell.js: visible to this
+  // script, but not a property of window.
   async function ask(title, body, ok) {
-    if (window.WS && typeof WS.confirm === "function") return WS.confirm(title, body, ok, true);
+    if (typeof WS !== "undefined" && typeof WS.confirm === "function") return WS.confirm(title, body, ok, true);
     return window.confirm(title + "\n\n" + body);
   }
 
@@ -73,7 +75,7 @@ const backupsTab = (() => {
     for (const v of vs) {
       const label = el("div", null, el("b", { text: when(v.at) }));
       const sub = [KIND[v.kind] || v.kind];
-      if (v.first && v.first !== v.at) sub.push("unchanged since " + when(v.first));
+      if (v.first && when(v.first) !== when(v.at)) sub.push("unchanged since " + when(v.first));
       if (v.current) sub.push("the files now");
       label.append(el("div", { class: "sub", text: sub.join(" · ") }));
       const acts = el("td", { style: "text-align:right;white-space:nowrap" },

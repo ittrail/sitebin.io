@@ -490,6 +490,41 @@ The third site mode (`store.ModeContainer`) runs the project its
   after a delete (authz's checks) uses `store.OpenServedRoot`, which never
   does.
 
+## Snapshots and restore
+
+Owners and admins restore a site's FILES from a backup snapshot (the Backups
+tab, `internal/httpapi/backups.go`, `web/static/edit-backups.js`); the
+operator restores the whole instance (workspace → Backups,
+`ee/adminbackups.go`). Both only ASK `sitebin agent` (`internal/snapshots`),
+which runs on the HOST beside the backups (Borg or a folder of `sitebin
+backup` archives) and answers over a unix socket only the container mounts
+(`SITEBIN_SNAPSHOTS_AGENT`). Read
+`docs/superpowers/specs/2026-11-07-snapshots-and-restore-design.md`. Rules a
+change must keep:
+
+- **The container never holds backup keys.** Anything that needs the
+  repository, the Docker socket or the data directory's host path belongs in
+  the agent.
+- **A site restore goes through `store.Replacement`** (caps, scan, lock,
+  viewer layout) and **takes a snapshot first** (`/v1/backup-now`); no
+  snapshot, no restore. Files only: settings, admins, domains, forms, the edit
+  password and Git stay. Sitebin's markers are never restored, counted or
+  fingerprinted (`snapshots.Markers` = the store's, a test holds them equal).
+- **Never offer a version from before the site changed hands**
+  (`Meta.OwnerSince`, else the newest transfer/adopt in provenance; an
+  unreadable log offers nothing). Container ↔ non-container is a 409.
+- **A container project stops right before the commit and starts again
+  whatever happens** (`startAfterRestore`, deferred, plan re-checked).
+- **Fingerprints round mtimes to the second** (Go's tar writer rounds) and are
+  order-free; keep `liveFingerprint` and `Summarize` the same algorithm.
+- **Snapshot ids reach a command only after the source listed them**
+  (`ValidSnapshotID`, `find`); view ids match `^[a-z2-7]{26}$`.
+- **Nothing outlives 30 days** (the privacy policy's and DPA's promise):
+  indexes go with their snapshot, kept copies after 30 days.
+- The instance restore swaps `<data>` with an extracted tree beside it, holds
+  the backup flock, removes every `io.sitebin.managed` container, and puts the
+  old tree back when Docker does not report `healthy` within 3 minutes.
+
 ## Browser caching
 
 `store.Meta.Cache` (`""` = auto) is a site's cache policy; authz turns it into

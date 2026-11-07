@@ -153,6 +153,7 @@ when an external proxy terminates TLS for `*.yourdomain` in front of Sitebin.
 | `SITEBIN_ABUSE_CONTACT` | — | Public abuse mailbox (a bare address). Named on the view domain's info page, in `security.txt` and on the "Site suspended" page; omitted everywhere when unset. |
 | `SITEBIN_ABUSE_REPORT_URL` | `<base>/report` | The page where people report a site. `none` omits it. |
 | `SITEBIN_HOME_URL` | the base URL | The operator's main site, linked from the view domain's info page. |
+| `SITEBIN_SNAPSHOTS_AGENT` | — | The unix socket of the [snapshots agent](#snapshots-and-restore) on the host (`/run/sitebin-agent/agent.sock`, its folder mounted into the container). Set, every site gets a **Backups** tab and the operator a **Backups** view. |
 | `SITEBIN_ABUSE_ALERTS_TO` | the `SITEBIN_ADMIN_ACCOUNTS` addresses | Comma-separated bare addresses that get the [abuse detection](#abuse-detection) alerts: held and flagged uploads, the CSP tripwire, every abuse report. Plain-text mail through the forms mailer (`SITEBIN_FORMS_SMTP_*`); without it, alerts are only logged. A malformed address refuses to start. |
 
 A tier's `max_expiry_days` works the same way per site and adds one rule:
@@ -1577,6 +1578,80 @@ Operator commands (run inside the container, e.g. `docker exec sitebin sitebin <
   base domain — and on the view domain's apex — from `SITEBIN_ABUSE_CONTACT`
   and `SITEBIN_ABUSE_REPORT_URL`, with an `Expires` always 180 days ahead.
 
+### Snapshots and restore
+
+The backups can be more than disaster recovery: with a **snapshots agent**
+beside the instance, every site's owner (and its admins) can download or
+restore an earlier version of the site's files, and the operator can restore
+the whole instance — from the workspace, without a shell. Design:
+[`2026-11-07-snapshots-and-restore-design.md`](docs/superpowers/specs/2026-11-07-snapshots-and-restore-design.md).
+
+**The agent runs on the host, not in the container.** It is the same binary,
+`sitebin agent`, run as root next to the backups. It holds what the
+internet-facing container must not: the backup repository's keys, the Docker
+socket, the data directory's host path. It answers the instance over a unix
+socket in a folder only the Sitebin container mounts (mode 0660, the
+container user's group).
+
+```bash
+# /etc/systemd/system/sitebin-agent.service (ExecStart, one line)
+sitebin agent -data /opt/sitebin/data -source borg \
+  -backup-now "/usr/local/sbin/sitebin-borg hourly" \
+  -backup-lock /run/sitebin-borg.lock -status-dir /var/lib/sitebin-borg \
+  -container sitebin
+# EnvironmentFile: BORG_REPO, BORG_PASSCOMMAND, BORG_REMOTE_PATH
+
+# compose: the socket's folder, and where it is
+volumes:   [ "/run/sitebin-agent:/run/sitebin-agent" ]
+environment: [ "SITEBIN_SNAPSHOTS_AGENT=/run/sitebin-agent/agent.sock" ]
+```
+
+- **Sources.** `-source borg` reads a Borg repository (`borg list`,
+  `export-tar`, `extract` with the environment's `BORG_*`); `-source dir -dir
+  <folder>` reads a folder of `sitebin backup` archives (`<name>.tar.gz`),
+  the cron recipe below. Archive names give the kind: `hourly-*`,
+  `nightly-*`, `predeploy-*`, anything else is a backup.
+- **`-backup-now`** is the command that takes a snapshot on request. **A site
+  restore takes one first** and refuses without it, so the files it replaces
+  are the newest version afterwards — every restore can be undone.
+- The agent **indexes** each snapshot once (per site: files, bytes and a
+  fingerprint of `files/`, so equal snapshots are one *version*) and deletes
+  an index with its snapshot.
+
+**A site restore** (`GET /api/sites/{id}/backups`,
+`GET …/backups/{snapshot}/download`, `POST …/backups/{snapshot}/restore`;
+the edit page's and workspace's **Backups** tab):
+
+- replaces the site's **files** through the staged replace an upload uses —
+  caps, abuse scan, site lock, viewer layout — and keeps the snapshot's file
+  times; settings, addresses, sharing, forms, the edit password and the Git
+  repository stay as they are, and so do Sitebin's own marker files;
+- refuses a version from before the site changed hands (`Meta.OwnerSince`,
+  set by a transfer or an adoption): the previous owner's deleted files are
+  not the new owner's;
+- refuses a version across Container mode: an app's data folders restored
+  into a static site would be published, and a static version would leave a
+  project without its compose file. Static and File viewer interchange;
+- stops a container project right before the files change and starts it
+  again afterwards, a failed restore included. **A database a container was
+  writing when a snapshot was taken may not be consistent in it** — the
+  copy is file by file; keep your own export.
+
+**An instance restore** (operator, workspace → Instance → Backups, typed
+confirmation): the agent unpacks the snapshot beside the data directory
+(through the same code as `sitebin restore`, owned by the data directory's
+owner), takes the backup lock, stops the instance and removes every site
+container (`io.sitebin.managed=true`), swaps the two directories, starts the
+instance and waits up to three minutes for Docker's `healthy`. If it does
+not come up, the previous data is put back by itself. The data from before
+is kept as `<data>.before-restore-<time>` for 30 days and can be switched
+back to; the agent deletes copies after 30 days. The data directory must be
+a bind mount of a host folder (or a volume subpath) the agent can rename.
+
+`sitebin backup` and `sitebin restore` read only `SITEBIN_DATA_DIR` (default
+`/data`). `restore` takes a gzip or a plain tar (Borg's `export-tar`), and
+skips a link pointing out of the data root instead of refusing the archive.
+
 ### Availability & failover
 
 Sitebin is a **single-writer** system: writes are serialized by in-process
@@ -1689,6 +1764,7 @@ others, so a full pass means running them all.
 | `redirects.ps1` | custom-domain redirects and the generated address through Caddy *(enterprise)* | `sitebin:e2e-redirects` |
 | `license.ps1` | licensing *(enterprise)* — builds its own image | `sitebin:e2e-license` |
 | `containers.ps1` | container sites against the host's Docker Engine: node + MySQL behind Caddy, an address per HTTP port, domains pointed at ports, redirects and off, egress, the plan cap, restarts, symlink confinement *(enterprise; pulls images, needs internet)* | `sitebin:dev-ee` |
+| `snapshots.ps1` | snapshots and restore: an agent beside the instance (dir source), a site's versions, ZIP download, site restore with a snapshot first, the instance restore and switching back *(enterprise; uses the Docker socket)* | `sitebin:dev-ee` |
 | `consent.ps1` | the stack's consent gate: three documents asked once *(enterprise, needs a running SaaS Stack)* | `sitebin:dev-ee` |
 | `stack/verify.ps1` | the compose container against a live stack: registration, sign-in, GDPR endpoints, self-service links | `sitebin:stack-e2e` |
 
