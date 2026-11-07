@@ -508,7 +508,7 @@ require stdio) can bridge with `npx mcp-remote https://…/mcp --header …`.
 | `list_sites` | The connected account's sites, with their names, tags and custom domains; sites other accounts [shared](#site-ownership-enterprise) with it appear with `role: "admin"` *(needs a token)* |
 | `get_site` / `update_site` | Read and change the name, tags (`settings.tags` replaces them; an empty list removes all), settings, expiry, view password, WebDAV/FTP, SPA fallback, browser caching, the not-found page; an admin of a shared site cannot change the expiry |
 | `list_files` / `read_file` | Inspect a site's contents |
-| `write_files` | Add or overwrite files; with `replace`, the site ends up containing exactly what you pass |
+| `write_files` | Add or overwrite files; with `replace`, the site ends up containing exactly what you pass. On a container site only a change to the compose file restarts the project, and `replace` also deletes what the app wrote into its data folders |
 | `delete_file` / `delete_site` | Remove a file, or the whole site (not for an admin of a shared site) |
 | `add_domain` / `remove_domain` | Custom domains; on a container site, `add_domain` takes the HTTP port the domain serves *(Enterprise)* |
 | `set_domain_redirect` / `set_view_address` | Redirect a custom domain to another of the site's domains; switch a generated address off or redirect it *(Enterprise)* |

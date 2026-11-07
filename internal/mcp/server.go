@@ -205,7 +205,9 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 		Name: "write_files",
 		Description: "Add or overwrite files in a site. With replace set, the site ends up containing " +
 			"exactly the files you pass; the old files are removed only once every new one is written. " +
-			"For files larger than a few hundred KB, use open_upload instead.",
+			"For files larger than a few hundred KB, use open_upload instead. On a container site only a " +
+			"change to sitebin-container-compose.yaml restarts the project: new app code runs from the next " +
+			"restart, and replace also deletes what the app wrote into its data folders.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in writeArgs) (*sdk.CallToolResult, *SiteResult, error) {
 		files, err := DecodeFiles(in.Files)
 		if err != nil {
