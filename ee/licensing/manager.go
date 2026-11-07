@@ -166,6 +166,21 @@ func (m *Manager) Start(f Fetcher) {
 		// forever -- so the two together are said loudly and in one line. This
 		// is the likeliest way a paying customer ends up restricted, and the
 		// only signal they get is in this log.
+		//
+		// A key bound to ANOTHER installation did verify; it is just someone
+		// else's, or was moved away. Moving it to this installation in the
+		// portal cannot help while it comes from this variable, because an env
+		// key is never renewed. So that case gets its own line, with the way out.
+		if errors.Is(envErr, ErrOtherCluster) {
+			id := m.clusterID
+			if id == "" {
+				id = "unknown: the cluster id could not be read, see the error above"
+			}
+			slog.Error("license: SITEBIN_LICENSE_KEY holds a licence bound to another installation, and a key from this variable is never renewed, so moving the licence cannot reach this instance. Put the key into "+
+				filepath.Join(m.dir, cacheFile)+", unset SITEBIN_LICENSE_KEY, then move the licence to this installation (id "+id+") in the account portal.",
+				"cluster_id", m.clusterID, "err", envErr)
+			return
+		}
 		if envErr != nil {
 			slog.Error("license: SITEBIN_LICENSE_KEY DID NOT VERIFY, so this instance is running UNLICENSED (a 90-day trial, then no new sites) -- and because the key is set, it will NOT collect a licence from the stack either. Fix or unset SITEBIN_LICENSE_KEY.",
 				"err", envErr)
@@ -198,7 +213,11 @@ func (m *Manager) Waitc() <-chan struct{} { return m.fetched }
 
 // refreshOnce collects a licence and applies it if — and only if — it verifies.
 // A fetch that fails, returns nothing, or returns a key that does not check out
-// leaves the current licence exactly where it is. Nothing here can restrict.
+// leaves the current licence exactly where it is. Nothing here can restrict,
+// with ONE exception, by design: a 409 refusal (ErrBoundElsewhere) records the
+// marker, and the marker voids a held key that is UNBOUND (StatusAt), because
+// the stack has just said that licence belongs to another installation. A key
+// bound to this installation is never voided by it.
 func (m *Manager) refreshOnce(f Fetcher) {
 	defer m.once.Do(func() { close(m.fetched) })
 
@@ -211,16 +230,23 @@ func (m *Manager) refreshOnce(f Fetcher) {
 	key, ok, err := f.Fetch(ctx, current)
 	if errors.Is(err, ErrBoundElsewhere) {
 		// The stack bound this licence to another installation. Remember it
-		// (also across restarts) so the instance says so; nothing is restricted
-		// beyond what StatusAt derives.
+		// (also across restarts) so the instance says so. This is the one
+		// place a refresh restricts, by design: StatusAt lets the marker void a
+		// held UNBOUND key (the instance falls to its trial arm). A key bound
+		// to this cluster is left in force until it expires.
 		if werr := m.write(boundMarkerFile, []byte(m.now().Format(time.RFC3339))); werr != nil {
 			slog.Warn("license: could not record the refusal", "err", werr)
 		}
 		m.mu.Lock()
 		m.snap.BoundElsewhere = true
 		m.mu.Unlock()
-		slog.Error("license: the stack refused to renew this license because it is bound to another installation; this instance runs unlicensed",
-			m.Status().LogArgs()...)
+		if st := m.Status(); st.BoundElsewhere {
+			slog.Error("license: the stack refused to renew this license because it is bound to another installation; this instance runs unlicensed",
+				st.LogArgs()...)
+		} else {
+			slog.Error("license: the stack refused to renew this license: it was moved to another installation. The key this instance holds stays valid until it expires",
+				st.LogArgs()...)
+		}
 		return
 	}
 	if err != nil {

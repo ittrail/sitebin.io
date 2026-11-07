@@ -447,12 +447,186 @@ func TestMarkerWithoutVerifiedLicenceIsNotBoundElsewhere(t *testing.T) {
 	}
 }
 
+// The notice carries the instance's FULL cluster id: the holder copies it into
+// the portal, which moves the licence to exactly that installation. With no
+// readable id there is nothing to copy, and the sentence ends without it.
 func TestNoticeWithoutOwnClusterIDOmitsInstallation(t *testing.T) {
-	if n := (Status{BoundElsewhere: true}).Notice(); n == "" || strings.Contains(n, "(installation") {
+	n := (Status{BoundElsewhere: true}).Notice()
+	if !strings.HasSuffix(n, "move the licence to this installation in the account portal.") || strings.Contains(n, "id:") {
+		t.Errorf("notice without an id = %q", n)
+	}
+	n = (Status{BoundElsewhere: true, ClusterID: clusterA}).Notice()
+	if !strings.HasSuffix(n, "in the account portal with this installation's id: "+clusterA+".") {
 		t.Errorf("notice = %q", n)
 	}
-	if n := (Status{BoundElsewhere: true, ClusterID: clusterA}).Notice(); !strings.Contains(n, "(installation aaaaaa…)") {
-		t.Errorf("notice = %q", n)
+	if strings.Contains(n, "…") {
+		t.Errorf("the id is shortened: %q", n)
+	}
+}
+
+// captureLog routes slog into a buffer for the rest of the test.
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+// A SITEBIN_LICENSE_KEY bound to another installation is not a typo: it
+// verifies, it is just someone else's. And a key from that variable is never
+// renewed, so moving the licence in the portal cannot reach this instance. The
+// log must say exactly that, and what to do, not "DID NOT VERIFY".
+func TestEnvKeyBoundElsewhereSaysHowToMove(t *testing.T) {
+	c := newChain(t)
+	m, dir := newTestManager(t, c, refTime)
+	m.SetClusterID(clusterA)
+	buf := captureLog(t)
+
+	st := m.Load(boundKey(t, c, clusterB))
+	if st.State != StateNone || !errors.Is(st.Err, ErrOtherCluster) {
+		t.Fatalf("state=%s err=%v, want none/ErrOtherCluster", st.State, st.Err)
+	}
+	f := &stubFetcher{key: c.key(t), ok: true}
+	m.Start(f)
+	select {
+	case <-m.Waitc():
+		t.Fatal("a fetch ran while SITEBIN_LICENSE_KEY was set")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if f.hits != 0 {
+		t.Errorf("fetcher was called %d times", f.hits)
+	}
+
+	// The text handler quotes the message, doubling a Windows path's backslashes.
+	log := strings.ReplaceAll(buf.String(), `\\`, `\`)
+	if !strings.Contains(log, "level=ERROR") {
+		t.Errorf("not logged at ERROR:\n%s", log)
+	}
+	for _, want := range []string{
+		"SITEBIN_LICENSE_KEY holds a licence bound to another installation",
+		"never renewed",
+		filepath.Join(dir, "license", cacheFile),
+		"unset SITEBIN_LICENSE_KEY",
+		"(id " + clusterA + ")",
+		"account portal",
+	} {
+		if !strings.Contains(log, want) {
+			t.Errorf("the log never says %q:\n%s", want, log)
+		}
+	}
+	if strings.Contains(log, "DID NOT VERIFY") {
+		t.Errorf("a key bound elsewhere is reported as a key that did not verify:\n%s", log)
+	}
+}
+
+// The refusal says "runs unlicensed" only when it voided the held licence (an
+// unbound one). A key bound to THIS installation stays licensed until it
+// expires, and the log must say that instead.
+func TestRefusalLogSaysUnlicensedOnlyWhenVoided(t *testing.T) {
+	cases := []struct {
+		name, keyCluster string
+		voided           bool
+	}{
+		{"unbound held key", "", true},
+		{"own-bound held key", clusterA, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newChain(t)
+			m, dir := newTestManager(t, c, refTime)
+			m.SetClusterID(clusterA)
+			if err := os.MkdirAll(filepath.Join(dir, "license"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "license", cacheFile), []byte(boundKey(t, c, tc.keyCluster)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			m.Load("")
+			buf := captureLog(t)
+
+			m.refreshOnce(&stubFetcher{err: ErrBoundElsewhere})
+
+			log, st := buf.String(), m.Status()
+			if !strings.Contains(log, "level=ERROR") {
+				t.Errorf("not logged at ERROR:\n%s", log)
+			}
+			if tc.voided {
+				if !st.BoundElsewhere || !strings.Contains(log, "runs unlicensed") {
+					t.Errorf("boundElsewhere=%v log=%s", st.BoundElsewhere, log)
+				}
+				return
+			}
+			if st.State != StateLicensed || st.BoundElsewhere {
+				t.Fatalf("an own-bound key was downgraded: state=%s boundElsewhere=%v", st.State, st.BoundElsewhere)
+			}
+			if strings.Contains(log, "runs unlicensed") {
+				t.Errorf("claims unlicensed beside a licence that stays in force:\n%s", log)
+			}
+			for _, want := range []string{"moved to another installation", "stays valid until it expires"} {
+				if !strings.Contains(log, want) {
+					t.Errorf("the log never says %q:\n%s", want, log)
+				}
+			}
+		})
+	}
+}
+
+// The hosted instance's first renewal after the upgrade: it holds an unbound
+// key, presents its cluster id, and the stack binds the licence and answers
+// with the key re-signed for this cluster. That key must be applied and
+// cached, with no refusal marker, and the status licensed with the id.
+func TestHostedFirstRenewalAppliesTheBoundKey(t *testing.T) {
+	c := newChain(t)
+	m, dir := newTestManager(t, c, refTime)
+	m.SetClusterID(clusterA)
+	cachePath := filepath.Join(dir, "license", cacheFile)
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	unbound := boundKey(t, c, "")
+	if err := os.WriteFile(cachePath, []byte(unbound), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if st := m.Load(""); st.State != StateLicensed || st.Source != "cache" {
+		t.Fatalf("setup: state=%s source=%s", st.State, st.Source)
+	}
+	buf := captureLog(t)
+
+	bound := boundKey(t, c, clusterA)
+	f := &stubFetcher{key: bound, ok: true}
+	m.Start(f)
+	<-m.Waitc()
+
+	if f.sawCurrent != unbound {
+		t.Errorf("the renewal did not present the held key")
+	}
+	st := m.Status()
+	if st.State != StateLicensed || st.Source != "stack" || st.ClusterID != clusterA || st.BoundElsewhere || st.Restricted {
+		t.Fatalf("state=%s source=%s cluster=%q boundElsewhere=%v restricted=%v, want licensed/stack/%s/false/false",
+			st.State, st.Source, st.ClusterID, st.BoundElsewhere, st.Restricted, clusterA)
+	}
+	m.mu.RLock()
+	claim := m.snap.License.Lic.ClusterID
+	m.mu.RUnlock()
+	if claim != clusterA {
+		t.Errorf("the applied licence claims %q, want %q", claim, clusterA)
+	}
+	if b, err := os.ReadFile(cachePath); err != nil || string(b) != bound {
+		t.Errorf("license.key was not rewritten with the bound key: %v", err)
+	}
+	if _, err := os.Stat(markerPath(dir)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a refusal marker exists: %v", err)
+	}
+	if log := buf.String(); !strings.Contains(log, "applied a license collected from the stack") || !strings.Contains(log, "cluster_id="+clusterA) {
+		t.Errorf("log = %s", log)
+	}
+	// And the next start reads the bound key from the cache.
+	m2 := NewManager(dir, c.roots(), AppID, func() time.Time { return refTime })
+	m2.SetClusterID(clusterA)
+	if st := m2.Load(""); st.State != StateLicensed || st.Source != "cache" {
+		t.Errorf("restart: state=%s source=%s", st.State, st.Source)
 	}
 }
 

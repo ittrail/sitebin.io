@@ -227,7 +227,8 @@ func TestStatusBoundElsewhereIgnoresUnboundKey(t *testing.T) {
 	if late := s.StatusAt(s.TrialStart.Add(TrialPeriod + time.Second)); !late.Restricted {
 		t.Error("the trial arm does not restrict after 90 days")
 	}
-	if !strings.Contains(got.Notice(), "(installation aaaaaa…)") {
+	// The FULL id, so the holder can copy it into the portal's move form.
+	if !strings.Contains(got.Notice(), "with this installation's id: aaaaaaaaaaaaaaaaaaaaaaaaaa.") {
 		t.Errorf("notice = %q", got.Notice())
 	}
 }

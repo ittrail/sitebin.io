@@ -163,11 +163,10 @@ func (s Status) Notice() string {
 	switch {
 	case s.BoundElsewhere:
 		msg := "This Sitebin Enterprise licence is bound to another installation, so this instance runs unlicensed: a 90-day trial from its first start, then no new sites or drops. The licence holder can move the licence to this installation in the account portal"
-		if prefix := s.ClusterID; prefix != "" {
-			if len(prefix) > 6 {
-				prefix = prefix[:6]
-			}
-			msg += " (installation " + prefix + "…)"
+		// The FULL id: the portal's move form asks for it, so the holder copies
+		// it from here. Without a readable id there is nothing to copy.
+		if s.ClusterID != "" {
+			msg += " with this installation's id: " + s.ClusterID
 		}
 		return msg + "."
 	case s.State == StateGrace:

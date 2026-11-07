@@ -45,7 +45,7 @@ New-Item -ItemType Directory -Force $work | Out-Null
 # totals looking healthy while the run is silently smaller, so the count is
 # checked at the end against this number. Update it when you add or remove one.
 # (mcp.ps1 grew this guard after exactly that happened.)
-$ExpectedAssertions = 66
+$ExpectedAssertions = 68
 
 $script:pass = 0; $script:fail = 0
 # $c is deliberately untyped: with [bool], PowerShell throws on anything it
@@ -366,15 +366,21 @@ Assert "binding: no 'another installation' notice for the own key" ($r.code -eq 
 Write-Host "== cluster binding (a key naming ANOTHER cluster)" -ForegroundColor Cyan
 $otherId = "aaaaaaaaaaaaaaaaaaaaaaaaaa"
 $other = Mint @("-root-private", $rootPriv, "-holder", "Elsewhere GmbH", "-expires", "8760h", "-grace", "17520h", "-cluster-id", $otherId)
-$up = StartInstance "sitebin-lic-e2e-other" @("-e", "SITEBIN_LICENSE_KEY=$($other.LICENSE)")
+# A licence endpoint is configured, as on any installation that renews, so the
+# startup takes the collection path; the env key keeps it from ever calling
+# out (the port is closed on purpose).
+$up = StartInstance "sitebin-lic-e2e-other" @("-e", "SITEBIN_LICENSE_KEY=$($other.LICENSE)", "-e", "SITEBIN_LICENSE_URL=http://127.0.0.1:9/api/v1/licenses/renew")
 Assert "container up (key bound to another installation)" $up
 if (-not $up) { docker rm -f $name | Out-Null; exit 1 }
 $logs = Logs
 Assert "other cluster: it is reported as none, NOT licensed or expired" ($logs -match "state=none") "$logs"
 Assert "other cluster: the log says bound_elsewhere=true" ($logs -match "bound_elsewhere=true") "$logs"
+Assert "other cluster: the log says an env key cannot be moved here, and how to fix it" ($logs -match "SITEBIN_LICENSE_KEY holds a licence bound to another installation" -and $logs -match "unset SITEBIN_LICENSE_KEY") "$logs"
+$thisId = ((docker exec $name cat /data/cluster/id 2>$null) | Out-String).Trim()
 $jar = SignUp "other"
 $r = Dashboard $jar
 Assert "other cluster: the account UI says the licence is bound to another installation" ($r.code -eq 200 -and $r.body -match "bound to another installation") ""
+Assert "other cluster: the notice shows this installation's FULL id, to copy into the portal" ($thisId -match '^[a-z2-7]{26}$' -and $r.body -match $thisId) "id '$thisId'"
 $r = CreateSite $jar
 Assert "other cluster: it runs as unlicensed (trial), creating still works (201)" ($r.code -eq 201) "got $($r.code): $($r.body)"
 

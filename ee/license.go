@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -88,7 +89,12 @@ func (p *provider) initLicensing() {
 
 	st := p.license.Load(os.Getenv("SITEBIN_LICENSE_KEY"))
 	slog.Info("enterprise license", st.LogArgs()...)
-	if st.Err != nil {
+	if errors.Is(st.Err, licensing.ErrOtherCluster) {
+		// It did verify; it belongs to another installation. Saying "could not
+		// be verified" would send the operator after a typo that is not there.
+		slog.Warn("license: the license key is bound to another installation; treating this instance as unlicensed (NOT as expired). Its holder can move it to this installation in the account portal",
+			"cluster_id", clusterID, "err", st.Err)
+	} else if st.Err != nil {
 		slog.Warn("license: the supplied license key could not be verified; treating this instance as unlicensed (NOT as expired)", "err", st.Err)
 	}
 
