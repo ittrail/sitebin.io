@@ -28,8 +28,26 @@
   }).catch(() => {});
 
   // ---- hooks into edit.js ----
+  // Any change makes the loaded activity stale: a write through edit.js's
+  // api(), or a content change the site's updated_at shows. The list reloads
+  // when Overview or Activity is next shown (at once if Activity is open).
+  let seenUpdate = null;
+  function activityStale() {
+    activity = null;
+    if (pane === "activity" && (!tabs.active || tabs.active === "live")) activityPane();
+  }
+  const editApi = window.api;
+  window.api = async function (method, path, body, isForm) {
+    const r = await editApi(method, path, body, isForm);
+    if (method !== "GET") activityStale();
+    return r;
+  };
   const editRender = window.render;
-  window.render = function () { editRender(); paint(); };
+  window.render = function () {
+    editRender();
+    if (site && site.updated_at !== seenUpdate) { if (seenUpdate !== null) activity = null; seenUpdate = site.updated_at; }
+    paint();
+  };
   const tabsShow = tabs.show.bind(tabs);
   tabs.show = function (id, opts) { tabsShow(id, opts); bar(); };
   const editRenderForms = window.renderForms;

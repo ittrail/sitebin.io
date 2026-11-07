@@ -271,3 +271,14 @@ What building it changed or settled, 2026-11-06:
   the plans do not have. **The operator decided (2026-11-07): "21 of 500
   sites, 4.8 GB in use"** — the plan's real site cap, counted over owned
   sites (what `max_sites` counts); a plan without a cap keeps "21 sites, …".
+- **Live end-to-end on app.sitebin.io (2026-11-07, with the operator's OK):**
+  one test site "Workspace live check" in the operator's account, driven
+  through the workspace in the operator's browser — rename, tag via "+ Tag",
+  the four type cards, a date-only expiry (saved as that day 23:59), view
+  password, caching, the Missing pages dropdown, Turn on (kept a saved
+  exclude rule), activity as sentences without account ids, delete through
+  the dialog — 19 checks, all passing, the site gone afterwards. It found that
+  the activity list stayed as loaded after a change on the same page: a write
+  through edit.js's `api()` (wrapped like `render`) or a new `updated_at`
+  now marks it stale, and it reloads when shown (e2e check added, failing
+  before the fix).
