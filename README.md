@@ -1414,7 +1414,12 @@ nothing else on the host is touched.
 > container also reaches the host itself through its bridge (the `INPUT`
 > chain, which `DOCKER-USER` does not cover); keep it off the host's SSH with
 > `iptables -I INPUT -i sbe+ -p tcp --dport 22 -j DROP`. Check from a
-> container on an `sbe` network that nothing internal answers.
+> container on an `sbe` network that nothing internal answers. **Close
+> outgoing SMTP** as well, or a spammer on a container site delivers straight
+> to the world's mail servers from your address (and gets it blacklisted):
+> `iptables -I DOCKER-USER -i sbe+ -p tcp --dport 25 -j REJECT --reject-with tcp-reset`.
+> Apps then send mail through a provider's submission port (587 or 465, with
+> a login), which stays open.
 
 Leaving container mode stops the project and removes every symlink the
 containers left in the tree before the files are served again. Independently
