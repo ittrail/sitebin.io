@@ -191,6 +191,16 @@ func (a *API) snapshotLayout(ctx context.Context, site *store.Site, id string) (
 // with its path relative to root — Sitebin's own markers left out (a site
 // keeps its own, as on every replace). A stream cut short is an error.
 func eachFile(tr *tar.Reader, root string, fn func(rel string, h *tar.Header, r io.Reader) error) error {
+	return eachEntry(tr, root, func(rel string, h *tar.Header, r io.Reader) error {
+		if h.Typeflag != tar.TypeReg {
+			return nil
+		}
+		return fn(rel, h, r)
+	})
+}
+
+// eachEntry is eachFile for every kind of entry: files, folders and links.
+func eachEntry(tr *tar.Reader, root string, fn func(rel string, h *tar.Header, r io.Reader) error) error {
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -198,9 +208,6 @@ func eachFile(tr *tar.Reader, root string, fn func(rel string, h *tar.Header, r 
 		}
 		if err != nil {
 			return fmt.Errorf("the snapshot's files: %w", err)
-		}
-		if h.Typeflag != tar.TypeReg {
-			continue
 		}
 		name := strings.TrimPrefix(path.Clean("/" + strings.TrimPrefix(h.Name, "./"))[1:], "/")
 		rel, ok := strings.CutPrefix(name, root)
@@ -221,6 +228,10 @@ func (a *API) downloadBackup(w http.ResponseWriter, r *http.Request, site *store
 	id := r.PathValue("snapshot")
 	if _, err := a.offeredVersion(ctx, site, id); err != nil {
 		a.agentFailed(w, site, err)
+		return
+	}
+	if !a.backupDownloads.Allow(site.ViewID) {
+		writeError(w, 429, "Too many downloads of this site's backups in a short time. Try again in a few minutes.")
 		return
 	}
 	root, _, err := a.snapshotLayout(ctx, site, id)
@@ -284,6 +295,19 @@ func (a *API) restoreBackup(w http.ResponseWriter, r *http.Request, site *store.
 		}
 		return
 	}
+	// Each restore takes a snapshot of the whole instance first.
+	if !a.backupRestores.Allow(site.ViewID) {
+		writeError(w, 429, "Too many restores of this site in a short time. Try again in a few minutes.")
+		return
+	}
+	// The one-replace claim first: a site busy with an upload gets its 409
+	// before a snapshot is taken for nothing.
+	rep, err := a.st.BeginReplace(site)
+	if err != nil {
+		respondErr(w, err)
+		return
+	}
+	defer rep.Abort()
 	// Every restore can be undone: the files it replaces become a snapshot
 	// first. No snapshot, no restore.
 	taken, err := a.snap.BackupNow(ctx)
@@ -292,23 +316,55 @@ func (a *API) restoreBackup(w http.ResponseWriter, r *http.Request, site *store.
 		writeError(w, 503, "A snapshot of the current files could not be taken first, so nothing was restored. Try again in a few minutes.")
 		return
 	}
-	rep, err := a.st.BeginReplace(site)
+	// The snapshot can take minutes: what was decided above is checked
+	// again now, before the container stops, and under the site lock at the
+	// commit (Guard).
+	still := a.restoreStillFits(site.Meta, a.actorOf(r), snapContainer)
+	fresh, err := a.st.ByViewID(site.ViewID)
 	if err != nil {
 		respondErr(w, err)
 		return
 	}
-	defer rep.Abort()
+	if err := still(fresh.Meta); err != nil {
+		respondErr(w, err)
+		return
+	}
+	site = fresh
+	rep.Guard(still)
 	body, err := a.snap.Files(ctx, id, site.ViewID)
 	if err != nil {
 		a.agentFailed(w, site, err)
 		return
 	}
 	times := map[string]time.Time{}
-	err = eachFile(tar.NewReader(body), root, func(rel string, h *tar.Header, rd io.Reader) error {
-		if err := rep.SaveFile(rel, rd); err != nil {
-			return err
+	// A container site keeps what its app installed — executables, links
+	// inside its tree (node_modules/.bin), empty folders — or its project
+	// may not start again. Every other site gets plain files, as an upload.
+	keepAll := site.Meta.Mode == store.ModeContainer
+	err = eachEntry(tar.NewReader(body), root, func(rel string, h *tar.Header, rd io.Reader) error {
+		switch h.Typeflag {
+		case tar.TypeReg:
+			if err := rep.SaveFile(rel, rd); err != nil {
+				return err
+			}
+			times[rel] = h.ModTime
+			if keepAll && h.Mode&0o111 != 0 {
+				return rep.SetMode(rel, fs.FileMode(h.Mode))
+			}
+		case tar.TypeSymlink:
+			if !keepAll {
+				return nil
+			}
+			if err := rep.Symlink(rel, h.Linkname); errors.Is(err, store.ErrBadPath) {
+				a.log.Warn("backups: restore skipped a link out of the site", "id", site.ViewID, "path", rel)
+			} else if err != nil {
+				return err
+			}
+		case tar.TypeDir:
+			if keepAll {
+				return rep.Mkdir(rel)
+			}
 		}
-		times[rel] = h.ModTime
 		return nil
 	})
 	body.Close()
@@ -324,6 +380,15 @@ func (a *API) restoreBackup(w http.ResponseWriter, r *http.Request, site *store.
 
 	// A container project stops only now, right before its files change,
 	// and runs again afterwards whatever happens.
+	if fresh, err := a.st.ByViewID(site.ViewID); err != nil {
+		respondErr(w, err)
+		return
+	} else if err := still(fresh.Meta); err != nil {
+		respondErr(w, err)
+		return
+	} else {
+		site = fresh
+	}
 	if site.Meta.Mode == store.ModeContainer {
 		if rt, ok := containerRuntime(); ok {
 			was := site.Meta.Container != nil && site.Meta.Container.Enabled
@@ -363,6 +428,41 @@ func (a *API) restoreBackup(w http.ResponseWriter, r *http.Request, site *store.
 	resp := a.payloadFor(r, site)
 	resp["restored"] = map[string]any{"snapshot": id, "at": v.At, "files": len(times), "before": taken.ID}
 	writeJSON(w, 200, resp)
+}
+
+// restoreStillFits answers the check a restore makes again after its
+// snapshot and under the site lock at the commit: the site's type still
+// matches the version's, it has not changed hands, and the caller still
+// manages it (gitStandingHolds's rules, on the meta.json given).
+func (a *API) restoreStillFits(was store.Meta, act actor, snapContainer bool) func(store.Meta) error {
+	return func(m store.Meta) error {
+		if (m.Mode == store.ModeContainer) != snapContainer {
+			return &apiError{409, "The site's type changed while the restore was getting ready, so nothing was restored."}
+		}
+		if m.OwnerAccountID != was.OwnerAccountID || !sameInstant(m.OwnerSince, was.OwnerSince) {
+			return &apiError{409, "The site changed hands while the restore was getting ready, so nothing was restored."}
+		}
+		holds := true
+		switch act.role {
+		case roleOwner:
+			holds = act.account != "" && m.OwnerAccountID == act.account
+		case roleAdmin:
+			holds = m.LiveAdmin(act.account, time.Now())
+		case rolePassword:
+			holds = m.EditPasswordHash == was.EditPasswordHash
+		}
+		if !holds {
+			return &apiError{409, "You no longer manage this site, so nothing was restored."}
+		}
+		return nil
+	}
+}
+
+func sameInstant(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(*b)
 }
 
 // startAfterRestore runs a container project again, as Start does — unless

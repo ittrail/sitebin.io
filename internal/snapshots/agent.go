@@ -49,11 +49,13 @@ type Agent struct {
 	snaps    []Snapshot
 	listedAt time.Time
 
-	backupMu sync.Mutex // one backup-now at a time
-	indexMu  sync.Mutex // one indexer at a time
+	backupMu   sync.Mutex // one backup-now at a time
+	lastBackup backupRun  // the last backup-now run, under backupMu
+	indexMu    sync.Mutex // one indexer at a time
 
 	restoreMu sync.Mutex
 	restore   RestoreState
+	restoreWG sync.WaitGroup // the running instance restore, waited for at shutdown
 }
 
 // copyKeep is how long a pre-restore copy, and a staging tree a crash left,
@@ -61,7 +63,8 @@ type Agent struct {
 const copyKeep = 30 * 24 * time.Hour
 
 // NewAgent answers an agent over cfg. It reads the last instance restore's
-// state; one the agent did not live to finish is reported as failed.
+// state; one the agent did not live to finish is put right by Recover, which
+// Run calls first.
 func NewAgent(cfg AgentConfig) *Agent {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -76,12 +79,6 @@ func NewAgent(cfg AgentConfig) *Agent {
 	a.restore = RestoreState{State: "idle"}
 	if b, err := os.ReadFile(a.restorePath()); err == nil {
 		json.Unmarshal(b, &a.restore)
-		if a.restore.running() {
-			a.restore.State = "failed"
-			a.restore.Message = "The agent stopped during this restore. Check that " + cfg.DataDir + " holds the data you want and that the instance runs."
-			a.restore.Finished = cfg.Now().UTC()
-			a.saveRestore()
-		}
 	}
 	return a
 }
@@ -105,6 +102,7 @@ func (a *Agent) Handler() http.Handler {
 // Run indexes new snapshots, forgets gone ones and removes copies past
 // their time, every minute and whenever woken, until ctx ends.
 func (a *Agent) Run(ctx context.Context) {
+	a.Recover(ctx)
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 	for {
@@ -343,6 +341,13 @@ func (a *Agent) handleFiles(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// backupRun is a finished backup-now run.
+type backupRun struct {
+	started time.Time
+	snap    Snapshot
+	ok      bool
+}
+
 // countWriter sets the tar response's headers on its first write and counts.
 type countWriter struct {
 	w http.ResponseWriter
@@ -364,9 +369,16 @@ func (a *Agent) handleBackupNow(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 501, "this agent takes no snapshot on request")
 		return
 	}
+	asked := time.Now()
 	a.backupMu.Lock()
 	defer a.backupMu.Unlock()
-	before, _ := a.list(r.Context(), true)
+	// Requests that waited behind a run share the next one: a snapshot
+	// begun after they asked is theirs too, without a run each.
+	if lb := a.lastBackup; lb.ok && !lb.started.Before(asked) {
+		writeJSON(w, 200, lb.snap)
+		return
+	}
+	started := time.Now()
 	// The run must end even when the instance gives up waiting.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Minute)
 	defer cancel()
@@ -386,11 +398,14 @@ func (a *Agent) handleBackupNow(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 502, "the snapshot was taken but cannot be listed")
 		return
 	}
+	// Only a snapshot this run made is an undo for the restore that asked:
+	// an older one would not hold the files it replaces.
 	newest := snaps[0]
-	if len(before) > 0 && before[0].ID == newest.ID {
+	if newest.At.Before(started.Add(-2 * time.Second)) {
 		writeErr(w, 502, "the backup command made no new snapshot")
 		return
 	}
+	a.lastBackup = backupRun{started: started, snap: newest, ok: true}
 	if m, err := Summarize(ctx, a.cfg.Source, newest.ID); err == nil {
 		a.idx.Put(newest.ID, m)
 	}

@@ -870,7 +870,7 @@
       '</div><div class="wcol">' +
       '<section class="panel"><h3>Backup runs</h3><div class="lines">' + (runsHTML || '<p class="d" style="margin:0">The agent reports no backup runs.</p>') + "</div></section>" +
       '<section class="panel"><h3>Kept copies</h3><p class="d">The data from before a restore, or a restored copy that did not start, kept beside the data directory for 30 days. Switching to one is a restore too.</p>' + copiesHTML + "</section>" +
-      '<section class="panel"><h3>What a restore does</h3><p class="d" style="margin:0">The whole instance — every site, account, address and setting — goes back to the moment of the snapshot, and everything since is replaced. Sitebin stops for about a minute and its site containers start again. If the restored instance does not become healthy, the previous data is put back by itself. Owners restore a single site on its Backups tab.</p></section>' +
+      '<section class="panel"><h3>What a restore does</h3><p class="d" style="margin:0">The whole instance — every site, account, address and setting — goes back to the moment of the snapshot, and everything since is replaced; what was deleted since, erasures on a deletion request included, comes back and must be deleted again. Sitebin stops for about a minute and its site containers start again. If the restored instance does not become healthy, the previous data is put back by itself. Owners restore a single site on its Backups tab.</p></section>' +
       "</div></div>";
     if (running) backupsPoll = setTimeout(() => { if (route().view === "backups") renderBackups(); }, 3000);
     view.onclick = async (e) => {
@@ -878,7 +878,7 @@
       const rs = e.target.closest("[data-restore]"), sw = e.target.closest("[data-switch]"), dr = e.target.closest("[data-drop]");
       if (rs || sw) {
         const what = rs ? "the snapshot of " + stamp(rs.dataset.at) : "the kept copy of " + stamp((copies.find((c) => c.name === sw.dataset.switch) || {}).at);
-        const v = await dialog({ title: "Restore the whole instance?", body: "Every site, account and setting goes back to " + what + ". Everything since is replaced, and Sitebin is unreachable for about a minute. The data as it is now is kept as a copy for 30 days. Type restore to go on.",
+        const v = await dialog({ title: "Restore the whole instance?", body: "Every site, account and setting goes back to " + what + ". Everything since is replaced — and what was deleted since comes back, sites and accounts erased on a deletion request included: delete them again. Sitebin is unreachable for about a minute. The data as it is now is kept as a copy for 30 days. Type restore to go on.",
           html: '<div class="field"><input type="text" name="confirm" autocomplete="off" placeholder="restore" aria-label="Type restore"></div>', actions: [{ label: "Cancel", value: null }, { label: "Restore the instance", value: true, danger: true }] });
         if (!v) return;
         try {

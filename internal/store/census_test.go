@@ -33,6 +33,8 @@ var writeCensus = map[string]string{
 	"internal/store/staged.go:Store.commitStagedLocked:Rename":  "the rename after the verdict is settled",
 	"internal/store/staged.go:Store.RenameChecked:Rename":       "the rename after the verdict is settled",
 	"internal/store/replace.go:Replacement.Commit:commitRename": "moves staged files whose verdict Commit settled first",
+	"internal/store/replace.go:Replacement.Symlink:Symlink":     "a link a container site's restore keeps inside its tree: no bytes to scan, never followed out",
+	"internal/httpapi/backups.go:API.restoreBackup:Symlink":     "Replacement.Symlink above, from a container site's restore",
 	// surfaces that reach site content only through the guarded paths
 	"internal/httpapi/webdavfs.go:siteFS.OpenFile:OpenFile":   "read-only opens; writes go to Store.OpenStaged above it",
 	"internal/ftp/quota.go:quotaFs.Create:OpenFile":           "goes through quotaFs.OpenFile",

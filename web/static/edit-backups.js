@@ -48,7 +48,7 @@ const backupsTab = (() => {
     const box = el("section", { class: "card" },
       el("h3", { text: "Backups" }),
       el("p", { class: "sub", text: "Snapshots of this site’s files: every hour for the last two days, and every night for 30 days. Restoring one replaces the site’s files with those of that time. Settings, addresses, forms, sharing and the Git repository stay as they are." }),
-      el("p", { class: "sub", text: "Before a restore, a snapshot of the files as they are now is taken, so a restore can be undone: they are the newest version in this list afterwards." }));
+      el("p", { class: "sub", text: "Before a restore, a snapshot of the files as they are now is taken, so a restore can be undone for two days: they are the newest version in this list afterwards." }));
     if (s.mode === "container") {
       box.append(el("p", { class: "sub", text: "The project stops while its files are restored and starts again afterwards. A database the app was writing when a snapshot was taken may not be consistent in it: keep your own export of anything you cannot lose." }));
     }
@@ -112,7 +112,7 @@ const backupsTab = (() => {
   async function restore(snap, at, files) {
     const n = Number(files) || 0;
     const ok = await ask("Restore the files of " + when(at) + "?",
-      "The site’s files are replaced by the " + n.toLocaleString("en") + (n === 1 ? " file" : " files") + " of that time. A snapshot of the files as they are now is taken first, so you can undo this." +
+      "The site’s files are replaced by the " + n.toLocaleString("en") + (n === 1 ? " file" : " files") + " of that time. A snapshot of the files as they are now is taken first, so you can undo this for two days." +
       (site.mode === "container" ? " The project stops while the files are restored and starts again afterwards." : ""),
       "Restore");
     if (!ok) return;

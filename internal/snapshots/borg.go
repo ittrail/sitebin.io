@@ -128,7 +128,11 @@ func (b *BorgSource) Walk(ctx context.Context, id, prefix string, fn func(Item) 
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	c, stderr := b.command(ctx, "list", "--lock-wait", borgLockWait, "--json-lines", a, prefix)
+	args := []string{"list", "--lock-wait", borgLockWait, "--json-lines", a}
+	if prefix != "" {
+		args = append(args, prefix) // an empty path would match nothing
+	}
+	c, stderr := b.command(ctx, args...)
 	out, err := c.StdoutPipe()
 	if err != nil {
 		return err
@@ -173,6 +177,9 @@ func (b *BorgSource) Tar(ctx context.Context, id string, paths []string, w io.Wr
 	if err != nil {
 		return err
 	}
+	// Borg 1.2 writes GNU tar, its times cut to whole seconds (no PAX before
+	// 1.4): a file restored from an hourly archive keeps its second, not its
+	// fraction, so the version may not show as the current one afterwards.
 	args := append([]string{"export-tar", "--lock-wait", borgLockWait, a, "-"}, paths...)
 	c, stderr := b.command(ctx, args...)
 	c.Stdout = w

@@ -114,14 +114,20 @@ func (d *dockerClient) RemoveManaged(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	// Every one is tried: one that cannot be removed must not leave the
+	// others behind.
 	n := 0
+	var first error
 	for _, c := range list {
 		r, err := d.do(ctx, "DELETE", "/containers/"+url.PathEscape(c.ID)+"?force=1", 204, 404)
 		if err != nil {
-			return n, err
+			if first == nil {
+				first = err
+			}
+			continue
 		}
 		r.Body.Close()
 		n++
 	}
-	return n, nil
+	return n, first
 }

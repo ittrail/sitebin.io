@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -28,6 +29,9 @@ import (
 type snapFile struct {
 	path, body string
 	mtime      time.Time
+	link       string // a symlink to this target
+	mode       int64  // permission bits; 0644 when zero
+	dir        bool   // an (empty) folder
 }
 
 // writeSnapshot writes <dir>/<id>.tar holding site view (mode) with files.
@@ -43,8 +47,20 @@ func writeSnapshot(t *testing.T, dir, id string, at time.Time, view, mode string
 	tw.WriteHeader(&tar.Header{Name: "sites/" + view + "/meta.json", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(meta)), ModTime: at})
 	tw.Write([]byte(meta))
 	for _, x := range files {
-		tw.WriteHeader(&tar.Header{Name: "sites/" + view + "/files/" + x.path, Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(x.body)), ModTime: x.mtime})
-		tw.Write([]byte(x.body))
+		h := &tar.Header{Name: "sites/" + view + "/files/" + x.path, Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(x.body)), ModTime: x.mtime}
+		if x.mode != 0 {
+			h.Mode = x.mode
+		}
+		switch {
+		case x.link != "":
+			h.Typeflag, h.Linkname, h.Size = tar.TypeSymlink, x.link, 0
+		case x.dir:
+			h.Typeflag, h.Mode, h.Size, h.Name = tar.TypeDir, 0o755, 0, h.Name+"/"
+		}
+		tw.WriteHeader(h)
+		if h.Typeflag == tar.TypeReg {
+			tw.Write([]byte(x.body))
+		}
 	}
 	tw.Close()
 	f.Close()
@@ -76,7 +92,10 @@ type backupEnv struct {
 	dir        string
 	backups    atomic.Int32
 	failBackup atomic.Bool
-	agent      *snapshots.Agent
+	// during runs inside the snapshot taken before a restore: what changes
+	// while it runs, which can take minutes.
+	during func()
+	agent  *snapshots.Agent
 }
 
 var (
@@ -96,7 +115,7 @@ func newBackupEnv(t *testing.T) *backupEnv {
 	}
 	b := &backupEnv{env: e, editID: editIDFrom(t, c.EditURL), pw: c.EditPassword, site: site, dir: t.TempDir()}
 	writeSnapshot(t, b.dir, "nightly-old", tOld, site.ViewID, "webserver", []snapFile{
-		{"index.html", "v1", tOld}, {"old.txt", "old", tOld}, {".sitebin-spa", "", tOld},
+		{path: "index.html", body: "v1", mtime: tOld}, {path: "old.txt", body: "old", mtime: tOld}, {path: ".sitebin-spa", body: "", mtime: tOld},
 	})
 	writeSnapshot(t, b.dir, "hourly-mid", tMid, site.ViewID, "webserver", liveFiles(t, site))
 	b.agent = snapshots.NewAgent(snapshots.AgentConfig{
@@ -108,6 +127,9 @@ func newBackupEnv(t *testing.T) *backupEnv {
 		if b.failBackup.Load() {
 			http.Error(w, `{"error":"the snapshot could not be taken"}`, 502)
 			return
+		}
+		if b.during != nil {
+			b.during()
 		}
 		n := b.backups.Add(1)
 		at := time.Now().UTC().Truncate(time.Second).Add(time.Duration(n) * time.Second)
@@ -264,7 +286,7 @@ func TestRestoreRefusesWhenNoSnapshotCanBeTakenFirst(t *testing.T) {
 
 func TestRestoreOfABrokenStreamLeavesTheSiteAsItWas(t *testing.T) {
 	b := newBackupEnv(t)
-	writeSnapshot(t, b.dir, "broken", tOld.Add(time.Hour), b.site.ViewID, "webserver", []snapFile{{"a.txt", "a", tOld}})
+	writeSnapshot(t, b.dir, "broken", tOld.Add(time.Hour), b.site.ViewID, "webserver", []snapFile{{path: "a.txt", body: "a", mtime: tOld}})
 	b.agent.IndexNow(context.Background())
 	if w := b.restore(t, "broken"); w.Code < 500 {
 		t.Fatalf("restore of a broken stream: %d %s", w.Code, w.Body)
@@ -277,7 +299,7 @@ func TestRestoreOfABrokenStreamLeavesTheSiteAsItWas(t *testing.T) {
 func TestRestoreOfAViewerSnapshotIntoAStaticSiteTakesTheFilesNotTheWrapper(t *testing.T) {
 	b := newBackupEnv(t)
 	writeSnapshot(t, b.dir, "nightly-viewer", tOld.Add(2*time.Hour), b.site.ViewID, "viewer", []snapFile{
-		{"_raw/doc.md", "# doc", tOld}, {"index.html", "<wrapper>", tOld},
+		{path: "_raw/doc.md", body: "# doc", mtime: tOld}, {path: "index.html", body: "<wrapper>", mtime: tOld},
 	})
 	b.agent.IndexNow(context.Background())
 	if w := b.restore(t, "nightly-viewer"); w.Code != 200 {
@@ -291,7 +313,7 @@ func TestRestoreOfAViewerSnapshotIntoAStaticSiteTakesTheFilesNotTheWrapper(t *te
 func TestRestoreRefusesAContainerSnapshotForAStaticSite(t *testing.T) {
 	b := newBackupEnv(t)
 	writeSnapshot(t, b.dir, "nightly-app", tOld.Add(3*time.Hour), b.site.ViewID, "container", []snapFile{
-		{store.ComposeFile, "services: {}", tOld}, {"data/app.db", "secret rows", tOld},
+		{path: store.ComposeFile, body: "services: {}", mtime: tOld}, {path: "data/app.db", body: "secret rows", mtime: tOld},
 	})
 	b.agent.IndexNow(context.Background())
 	w := b.restore(t, "nightly-app")
@@ -334,7 +356,7 @@ func TestRestoreOfAContainerSiteStopsTheProjectAndStartsItAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeSnapshot(t, b.dir, "nightly-app", tOld.Add(3*time.Hour), b.site.ViewID, "container", []snapFile{
-		{store.ComposeFile, "services: {}", tOld}, {"data/app.db", "rows", tOld},
+		{path: store.ComposeFile, body: "services: {}", mtime: tOld}, {path: "data/app.db", body: "rows", mtime: tOld},
 	})
 	b.agent.IndexNow(context.Background())
 	if w := b.restore(t, "nightly-app"); w.Code != 200 {
@@ -348,7 +370,7 @@ func TestRestoreOfAContainerSiteStopsTheProjectAndStartsItAgain(t *testing.T) {
 		t.Errorf("container after restore = %+v", c)
 	}
 	// a failed restore starts the project again too
-	writeSnapshot(t, b.dir, "broken", tOld.Add(4*time.Hour), b.site.ViewID, "container", []snapFile{{"a", "a", tOld}})
+	writeSnapshot(t, b.dir, "broken", tOld.Add(4*time.Hour), b.site.ViewID, "container", []snapFile{{path: "a", body: "a", mtime: tOld}})
 	b.agent.IndexNow(context.Background())
 	b.restore(t, "broken")
 	s, _ = b.st.ByViewID(b.site.ViewID)
@@ -375,4 +397,140 @@ func TestDownloadIsAZipOfTheVersionsFiles(t *testing.T) {
 	if strings.Join(names, ",") != "index.html,old.txt" {
 		t.Errorf("zip holds %v", names)
 	}
+}
+
+// What a restore decided at its start is checked again after its snapshot
+// (which can take minutes) and under the site lock at the commit.
+func TestRestoreRechecksTheSiteAfterItsSnapshot(t *testing.T) {
+	for name, change := range map[string]func(b *backupEnv){
+		"became a container": func(b *backupEnv) {
+			b.st.Update(b.site, func(m *store.Meta) error { m.Mode = store.ModeContainer; return nil })
+		},
+		"changed hands": func(b *backupEnv) {
+			now := time.Now()
+			b.st.Update(b.site, func(m *store.Meta) error { m.OwnerAccountID = "someone-else"; m.OwnerSince = &now; return nil })
+		},
+		"edit password rotated": func(b *backupEnv) {
+			if _, err := b.st.SetEditPassword(b.site); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newBackupEnv(t)
+			b.during = func() { change(b) }
+			w := b.restore(t, "nightly-old")
+			if w.Code != 409 {
+				t.Fatalf("restore: %d %s", w.Code, w.Body)
+			}
+			if got := b.siteFiles(t); got != "index.html=now" {
+				t.Errorf("files changed: %q", got)
+			}
+		})
+	}
+}
+
+// Every restore runs a snapshot of the whole instance: an owner cannot make
+// it run without end.
+func TestRestoresAndDownloadsAreRateLimitedPerSite(t *testing.T) {
+	b := newBackupEnv(t)
+	codes := []int{}
+	for i := 0; i < 4; i++ {
+		codes = append(codes, b.restore(t, "nightly-old").Code)
+	}
+	if codes[3] != 429 {
+		t.Fatalf("restore codes = %v, want the 4th refused", codes)
+	}
+	last := 0
+	for i := 0; i < 11; i++ {
+		last = b.call(t, "GET", "/api/sites/"+b.editID+"/backups/nightly-old/download", b.pw, nil).Code
+	}
+	if last != 429 {
+		t.Fatalf("the 11th download answered %d", last)
+	}
+}
+
+// A container site's restore keeps what its app installed: executables,
+// links inside the tree and empty folders. A link out of the tree is
+// skipped; a static site gets plain files only.
+func TestRestoreOfAContainerSiteKeepsLinksModesAndEmptyFolders(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("links and mode bits need a unix filesystem")
+	}
+	rt := &fakeRuntime{}
+	withContainers(t, rt)
+	b := newBackupEnv(t)
+	b.st.Update(b.site, func(m *store.Meta) error {
+		m.Mode, m.OwnerAccountID = store.ModeContainer, "acct-1"
+		m.Container = &store.ContainerMeta{Enabled: true}
+		return nil
+	})
+	writeSnapshot(t, b.dir, "nightly-app", tOld.Add(3*time.Hour), b.site.ViewID, "container", []snapFile{
+		{path: store.ComposeFile, body: "services: {}", mtime: tOld},
+		{path: "app/node_modules/next/dist/bin/next", body: "#!/usr/bin/env node", mtime: tOld, mode: 0o755},
+		{path: "app/node_modules/.bin/next", mtime: tOld, link: "../next/dist/bin/next"},
+		{path: "app/evil", mtime: tOld, link: "../../../../../etc"},
+		{path: "data/empty", mtime: tOld, dir: true},
+	})
+	b.agent.IndexNow(context.Background())
+	if w := b.restore(t, "nightly-app"); w.Code != 200 {
+		t.Fatalf("restore: %d %s", w.Code, w.Body)
+	}
+	dir := b.site.FilesDir()
+	if fi, err := os.Stat(filepath.Join(dir, "app/node_modules/next/dist/bin/next")); err != nil || fi.Mode().Perm()&0o111 == 0 {
+		t.Errorf("executable bits lost: %v %v", fi, err)
+	}
+	if l, err := os.Readlink(filepath.Join(dir, "app/node_modules/.bin/next")); err != nil || l != "../next/dist/bin/next" {
+		t.Errorf(".bin link = %q %v", l, err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "app/evil")); err == nil {
+		t.Error("a link out of the tree was restored")
+	}
+	if fi, err := os.Stat(filepath.Join(dir, "data/empty")); err != nil || !fi.IsDir() {
+		t.Errorf("empty folder lost: %v", err)
+	}
+}
+
+func TestRestoreOfAStaticSiteTakesPlainFilesOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("links need a unix filesystem")
+	}
+	b := newBackupEnv(t)
+	writeSnapshot(t, b.dir, "nightly-links", tOld.Add(4*time.Hour), b.site.ViewID, "webserver", []snapFile{
+		{path: "index.html", body: "x", mtime: tOld, mode: 0o755},
+		{path: "l", mtime: tOld, link: "index.html"},
+	})
+	b.agent.IndexNow(context.Background())
+	if w := b.restore(t, "nightly-links"); w.Code != 200 {
+		t.Fatalf("restore: %d %s", w.Code, w.Body)
+	}
+	if _, err := os.Lstat(filepath.Join(b.site.FilesDir(), "l")); err == nil {
+		t.Error("a static site got a link")
+	}
+	if fi, _ := os.Stat(filepath.Join(b.site.FilesDir(), "index.html")); fi != nil && fi.Mode().Perm()&0o111 != 0 {
+		t.Error("a static site got an executable")
+	}
+}
+
+// attachBackups gives e a snapshots agent holding one snapshot, nightly-kit,
+// of site viewID with files; a snapshot before a restore always succeeds.
+func attachBackups(t *testing.T, e *env, viewID string, files map[string]string) {
+	t.Helper()
+	dir := t.TempDir()
+	var fs []snapFile
+	for p, b := range files {
+		fs = append(fs, snapFile{path: p, body: b, mtime: tOld})
+	}
+	writeSnapshot(t, dir, "nightly-kit", tOld, viewID, "webserver", fs)
+	ag := snapshots.NewAgent(snapshots.AgentConfig{Source: &snapshots.DirSource{Dir: dir}, SourceID: "dir",
+		StateDir: t.TempDir(), DataDir: t.TempDir(), Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/backup-now", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(snapshots.Snapshot{ID: "hourly-now", At: time.Now().UTC(), Kind: "hourly"})
+	})
+	mux.Handle("/", ag.Handler())
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	e.api.snap = snapshots.NewClientURL(srv.URL, srv.Client())
+	ag.IndexNow(context.Background())
 }

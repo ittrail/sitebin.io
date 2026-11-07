@@ -5,12 +5,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -27,8 +29,16 @@ func fakeBackup(dir string) int {
 			newest = fi.ModTime()
 		}
 	}
-	at := newest.Add(time.Second)
-	p := filepath.Join(dir, "hourly-now.tar")
+	if d := os.Getenv("FAKE_BACKUP_SLEEP"); d != "" {
+		if ms, err := time.ParseDuration(d); err == nil {
+			time.Sleep(ms)
+		}
+	}
+	at := time.Now().UTC()
+	if !at.After(newest) {
+		at = newest.Add(time.Second)
+	}
+	p := filepath.Join(dir, "hourly-now-"+strconv.FormatInt(time.Now().UnixNano(), 10)+".tar")
 	f, err := os.Create(p)
 	if err != nil {
 		return 1
@@ -71,9 +81,10 @@ func extractForTest(dst string, r io.Reader) error {
 }
 
 type fakeDocker struct {
-	mu     sync.Mutex
-	calls  []string
-	health func() string
+	mu        sync.Mutex
+	calls     []string
+	health    func() string
+	removeErr error
 }
 
 func (d *fakeDocker) note(s string)                           { d.mu.Lock(); d.calls = append(d.calls, s); d.mu.Unlock() }
@@ -84,7 +95,7 @@ func (d *fakeDocker) Health(context.Context, string) (string, error) {
 }
 func (d *fakeDocker) RemoveManaged(context.Context) (int, error) {
 	d.note("remove-managed")
-	return 2, nil
+	return 2, d.removeErr
 }
 func (d *fakeDocker) Calls() string {
 	d.mu.Lock()
@@ -206,10 +217,10 @@ func TestAgentAnswersASitesMetaAndFiles(t *testing.T) {
 func TestAgentBackupNowAnswersTheNewSnapshotIndexed(t *testing.T) {
 	f := newAgentFixture(t, "healthy")
 	code, m := f.post(t, "/v1/backup-now", "")
-	if code != 200 || m["id"] != "hourly-now" || m["kind"] != "hourly" {
+	if code != 200 || !strings.HasPrefix(m["id"].(string), "hourly-now") || m["kind"] != "hourly" {
 		t.Fatalf("backup-now %d %v", code, m)
 	}
-	if _, ok := f.a.idx.Get("hourly-now"); !ok {
+	if _, ok := f.a.idx.Get(m["id"].(string)); !ok {
 		t.Error("the new snapshot was not indexed at once")
 	}
 	t.Setenv("FAKE_BACKUP_FAIL", "1")
@@ -370,11 +381,189 @@ func TestCopiesAreRemovedAfterThirtyDays(t *testing.T) {
 	}
 }
 
-func TestAnInterruptedRestoreIsReportedFailed(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "restore.json"), []byte(`{"state":"swapping","snapshot":"x"}`), 0o600)
-	a := NewAgent(AgentConfig{StateDir: dir, DataDir: filepath.Join(dir, "data"), Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
-	if st := a.restoreState(); st.State != "failed" || !strings.Contains(st.Message, "stopped during") {
+// An agent that stopped mid-restore puts things right when it starts again:
+// whatever the point it stopped at, the instance runs on whole data.
+func TestRecoverAfterAnInterruptedRestore(t *testing.T) {
+	setup := func(t *testing.T, state string, prepare func(dir string)) (*Agent, *fakeDocker, string) {
+		base := t.TempDir()
+		data := filepath.Join(base, "data")
+		os.MkdirAll(data, 0o755)
+		os.WriteFile(filepath.Join(data, "live.txt"), []byte("live"), 0o644)
+		prepare(base)
+		st := `{"state":"` + state + `","snapshot":"x","incoming":"data.restore-20261107T100000Z","previous":"data.before-restore-20261107T100000Z","incoming_origin":"2026-10-20T03:20:00Z"}`
+		os.MkdirAll(filepath.Join(base, "state"), 0o700)
+		os.WriteFile(filepath.Join(base, "state", "restore.json"), []byte(st), 0o600)
+		d := &fakeDocker{health: func() string { return "healthy" }}
+		a := NewAgent(AgentConfig{StateDir: filepath.Join(base, "state"), DataDir: data, Container: "sitebin", Docker: d,
+			Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		a.Recover(context.Background())
+		return a, d, base
+	}
+	read := func(p string) string { b, _ := os.ReadFile(p); return string(b) }
+
+	t.Run("before any swap", func(t *testing.T) {
+		a, d, base := setup(t, "extracting", func(base string) { os.MkdirAll(filepath.Join(base, "data.restore-20261107T100000Z"), 0o755) })
+		if st := a.restoreState(); st.State != "failed" || !strings.Contains(st.Message, "Nothing was changed") {
+			t.Fatalf("state = %+v", st)
+		}
+		if _, err := os.Stat(filepath.Join(base, "data.restore-20261107T100000Z")); err == nil {
+			t.Error("the staging tree was left")
+		}
+		if d.Calls() != "start sitebin" {
+			t.Errorf("calls = %q", d.Calls())
+		}
+	})
+	t.Run("between the two renames", func(t *testing.T) {
+		a, d, base := setup(t, "swapping", func(base string) {
+			os.Rename(filepath.Join(base, "data"), filepath.Join(base, "data.before-restore-20261107T100000Z"))
+		})
+		if read(filepath.Join(base, "data", "live.txt")) != "live" {
+			t.Fatal("the data from before is not back in place")
+		}
+		if st := a.restoreState(); st.State != "failed" || !strings.Contains(st.Message, "back in place") || d.Calls() != "start sitebin" {
+			t.Fatalf("state = %+v, calls %q", st, d.Calls())
+		}
+	})
+	t.Run("both renames done, not started", func(t *testing.T) {
+		a, _, base := setup(t, "swapping", func(base string) {
+			os.Rename(filepath.Join(base, "data"), filepath.Join(base, "data.before-restore-20261107T100000Z"))
+			os.MkdirAll(filepath.Join(base, "data"), 0o755)
+			os.WriteFile(filepath.Join(base, "data", "restored.txt"), []byte("old"), 0o644)
+		})
+		if read(filepath.Join(base, "data", "live.txt")) != "live" {
+			t.Fatal("the data from before is not back in place")
+		}
+		c := a.copies()
+		if len(c) != 1 || c[0].Kind != "failed-restore" || !c[0].Origin.Equal(time.Date(2026, 10, 20, 3, 20, 0, 0, time.UTC)) {
+			t.Fatalf("copies = %+v (the restored tree, aged by its snapshot)", c)
+		}
+		if st := a.restoreState(); st.State != "failed" {
+			t.Fatalf("state = %+v", st)
+		}
+	})
+	t.Run("while starting", func(t *testing.T) {
+		a, d, base := setup(t, "starting", func(base string) {
+			os.MkdirAll(filepath.Join(base, "data.before-restore-20261107T100000Z"), 0o755)
+		})
+		if read(filepath.Join(base, "data", "live.txt")) != "live" || d.Calls() != "start sitebin" {
+			t.Fatalf("the restored data must stay and start: calls %q", d.Calls())
+		}
+		if st := a.restoreState(); st.State != "failed" || !strings.Contains(st.Message, "runs on the restored data") {
+			t.Fatalf("state = %+v", st)
+		}
+	})
+}
+
+// A copy is deleted 30 days after its CONTENTS: a restored tree that did
+// not come up holds the snapshot's data, however recently it was set aside.
+func TestCopiesAgeByTheirContents(t *testing.T) {
+	f := newAgentFixture(t, "unhealthy")
+	f.post(t, "/v1/instance/restore", `{"snapshot":"sitebin-2026-11-06"}`)
+	waitRestore(t, f.a)
+	c := f.a.copies()
+	if len(c) != 1 || c[0].Kind != "failed-restore" {
+		t.Fatalf("copies = %+v", c)
+	}
+	snapAt := time.Date(2026, 11, 6, 3, 20, 0, 0, time.UTC)
+	if !c[0].Origin.Equal(snapAt) {
+		t.Fatalf("origin = %v, want the snapshot's %v", c[0].Origin, snapAt)
+	}
+	f.a.cfg.Now = func() time.Time { return snapAt.Add(30*24*time.Hour + time.Hour) }
+	f.a.pruneCopies()
+	if len(f.a.copies()) != 0 {
+		t.Error("a copy of 30-day-old contents was kept")
+	}
+}
+
+// paddedSource is a source whose Tar pads its tar like Borg's export-tar
+// (Python's tarfile fills the stream to a 10240-byte record after the end
+// marker) and fails when the reader stops before the padding, as exec does.
+type paddedSource struct{ *DirSource }
+
+func (p paddedSource) Tar(ctx context.Context, id string, paths []string, w io.Writer) error {
+	var buf bytes.Buffer
+	if err := p.DirSource.Tar(ctx, id, paths, &buf); err != nil {
+		return err
+	}
+	buf.Write(make([]byte, 10240*3))
+	_, err := io.Copy(w, &buf)
+	return err
+}
+
+func TestInstanceRestoreReadsAPaddedTar(t *testing.T) {
+	f := newAgentFixture(t, "healthy")
+	f.a.cfg.Source = paddedSource{f.a.cfg.Source.(*DirSource)}
+	f.post(t, "/v1/instance/restore", `{"snapshot":"sitebin-2026-11-06"}`)
+	if st := waitRestore(t, f.a); st.State != "done" {
+		t.Fatalf("a tar padded after its end marker failed the restore: %+v", st)
+	}
+}
+
+// The space a restore needs is the whole snapshot's: Git repositories,
+// accounts and analytics too, not only the sites' files the index sums.
+func TestInstanceRestoreCountsTheWholeSnapshotForSpace(t *testing.T) {
+	f := newAgentFixture(t, "healthy")
+	old := diskFree
+	// the 07 archive: 10 bytes of site files, 36 bytes in all
+	diskFree = func(string) (uint64, error) { return restoreHeadroom + 20, nil }
+	defer func() { diskFree = old }()
+	f.post(t, "/v1/instance/restore", `{"snapshot":"sitebin-2026-11-07"}`)
+	if st := waitRestore(t, f.a); st.State != "failed" || !strings.Contains(st.Message, "Not enough space") {
 		t.Fatalf("state = %+v", st)
+	}
+}
+
+// Site containers that could not be removed would keep their mounts into
+// the old tree after a swap: the restore stops there and changes nothing.
+func TestInstanceRestoreStopsWhenTheSiteContainersCannotBeRemoved(t *testing.T) {
+	f := newAgentFixture(t, "healthy")
+	f.docker.removeErr = errors.New("container in use")
+	f.post(t, "/v1/instance/restore", `{"snapshot":"sitebin-2026-11-06"}`)
+	st := waitRestore(t, f.a)
+	if st.State != "failed" || !strings.Contains(st.Message, "Nothing was changed") {
+		t.Fatalf("state = %+v", st)
+	}
+	if b, _ := os.ReadFile(filepath.Join(f.data, "old.txt")); string(b) != "before" {
+		t.Fatal("the data was swapped although site containers survived")
+	}
+	if got := f.docker.Calls(); got != "stop sitebin, remove-managed, remove-managed, remove-managed, start sitebin" {
+		t.Errorf("docker calls = %q (three tries, then the instance must run again)", got)
+	}
+	if c := f.a.copies(); len(c) != 0 {
+		t.Errorf("copies = %+v", c)
+	}
+}
+
+// Restores waiting behind one backup run share the next one: each gets a
+// snapshot taken after it asked, without a run each.
+func TestBackupNowSharesARunAmongWaiters(t *testing.T) {
+	f := newAgentFixture(t, "healthy")
+	t.Setenv("FAKE_BACKUP_SLEEP", "400ms")
+	var wg sync.WaitGroup
+	ids := make([]string, 4)
+	for i := range ids {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			time.Sleep(time.Duration(i) * 50 * time.Millisecond)
+			_, m := f.post(t, "/v1/backup-now", "")
+			ids[i], _ = m["id"].(string)
+		}(i)
+	}
+	wg.Wait()
+	runs := 0
+	entries, _ := os.ReadDir(f.a.cfg.Source.(*DirSource).Dir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "hourly-now-") {
+			runs++
+		}
+	}
+	if runs != 2 {
+		t.Errorf("%d backup runs for 4 requests arriving during the first, want 2 (ids %v)", runs, ids)
+	}
+	for i, id := range ids {
+		if id == "" {
+			t.Errorf("request %d got no snapshot", i)
+		}
 	}
 }

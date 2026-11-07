@@ -100,6 +100,10 @@ func runAgent(args []string) error {
 	srv := &http.Server{Handler: agent.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
+		// An instance restore half-way through a swap must finish first
+		// (the unit's TimeoutStopSec allows for it); Recover handles one
+		// cut short anyway.
+		agent.WaitRestore(20 * time.Minute)
 		sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		srv.Shutdown(sctx)

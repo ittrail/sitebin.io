@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -613,5 +614,75 @@ func TestFailedCommitsLeaveAtMostOneKeptDirectory(t *testing.T) {
 	defer rep.Abort()
 	if kept, _ := filepath.Glob(filepath.Join(site.Dir(), replaceCommitPrefix+"*")); len(kept) != 0 {
 		t.Errorf("the next replace left the kept directory: %v", kept)
+	}
+}
+
+// A guard sees meta.json as it is at the commit, under the site lock, and
+// refusing leaves the site as it was: what a long replace decided at its
+// start (a restore's site type, its owner) is checked where it lands.
+func TestReplaceGuardRefusesUnderTheLock(t *testing.T) {
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	s.SaveFile(site, "old.txt", strings.NewReader("old"))
+	rep, err := s.BeginReplace(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rep.Abort()
+	rep.SaveFile("new.txt", strings.NewReader("new"))
+	s.Update(site, func(m *Meta) error { m.Mode = ModeContainer; return nil })
+	refused := errors.New("the site's type changed")
+	var seen string
+	rep.Guard(func(m Meta) error { seen = m.Mode; return refused })
+	if err := rep.Commit(); !errors.Is(err, refused) {
+		t.Fatalf("Commit = %v", err)
+	}
+	if seen != ModeContainer {
+		t.Errorf("the guard saw mode %q, not the one at the commit", seen)
+	}
+	if got := fileNames(t, s, site); got != "old.txt" {
+		t.Errorf("a refused commit changed the files: %s", got)
+	}
+}
+
+// A container site's restore keeps what its app installed: executables,
+// links inside the tree (node_modules/.bin) and empty folders. A link out
+// of the tree is refused.
+func TestReplaceKeepsLinksModesAndFoldersInsideTheTree(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("links and mode bits need a unix filesystem")
+	}
+	s := newTestStore(t)
+	site, _, _ := s.Create()
+	rep, err := s.BeginReplace(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rep.Abort()
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(rep.SaveFile("node_modules/next/dist/bin/next", strings.NewReader("#!/usr/bin/env node")))
+	must(rep.SetMode("node_modules/next/dist/bin/next", 0o755))
+	must(rep.Symlink("node_modules/.bin/next", "../next/dist/bin/next"))
+	must(rep.Mkdir("data/empty"))
+	for _, bad := range []string{"../../../etc", "/etc", "../../../../x", "a/../../../../y"} {
+		if err := rep.Symlink("node_modules/.bin/bad", bad); !errors.Is(err, ErrBadPath) {
+			t.Errorf("link to %q: %v", bad, err)
+		}
+	}
+	must(rep.Commit())
+	dir := site.ContentDir()
+	if fi, err := os.Stat(filepath.Join(dir, "node_modules/next/dist/bin/next")); err != nil || fi.Mode().Perm()&0o111 == 0 {
+		t.Errorf("the executable lost its bits: %v %v", fi.Mode(), err)
+	}
+	if l, err := os.Readlink(filepath.Join(dir, "node_modules/.bin/next")); err != nil || l != "../next/dist/bin/next" {
+		t.Errorf("link = %q %v", l, err)
+	}
+	if fi, err := os.Stat(filepath.Join(dir, "data/empty")); err != nil || !fi.IsDir() {
+		t.Errorf("the empty folder is gone: %v", err)
 	}
 }

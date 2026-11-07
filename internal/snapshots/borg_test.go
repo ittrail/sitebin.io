@@ -33,6 +33,11 @@ func fakeBorg(log string, args []string) int {
 	f, _ := os.OpenFile(log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	fmt.Fprintln(f, strings.Join(args, " "))
 	f.Close()
+	// how many arguments, so an empty one shows
+	if g, err := os.OpenFile(log+".n", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+		fmt.Fprintln(g, len(args))
+		g.Close()
+	}
 	cmd := ""
 	for _, a := range args {
 		if !strings.HasPrefix(a, "-") {
@@ -150,5 +155,15 @@ func TestBorgSourceWalkReadTar(t *testing.T) {
 	// an id that was never listed is refused before borg runs
 	if err := src.Tar(ctx, "-x", nil, io.Discard); err == nil {
 		t.Error("an invalid snapshot id reached borg")
+	}
+}
+
+// Walking everything passes no path: an empty argument would match nothing.
+func TestBorgWalkOfEverythingPassesNoPath(t *testing.T) {
+	src, log := fakeSource(t)
+	src.Walk(context.Background(), "hourly-1", "", func(Item) error { return nil })
+	n, _ := os.ReadFile(log + ".n")
+	if a := argvLog(t, log); a[len(a)-1] != "list --lock-wait 120 --json-lines ::hourly-1" || strings.TrimSpace(string(n)) != "5" {
+		t.Fatalf("argv = %q, %s arguments", a[len(a)-1], strings.TrimSpace(string(n)))
 	}
 }

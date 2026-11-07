@@ -79,7 +79,9 @@ type API struct {
 
 	analyticsLimiter *auth.Limiter // the script's records per (site, client network)
 
-	snap *snapshots.Client // nil: no snapshots agent (SITEBIN_SNAPSHOTS_AGENT)
+	snap            *snapshots.Client // nil: no snapshots agent (SITEBIN_SNAPSHOTS_AGENT)
+	backupRestores  *auth.Limiter     // restores per site: each snapshots the whole instance first
+	backupDownloads *auth.Limiter     // backup downloads per site: each reads the repository
 }
 
 // New wires the API. secret signs view-session cookies; webFS provides the
@@ -130,6 +132,8 @@ func New(cfg config.Config, st *store.Store, secret []byte, webFS fs.FS) (*API, 
 	if cfg.SnapshotsAgent != "" {
 		a.snap = snapshots.NewClient(cfg.SnapshotsAgent)
 	}
+	a.backupRestores = auth.NewLimiter(6, 3)
+	a.backupDownloads = auth.NewLimiter(30, 10)
 	a.analyticsSalts = analytics.NewSalts(cfg.DataDir)
 	a.analyticsGeo = openAnalyticsGeo(cfg, a.log)
 	a.analytics = newAnalyticsRecorder(cfg, st, a.analyticsSalts, a.analyticsGeo, a.log)

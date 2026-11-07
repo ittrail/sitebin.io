@@ -214,6 +214,13 @@ func TestEveryWriteSurfaceIsScanned(t *testing.T) {
 			}
 			return createdID(t, fp), code, mcpText(res)
 		}, "index.html"},
+		{"backup restore", func(t *testing.T, e *env, fp *fakeProvider) (string, int, string) {
+			id, edit, _ := cleanSite(t, e, nil)
+			attachBackups(t, e, id, map[string]string{"index.html": kitHTML})
+			req := httptest.NewRequest("POST", "/api/sites/"+edit+"/backups/nightly-kit/restore", nil)
+			w := e.public(t, bearer(req, "sbp_tok"))
+			return id, w.Code, w.Body.String()
+		}, "index.html"},
 		{"mcp write_files", mcpWrite(false), "index.html"},
 		{"mcp write_files replace", mcpWrite(true), "index.html"},
 		{"webdav put", func(t *testing.T, e *env, fp *fakeProvider) (string, int, string) {

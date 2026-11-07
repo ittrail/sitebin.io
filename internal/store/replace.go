@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -68,7 +69,17 @@ type Replacement struct {
 	// path, as they will be committed. Their verdict is applied in Commit,
 	// under the site lock, before any of them moves in.
 	pending []abuse.Result
+	// guard, when set, is asked in Commit, under the site lock, with
+	// meta.json as it is then; an error refuses the commit (see Guard).
+	guard func(Meta) error
 }
+
+// Guard has Commit ask fn, under the site lock and with meta.json as it is
+// at that moment, whether the replacement may still go in; an error from fn
+// refuses the commit and leaves the site as it was. For a replace that
+// decided something long before it lands — a restore's site type, owner and
+// the caller's standing, checked again after its snapshot was taken.
+func (r *Replacement) Guard(fn func(Meta) error) { r.guard = fn }
 
 // stagedGuard scans a replacement's files as they stage and keeps the
 // results with hits for Commit. Nothing staged is visible, so nothing is
@@ -218,6 +229,60 @@ func (r *Replacement) SaveFile(relPath string, rd io.Reader) error {
 	return nil
 }
 
+// SetMode gives a staged file the permission bits of mode, at most 0755: a
+// container site's restore keeps the executables its app installed. Uploads
+// never call it (they stage plain files).
+func (r *Replacement) SetMode(relPath string, mode fs.FileMode) error {
+	if r.finished {
+		return errReplaceFinished
+	}
+	rel, err := CleanRelPath(relPath)
+	if err != nil {
+		return err
+	}
+	return r.root.Chmod(rel, mode.Perm()&0o755)
+}
+
+// Symlink stages a link at relPath to target, which must be relative and
+// stay inside the content tree once resolved from the link's folder (else
+// ErrBadPath): a container site's restore keeps the links its app made
+// (node_modules/.bin). A link carries no bytes to scan; every file surface
+// already refuses to follow one out of a site.
+func (r *Replacement) Symlink(relPath, target string) error {
+	if r.finished {
+		return errReplaceFinished
+	}
+	rel, err := CleanRelPath(relPath)
+	if err != nil {
+		return err
+	}
+	t := filepath.ToSlash(target)
+	if t == "" || filepath.IsAbs(target) || strings.HasPrefix(t, "/") || strings.Contains(t, "\x00") {
+		return ErrBadPath
+	}
+	if res := path.Clean(path.Join(path.Dir(filepath.ToSlash(rel)), t)); res == ".." || strings.HasPrefix(res, "../") {
+		return ErrBadPath
+	}
+	if d := filepath.Dir(rel); d != "." {
+		if err := r.root.MkdirAll(d, 0o755); err != nil {
+			return err
+		}
+	}
+	return r.root.Symlink(target, rel)
+}
+
+// Mkdir stages an empty folder (one a container's app expects to find).
+func (r *Replacement) Mkdir(relPath string) error {
+	if r.finished {
+		return errReplaceFinished
+	}
+	rel, err := CleanRelPath(relPath)
+	if err != nil {
+		return err
+	}
+	return r.root.MkdirAll(rel, 0o755)
+}
+
 // ExtractZip stages an archive's files, with ExtractZip's rules.
 func (r *Replacement) ExtractZip(ra io.ReaderAt, size int64) error {
 	if r.finished {
@@ -285,6 +350,11 @@ func (r *Replacement) Commit() error {
 	// swap out the content the lock is holding as evidence.
 	if meta.Locked != nil {
 		return ErrLocked
+	}
+	if r.guard != nil {
+		if err := r.guard(meta); err != nil {
+			return err
+		}
 	}
 	// The mode decides where the content lives; take it as it is now, not as
 	// it was when the upload began.

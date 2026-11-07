@@ -17,7 +17,8 @@ import (
 )
 
 // RestoreState is where the instance restore is. It is kept on disk, so the
-// instance — which the restore stops — reads it once it runs again.
+// instance — which the restore stops — reads it once it runs again, and so
+// an agent that stopped mid-way can put things right when it starts.
 type RestoreState struct {
 	State    string    `json:"state"` // idle preparing extracting stopping swapping starting done failed rolled-back
 	Snapshot string    `json:"snapshot,omitempty"`
@@ -25,8 +26,18 @@ type RestoreState struct {
 	Started  time.Time `json:"started,omitzero"`
 	Finished time.Time `json:"finished,omitzero"`
 	Message  string    `json:"message,omitempty"`
-	// Previous is the copy the data from before the restore was kept as.
+	// Incoming is the tree that becomes the data directory (an extraction
+	// beside it, or the kept copy), and Previous the name the data from
+	// before is kept as. Both are recorded before the first rename, so an
+	// interrupted swap can be undone.
+	Incoming string `json:"incoming,omitempty"`
 	Previous string `json:"previous,omitempty"`
+	// IncomingOrigin is how old the incoming tree's contents are (the
+	// snapshot's time, or the copy's own origin).
+	IncomingOrigin time.Time `json:"incoming_origin,omitzero"`
+	// LiveOrigin is how old the running data's contents are when a restore
+	// put them there; zero when they are simply the instance's own.
+	LiveOrigin time.Time `json:"live_origin,omitzero"`
 }
 
 func (s RestoreState) running() bool {
@@ -60,18 +71,25 @@ func (a *Agent) restoreState() RestoreState {
 	return a.restore
 }
 
-// step moves the restore to state and keeps it.
-func (a *Agent) step(state, msg string) {
+// update changes the restore's state under its lock and keeps it.
+func (a *Agent) update(fn func(*RestoreState)) {
 	a.restoreMu.Lock()
 	defer a.restoreMu.Unlock()
-	a.restore.State = state
-	if msg != "" {
-		a.restore.Message = msg
-	}
-	if !a.restore.running() {
-		a.restore.Finished = a.cfg.Now().UTC()
-	}
+	fn(&a.restore)
 	a.saveRestore()
+}
+
+// step moves the restore to state and keeps it.
+func (a *Agent) step(state, msg string) {
+	a.update(func(s *RestoreState) {
+		s.State = state
+		if msg != "" {
+			s.Message = msg
+		}
+		if !s.running() {
+			s.Finished = a.cfg.Now().UTC()
+		}
+	})
 	a.cfg.Log.Info("instance restore", "state", state, "msg", msg)
 }
 
@@ -80,7 +98,11 @@ func (a *Agent) step(state, msg string) {
 type Copy struct {
 	Name string    `json:"name"`
 	Kind string    `json:"kind"` // before-restore, failed-restore
-	At   time.Time `json:"at"`
+	At   time.Time `json:"at"`   // when it was set aside
+	// Origin is how old its contents are: a copy is deleted 30 days after
+	// that, not after it was set aside — a restored 29-day-old snapshot
+	// kept as a copy must not live another 30 days.
+	Origin time.Time `json:"origin"`
 }
 
 func (a *Agent) parent() (string, string) {
@@ -101,6 +123,43 @@ func freeName(dir, base, kind string, t time.Time) string {
 	}
 }
 
+// ---- the copies' origins, kept beside the restore's state ----
+
+func (a *Agent) originsPath() string { return filepath.Join(a.cfg.StateDir, "copies.json") }
+
+func (a *Agent) origins() map[string]time.Time {
+	m := map[string]time.Time{}
+	if b, err := os.ReadFile(a.originsPath()); err == nil {
+		json.Unmarshal(b, &m)
+	}
+	return m
+}
+
+// setOrigin records (or, with a zero time, forgets) a copy's origin.
+func (a *Agent) setOrigin(name string, t time.Time) {
+	m := a.origins()
+	if t.IsZero() {
+		delete(m, name)
+	} else {
+		m[name] = t.UTC()
+	}
+	os.MkdirAll(a.cfg.StateDir, 0o700)
+	b, _ := json.Marshal(m)
+	tmp := a.originsPath() + ".tmp"
+	if os.WriteFile(tmp, b, 0o600) == nil {
+		os.Rename(tmp, a.originsPath())
+	}
+}
+
+// liveOrigin is how old the running data's contents are: the time of what
+// a restore put in place, else now.
+func (a *Agent) liveOrigin(now time.Time) time.Time {
+	if o := a.restoreState().LiveOrigin; !o.IsZero() {
+		return o
+	}
+	return now
+}
+
 // copies lists the kept trees beside the data directory, newest first.
 func (a *Agent) copies() []Copy {
 	dir, base := a.parent()
@@ -108,6 +167,7 @@ func (a *Agent) copies() []Copy {
 	if err != nil {
 		return nil
 	}
+	origins := a.origins()
 	var out []Copy
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -122,7 +182,11 @@ func (a *Agent) copies() []Copy {
 			if err != nil {
 				continue
 			}
-			out = append(out, Copy{Name: e.Name(), Kind: kind, At: at})
+			origin := at
+			if o, ok := origins[e.Name()]; ok && o.Before(at) {
+				origin = o
+			}
+			out = append(out, Copy{Name: e.Name(), Kind: kind, At: at, Origin: origin})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].At.After(out[j].At) })
@@ -138,8 +202,9 @@ func (a *Agent) findCopy(name string) (Copy, bool) {
 	return Copy{}, false
 }
 
-// pruneCopies removes kept trees older than copyKeep, and staging trees a
-// crashed extraction left more than a day ago. Never while a restore runs.
+// pruneCopies removes kept trees whose contents are older than copyKeep,
+// and staging trees a crashed extraction left more than a day ago. Never
+// while a restore runs.
 func (a *Agent) pruneCopies() {
 	if a.restoreState().running() {
 		return
@@ -147,8 +212,9 @@ func (a *Agent) pruneCopies() {
 	now := a.cfg.Now()
 	dir, base := a.parent()
 	for _, c := range a.copies() {
-		if now.Sub(c.At) > copyKeep {
+		if now.Sub(c.Origin) > copyKeep {
 			if err := os.RemoveAll(filepath.Join(dir, c.Name)); err == nil {
+				a.setOrigin(c.Name, time.Time{})
 				a.cfg.Log.Info("instance restore: removed an expired copy", "copy", c.Name)
 			}
 		}
@@ -189,6 +255,7 @@ func (a *Agent) handleDeleteCopy(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "the copy could not be deleted")
 		return
 	}
+	a.setOrigin(c.Name, time.Time{})
 	a.cfg.Log.Info("instance restore: copy deleted", "copy", c.Name)
 	writeJSON(w, 200, map[string]string{"status": "deleted"})
 }
@@ -229,12 +296,42 @@ func (a *Agent) handleInstanceRestore(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, "a restore is already running")
 		return
 	}
-	a.restore = RestoreState{State: "preparing", Snapshot: src.ID, Copy: cp.Name, Started: a.cfg.Now().UTC()}
+	live := a.restore.LiveOrigin
+	a.restore = RestoreState{State: "preparing", Snapshot: src.ID, Copy: cp.Name, Started: a.cfg.Now().UTC(), LiveOrigin: live}
 	a.saveRestore()
 	st := a.restore
+	a.restoreWG.Add(1)
 	a.restoreMu.Unlock()
-	go a.runRestore(context.Background(), src, cp)
+	go func() {
+		defer a.restoreWG.Done()
+		a.runRestore(context.Background(), src, cp)
+	}()
 	writeJSON(w, 202, st)
+}
+
+// WaitRestore waits up to max for a running instance restore: the agent
+// must not stop half-way through a swap (systemd's TimeoutStopSec allows it).
+func (a *Agent) WaitRestore(max time.Duration) {
+	done := make(chan struct{})
+	go func() { a.restoreWG.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(max):
+		a.cfg.Log.Error("instance restore: still running at shutdown; the next start puts it right")
+	}
+}
+
+// removeManaged removes every site container, trying a few times: a
+// survivor would keep its mounts into the tree being swapped out.
+func (a *Agent) removeManaged(ctx context.Context) error {
+	var err error
+	for i := 0; i < 3; i++ {
+		if _, err = a.cfg.Docker.RemoveManaged(ctx); err == nil {
+			return nil
+		}
+		time.Sleep(time.Duration(i+1) * 500 * time.Millisecond)
+	}
+	return err
 }
 
 // runRestore restores the instance to snapshot src, or to the kept copy cp:
@@ -245,23 +342,30 @@ func (a *Agent) runRestore(ctx context.Context, src Snapshot, cp Copy) {
 	dir, base := a.parent()
 	now := a.cfg.Now()
 	var incoming string // the tree that becomes the data directory
+	origin := src.At
 	if cp.Name != "" {
 		incoming = filepath.Join(dir, cp.Name)
+		origin = cp.Origin
 	} else {
+		// The whole snapshot's size — Git repositories, accounts and
+		// analytics too, not only the sites' files the index sums.
 		var size int64
-		if m, ok := a.idx.Get(src.ID); ok {
-			for _, s := range m {
-				size += s.Bytes
+		if err := a.cfg.Source.Walk(ctx, src.ID, "", func(it Item) error {
+			if it.Regular {
+				size += it.Size
 			}
-		} else {
-			a.cfg.Source.Walk(ctx, src.ID, "", func(it Item) error { size += it.Size; return nil })
+			return nil
+		}); err != nil {
+			a.step("failed", "The snapshot could not be read: "+err.Error()+". Nothing was changed.")
+			return
 		}
 		if free, err := diskFree(dir); err == nil && free < uint64(size)+restoreHeadroom {
 			a.step("failed", fmt.Sprintf("Not enough space: the snapshot needs about %d MB, %d MB are free. Nothing was changed.", (size+restoreHeadroom)>>20, free>>20))
 			return
 		}
-		a.step("extracting", "")
 		incoming = filepath.Join(dir, freeName(dir, base, "restore", now))
+		a.update(func(s *RestoreState) { s.Incoming = filepath.Base(incoming) })
+		a.step("extracting", "")
 		if err := a.extract(ctx, src.ID, incoming); err != nil {
 			os.RemoveAll(incoming)
 			a.cfg.Log.Error("instance restore: extract", "err", err)
@@ -269,11 +373,15 @@ func (a *Agent) runRestore(ctx context.Context, src Snapshot, cp Copy) {
 			return
 		}
 	}
-	unlock, err := lockFile(a.cfg.BackupLock, 30*time.Minute)
-	if err != nil {
+	// a staging tree is ours to remove on a way out; a kept copy is not
+	dropIncoming := func() {
 		if cp.Name == "" {
 			os.RemoveAll(incoming)
 		}
+	}
+	unlock, err := lockFile(a.cfg.BackupLock, 30*time.Minute)
+	if err != nil {
+		dropIncoming()
 		a.step("failed", "A backup run held its lock for too long: "+err.Error()+". Nothing was changed.")
 		return
 	}
@@ -281,33 +389,44 @@ func (a *Agent) runRestore(ctx context.Context, src Snapshot, cp Copy) {
 
 	a.step("stopping", "")
 	if err := a.cfg.Docker.Stop(ctx, a.cfg.Container); err != nil {
-		if cp.Name == "" {
-			os.RemoveAll(incoming)
-		}
+		dropIncoming()
 		a.cfg.Docker.Start(ctx, a.cfg.Container)
 		a.step("failed", "The instance could not be stopped: "+err.Error()+". Nothing was changed.")
 		return
 	}
-	if n, err := a.cfg.Docker.RemoveManaged(ctx); err != nil {
-		a.cfg.Log.Warn("instance restore: removing site containers", "err", err, "removed", n)
+	if err := a.removeManaged(ctx); err != nil {
+		dropIncoming()
+		a.cfg.Docker.Start(ctx, a.cfg.Container)
+		a.step("failed", "The site containers could not be removed ("+err.Error()+"), so the data was not swapped. Nothing was changed; the instance runs again.")
+		return
 	}
 
-	a.step("swapping", "")
 	previous := freeName(dir, base, "before-restore", now)
+	prevOrigin := a.liveOrigin(now)
+	a.update(func(s *RestoreState) {
+		s.Incoming, s.Previous, s.IncomingOrigin = filepath.Base(incoming), previous, origin
+	})
+	a.step("swapping", "")
 	if err := os.Rename(a.cfg.DataDir, filepath.Join(dir, previous)); err != nil {
+		dropIncoming()
 		a.cfg.Docker.Start(ctx, a.cfg.Container)
+		a.update(func(s *RestoreState) { s.Previous = "" })
 		a.step("failed", "The data directory could not be moved aside: "+err.Error()+". The instance runs on its data as before.")
 		return
 	}
+	a.setOrigin(previous, prevOrigin)
 	if err := os.Rename(incoming, a.cfg.DataDir); err != nil {
 		os.Rename(filepath.Join(dir, previous), a.cfg.DataDir)
+		a.setOrigin(previous, time.Time{})
+		dropIncoming()
 		a.cfg.Docker.Start(ctx, a.cfg.Container)
+		a.update(func(s *RestoreState) { s.Previous = "" })
 		a.step("failed", "The restored tree could not be put in place: "+err.Error()+". The instance runs on its data as before.")
 		return
 	}
-	a.restoreMu.Lock()
-	a.restore.Previous = previous
-	a.restoreMu.Unlock()
+	if cp.Name != "" {
+		a.setOrigin(cp.Name, time.Time{}) // it is the data now, no longer a copy
+	}
 
 	a.step("starting", "")
 	if err := a.startHealthy(ctx); err == nil {
@@ -315,27 +434,100 @@ func (a *Agent) runRestore(ctx context.Context, src Snapshot, cp Copy) {
 		if cp.Name != "" {
 			what = "the copy " + cp.Name
 		}
+		a.update(func(s *RestoreState) { s.LiveOrigin = origin })
 		a.step("done", "The instance runs on "+what+". The data from before is kept as "+previous+" for 30 days.")
 		return
 	} else {
 		a.cfg.Log.Error("instance restore: not healthy, switching back", "err", err)
-		a.cfg.Docker.Stop(ctx, a.cfg.Container)
-		a.cfg.Docker.RemoveManaged(ctx)
-		failed := freeName(dir, base, "failed-restore", now)
-		os.Rename(a.cfg.DataDir, filepath.Join(dir, failed))
-		if err2 := os.Rename(filepath.Join(dir, previous), a.cfg.DataDir); err2 != nil {
-			a.step("failed", "The restored instance did not become healthy ("+err.Error()+"), and switching back failed: "+err2.Error()+". The previous data is "+previous+".")
-			return
-		}
-		a.restoreMu.Lock()
-		a.restore.Previous = ""
-		a.restoreMu.Unlock()
-		if err3 := a.startHealthy(ctx); err3 != nil {
-			a.step("failed", "The restored instance did not become healthy, and after switching back the instance does not either: "+err3.Error()+".")
-			return
-		}
-		a.step("rolled-back", "The restored instance did not become healthy ("+err.Error()+"), so the previous data is back in place. The restored tree is kept as "+failed+" for 30 days.")
+		a.rollBack(ctx, err.Error())
 	}
+}
+
+// rollBack puts the data from before back after the restored tree did not
+// come up, keeping the restored tree as a failed copy.
+func (a *Agent) rollBack(ctx context.Context, why string) {
+	dir, base := a.parent()
+	st := a.restoreState()
+	a.cfg.Docker.Stop(ctx, a.cfg.Container)
+	note := ""
+	if err := a.removeManaged(ctx); err != nil {
+		note = " Some site containers could not be removed (" + err.Error() + "); restart their projects."
+	}
+	failed := freeName(dir, base, "failed-restore", a.cfg.Now())
+	if err := os.Rename(a.cfg.DataDir, filepath.Join(dir, failed)); err == nil {
+		a.setOrigin(failed, st.IncomingOrigin)
+	}
+	if err := os.Rename(filepath.Join(dir, st.Previous), a.cfg.DataDir); err != nil {
+		a.step("failed", "The restored instance did not become healthy ("+why+"), and switching back failed: "+err.Error()+". The previous data is "+st.Previous+"."+note)
+		return
+	}
+	a.setOrigin(st.Previous, time.Time{})
+	a.update(func(s *RestoreState) { s.Previous = "" })
+	if err := a.startHealthy(ctx); err != nil {
+		a.step("failed", "The restored instance did not become healthy, and after switching back the instance does not either: "+err.Error()+"."+note)
+		return
+	}
+	a.step("rolled-back", "The restored instance did not become healthy ("+why+"), so the previous data is back in place. The restored tree is kept as "+failed+" for 30 days."+note)
+}
+
+// Recover puts right an instance restore the agent did not live to finish
+// (a restart, a crash): the data the instance needs is put back in place if
+// a swap was cut in half, and the instance is started whatever the state.
+// Run calls it first.
+func (a *Agent) Recover(ctx context.Context) {
+	st := a.restoreState()
+	if !st.running() {
+		return
+	}
+	dir, _ := a.parent()
+	exists := func(name string) bool {
+		if name == "" {
+			return false
+		}
+		_, err := os.Lstat(filepath.Join(dir, name))
+		return err == nil
+	}
+	_, dataErr := os.Lstat(a.cfg.DataDir)
+	data := dataErr == nil
+	msg := ""
+	switch {
+	case !data && exists(st.Previous):
+		// cut between the two renames: the data from before goes back
+		if err := os.Rename(filepath.Join(dir, st.Previous), a.cfg.DataDir); err != nil {
+			msg = "The agent stopped while swapping, and the data could not be put back: " + err.Error() + ". The data from before is " + st.Previous + "."
+			break
+		}
+		a.setOrigin(st.Previous, time.Time{})
+		msg = "The agent stopped while swapping the data. The data from before is back in place; nothing was restored."
+	case st.State == "swapping" && data && exists(st.Previous):
+		// both renames done, never started: the data from before goes back
+		a.cfg.Docker.Stop(ctx, a.cfg.Container)
+		a.removeManaged(ctx)
+		failed := freeName(dir, filepath.Base(a.cfg.DataDir), "failed-restore", a.cfg.Now())
+		if err := os.Rename(a.cfg.DataDir, filepath.Join(dir, failed)); err == nil {
+			a.setOrigin(failed, st.IncomingOrigin)
+		}
+		if err := os.Rename(filepath.Join(dir, st.Previous), a.cfg.DataDir); err != nil {
+			msg = "The agent stopped after swapping, and the data from before could not be put back: " + err.Error() + ". It is " + st.Previous + "."
+			break
+		}
+		a.setOrigin(st.Previous, time.Time{})
+		msg = "The agent stopped after swapping the data, before the instance started. The data from before is back in place; the restored tree is kept as " + failed + "."
+	case st.State == "starting":
+		// in place and being started: it stays, and starts
+		a.update(func(s *RestoreState) { s.LiveOrigin = s.IncomingOrigin })
+		msg = "The agent stopped while the restored instance was starting. It runs on the restored data; the data from before is kept as " + st.Previous + "."
+	default:
+		// before any swap: a staging tree goes, nothing else changed
+		if strings.Contains(st.Incoming, ".restore-") && exists(st.Incoming) {
+			os.RemoveAll(filepath.Join(dir, st.Incoming))
+		}
+		msg = "The agent stopped during this restore, before anything was swapped. Nothing was changed."
+	}
+	if err := a.cfg.Docker.Start(ctx, a.cfg.Container); err != nil {
+		msg += " The instance could not be started: " + err.Error() + "."
+	}
+	a.step("failed", msg)
 }
 
 // extract writes snapshot id's whole tree into dst.
@@ -348,12 +540,19 @@ func (a *Agent) extract(ctx context.Context, id, dst string) error {
 		errc <- err
 	}()
 	exErr := a.cfg.Extract(dst, pr)
+	if exErr == nil {
+		// A tar reader stops at the end-of-archive marker; Borg's export-tar
+		// (Python's tarfile) pads the stream after it to a full record. The
+		// rest is read and dropped, or the writer fails on a closed pipe and
+		// a complete extraction would be reported as a broken one.
+		io.Copy(io.Discard, pr)
+	}
 	pr.CloseWithError(errors.New("extraction ended"))
 	tarErr := <-errc
-	if tarErr != nil {
-		return tarErr
+	if exErr != nil {
+		return exErr // the cause; the tar side then only saw the pipe close
 	}
-	return exErr
+	return tarErr
 }
 
 // startHealthy starts the instance and waits for Docker to call it healthy.
