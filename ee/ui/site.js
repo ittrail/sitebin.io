@@ -211,7 +211,7 @@
     if (!s.name) a.push(["s-info", "edit", "No name yet, so every list shows its address.", "Name it", "settings"]);
     if (s.mode === "container" && s.container && (!s.container.enabled || s.container.status !== "running")) a.push([s.container.status === "error" ? "s-bad" : "s-off", "stop", s.container.enabled ? "The project is " + (s.container.status || "not running") + "." : "The project is stopped.", "Open", "containers"]);
     if (s.mode === "webserver" && !s.spa_fallback && !s.not_found_serves && !s.start_page_missing) a.push(["s-info", "files", "No 404 page of its own: a mistyped address shows Sitebin’s.", "Add one", "settings"]);
-    if (analyticsState && s.analytics_available && !analyticsOn()) a.push(["s-off", "chart", "Analytics are off.", "Turn on", "analytics"]);
+    if (analyticsState && s.analytics_available && !analyticsOn() && !analyticsState.reason) a.push(["s-off", "chart", "Analytics are off.", "Turn on", "!analytics-on"]);
     return a;
   }
   function addressRows() {
@@ -251,12 +251,14 @@
   function chartHTML() {
     if (!site.analytics_available) return '<p class="d" style="margin:6px 0 0">Analytics are not part of this site’s plan.</p>';
     if (!chart || chart.loading) return '<p class="d" style="margin:6px 0 0">Loading…</p>';
-    if (chart.off) return '<p class="d" style="margin:6px 0 0">' + (chart.err ? "The statistics could not be read." : "Analytics are off for this site, so there is nothing to show.") + ' <button class="btn sm" type="button" data-go="analytics">Open analytics</button></p>';
+    if (chart.off) {
+      if (chart.err || (analyticsState && analyticsState.reason)) return '<p class="d" style="margin:6px 0 0">' + (chart.err ? "The statistics could not be read." : "Analytics are not available for this site now.") + ' <button class="btn sm" type="button" data-go="analytics">Open analytics</button></p>';
+      return '<p class="d" style="margin:6px 0 0">Analytics are off for this site, so there is nothing to show. <button class="btn sm" type="button" data-analytics-on>Turn on</button></p>';
+    }
     const vals = chart.series.map((p) => p.visitors), max = Math.max(1, ...vals);
     const cols = chart.series.map((p) => { const d = new Date(p.t); return '<div class="col" tabindex="0" aria-label="' + WD[d.getDay()] + " " + fmtDate(d) + ": " + p.visitors + ' visitors"><i style="height:' + Math.max(1.5, p.visitors / max * 100) + '%"></i><span class="tip"><b>' + p.visitors.toLocaleString("en") + "</b> visitors · " + p.views.toLocaleString("en") + " views<br>" + WD[d.getDay()] + ", " + fmtDate(d) + "</span></div>"; }).join("");
     const first = chart.series[0], mid = chart.series[Math.floor(chart.series.length / 2)];
-    return '<p class="d" style="margin:0 0 6px">' + chart.totals.visitors.toLocaleString("en") + " visitors, " + chart.totals.views.toLocaleString("en") + " page views.</p>" +
-      '<div class="wchart" style="height:150px" role="group" aria-label="Visitors per day, last 14 days"><span class="ymax">' + max.toLocaleString("en") + "</span>" + cols + "</div>" +
+    return '<div class="wchart" style="height:150px" role="group" aria-label="Visitors per day, last 14 days"><span class="ymax">' + max.toLocaleString("en") + "</span>" + cols + "</div>" +
       '<div class="xlab"><span>' + (first ? fmtDate(first.t) : "") + "</span><span>" + (mid ? fmtDate(mid.t) : "") + "</span><span>today</span></div>" +
       '<details class="tview"><summary>Show as a table</summary><div class="tblwrap"><table class="tbl"><thead><tr><th>Day</th><th class="r">Visitors</th><th class="r">Views</th></tr></thead><tbody>' +
       chart.series.slice().reverse().map((p) => '<tr><td class="num">' + fmtDate(p.t) + '</td><td class="num r">' + p.visitors + '</td><td class="num r">' + p.views + "</td></tr>").join("") + "</tbody></table></div></details>";
@@ -273,7 +275,7 @@
       '<section class="panel"><h3>Visitors, last 14 days<span class="acts"><button class="btn ghost sm" type="button" data-go="analytics">Open analytics</button></span></h3>' + chartHTML() + "</section>" +
       '<section class="panel"><h3>Recent activity<span class="acts"><button class="btn ghost sm" type="button" data-go="activity">All activity</button></span></h3>' + (activity ? timeline(activity.slice(0, 4)) : '<p class="d" style="margin:0">Loading…</p>') + "</section>" +
       '</div><div class="wcol">' +
-      '<section class="panel"><h3>Needs attention</h3>' + (att.length ? '<ul class="attn">' + att.map(([c, i, t, b, tab]) => '<li><span class="' + c + '">' + ic(i) + '</span><span class="t">' + esc(t) + "</span>" + (b ? '<button class="btn sm" type="button" data-go="' + tab + '">' + esc(b) + "</button>" : "") + "</li>").join("") + "</ul>" : '<p class="allgood">' + ic("check") + "Nothing here needs you.</p>") + "</section>" +
+      '<section class="panel"><h3>Needs attention</h3>' + (att.length ? '<ul class="attn">' + att.map(([c, i, t, b, tab]) => '<li><span class="' + c + '">' + ic(i) + '</span><span class="t">' + esc(t) + "</span>" + (b ? '<button class="btn sm" type="button" ' + (tab === "!analytics-on" ? "data-analytics-on" : 'data-go="' + tab + '"') + ">" + esc(b) + "</button>" : "") + "</li>").join("") + "</ul>" : '<p class="allgood">' + ic("check") + "Nothing here needs you.</p>") + "</section>" +
       '<section class="panel"><h3>At a glance</h3><dl class="kv">' +
       "<dt>Owner</dt><dd>" + (s.role === "admin" ? esc(s.shared_by || "another account") : "You") + (me && (me.admins || []).length ? ' <span class="faint">+ ' + me.admins.length + " admin" + (me.admins.length > 1 ? "s" : "") + "</span>" : "") + "</dd>" +
       "<dt>Type</dt><dd>" + esc(WS.typeLong(s)) + "</dd>" +
@@ -283,8 +285,6 @@
       "<dt>View password</dt><dd>" + (s.view_password_protected ? "On" : "Off") + "</dd>" +
       (s.mode !== "container" ? "<dt>Caching</dt><dd>" + esc(CACHE[s.cache || "auto"] || s.cache) + "</dd>" : "") +
       (s.git_available ? "<dt>Git</dt><dd>" + (s.usage.git_bytes ? "Repository, " + esc(fmtBytes(s.usage.git_bytes)) : "No repository yet") + "</dd>" : "") +
-      "<dt>Storage</dt><dd>" + esc(fmtBytes(s.usage.bytes)) + " of " + esc(fmtBytes(s.usage.max_bytes)) + "</dd>" +
-      (typeof s.views === "number" ? "<dt>Views</dt><dd>" + s.views.toLocaleString("en") + (s.last_seen ? ' <span class="faint">last ' + esc(ago(s.last_seen)) + "</span>" : "") + "</dd>" : "") +
       "</dl></section>" +
       (s.mode === "container" ? '<section class="panel"><h3>Containers<span class="acts"><button class="btn ghost sm" type="button" data-go="containers">Open</button></span></h3><div class="lines">' +
         ((ct.services || []).length ? ct.services.map((v) => '<div class="line">' + ic("box") + '<div class="grow"><span class="a">' + esc(v.name) + ' <span class="faint">' + esc(v.image || "") + '</span></span></div><span class="st ' + (v.state === "running" ? "s-ok" : "s-off") + '">' + ic(v.state === "running" ? "dot" : "stop") + esc(v.state || "—") + "</span></div>").join("") : '<div class="line"><span class="faint">' + esc(ct.enabled ? ct.status || "Starting" : "Stopped") + "</span></div>") + "</div></section>" : "") +
@@ -292,6 +292,22 @@
       (forms.length ? '<div class="lines">' + forms.map((f) => '<div class="line">' + ic("mail") + '<div class="grow"><span class="a">' + esc(f.name || f.key) + '</span><span class="s">' + esc(f.recipient || "") + (f.status ? " · " + esc(f.status) : "") + "</span></div></div>").join("") + "</div>" :
         '<p class="d" style="margin:0">' + (formsData && formsData.enabled ? "No forms. A form mails what visitors send to an address you choose." : "Forms are not available for this site.") + "</p>") + "</section>" +
       "</div></div>";
+  }
+
+  // Turning analytics on from the Overview: the settings PUT replaces them
+  // whole, so it sends the stored ones with only the switch changed — what the
+  // Analytics tab's own switch sends.
+  async function analyticsOnNow(btn) {
+    const s = (analyticsState && analyticsState.settings) || {};
+    const set = { enabled: true, mode: s.mode || "server", timezone: s.timezone || "", addresses: s.addresses || [], exclude: s.exclude || [], query: s.query || [], funnels: s.funnels || [], goals: s.goals || [] };
+    if (btn) btn.disabled = true;
+    try {
+      analyticsState = await api("PUT", "/analytics", set);
+      toast("Turned on: counting starts with the next visit.");
+      chart = null; week = null;
+      loadChart();
+      overview();
+    } catch (err) { fail(err); if (btn) btn.disabled = false; }
   }
 
   // ---- Activity ----
@@ -428,6 +444,8 @@
       return;
     }
     if (e.target.closest("#ws-copy")) { navigator.clipboard?.writeText(site.primary_url || site.view_url).then(() => toast("Copied.")); return; }
+    const on = e.target.closest("[data-analytics-on]");
+    if (on) { analyticsOnNow(on); return; }
     const ty = e.target.closest("[data-type]");
     if (ty) { setType(ty.dataset.type); return; }
     const st = e.target.closest("[data-step]");

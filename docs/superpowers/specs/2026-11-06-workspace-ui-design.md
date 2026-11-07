@@ -244,3 +244,11 @@ What building it changed or settled, 2026-11-06:
     the browser's zone — converting showed 17 Dec for an expiry set to 16 Dec.
   Verified: e2e 19, parity 26 (now also a date-only expiry and the register's
   date), containers 15, both Go suites.
+- **Final pass (same night):** the site page's Overview lost what the mockup
+  does not have — the totals line above the chart and At a glance's Storage
+  and Views (the ticket states size and visitors) — and analytics that are
+  off get the mockup's **Turn on** button (Overview card and Needs
+  attention): it sends the stored settings with only `enabled` changed,
+  since the settings PUT replaces them whole (what the Analytics tab's own
+  switch does). The e2e checks that a saved exclude list survives it, reads
+  the chart's bars and the ticket's Visitors 7d (20 checks).
