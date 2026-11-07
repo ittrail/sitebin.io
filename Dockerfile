@@ -28,8 +28,17 @@ RUN set -eux; \
     CGO_ENABLED=0 go build $TAGS -trimpath -ldflags "$LDFLAGS" -o /out/sitebin ./cmd/sitebin
 
 # ---- caddy with DNS modules for the wildcard certificate ----
+# quic-go is replaced: Caddy 2.11.4 brings v0.59.1, whose congestion control
+# leaves slow start at ~400 KB on RTT jitter alone and then grows the window
+# ~8 KB/s (application_limited ↔ congestion_avoidance flapping), so HTTP/3
+# stalls near 100 Mbit/s where TCP reaches 390 (qlog on the hosted instance,
+# 2026-11-07). v0.64 fixes slow-start pacing and reordering/spurious-loss
+# handling (#5882, #5905, #5923, #5925); no Caddy release carries it yet.
+# v0.64.1, not v0.65: v0.65 removed http3/qlog.DefaultConnectionTracer,
+# which every Caddy release up to 2.11.9 still calls.
 FROM caddy:2-builder@sha256:b8f9c720f13f64c13dd42db28e8f38a3fab54c11fce4d93bda26d710c448dcfd AS caddybuild
 RUN xcaddy build \
+    --replace github.com/quic-go/quic-go=github.com/quic-go/quic-go@v0.64.1 \
     --with github.com/caddy-dns/cloudflare \
     --with github.com/caddy-dns/hetzner/v2 \
     --with github.com/caddy-dns/duckdns \
