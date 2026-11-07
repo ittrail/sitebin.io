@@ -1392,8 +1392,50 @@ $("e-tag").addEventListener("input", () => {
   addTagsFrom(v.slice(0, i));
 });
 
+// The site folders a container project mounts: what the app wrote there —
+// a database, keys — is served at the site's addresses again once the site
+// leaves Container mode. (The compose file itself never is.) Read from the
+// compose file's volumes: entries, so a stopped project names them too.
+function foldersFromCompose(text) {
+  const out = new Set();
+  const add = (v) => {
+    const f = v.trim().replace(/^["']|["']$/g, "").split(":")[0];
+    if (/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(f)) out.add(f);
+  };
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^(\s*)volumes:\s*(.*?)\s*(#.*)?$/.exec(lines[i]);
+    if (!m) continue;
+    if (m[2].startsWith("[")) { m[2].replace(/^\[|\]$/g, "").split(",").forEach(add); continue; }
+    for (let j = i + 1; j < lines.length; j++) {
+      if (!lines[j].trim() || lines[j].trim().startsWith("#")) continue;
+      const item = /^(\s*)-\s*(.+?)\s*(#.*)?$/.exec(lines[j]);
+      if (!item || item[1].length <= m[1].length) break;
+      add(item[2]);
+    }
+  }
+  return [...out];
+}
+async function leaveContainerNote() {
+  let f = [];
+  try {
+    const res = await fetch("/api/sites/" + editID + "/content/" + encodePath(site.container.compose_file || "sitebin-container-compose.yaml"), { headers: authHeaders() });
+    if (res.ok) f = foldersFromCompose(await res.text());
+  } catch {}
+  return "The project stops, and the site's files are served at its addresses again" +
+    (f.length ? ", the folders the app used included: " + f.join(", ") : ", every folder included") +
+    ". Move anything secret or private out first. The compose file itself is never served.";
+}
+
 document.querySelectorAll("input[name=emode]").forEach((r) =>
-  r.addEventListener("change", () => put({ mode: r.value }, "Mode switched to " + r.value)));
+  r.addEventListener("change", async () => {
+    if (site.mode === "container" && r.value !== "container" &&
+        !window.confirm("Leave Container mode?\n\n" + await leaveContainerNote())) {
+      render(); // put the radio back
+      return;
+    }
+    put({ mode: r.value }, "Mode switched to " + r.value);
+  }));
 
 $("entry-file").addEventListener("change", (e) =>
   put({ entry_file: e.target.value }, e.target.value

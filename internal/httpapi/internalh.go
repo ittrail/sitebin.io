@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"net/http"
+	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -138,14 +140,21 @@ func (a *API) admit(w http.ResponseWriter, r *http.Request, site *store.Site, pa
 		w.WriteHeader(200)
 		return
 	}
-	a.countView(r, site)
-	a.recordPageView(r, site, addr, mount, pathMode)
-	// A file site's Cache-Control, which Caddy sets on a 2xx or 304 only —
-	// computed on the path the file server will see.
 	prefix := mount
 	if pathMode {
 		prefix = "/v/" + site.ViewID
 	}
+	// The compose file holds a container project's secrets and stays in the
+	// site's root when the site leaves Container mode: no file mode ever
+	// serves it, as if it did not exist.
+	if composeRequested(r.Header.Get("X-Forwarded-Uri"), prefix) {
+		a.msgPage(w, 404, "Page not found", "There is no page at this address. Check the link for typos.")
+		return
+	}
+	a.countView(r, site)
+	a.recordPageView(r, site, addr, mount, pathMode)
+	// A file site's Cache-Control, which Caddy sets on a 2xx or 304 only —
+	// computed on the path the file server will see.
 	if v := a.cacheValue(site, r.Header.Get("X-Forwarded-Uri"), prefix); v != "" {
 		w.Header().Set(cacheHeader, v)
 	}
@@ -161,6 +170,22 @@ func (a *API) admit(w http.ResponseWriter, r *http.Request, site *store.Site, pa
 		w.Header().Set(stripHeader, mount)
 	}
 	w.WriteHeader(200)
+}
+
+// composeRequested reports whether a file site's request names its compose
+// file, on the path the file server will see (as cacheValue derives it: the
+// URI decoded and cleaned, the mount or path-view prefix removed), directly or
+// as the File viewer's /_raw/ copy.
+func composeRequested(rawURI, prefix string) bool {
+	p := "/"
+	if u, err := url.ParseRequestURI(rawURI); err == nil && u.Path != "" {
+		p = u.Path
+	}
+	if prefix != "" {
+		p = strings.TrimPrefix(p, prefix)
+	}
+	rel := strings.TrimPrefix(path.Clean("/"+p), "/")
+	return rel == store.ComposeFile || rel == "_raw/"+store.ComposeFile
 }
 
 // tlsCheck is Caddy's on-demand TLS ask endpoint: 200 only for domains that

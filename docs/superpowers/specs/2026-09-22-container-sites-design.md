@@ -292,6 +292,24 @@ site's, with its redirects and off. An address change no longer restarts the
 project. No compatibility path: a file with `domains:` is refused with a
 message naming `http:`. See `2026-10-16-container-addresses-design.md`.
 
+**2026-11-07 — the compose file is never served; leaving asks first.** A
+review for a push-notification relay found that a site switched from
+Container to a file mode served everything in its tree, the compose file with
+its secrets included. authz (`admit`, `composeRequested`) now answers `404`
+for `sitebin-container-compose.yaml` at the root — on the path the file
+server would see, decoded and cleaned, and as the File viewer's `/_raw/`
+copy — in every file mode and on path views; the viewer's list leaves it out
+(`isHiddenPath`, mirrored in `files.js`). The other folders are still served
+once the site is a file site: leaving Container mode in the edit page
+(`window.confirm`) and the workspace (its dialog) asks first, naming the
+folders the compose file's `volumes:` mount (`foldersFromCompose`, read from
+the file, so a stopped project names them too). The same review asked for
+persistent storage and secrets: a writable volume (`data:/data`) already is
+the first — SQLite on it survives restarts and deploys, but a replace upload
+replaces it with everything else — and the compose file's `environment:` the
+second (multi-line values work). Graph-style webhooks pass the proxy
+unchanged (query, body byte for byte, `text/plain`, no caching header added).
+
 ## Testing
 
 - Parser: table tests for every key, every error, the example above.

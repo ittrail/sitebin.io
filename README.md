@@ -1297,8 +1297,8 @@ services:
 | Key | Meaning |
 |---|---|
 | `image` | One of Sitebin's own images — never a registry reference. `alpine-node-22` (`node:22.23.2-alpine3.24`), `alpine-dotnet-10` (`mcr.microsoft.com/dotnet/aspnet:10.0.9-alpine3.24-extra`: the .NET 10 and ASP.NET Core runtimes with ICU and time zones; ASP.NET listens on `8080`) and `mysql-8.4` (`mysql:8.4.11`), all pinned by digest. |
-| `environment` | A map or a `KEY=value` list, as in Compose. **No interpolation**: `$HOME` stays the five characters `$HOME`. |
-| `volumes` | `<folder>:<absolute path>[:ro]`. The folder is a **root folder of the site** — the same one the edit page, WebDAV and FTP show — created if it does not exist. That is how code reaches a container: upload it into the folder the service mounts. |
+| `environment` | A map or a `KEY=value` list, as in Compose. **No interpolation**: `$HOME` stays the five characters `$HOME`. Multi-line values (`KEY: \|` and an indented block, e.g. a PEM key) arrive intact. This is where secrets go: the compose file is never served, in any mode, and only the site's managers can read it (owner, admins, the edit password, tokens and agents with access to the site). |
+| `volumes` | `<folder>:<absolute path>[:ro]`. The folder is a **root folder of the site** — the same one the edit page, WebDAV and FTP show — created if it does not exist. That is how code reaches a container: upload it into the folder the service mounts. A volume is writable unless it says `:ro`, so a folder such as `data:/data` is the app's persistent storage (a SQLite file works): it survives restarts and deploys, counts toward the site's byte cap and is in the instance's backups. **A replace upload (`?replace=true`) replaces the whole site, data folders included** — deploy an app by uploading into its own folder, then restart it (only a change to the compose file restarts on its own). |
 | `http` | The ports the service speaks HTTP on — one, or a list (at most 10). Each `service:port` gets a **generated address**; which custom domain serves which port is the site's domain settings, never the file's. A service without `http:` has no address (services reach each other on any port by name). The old `domains:` key is refused with a message saying so. |
 | `egress` | `allowed` or `denied` (default). `egres` is accepted too. |
 | `command`, `working_dir`, `depends_on` | Optional. `depends_on` orders the start; it does not wait for health. The node image's default command runs `npm install` when there is no `node_modules` (needs egress) and then `npm start`, or `node index.js` without a `package.json`. The .NET image's runs the app whose `<App>.runtimeconfig.json` is the only one in the folder (`dotnet <App>.dll`: upload the output of `dotnet publish`); with none or several it says so and waits. The working directory defaults to the first volume. |
@@ -1328,7 +1328,14 @@ How it runs:
 - Caddy **reverse-proxies** to the service — a container site is never served
   from its files (its folders hold the database; its compose file holds
   passwords). Not running: `503`. An address serving no declared port: `404`.
-  Path views (`/v/<id>`) do not proxy.
+  Path views (`/v/<id>`) do not proxy. Requests pass through as they came:
+  path, query string and body unchanged, no caching header added.
+- **The compose file is never served, in any mode** — authz answers `404`
+  for it (and for the File viewer's `/_raw/` copy) after the site has left
+  Container mode too, and the viewer's list leaves it out. Its other folders
+  are served once the site is a file site again: leaving Container mode in
+  the edit page or the workspace asks first and names the folders the compose
+  file mounts.
 - Per container: Sitebin's own uid (files stay manageable), no capabilities,
   `no-new-privileges`, a read-only root filesystem with bounded tmpfs scratch
   space, and memory / CPU / process limits the **operator** sets: the

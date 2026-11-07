@@ -269,3 +269,63 @@ func TestFingerprintedDotfiles(t *testing.T) {
 		}()
 	}
 }
+
+// The compose file holds a container project's secrets and stays in the
+// site's root when the site leaves Container mode: no file mode serves it —
+// web server, SPA, the File viewer's /_raw/ copy — however the path is
+// written, while every other file is served as before.
+func TestAuthzNeverServesTheComposeFile(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{
+		"index.html": "x", "data/app.db": "db",
+		"sitebin-container-compose.yaml": "services:\n  app:\n    image: alpine-node-22\n    environment:\n      KEY: secret\n",
+	})
+	host := c.ID + ".sitebin.example"
+	edit := editIDFrom(t, c.EditURL)
+	code := func(uri string) int { return e.internal(t, authzReq(host, uri, "")).Code }
+	check := func(mode string) {
+		t.Helper()
+		for _, uri := range []string{
+			"/sitebin-container-compose.yaml",
+			"/sitebin-container-compose.yaml?download=1",
+			"/sitebin-container-compose%2Eyaml",
+			"/data/../sitebin-container-compose.yaml",
+			"//sitebin-container-compose.yaml",
+			"/_raw/sitebin-container-compose.yaml",
+		} {
+			if got := code(uri); got != 404 {
+				t.Errorf("%s: %s = %d, want 404", mode, uri, got)
+			}
+		}
+		if got := code("/index.html"); got != 200 {
+			t.Errorf("%s: an ordinary file = %d, want 200", mode, got)
+		}
+	}
+	check("web server")
+	if w := e.public(t, jsonReq("PUT", "/api/sites/"+edit, `{"spa_fallback":true}`, c.EditPassword)); w.Code != 200 {
+		t.Fatalf("spa: %d %s", w.Code, w.Body)
+	}
+	check("spa")
+	if w := e.public(t, jsonReq("PUT", "/api/sites/"+edit, `{"mode":"viewer"}`, c.EditPassword)); w.Code != 200 {
+		t.Fatalf("viewer: %d %s", w.Code, w.Body)
+	}
+	if got := code("/_raw/data/app.db"); got != 200 {
+		t.Errorf("viewer: another raw file = %d, want 200", got)
+	}
+	code = func(uri string) int { return e.internal(t, authzReq(host, uri, "")).Code }
+	for _, uri := range []string{"/_raw/sitebin-container-compose.yaml", "/sitebin-container-compose.yaml"} {
+		if got := code(uri); got != 404 {
+			t.Errorf("viewer: %s = %d, want 404", uri, got)
+		}
+	}
+
+	// A path view names the same file under /v/<id>/.
+	e2 := newEnv(t, map[string]string{"SITEBIN_VIEW_ACCESS": "path"})
+	c2 := e2.createSite(t, nil, map[string]string{"index.html": "x", "sitebin-container-compose.yaml": "services: {}\n"})
+	req := httptest.NewRequest("GET", "/internal/authz", nil)
+	req.Header.Set("X-Sitebin-View", c2.ID)
+	req.Header.Set("X-Forwarded-Uri", "/v/"+c2.ID+"/sitebin-container-compose.yaml")
+	if got := e2.internal(t, req).Code; got != 404 {
+		t.Errorf("path view: %d, want 404", got)
+	}
+}

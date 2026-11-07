@@ -268,10 +268,19 @@ func startPage(chosen string, all, visible []wrapperFile) string {
 	return ""
 }
 
+// composeFile is store.ComposeFile (the viewer does not import the store): a
+// container project's compose file, which holds its secrets. authz never
+// serves it, not even at /_raw/, so the list must not offer it either.
+const composeFile = "sitebin-container-compose.yaml"
+
 // isHiddenPath reports whether the list leaves a file out: any segment that
 // is a dotfile or dot-folder (the .sitebin-* markers among them), or
-// operating-system clutter. Hidden files are still served at /_raw/.
+// operating-system clutter — still served at /_raw/ — and the compose file at
+// the root, which is never served.
 func isHiddenPath(rel string) bool {
+	if rel == composeFile {
+		return true
+	}
 	for _, seg := range strings.Split(rel, "/") {
 		if strings.HasPrefix(seg, ".") {
 			return true

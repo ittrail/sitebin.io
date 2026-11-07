@@ -117,9 +117,13 @@
     sel.innerHTML = '<option value="">' + esc(auto) + "</option>" + files.map((p) => '<option value="' + esc(p) + '">' + esc(p) + "</option>").join("") + '<option value="__choose__">Choose a file…</option>';
     sel.value = cur;
   }
-  function setType(k) {
+  async function setType(k) {
     const t = TYPES.find((x) => x[0] === k);
     if (!t || typeOf(site) === k) return;
+    // Leaving Container mode serves the folders the app wrote into again:
+    // the same warning as the classic page's (edit.js leaveContainerNote).
+    if (site.mode === "container" && t[3].mode !== "container" &&
+        !(await confirm("Leave Container mode?", await leaveContainerNote(), "Switch to " + t[1], true))) return;
     const body = Object.assign({}, t[3]);
     // the SPA switch belongs to the web server; leaving it alone elsewhere
     if (body.mode !== "webserver") delete body.spa_fallback;

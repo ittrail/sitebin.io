@@ -427,14 +427,24 @@ func TestViewerJSHidesTheSameNames(t *testing.T) {
 	if !strings.Contains(s, "export function isHiddenPath(") {
 		t.Fatal("files.js has no isHiddenPath")
 	}
-	for _, name := range []string{`"__macosx"`, `"thumbs.db"`, `"desktop.ini"`, `startsWith(".")`} {
+	for _, name := range []string{`"__macosx"`, `"thumbs.db"`, `"desktop.ini"`, `startsWith(".")`, `"` + composeFile + `"`} {
 		if !strings.Contains(s, name) {
 			t.Errorf("files.js isHiddenPath does not know %s", name)
 		}
 	}
-	for _, p := range []string{".env", "a/.git/x", "__MACOSX/y", "p/Thumbs.db", "Desktop.ini"} {
+	for _, p := range []string{".env", "a/.git/x", "__MACOSX/y", "p/Thumbs.db", "Desktop.ini", composeFile} {
 		if !isHiddenPath(p) {
 			t.Errorf("Go isHiddenPath(%q) = false", p)
 		}
+	}
+}
+
+// The viewer's copy of the compose file's name is the store's.
+func TestComposeFileNameIsTheStores(t *testing.T) {
+	if composeFile != store.ComposeFile {
+		t.Fatalf("viewer %q, store %q", composeFile, store.ComposeFile)
+	}
+	if isHiddenPath("app/" + composeFile) {
+		t.Error("only the root's compose file is the project's; one in a folder is an ordinary file")
 	}
 }

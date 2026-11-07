@@ -59,6 +59,8 @@ export function rendererFor(path) {
 // path. The server leaves them out of the page; this hides them in a page
 // written before it did.
 export function isHiddenPath(path) {
+  // the container compose file holds its project's secrets and is never served
+  if (path === "sitebin-container-compose.yaml") return true;
   return path.split("/").some((seg) => seg.startsWith(".") ||
     ["__macosx", "thumbs.db", "desktop.ini"].includes(seg.toLowerCase()));
 }
