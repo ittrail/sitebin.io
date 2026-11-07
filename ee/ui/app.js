@@ -168,6 +168,18 @@
     return out;
   }
 
+  // "21 of 500 sites, 4.8 GB in use": the plan caps how many sites an
+  // account owns (never how much they hold together: storage is per site),
+  // so the "of" is the site cap, counted over owned sites. No cap, no "of".
+  function siteCountLede(total) {
+    const cap = (st().plan && st().plan.caps && st().plan.caps.sites) || 0;
+    if (cap > 0) {
+      const own = st().sites.filter(owned);
+      return own.length + " of " + cap + " sites, " + fmtBytes(own.reduce((c, s) => c + s.bytes + s.git_bytes, 0)) + " in use.";
+    }
+    return st().sites.length + (st().sites.length === 1 ? " site, " : " sites, ") + fmtBytes(total) + " in use.";
+  }
+
   function renderSites(r) {
     const all = scope(r), rows = filtered(r);
     const groups = st().groups;
@@ -175,7 +187,7 @@
     const title = r.view === "shared" ? "Shared with me" : r.view === "untagged" ? "Untagged sites" : t ? '<span class="tdot tag-' + esc(t.color) + '" style="width:12px;height:12px"></span>' + esc(t.name) : "Sites";
     const total = st().sites.reduce((c, s) => c + s.bytes + s.git_bytes, 0);
     const lede = r.view === "shared" ? "Sites other accounts made you an admin of." : r.view === "tag" || r.view === "untagged" ? all.length + " of " + st().sites.length + " sites." :
-      st().sites.length + (st().sites.length === 1 ? " site, " : " sites, ") + fmtBytes(total) + " in use.";
+      siteCountLede(total);
     const cnt = (k) => all.filter(FILTERS[k]).length;
     const chip = (k, l) => (k !== "all" && k !== "live" && !cnt(k) ? "" : '<button class="wchip' + (S.status === k ? " on" : "") + '" type="button" data-status="' + k + '">' + l + " <small>" + cnt(k) + "</small></button>");
     // Grouping by a tag group is offered for the groups these sites use;

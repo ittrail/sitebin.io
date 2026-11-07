@@ -266,6 +266,8 @@ What building it changed or settled, 2026-11-06:
   edit.js's field; saving stays edit.js's). Checks: e2e 21, parity 27 (the
   dropdown, uploaded in Files and picked in Settings without a reload),
   containers 15, phone pass.
-  Not aligned on purpose: the sites list's "838 MB **of 50 GB**" — plans
-  cap storage per site, not per account, and the pricing page says so; a
-  total would promise a pool the plans do not have (the operator decides).
+  The sites list's "838 MB **of 50 GB**": plans cap storage per site, not
+  per account (the pricing page says so), so a total would promise a pool
+  the plans do not have. **The operator decided (2026-11-07): "21 of 500
+  sites, 4.8 GB in use"** — the plan's real site cap, counted over owned
+  sites (what `max_sites` counts); a plan without a cap keeps "21 sites, …".
