@@ -509,3 +509,29 @@ func TestUpdateAdminsCancelsAPushWhenAnAdminGoes(t *testing.T) {
 	}
 	p.wait(t)
 }
+
+// A site records when its current owner got it, so what the backups hold of
+// it from before (the previous owner's deleted files) is not handed on.
+func TestOwnershipChangesStampOwnerSince(t *testing.T) {
+	s, site := redirectSite(t, "a.example")
+	if err := s.Update(site, func(m *Meta) error { m.OwnerAccountID = "a"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now().UTC().Add(-time.Second)
+	if _, err := s.TransferOwner(site, "a", "b", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ByViewID(site.ViewID)
+	if got.Meta.OwnerSince == nil || got.Meta.OwnerSince.Before(before) {
+		t.Fatalf("after a transfer OwnerSince = %v", got.Meta.OwnerSince)
+	}
+
+	drop := ownSite(t, s, "")
+	if err := s.AdoptOwner(drop, "c", nil); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.ByViewID(drop.ViewID)
+	if got.Meta.OwnerSince == nil || got.Meta.OwnerSince.Before(before) {
+		t.Fatalf("after an adoption OwnerSince = %v", got.Meta.OwnerSince)
+	}
+}

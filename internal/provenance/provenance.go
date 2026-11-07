@@ -83,6 +83,7 @@ const (
 	ActionAdmins         = "admins"     // the site's admins changed
 
 	ActionAnalyticsSettings = "analytics-settings" // the site's analytics settings changed
+	ActionRestore           = "restore"            // the site's files were restored from a backup snapshot
 
 	ActionSignup     = "signup"
 	ActionSignin     = "signin"

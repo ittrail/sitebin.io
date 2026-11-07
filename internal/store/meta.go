@@ -48,6 +48,11 @@ type Meta struct {
 	// notfound.go.
 	NotFoundPage   string `json:"not_found_page,omitempty"`
 	OwnerAccountID string `json:"owner_account_id,omitempty"` // enterprise: owning account (empty = anonymous)
+	// OwnerSince is when the current owner got the site, by a transfer or an
+	// adoption; nil for a site its creator still owns (and for older sites —
+	// their provenance log says). What the backups hold of the site from
+	// before is the previous owner's, and is not offered to restore.
+	OwnerSince *time.Time `json:"owner_since,omitempty"`
 
 	// Name is the owner's optional label for the site, validated by
 	// CleanSiteName. It is private: shown wherever the site is managed and

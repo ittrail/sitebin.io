@@ -135,6 +135,7 @@ func (s *Store) TransferOwner(site *Site, from, to string, detach func(m *Meta) 
 	m.Tags = nil
 	m.Admins = nil
 	now := time.Now().UTC()
+	m.OwnerSince = &now
 	trusted := s.Trusted(site)
 	if stamp != nil {
 		trusted = stamp(&m, now)
@@ -192,6 +193,7 @@ func (s *Store) AdoptOwner(site *Site, to string, stamp func(*Meta, time.Time) b
 		return ErrNotAdoptable
 	}
 	m.OwnerAccountID = to
+	m.OwnerSince = &now
 	trusted := s.Trusted(site)
 	if stamp != nil {
 		trusted = stamp(&m, now)
