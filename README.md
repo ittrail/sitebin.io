@@ -1526,8 +1526,8 @@ Operator commands (run inside the container, e.g. `docker exec sitebin sitebin <
   443, and browsers switch to it once they have seen it offered. Its QUIC
   library asks for 7 MiB socket buffers. Linux allows 208 KiB by default, and
   HTTP/3 then runs at a fraction of the line's speed: on the hosted instance a
-  browser got 15–39 Mbit/s down where TCP got about 300, and 100–290 after
-  the change. Caddy says so once at start:
+  browser's HTTP/3 download ran at 15–39 Mbit/s on a line where TCP got about
+  390, and at 70–105 sustained (bursts up to 290) after the change. Caddy says so once at start:
   `failed to sufficiently increase receive buffer size`. The limits are the
   host's (a container cannot raise them), so set them on the host and restart
   the container, which makes Caddy open its socket again:
