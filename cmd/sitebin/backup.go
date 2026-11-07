@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/tar"
+	"bufio"
 	"compress/gzip"
 	"errors"
 	"fmt"
@@ -20,7 +21,7 @@ import (
 func backup(outPath string) error { return backupData(mustConfig().DataDir, outPath) }
 
 // restore extracts a backup into the data directory.
-func restore(inPath string) error { return restoreData(mustConfig().DataDir, inPath) }
+func restore(inPath string) error { return restoreData(dataDirFromEnv(), inPath) }
 
 // openForBackup opens the file name of root for reading, never blocking on a
 // FIFO where the platform can (see openInRoot). Swappable so a test can change
@@ -443,22 +444,69 @@ func parentStaysUnder(root, target string) error {
 	}
 }
 
-// restoreData extracts a backup (from backupData) into root.
+// restoreData extracts a backup (from backupData, or a plain tar such as
+// Borg's export-tar writes) into root.
 func restoreData(root, inPath string) error {
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return err
-	}
 	f, err := os.Open(inPath)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	gz, err := gzip.NewReader(f)
+	n, err := restoreFrom(root, f, restoreOpts{})
 	if err != nil {
 		return err
 	}
-	defer gz.Close()
-	tr := tar.NewReader(gz)
+	fmt.Fprintf(os.Stderr, "restored %d entries into %s\n", n, root)
+	return nil
+}
+
+// restoreOpts tunes restoreFrom.
+type restoreOpts struct {
+	// Owner, when set, is the uid and gid every restored entry is given: the
+	// agent restores as root into a tree the container's user must own.
+	Owner *[2]int
+}
+
+// dataDirFromEnv is the data directory the restore command writes into:
+// SITEBIN_DATA_DIR, else /data. Nothing else of the configuration is read —
+// a recovery on a fresh machine must not first reproduce the instance's
+// settings.
+func dataDirFromEnv() string {
+	if v := os.Getenv("SITEBIN_DATA_DIR"); v != "" {
+		return v
+	}
+	return "/data"
+}
+
+// restoreFrom extracts the tar stream r — gzip-compressed or plain, told
+// apart by the gzip magic — into root and answers how many entries it wrote.
+// A symlink pointing out of root is reported and skipped rather than failing
+// the whole restore: an hourly archive can hold one a container made, which
+// `sitebin backup` itself leaves out. Nothing is ever written through a link.
+func restoreFrom(root string, r io.Reader, o restoreOpts) (int, error) {
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return 0, err
+	}
+	own := func(p string) error {
+		if o.Owner == nil {
+			return nil
+		}
+		return os.Lchown(p, o.Owner[0], o.Owner[1])
+	}
+	if err := own(root); err != nil {
+		return 0, err
+	}
+	br := bufio.NewReader(r)
+	var in io.Reader = br
+	if magic, err := br.Peek(2); err == nil && magic[0] == 0x1f && magic[1] == 0x8b {
+		gz, err := gzip.NewReader(br)
+		if err != nil {
+			return 0, err
+		}
+		defer gz.Close()
+		in = gz
+	}
+	tr := tar.NewReader(in)
 
 	rootClean := filepath.Clean(root) + string(os.PathSeparator)
 	count := 0
@@ -468,52 +516,80 @@ func restoreData(root, inPath string) error {
 			break
 		}
 		if err != nil {
-			return err
+			return count, err
 		}
 		target := filepath.Join(root, filepath.FromSlash(hdr.Name))
 		// zip-slip guard: the target must stay under the data root
 		if !strings.HasPrefix(filepath.Clean(target)+string(os.PathSeparator), rootClean) &&
 			filepath.Clean(target) != filepath.Clean(root) {
-			return fmt.Errorf("refusing unsafe path in archive: %q", hdr.Name)
+			return count, fmt.Errorf("refusing unsafe path in archive: %q", hdr.Name)
 		}
 		// The lexical guard sees a path under the root; the filesystem follows
 		// symlinks. An earlier symlink entry pointing outside, followed by a
 		// regular entry beneath it, would land outside — so the parent is
-		// resolved for real before anything is written, and no link may point
-		// out of the root in the first place.
+		// resolved for real before anything is written, and no link pointing
+		// out of the root is ever created.
 		if hdr.Typeflag != tar.TypeDir {
 			if err := parentStaysUnder(root, target); err != nil {
-				return fmt.Errorf("refusing archive entry %q: %w", hdr.Name, err)
+				return count, fmt.Errorf("refusing archive entry %q: %w", hdr.Name, err)
 			}
 		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, os.FileMode(hdr.Mode)); err != nil {
-				return err
+				return count, err
 			}
 		case tar.TypeSymlink:
 			if err := linkStaysUnder(root, target, hdr.Linkname); err != nil {
-				return fmt.Errorf("refusing symlink %q in archive: %w", hdr.Name, err)
+				fmt.Fprintf(os.Stderr, "skipped %s: %v\n", hdr.Name, err)
+				continue
 			}
 			os.MkdirAll(filepath.Dir(target), 0o755)
 			os.Remove(target)
 			if err := os.Symlink(hdr.Linkname, target); err != nil {
-				return err
+				return count, err
+			}
+		case tar.TypeLink:
+			// A hard link names an earlier entry of the same archive.
+			src := filepath.Join(root, filepath.FromSlash(hdr.Linkname))
+			if !strings.HasPrefix(filepath.Clean(src)+string(os.PathSeparator), rootClean) || parentStaysUnder(root, src) != nil {
+				fmt.Fprintf(os.Stderr, "skipped %s: hard link target %q leaves the data root\n", hdr.Name, hdr.Linkname)
+				continue
+			}
+			os.MkdirAll(filepath.Dir(target), 0o755)
+			os.Remove(target)
+			if err := os.Link(src, target); err != nil {
+				fmt.Fprintf(os.Stderr, "skipped %s: %v\n", hdr.Name, err)
+				continue
 			}
 		case tar.TypeReg:
 			os.MkdirAll(filepath.Dir(target), 0o755)
 			out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(hdr.Mode))
 			if err != nil {
-				return err
+				return count, err
 			}
 			_, err = io.Copy(out, tr)
 			out.Close()
 			if err != nil {
-				return err
+				return count, err
 			}
+		default:
+			continue // devices, FIFOs: not content Sitebin manages
 		}
 		count++
 	}
-	fmt.Fprintf(os.Stderr, "restored %d entries into %s\n", count, root)
-	return nil
+	if o.Owner != nil {
+		// Every entry, the folders MkdirAll made on the way included; links
+		// themselves, never what they point at.
+		err := filepath.WalkDir(root, func(p string, _ fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			return own(p)
+		})
+		if err != nil {
+			return count, fmt.Errorf("give the restored tree its owner: %w", err)
+		}
+	}
+	return count, nil
 }

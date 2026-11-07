@@ -97,9 +97,12 @@ func TestRestoreRejectsUnsafePath(t *testing.T) {
 }
 
 // A symlink in an archive that points outside the data root, followed by a
-// regular entry written THROUGH it, lands outside the root — the lexical
-// guard sees a path under the root and the filesystem follows the link.
-func TestRestoreRefusesSymlinksThatEscapeTheRoot(t *testing.T) {
+// regular entry written THROUGH it, would land outside the root — the
+// lexical guard sees a path under the root and the filesystem follows the
+// link. Such a link is skipped (an hourly archive can hold one a container
+// made, and one link must not cost the whole restore), so the entry beneath
+// it lands in a real folder inside the root.
+func TestRestoreSkipsSymlinksThatEscapeTheRoot(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlinks need elevation on windows")
 	}
@@ -114,28 +117,64 @@ func TestRestoreRefusesSymlinksThatEscapeTheRoot(t *testing.T) {
 	body := []byte("pwned")
 	tw.WriteHeader(&tar.Header{Name: "escape/pwned.txt", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(body))})
 	tw.Write(body)
+	tw.WriteHeader(&tar.Header{Name: "abs", Typeflag: tar.TypeSymlink, Linkname: "/etc", Mode: 0o777})
+	ok := []byte("ok")
+	tw.WriteHeader(&tar.Header{Name: "sites/x/files/ok.txt", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(ok))})
+	tw.Write(ok)
 	tw.Close()
 	gz.Close()
 	f.Close()
 
 	root := filepath.Join(base, "data")
-	if err := restoreData(root, archive); err == nil {
-		t.Fatal("an archive with an escaping symlink was restored")
+	if err := restoreData(root, archive); err != nil {
+		t.Fatalf("restore: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(outside, "pwned.txt")); err == nil {
 		t.Fatal("a file was written outside the data root")
 	}
-	// absolute link targets are refused too
-	archive2 := filepath.Join(base, "abs.tar.gz")
-	f, _ = os.Create(archive2)
-	gz = gzip.NewWriter(f)
-	tw = tar.NewWriter(gz)
-	tw.WriteHeader(&tar.Header{Name: "abs", Typeflag: tar.TypeSymlink, Linkname: "/etc", Mode: 0o777})
+	for _, l := range []string{"escape", "abs"} {
+		if fi, err := os.Lstat(filepath.Join(root, l)); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			t.Errorf("%s was restored as a link out of the root", l)
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(root, "sites", "x", "files", "ok.txt")); err != nil || string(b) != "ok" {
+		t.Errorf("the rest of the archive was not restored: %q %v", b, err)
+	}
+}
+
+// Borg's export-tar writes a plain tar; restore takes it as it takes gzip.
+func TestRestoreReadsAPlainTar(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	tw.WriteHeader(&tar.Header{Name: "sites/abc/", Typeflag: tar.TypeDir, Mode: 0o755})
+	body := []byte("plain")
+	tw.WriteHeader(&tar.Header{Name: "sites/abc/meta.json", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(body))})
+	tw.Write(body)
 	tw.Close()
-	gz.Close()
-	f.Close()
-	if err := restoreData(filepath.Join(base, "data2"), archive2); err == nil {
-		t.Fatal("an absolute symlink target was restored")
+	root := t.TempDir()
+	n, err := restoreFrom(root, &buf, restoreOpts{})
+	if err != nil || n != 2 {
+		t.Fatalf("restoreFrom = %d, %v; want 2 entries", n, err)
+	}
+	if b, err := os.ReadFile(filepath.Join(root, "sites", "abc", "meta.json")); err != nil || string(b) != "plain" {
+		t.Fatalf("restored %q %v", b, err)
+	}
+	// an empty stream is an empty archive, not an error
+	if n, err := restoreFrom(t.TempDir(), bytes.NewReader(nil), restoreOpts{}); err != nil || n != 0 {
+		t.Fatalf("empty stream: %d, %v", n, err)
+	}
+}
+
+// The restore command needs nothing but the data directory: a recovery on a
+// fresh machine must not first have to reproduce the instance's settings.
+func TestRestoreDataDirComesFromTheEnvironmentAlone(t *testing.T) {
+	t.Setenv("SITEBIN_DATA_DIR", "")
+	if got := dataDirFromEnv(); got != "/data" {
+		t.Errorf("default data dir = %q", got)
+	}
+	t.Setenv("SITEBIN_DATA_DIR", "/srv/sb")
+	if got := dataDirFromEnv(); got != "/srv/sb" {
+		t.Errorf("data dir = %q", got)
 	}
 }
 
