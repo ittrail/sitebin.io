@@ -205,3 +205,25 @@ func TestSplitWords(t *testing.T) {
 		}
 	}
 }
+
+// Every catalogue entry is offered by name in the compose file's messages,
+// and the .NET image parses like any other.
+func TestCatalogueAndImageNamesAgree(t *testing.T) {
+	names := ImageNames()
+	if len(names) != len(catalog) {
+		t.Fatalf("ImageNames lists %d images, the catalogue has %d", len(names), len(catalog))
+	}
+	for _, n := range names {
+		img, ok := Lookup(n)
+		if !ok || img.Name != n || img.Repo == "" || !strings.HasPrefix(img.Digest, "sha256:") || len(img.Digest) != 71 {
+			t.Errorf("%s: %+v", n, img)
+		}
+	}
+	p, err := Parse([]byte("services:\n  web:\n    image: alpine-dotnet-10\n    http: [8080]\n    volumes: [\"app:/app\"]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Services[0].Image.Name != "alpine-dotnet-10" || p.Services[0].Image.Env["HOME"] != "/tmp" {
+		t.Fatalf("parsed %+v", p.Services[0])
+	}
+}

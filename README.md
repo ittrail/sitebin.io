@@ -1296,12 +1296,12 @@ services:
 
 | Key | Meaning |
 |---|---|
-| `image` | One of Sitebin's own images — never a registry reference. `alpine-node-22` (`node:22.23.2-alpine3.24`) and `mysql-8.4` (`mysql:8.4.11`), both pinned by digest. |
+| `image` | One of Sitebin's own images — never a registry reference. `alpine-node-22` (`node:22.23.2-alpine3.24`), `alpine-dotnet-10` (`mcr.microsoft.com/dotnet/aspnet:10.0.9-alpine3.24-extra`: the .NET 10 and ASP.NET Core runtimes with ICU and time zones; ASP.NET listens on `8080`) and `mysql-8.4` (`mysql:8.4.11`), all pinned by digest. |
 | `environment` | A map or a `KEY=value` list, as in Compose. **No interpolation**: `$HOME` stays the five characters `$HOME`. |
 | `volumes` | `<folder>:<absolute path>[:ro]`. The folder is a **root folder of the site** — the same one the edit page, WebDAV and FTP show — created if it does not exist. That is how code reaches a container: upload it into the folder the service mounts. |
 | `http` | The ports the service speaks HTTP on — one, or a list (at most 10). Each `service:port` gets a **generated address**; which custom domain serves which port is the site's domain settings, never the file's. A service without `http:` has no address (services reach each other on any port by name). The old `domains:` key is refused with a message saying so. |
 | `egress` | `allowed` or `denied` (default). `egres` is accepted too. |
-| `command`, `working_dir`, `depends_on` | Optional. `depends_on` orders the start; it does not wait for health. The node image's default command runs `npm install` when there is no `node_modules` (needs egress) and then `npm start`, or `node index.js` without a `package.json`; the working directory defaults to the first volume. |
+| `command`, `working_dir`, `depends_on` | Optional. `depends_on` orders the start; it does not wait for health. The node image's default command runs `npm install` when there is no `node_modules` (needs egress) and then `npm start`, or `node index.js` without a `package.json`. The .NET image's runs the app whose `<App>.runtimeconfig.json` is the only one in the folder (`dotnet <App>.dll`: upload the output of `dotnet publish`); with none or several it says so and waits. The working directory defaults to the first volume. |
 
 Every other key is an error that names it. **Every change to the compose file
 restarts the project**, however the file arrives — upload, ZIP, editor,

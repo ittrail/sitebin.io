@@ -55,6 +55,20 @@ else
   exec tail -f /dev/null
 fi`
 
+// dotnetStart is the .NET image's default command. `dotnet publish` writes
+// one <App>.runtimeconfig.json beside <App>.dll; with exactly one in the
+// folder, that app runs. Anything else says what to do and idles, so an
+// empty or ambiguous project is not a restart loop.
+const dotnetStart = `set -- *.runtimeconfig.json
+if [ "$#" -eq 1 ] && [ -f "$1" ]; then
+  exec dotnet "${1%.runtimeconfig.json}.dll"
+elif [ "$#" -gt 1 ]; then
+  echo "sitebin: several *.runtimeconfig.json in $(pwd) -- name the app: command: [\"dotnet\", \"YourApp.dll\"]"
+else
+  echo "sitebin: no *.runtimeconfig.json in $(pwd) -- upload the output of dotnet publish into the folder mounted here"
+fi
+exec tail -f /dev/null`
+
 // catalog is the whole catalogue. Bump a Digest together with its Display:
 // `docker buildx imagetools inspect <repo>:<tag>`.
 var catalog = map[string]Image{
@@ -71,6 +85,29 @@ var catalog = map[string]Image{
 			"npm_config_cache": "/tmp/.npm",
 		},
 		Tmpfs: map[string]string{"/tmp": "rw,nosuid,nodev,size=256m,mode=1777"},
+	},
+	// The ASP.NET Core runtime (which carries the .NET runtime) on Alpine,
+	// the "extra" variant: with ICU and tzdata, so cultures (de-AT dates and
+	// numbers) and time zones work — the plain Alpine image runs .NET in
+	// globalization-invariant mode. ASP.NET listens on 8080
+	// (ASPNETCORE_HTTP_PORTS in the image), so a service declares http: [8080].
+	"alpine-dotnet-10": {
+		Name:    "alpine-dotnet-10",
+		Display: "mcr.microsoft.com/dotnet/aspnet:10.0.9-alpine3.24-extra",
+		Repo:    "mcr.microsoft.com/dotnet/aspnet",
+		Digest:  "sha256:e3abedf7073227bec8a047f53692584f6646318d3cfbb8ce64e3199ee257321b",
+		Cmd:     []string{"sh", "-c", dotnetStart},
+		Env: map[string]string{
+			// Sitebin's uid need not have a home directory, and the root
+			// filesystem is read-only: ASP.NET's data-protection keys and
+			// anything else under HOME land in the tmpfs (an app that must
+			// keep them across restarts points them into its volume).
+			"HOME": "/tmp",
+			// No diagnostics IPC socket or debugger/profiler attach in a
+			// customer's container.
+			"DOTNET_EnableDiagnostics": "0",
+		},
+		Tmpfs: map[string]string{"/tmp": "rw,nosuid,nodev,size=128m,mode=1777"},
 	},
 	"mysql-8.4": {
 		Name:    "mysql-8.4",
@@ -99,4 +136,4 @@ func Lookup(name string) (Image, bool) {
 }
 
 // ImageNames lists the catalogue, for error messages and docs.
-func ImageNames() []string { return []string{"alpine-node-22", "mysql-8.4"} }
+func ImageNames() []string { return []string{"alpine-node-22", "alpine-dotnet-10", "mysql-8.4"} }
