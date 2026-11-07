@@ -1,4 +1,4 @@
-# Sitebin Enterprise -- licensing E2E against a real enterprise image.
+﻿# Sitebin Enterprise -- licensing E2E against a real enterprise image.
 #
 #   powershell -File e2e\license.ps1 [-Image sitebin:e2e-license] [-Port 8090] [-SkipBuild]
 #
@@ -19,6 +19,9 @@
 #   malformed key     licence inside it expired long ago  <-- also load-bearing
 #   entitlement       max_custom_domains is an instance-wide ceiling: it refuses
 #                     the NEXT domain and never disturbs the ones configured
+#   cluster binding   a key naming this installation's own cluster id is licensed;
+#                     a key naming another one is `none` with bound_elsewhere,
+#                     and the account UI says so
 #
 # The refusal text matters as much as the status code. A customer who paid for
 # custom domains and is told they are "an enterprise feature" has been given the
@@ -42,7 +45,7 @@ New-Item -ItemType Directory -Force $work | Out-Null
 # totals looking healthy while the run is silently smaller, so the count is
 # checked at the end against this number. Update it when you add or remove one.
 # (mcp.ps1 grew this guard after exactly that happened.)
-$ExpectedAssertions = 54
+$ExpectedAssertions = 66
 
 $script:pass = 0; $script:fail = 0
 # $c is deliberately untyped: with [bool], PowerShell throws on anything it
@@ -338,12 +341,50 @@ Assert "entitlement: the second domain still serves (200)" ($r.code -eq 200 -and
 $r = Req "GET" "http://127.0.0.1:$Port/" @("-H", "Host: three.lic-e2e.test")
 Assert "entitlement: the refused domain serves nothing" ($r.code -ne 200) "got $($r.code)"
 
+# ---------- binding: a key for this installation, and one for another ----------
+
+Write-Host "== cluster binding (a key naming this installation's own cluster id)" -ForegroundColor Cyan
+$bindVol = "sitebin-lic-e2e-bound"
+$up = StartInstance $bindVol @()
+Assert "container up (cluster id minted at first start)" $up
+if (-not $up) { docker rm -f $name | Out-Null; exit 1 }
+$clusterId = ((docker exec $name cat /data/cluster/id 2>$null) | Out-String).Trim()
+Assert "binding: the first start wrote a 26-char cluster id" ($clusterId -match '^[a-z2-7]{26}$') "got '$clusterId'"
+
+$own = Mint @("-root-private", $rootPriv, "-holder", "Bound GmbH", "-expires", "8760h", "-grace", "17520h", "-cluster-id", $clusterId)
+$up = StartInstance $bindVol @("-e", "SITEBIN_LICENSE_KEY=$($own.LICENSE)") -Keep
+Assert "container up (key bound to this installation)" $up
+if (-not $up) { docker rm -f $name | Out-Null; exit 1 }
+$logs = Logs
+Assert "binding: a key naming this cluster is licensed" ($logs -match "state=licensed") "$logs"
+Assert "binding: the startup log names the cluster id" ($logs -match "cluster_id=$clusterId") "$logs"
+Assert "binding: the id survives the restart unchanged" ((((docker exec $name cat /data/cluster/id 2>$null) | Out-String).Trim()) -eq $clusterId)
+$jar = SignUp "bound"
+$r = Dashboard $jar
+Assert "binding: no 'another installation' notice for the own key" ($r.code -eq 200 -and $r.body -notmatch "bound to another installation") ""
+
+Write-Host "== cluster binding (a key naming ANOTHER cluster)" -ForegroundColor Cyan
+$otherId = "aaaaaaaaaaaaaaaaaaaaaaaaaa"
+$other = Mint @("-root-private", $rootPriv, "-holder", "Elsewhere GmbH", "-expires", "8760h", "-grace", "17520h", "-cluster-id", $otherId)
+$up = StartInstance "sitebin-lic-e2e-other" @("-e", "SITEBIN_LICENSE_KEY=$($other.LICENSE)")
+Assert "container up (key bound to another installation)" $up
+if (-not $up) { docker rm -f $name | Out-Null; exit 1 }
+$logs = Logs
+Assert "other cluster: it is reported as none, NOT licensed or expired" ($logs -match "state=none") "$logs"
+Assert "other cluster: the log says bound_elsewhere=true" ($logs -match "bound_elsewhere=true") "$logs"
+$jar = SignUp "other"
+$r = Dashboard $jar
+Assert "other cluster: the account UI says the licence is bound to another installation" ($r.code -eq 200 -and $r.body -match "bound to another installation") ""
+$r = CreateSite $jar
+Assert "other cluster: it runs as unlicensed (trial), creating still works (201)" ($r.code -eq 201) "got $($r.code): $($r.body)"
+
 # ---------- cleanup ----------
 
 if (-not $KeepUp) {
     docker rm -f $name 2>$null | Out-Null
     foreach ($v in @("sitebin-lic-e2e-ok", "sitebin-lic-e2e-grace", "sitebin-lic-e2e-none",
-            "sitebin-lic-e2e-untrusted", "sitebin-lic-e2e-malformed", "sitebin-lic-e2e-domains")) {
+            "sitebin-lic-e2e-untrusted", "sitebin-lic-e2e-malformed", "sitebin-lic-e2e-domains",
+            "sitebin-lic-e2e-bound", "sitebin-lic-e2e-other")) {
         docker volume rm $v 2>$null | Out-Null
     }
 }
