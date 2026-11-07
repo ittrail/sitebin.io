@@ -98,7 +98,7 @@ Read `AGENTS.md` and README § 16 first. Run tests with
 `npm test --workspace=services/platform-api`, and the type check with
 `npx tsc -p tsconfig.typecheck.json --noEmit`.
 
-### Task S1: The licence payload carries an optional `cluster_id`
+### Task 1 (S1): The licence payload carries an optional `cluster_id`
 
 **Files:**
 - Modify: `packages/shared/src/license.ts`: `LicPayload` gets `cluster_id?: string`, with a doc comment (the installation it is bound to; absent = unbound).
@@ -118,7 +118,7 @@ Read `AGENTS.md` and README § 16 first. Run tests with
 - [ ] **Step 4:** Tests pass, and the type check passes.
 - [ ] **Step 5: Commit** `feat: a licence can name the installation it is bound to`
 
-### Task S2: Renewal binds a licence to the first cluster and refuses every other
+### Task 2 (S2): Renewal binds a licence to the first cluster and refuses every other
 
 **Files:**
 - Create: `docker_compose_shared/migrations/006-license-cluster-binding.sql`. On `paygate_db`, `licenses` gets:
@@ -185,7 +185,7 @@ Read `AGENTS.md` and README § 16 first. Run tests with
   In `AGENTS.md`: the mail key list and its count, and a new trap: "a licence binds at its first renewal with a cluster id; never reset `cluster_id` in an upsert".
 - [ ] **Step 6: Commit** `feat: a licence binds to the first installation that renews it and refuses every other`
 
-### Task S3: The holder or the operator releases a licence's binding
+### Task 3 (S3): The holder or the operator releases a licence's binding
 
 **Files:**
 - Modify: `services/paygate/src/services/license-service.ts`: add `release(appId: string, userId: string, by: 'holder' | 'operator'): Promise<ReleaseResult>`.
@@ -234,7 +234,7 @@ Read `AGENTS.md` and README § 16 first. Run tests with
 - [ ] **Step 5:** README § 16: the release route, its 7-day rule, `previous_cluster_id`, and the two mails.
 - [ ] **Step 6: Commit** `feat: a licence holder can move a licence to a new installation`
 
-### Task S4: The portal shows the binding and offers the release
+### Task 4 (S4): The portal shows the binding and offers the release
 
 **Files:**
 - Modify: `admin-portal/server.js`:
@@ -263,7 +263,7 @@ Read `AGENTS.md` and README § 16 first. Run tests with
 - [ ] **Step 4:** Tests pass.
 - [ ] **Step 5: Commit** `feat: the portal shows where a licence is bound and lets its holder move it`
 
-### Task S5: Stack e2e, then deploy dev before cloud
+### Task 5 (S5): Stack e2e, then deploy dev before cloud
 
 **Files:**
 - Create: `scripts/license-binding-e2e-test.ts`, with `npm run test:license-binding` in the root `package.json`, modelled on the other `scripts/*-e2e-test.ts`.
@@ -295,7 +295,7 @@ Work in this worktree (branch `worktree-cluster-mode`). Run
 `go test ./... && go test -tags ee ./...` and `go vet ./...`, plus
 `go vet -tags ee ./...`.
 
-### Task B1: Every instance has a persistent cluster id
+### Task 6 (B1): Every instance has a persistent cluster id
 
 **Files:**
 - Create: `ee/cluster/doc.go` (package doc; ELv2 header like `ee/licensing/doc.go`) and `ee/cluster/id.go` (`//go:build ee`)
@@ -318,7 +318,7 @@ Work in this worktree (branch `worktree-cluster-mode`). Run
 - [ ] **Step 4:** PASS. `go build ./...` (community) is unaffected.
 - [ ] **Step 5: Commit** `feat: every enterprise instance has a persistent cluster id`
 
-### Task B2: A key bound to another cluster verifies as `none`
+### Task 7 (B2): A key bound to another cluster verifies as `none`
 
 **Files:**
 - Modify: `ee/licensing/licensing.go:70-90`: `LicensePayload` gets `ClusterID string \`json:"cluster_id,omitempty"\``.
@@ -355,7 +355,7 @@ Work in this worktree (branch `worktree-cluster-mode`). Run
 - [ ] **Step 4:** PASS, including the existing licensing tests unchanged.
 - [ ] **Step 5: Commit** `feat: a licence bound to another installation counts as no licence`
 
-### Task B3: The renewal sends the cluster id and records a refusal
+### Task 8 (B3): The renewal sends the cluster id and records a refusal
 
 **Files:**
 - Modify: `ee/license.go`:
@@ -389,7 +389,7 @@ Work in this worktree (branch `worktree-cluster-mode`). Run
 - [ ] **Step 4:** PASS. `go vet -tags ee ./...` is clean.
 - [ ] **Step 5: Commit** `feat: the licence renewal names its installation and remembers a refusal`
 
-### Task B4: The licence e2e and the docs
+### Task 9 (B4): The licence e2e and the docs
 
 **Files:**
 - Modify: `e2e/license.ps1`, with two new scenarios using `mintlicense -cluster-id`:
@@ -403,7 +403,7 @@ Work in this worktree (branch `worktree-cluster-mode`). Run
 - [ ] **Step 3:** Write the README and `CLAUDE.md` text.
 - [ ] **Step 4: Commit** `test: the licence e2e covers keys bound to this and to another installation` and `docs: licences bind to one installation`
 
-### Task B5: Ship Sitebin, then the website
+### Task 10 (B5): Ship Sitebin, then the website
 
 - [ ] **Step 1:** Only after S5 step 2 (stack cloud live): merge `worktree-cluster-mode` into `main` (only the milestone 0 commits and the design and plan docs; cluster code does not exist yet), push, and deploy `app.sitebin.io` per the hosted-instance procedure (pre-deploy snapshot into `/opt/sitebin/backups/`, keep 3 rollback images, prune the build cache).
 - [ ] **Step 2: Verify** with `ssh -p 22113 root@sitebin.io "cat /opt/sitebin/data/cluster/id; docker logs sitebin 2>&1 | grep 'enterprise license' | tail -2"`. Expected: a valid id. After the first refresh: `state=licensed` with `cluster_id=<id>`, and the stack's GET for the operator licence shows the same `cluster_id`. (Set `SITEBIN_LICENSE_REFRESH` only if waiting a day is not acceptable, and remove it again.)
