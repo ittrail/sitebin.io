@@ -244,3 +244,47 @@ progress and result, and the copies. While Sitebin restarts the page polls
 - e2e `e2e/snapshots.ps1` (enterprise image + agent in a second container
   with the dir source): versions appear, download, restore, container-ness
   409, the instance restore and switching back.
+
+## Corrections (post-implementation)
+
+From the final review of the branch (2026-11-07), shipped in 8d0005d:
+
+- **Borg's export-tar pads its tar after the end marker** (Python's tarfile
+  fills a 10240-byte record). The instance restore read to the marker,
+  closed the pipe, and Borg's failed write turned a complete extraction into
+  "could not be read". `extract` now drains the rest after a successful
+  extraction, and reports the extraction's own error first. Verified against
+  the real repository.
+- **An interrupted instance restore is put right** (`Agent.Recover`, first
+  thing in `Run`): the names of the incoming tree and of the copy the data
+  will be kept as are recorded before the first rename; a swap cut in half
+  is undone, one finished but never started is undone too (the restored tree
+  becomes a failed copy), one cut while starting stays; the instance is
+  started in every case. Shutdown waits for a running restore (unit
+  `TimeoutStopSec=25min`).
+- **Site containers that cannot be removed stop the restore before the
+  swap** (three tries): a survivor would keep its mounts into the old tree.
+  `RemoveManaged` tries every container before it reports an error.
+- **Copies age by their contents** (`Copy.Origin`, `copies.json` in the
+  state dir): a failed-restore copy holds the snapshot's data, and the
+  running data's origin (`LiveOrigin`) follows a restore, so nothing a
+  snapshot held lives past 30 days because it was set aside later.
+- **A container site's restore keeps executables, links inside its tree and
+  empty folders** (`Replacement.SetMode`, `Symlink`, `Mkdir`; a link out of
+  the tree is skipped). A static or viewer site still gets plain files.
+- **A restore re-checks after its snapshot**: it claims the site's replace
+  first (a busy site gets its 409 before a snapshot is taken), takes the
+  snapshot, then checks the site's type, owner (`OwnerSince`) and the
+  caller's standing again before the container stops, and once more under
+  the site lock at the commit (`Replacement.Guard`).
+- **Rate limits**: restores 6 an hour per site (burst 3), downloads 30 an
+  hour (burst 10); backup-now requests waiting behind a run share the next
+  one, and only a snapshot that run made counts as the undo.
+- **The space check sums the whole snapshot** (every regular file), and Borg
+  gets no empty path argument.
+- **The restore is a scanned write surface** (`TestEveryWriteSurfaceIsScanned`).
+- **Not done**: Borg 1.2's export-tar writes GNU tar with whole-second times
+  (PAX needs Borg 1.4), so after a restore from an HOURLY archive the version
+  may not be marked current and the next hourly run lists the files as a new
+  version — cosmetic, deferred. The classic console has no link to the
+  workspace's Backups view (the workspace is the operator's interface).
