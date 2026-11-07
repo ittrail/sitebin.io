@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sync"
 	"testing"
 )
@@ -64,6 +65,23 @@ func TestLoadOrCreateIDEmptyFile(t *testing.T) {
 	writeID(t, dir, "")
 	if _, err := LoadOrCreateID(dir); !errors.Is(err, ErrInvalidID) {
 		t.Fatalf("err = %v, want ErrInvalidID", err)
+	}
+}
+
+// The new directory entry is synced after the link, so a power loss right
+// after the first start cannot drop it. Windows cannot sync a directory; there
+// the call must not fail.
+func TestSyncDir(t *testing.T) {
+	if err := syncDir(t.TempDir()); err != nil {
+		t.Fatalf("syncDir on a directory: %v", err)
+	}
+	err := syncDir(filepath.Join(t.TempDir(), "missing"))
+	if runtime.GOOS == "windows" {
+		if err != nil {
+			t.Fatalf("on Windows a directory sync is best effort, got %v", err)
+		}
+	} else if err == nil {
+		t.Fatal("a missing directory synced without error")
 	}
 }
 

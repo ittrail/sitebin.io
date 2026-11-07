@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
+	"syscall"
 
 	"github.com/ittrail/sitebin.io/internal/ids"
 )
@@ -61,7 +63,42 @@ func LoadOrCreateID(dataDir string) (string, error) {
 		}
 		return "", err
 	}
+	// The file's bytes are synced; its directory entry is not until the
+	// directory is. A power loss right after the first start could otherwise
+	// drop the entry, and the next start would mint a NEW id while the stack
+	// has bound the licence to this one. MkdirAll may have just created the
+	// cluster directory itself, so its parent is synced too.
+	if err := syncDir(dir); err != nil {
+		return "", fmt.Errorf("cluster: created %s but could not sync its directory: %w", path, err)
+	}
+	if err := syncDir(filepath.Dir(dir)); err != nil {
+		return "", fmt.Errorf("cluster: created %s but could not sync %s: %w", path, filepath.Dir(dir), err)
+	}
 	return id, nil
+}
+
+// syncDir fsyncs a directory so the entries in it survive a power loss. Windows
+// cannot sync a directory (FlushFileBuffers refuses a directory handle), so
+// there it is best effort and its error is ignored; NTFS journals the entry.
+// The same holds for a filesystem that does not support syncing a directory
+// at all (EINVAL, ENOTSUP: some FUSE and network mounts): there is nothing
+// more to do, and failing would only cost the id on every first start.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		if runtime.GOOS == "windows" {
+			return nil
+		}
+		return err
+	}
+	err = d.Sync()
+	if cerr := d.Close(); err == nil {
+		err = cerr
+	}
+	if runtime.GOOS == "windows" || errors.Is(err, syscall.EINVAL) || errors.Is(err, errors.ErrUnsupported) {
+		return nil
+	}
+	return err
 }
 
 func readID(path string) (string, error) {
