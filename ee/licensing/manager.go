@@ -98,7 +98,7 @@ var ErrBoundElsewhere = errors.New("license: the stack refused the renewal, the 
 // state and is logged.
 func (m *Manager) Load(envKey string) Status {
 	trial := m.trialStart()
-	snap := Snapshot{Loaded: true, TrialStart: trial, ClusterID: m.clusterID, BoundElsewhere: m.hasBoundMarker()}
+	snap := Snapshot{Loaded: true, TrialStart: trial, ClusterID: m.clusterID}
 
 	key, source := strings.TrimSpace(envKey), "env"
 	if key == "" {
@@ -117,10 +117,15 @@ func (m *Manager) Load(envKey string) Status {
 		if err != nil {
 			// Reported, never enforced on: an unverifiable key is "none".
 			snap.Err = err
-			snap.BoundElsewhere = snap.BoundElsewhere || errors.Is(err, ErrOtherCluster)
 		} else {
 			snap.License = &lic
 		}
+	}
+	// The refusal marker belongs to stack-collected licences. An operator's
+	// explicit SITEBIN_LICENSE_KEY wins: Start never renews it, so a stale
+	// marker would otherwise void it for good. The file is left alone.
+	if source != "env" {
+		snap.BoundElsewhere = m.hasBoundMarker()
 	}
 	m.mu.Lock()
 	m.snap = snap

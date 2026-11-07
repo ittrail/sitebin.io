@@ -402,6 +402,51 @@ func TestMarkerWithOwnBoundKeyStaysLicensed(t *testing.T) {
 	}
 }
 
+func writeMarker(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, "license"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(markerPath(dir), []byte(refTime.Format(time.RFC3339)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An operator's explicit key wins: a stale marker must not void it, because
+// Start never renews an env key and nothing would clear the marker.
+func TestMarkerIgnoredForEnvKey(t *testing.T) {
+	c := newChain(t)
+	m, dir := newTestManager(t, c, refTime)
+	m.SetClusterID(clusterA)
+	writeMarker(t, dir)
+	st := m.Load(boundKey(t, c, ""))
+	if st.State != StateLicensed || st.BoundElsewhere || st.Notice() != "" {
+		t.Fatalf("state=%s boundElsewhere=%v notice=%q, want licensed/false/empty", st.State, st.BoundElsewhere, st.Notice())
+	}
+}
+
+// BoundElsewhere is only reported when it voided a held licence or the key
+// itself names another cluster.
+func TestMarkerWithoutVerifiedLicenceIsNotBoundElsewhere(t *testing.T) {
+	c := newChain(t)
+	m, dir := newTestManager(t, c, refTime)
+	writeMarker(t, dir)
+	st := m.Load("")
+	if st.BoundElsewhere || st.State != StateNone || st.Restricted || st.Notice() != "" {
+		t.Fatalf("no licence: state=%s boundElsewhere=%v notice=%q", st.State, st.BoundElsewhere, st.Notice())
+	}
+
+	m2, dir2 := newTestManager(t, c, refTime)
+	writeMarker(t, dir2)
+	if err := os.WriteFile(filepath.Join(dir2, "license", cacheFile), []byte("not.a.valid.key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st = m2.Load("")
+	if st.BoundElsewhere || st.State != StateNone {
+		t.Fatalf("malformed key: state=%s boundElsewhere=%v", st.State, st.BoundElsewhere)
+	}
+}
+
 func TestNoticeWithoutOwnClusterIDOmitsInstallation(t *testing.T) {
 	if n := (Status{BoundElsewhere: true}).Notice(); n == "" || strings.Contains(n, "(installation") {
 		t.Errorf("notice = %q", n)

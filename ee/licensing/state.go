@@ -3,6 +3,7 @@
 package licensing
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
@@ -56,11 +57,10 @@ type Snapshot struct {
 	TrialStart time.Time
 	// ClusterID is this installation's own id, for the console.
 	ClusterID string
-	// BoundElsewhere says the licence this instance holds belongs to another
-	// installation: set when a key verifies but names another cluster, or when
-	// the stack refused to renew for that reason. An unbound licence is then
-	// ignored (the instance runs on its trial); one bound to this cluster is
-	// unaffected.
+	// BoundElsewhere is the refusal marker: the stack refused to renew for
+	// being bound elsewhere. It voids a held, verified, UNBOUND licence (the
+	// instance runs on its trial); one bound to this cluster is unaffected.
+	// A key that itself names another cluster is derived from Err instead.
 	BoundElsewhere bool
 	// raw is the key text as loaded, so a refresh can tell "the stack sent the
 	// same key again" without re-verifying it.
@@ -117,8 +117,8 @@ func (s Snapshot) StatusAt(now time.Time) Status {
 	// to this installation); one bound to this very cluster stays. The flag is
 	// reported only when it actually voided something (or the key itself was
 	// rejected), never beside a licence that stays in force.
-	voided := s.BoundElsewhere && (s.License == nil || s.License.Lic.ClusterID == "")
-	st.BoundElsewhere = voided
+	voided := s.BoundElsewhere && s.License != nil && s.License.Lic.ClusterID == ""
+	st.BoundElsewhere = voided || errors.Is(s.Err, ErrOtherCluster)
 	if l := s.License; l != nil && !voided {
 		st.Holder, st.Plan = l.Lic.Holder, l.Lic.Plan
 		st.ExpiresAt, st.GraceUntil = l.Lic.ExpiresAt, l.GraceEnd()
