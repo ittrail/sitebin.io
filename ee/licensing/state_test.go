@@ -4,6 +4,7 @@ package licensing
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -209,5 +210,34 @@ func TestEntitlementsInGraceAndAfterCertExpiry(t *testing.T) {
 	s.License.Cert.ExpiresAt = refTime
 	if got := s.StatusAt(refTime.Add(time.Hour)); got.Entitlements.MaxCustomDomains != 0 {
 		t.Errorf("an unvouched licence kept its cap: %d", got.Entitlements.MaxCustomDomains)
+	}
+}
+
+func TestStatusBoundElsewhereIgnoresUnboundKey(t *testing.T) {
+	s := snapWith(refTime.Add(24*time.Hour), refTime.Add(48*time.Hour))
+	s.BoundElsewhere = true
+	s.ClusterID = "aaaaaaaaaaaaaaaaaaaaaaaaaa"
+	got := s.StatusAt(refTime)
+	if got.State != StateNone || got.Restricted || got.Holder != "" {
+		t.Fatalf("state=%s restricted=%v holder=%q, want none/unrestricted/empty", got.State, got.Restricted, got.Holder)
+	}
+	if want := s.TrialStart.Add(TrialPeriod); !got.TrialEndsAt.Equal(want) {
+		t.Errorf("trial ends %s, want %s", got.TrialEndsAt, want)
+	}
+	if late := s.StatusAt(s.TrialStart.Add(TrialPeriod + time.Second)); !late.Restricted {
+		t.Error("the trial arm does not restrict after 90 days")
+	}
+	if !strings.Contains(got.Notice(), "(installation aaaaaa…)") {
+		t.Errorf("notice = %q", got.Notice())
+	}
+}
+
+func TestStatusBoundElsewhereKeepsOwnBoundKey(t *testing.T) {
+	s := snapWith(refTime.Add(24*time.Hour), refTime.Add(48*time.Hour))
+	s.License.Lic.ClusterID = "aaaaaaaaaaaaaaaaaaaaaaaaaa"
+	s.ClusterID = "aaaaaaaaaaaaaaaaaaaaaaaaaa"
+	s.BoundElsewhere = true
+	if got := s.StatusAt(refTime); got.State != StateLicensed {
+		t.Fatalf("state = %s, want licensed", got.State)
 	}
 }

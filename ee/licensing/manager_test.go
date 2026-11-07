@@ -232,3 +232,73 @@ func TestUnverifiableEnvKeySaysItAlsoStopsCollecting(t *testing.T) {
 		}
 	}
 }
+
+// ---- cluster binding ----
+
+const (
+	clusterA = "aaaaaaaaaaaaaaaaaaaaaaaaaa"
+	clusterB = "bbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
+
+// boundKey mints a key whose licence names clusterID ("" = unbound).
+func boundKey(t *testing.T, c *chain, clusterID string) string {
+	t.Helper()
+	lic, err := SignLicense(LicensePayload{
+		AppID:      AppID,
+		Holder:     "ACME GmbH",
+		Plan:       "team",
+		IssuedAt:   refTime.Add(-24 * time.Hour),
+		ExpiresAt:  refTime.Add(30 * 24 * time.Hour),
+		GraceUntil: refTime.Add(120 * 24 * time.Hour),
+		ClusterID:  clusterID,
+	}, c.appPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Key(c.cert(t, AppID, refTime.Add(365*24*time.Hour)), lic)
+}
+
+// cachedBoundManager caches a key bound to keyCluster and loads it on a manager
+// whose own id is ownCluster.
+func cachedBoundManager(t *testing.T, keyCluster, ownCluster string) Status {
+	t.Helper()
+	c := newChain(t)
+	m, dir := newTestManager(t, c, refTime)
+	if err := os.MkdirAll(filepath.Join(dir, "license"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "license", cacheFile), []byte(boundKey(t, c, keyCluster)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.SetClusterID(ownCluster)
+	return m.Load("")
+}
+
+func TestManagerKeyBoundToOwnCluster(t *testing.T) {
+	if st := cachedBoundManager(t, clusterA, clusterA); st.State != StateLicensed {
+		t.Fatalf("state = %s, want licensed", st.State)
+	}
+}
+
+func TestManagerKeyBoundToOtherCluster(t *testing.T) {
+	st := cachedBoundManager(t, clusterB, clusterA)
+	if st.State != StateNone || !errors.Is(st.Err, ErrOtherCluster) || !st.BoundElsewhere {
+		t.Fatalf("state=%s err=%v boundElsewhere=%v, want none/ErrOtherCluster/true", st.State, st.Err, st.BoundElsewhere)
+	}
+	if !strings.Contains(st.Notice(), "bound to another installation") {
+		t.Errorf("notice = %q", st.Notice())
+	}
+}
+
+func TestManagerUnboundKeyUnaffected(t *testing.T) {
+	if st := cachedBoundManager(t, "", clusterA); st.State != StateLicensed || st.BoundElsewhere {
+		t.Fatalf("state=%s boundElsewhere=%v, want licensed/false", st.State, st.BoundElsewhere)
+	}
+}
+
+func TestManagerNoClusterIDBoundKey(t *testing.T) {
+	st := cachedBoundManager(t, clusterA, "")
+	if st.State != StateNone || !st.BoundElsewhere {
+		t.Fatalf("state=%s boundElsewhere=%v, want none/true (never expired)", st.State, st.BoundElsewhere)
+	}
+}

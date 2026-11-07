@@ -82,6 +82,10 @@ type LicensePayload struct {
 	// caps otherwise live in their own tiers.json and a Team licence holder
 	// edits one number into Platform.
 	Entitlements Entitlements `json:"entitlements"`
+	// ClusterID binds the licence to one installation (see ee/cluster). Empty
+	// means unbound: it works anywhere, as every licence issued before binding
+	// did. A bound licence on another installation counts as no licence.
+	ClusterID string `json:"cluster_id,omitempty"`
 }
 
 // Entitlements are the limits a licence imposes on the instance. It is an

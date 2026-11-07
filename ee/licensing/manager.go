@@ -46,7 +46,10 @@ type Manager struct {
 	roots []ed25519.PublicKey
 	appID string
 	dir   string
-	now   func() time.Time
+	// clusterID is this installation's id; a licence bound to any other id
+	// does not count. Set before Load/Start.
+	clusterID string
+	now       func() time.Time
 
 	refresh  time.Duration
 	stopOnce sync.Once
@@ -87,7 +90,7 @@ const (
 // state and is logged.
 func (m *Manager) Load(envKey string) Status {
 	trial := m.trialStart()
-	snap := Snapshot{Loaded: true, TrialStart: trial}
+	snap := Snapshot{Loaded: true, TrialStart: trial, ClusterID: m.clusterID}
 
 	key, source := strings.TrimSpace(envKey), "env"
 	if key == "" {
@@ -102,10 +105,11 @@ func (m *Manager) Load(envKey string) Status {
 		source = ""
 	} else {
 		snap.Source, snap.raw = source, key
-		lic, err := Verify(key, m.roots, m.appID, m.now())
+		lic, err := m.verify(key)
 		if err != nil {
 			// Reported, never enforced on: an unverifiable key is "none".
 			snap.Err = err
+			snap.BoundElsewhere = errors.Is(err, ErrOtherCluster)
 		} else {
 			snap.License = &lic
 		}
@@ -208,7 +212,7 @@ func (m *Manager) refreshOnce(f Fetcher) {
 		return
 	}
 
-	lic, verr := Verify(key, m.roots, m.appID, m.now())
+	lic, verr := m.verify(key)
 	if verr != nil {
 		slog.Warn("license: the stack returned a license this build cannot verify; keeping the current one", "err", verr)
 		return
@@ -221,6 +225,7 @@ func (m *Manager) refreshOnce(f Fetcher) {
 	m.mu.Lock()
 	m.snap.License = &lic
 	m.snap.Err = nil
+	m.snap.BoundElsewhere = false
 	m.snap.Source = "stack"
 	m.snap.raw = key
 	m.mu.Unlock()
@@ -278,6 +283,29 @@ func (m *Manager) write(name string, data []byte) error {
 		return err
 	}
 	return os.Rename(tmp, filepath.Join(m.dir, name))
+}
+
+// ErrOtherCluster is returned for a key that verifies but is bound to a
+// different installation. Callers can tell "someone else's licence" from "a
+// broken one"; both end in StateNone, never StateExpired.
+var ErrOtherCluster = errors.New("license: bound to another installation")
+
+// SetClusterID sets this installation's cluster id. Must be called before Load
+// or Start, like SetRefresh.
+func (m *Manager) SetClusterID(id string) { m.clusterID = id }
+
+// verify is Verify plus the binding check; every verification in the manager
+// goes through it. An unbound licence passes anywhere; a bound one passes only
+// on its own cluster, so an instance with no id accepts no bound key.
+func (m *Manager) verify(key string) (License, error) {
+	lic, err := Verify(key, m.roots, m.appID, m.now())
+	if err != nil {
+		return License{}, err
+	}
+	if id := lic.Lic.ClusterID; id != "" && id != m.clusterID {
+		return License{}, ErrOtherCluster
+	}
+	return lic, nil
 }
 
 // SetRefresh overrides how often the licence is re-collected. It exists so

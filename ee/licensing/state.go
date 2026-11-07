@@ -54,6 +54,14 @@ type Snapshot struct {
 	// TrialStart is when this instance first ran. Zero means it could not be
 	// determined, which keeps the trial arm unknown rather than elapsed.
 	TrialStart time.Time
+	// ClusterID is this installation's own id, for the console.
+	ClusterID string
+	// BoundElsewhere says the licence this instance holds belongs to another
+	// installation: set when a key verifies but names another cluster, or when
+	// the stack refused to renew for that reason. An unbound licence is then
+	// ignored (the instance runs on its trial); one bound to this cluster is
+	// unaffected.
+	BoundElsewhere bool
 	// raw is the key text as loaded, so a refresh can tell "the stack sent the
 	// same key again" without re-verifying it.
 	raw string
@@ -75,6 +83,10 @@ type Status struct {
 	// unlimited — whenever there is no verified licence, so an unknown or
 	// unlicensed state can never be MORE restrictive than a licensed one.
 	Entitlements Entitlements
+	// ClusterID is this installation's own id; BoundElsewhere says the
+	// licence belongs to another installation.
+	ClusterID      string
+	BoundElsewhere bool
 }
 
 // DomainsAllowed reports whether one more custom domain may be added to an
@@ -100,8 +112,10 @@ func (s Snapshot) StatusAt(now time.Time) Status {
 	if !s.Loaded {
 		return Status{State: StateUnknown}
 	}
-	st := Status{Err: s.Err, Source: s.Source}
-	if l := s.License; l != nil {
+	st := Status{Err: s.Err, Source: s.Source, ClusterID: s.ClusterID, BoundElsewhere: s.BoundElsewhere}
+	// A bound-elsewhere marker voids an UNBOUND licence (the stack refused it
+	// to this installation); one bound to this very cluster stays.
+	if l := s.License; l != nil && !(s.BoundElsewhere && l.Lic.ClusterID == "") {
 		st.Holder, st.Plan = l.Lic.Holder, l.Lic.Plan
 		st.ExpiresAt, st.GraceUntil = l.Lic.ExpiresAt, l.GraceEnd()
 		// A certificate that has expired since it was verified stops vouching
@@ -143,6 +157,14 @@ func (s Snapshot) StatusAt(now time.Time) Status {
 // when there is nothing to say. It is never rendered into a served site.
 func (s Status) Notice() string {
 	switch {
+	case s.BoundElsewhere:
+		prefix := s.ClusterID
+		if len(prefix) > 6 {
+			prefix = prefix[:6]
+		}
+		return fmt.Sprintf(
+			"This Sitebin Enterprise licence is bound to another installation, so this instance runs unlicensed: a 90-day trial from its first start, then no new sites or drops. The licence holder can move the licence to this installation in the account portal (installation %s…).",
+			prefix)
 	case s.State == StateGrace:
 		return fmt.Sprintf(
 			"This Sitebin Enterprise licence expired on %s. Service continues until %s, after which no new sites or drops can be created. Renew to keep publishing.",
@@ -180,6 +202,12 @@ func (s Status) LogArgs() []any {
 	}
 	if s.Entitlements.MaxCustomDomains > 0 {
 		args = append(args, "max_custom_domains", s.Entitlements.MaxCustomDomains)
+	}
+	if s.ClusterID != "" {
+		args = append(args, "cluster_id", s.ClusterID)
+	}
+	if s.BoundElsewhere {
+		args = append(args, "bound_elsewhere", true)
 	}
 	args = append(args, "restricts_creation", s.Restricted)
 	if s.Err != nil {

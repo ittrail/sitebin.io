@@ -49,6 +49,7 @@ func main() {
 		graceIn     = flag.Duration("grace", 0, "grace_until, as a duration from now (may be negative); 0 means same as expires")
 		certIn      = flag.Duration("cert-expires", 10*365*24*time.Hour, "certificate expiry, as a duration from now (may be negative)")
 		maxDomains  = flag.Int("max-domains", 0, "entitlements.max_custom_domains; 0 means unlimited")
+		clusterID   = flag.String("cluster-id", "", "bind the licence to this cluster id; empty means unbound")
 		rootPrivB64 = flag.String("root-private", "", "reuse this root private key (std base64) instead of generating one")
 	)
 	flag.Parse()
@@ -89,6 +90,7 @@ func main() {
 		ExpiresAt:    expires,
 		GraceUntil:   grace,
 		Entitlements: licensing.Entitlements{MaxCustomDomains: *maxDomains},
+		ClusterID:    *clusterID,
 	}, appPriv)
 	if err != nil {
 		fail(err)
