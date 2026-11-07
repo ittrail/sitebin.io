@@ -43,7 +43,8 @@ Requirements:
   `*.sitebin.example.com` can only be issued via a DNS-01 challenge.
   Built-in single-token providers: `cloudflare`, `hetzner`, `duckdns`
   (`netcup` and `porkbun` are compiled in too, see `SITEBIN_TLS_SNIPPET`).
-- Ports 80 + 443 reachable from the internet.
+- Ports 80 + 443 reachable from the internet, 443 over TCP and UDP (UDP is
+  HTTP/3; give it bigger buffers, see [Operations](#operations)).
 
 ```bash
 docker run -d --name sitebin \
@@ -1521,6 +1522,22 @@ Operator commands (run inside the container, e.g. `docker exec sitebin sitebin <
   size), which the operator's Health panel in the workspace interface shows;
   the note itself is never archived.
 - **Health:** the image ships a `HEALTHCHECK`.
+- **HTTP/3 needs bigger UDP buffers.** Caddy serves HTTP/3 over QUIC on UDP
+  443, and browsers switch to it once they have seen it offered. Its QUIC
+  library asks for 7 MiB socket buffers. Linux allows 208 KiB by default, and
+  HTTP/3 then runs at a fraction of the line's speed: on the hosted instance a
+  browser got 15–39 Mbit/s down where TCP got about 300, and 100–290 after
+  the change. Caddy says so once at start:
+  `failed to sufficiently increase receive buffer size`. The limits are the
+  host's (a container cannot raise them), so set them on the host and restart
+  the container, which makes Caddy open its socket again:
+
+  ```bash
+  printf 'net.core.rmem_max=7500000\nnet.core.wmem_max=7500000\n' \
+    > /etc/sysctl.d/90-quic-udp-buffers.conf
+  sysctl --system
+  docker restart sitebin
+  ```
 - **Freeze:** `SITEBIN_READONLY=true` disables new-site creation.
 - **Logs:** structured request + lifecycle logs on stdout (`docker logs`).
   Request lines carry the client IP, so **retention is yours to bound**: the
