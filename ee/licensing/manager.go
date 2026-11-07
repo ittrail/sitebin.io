@@ -80,7 +80,15 @@ func NewManager(dataDir string, roots []ed25519.PublicKey, appID string, now fun
 const (
 	trialFile = "trial-start"
 	cacheFile = "license.key"
+	// boundMarkerFile records that the stack refused to renew this
+	// installation's licence because it is bound elsewhere. It survives a
+	// restart and is removed by any successful renewal.
+	boundMarkerFile = "bound-elsewhere"
 )
+
+// ErrBoundElsewhere is what a Fetcher returns when the stack refused the
+// renewal because the licence is bound to another installation.
+var ErrBoundElsewhere = errors.New("license: the stack refused the renewal, the license is bound to another installation")
 
 // Load reads the trial marker and resolves a key, without touching the network.
 // envKey (SITEBIN_LICENSE_KEY) WINS when set — that is what makes an air-gapped
@@ -90,7 +98,7 @@ const (
 // state and is logged.
 func (m *Manager) Load(envKey string) Status {
 	trial := m.trialStart()
-	snap := Snapshot{Loaded: true, TrialStart: trial, ClusterID: m.clusterID}
+	snap := Snapshot{Loaded: true, TrialStart: trial, ClusterID: m.clusterID, BoundElsewhere: m.hasBoundMarker()}
 
 	key, source := strings.TrimSpace(envKey), "env"
 	if key == "" {
@@ -109,7 +117,7 @@ func (m *Manager) Load(envKey string) Status {
 		if err != nil {
 			// Reported, never enforced on: an unverifiable key is "none".
 			snap.Err = err
-			snap.BoundElsewhere = errors.Is(err, ErrOtherCluster)
+			snap.BoundElsewhere = snap.BoundElsewhere || errors.Is(err, ErrOtherCluster)
 		} else {
 			snap.License = &lic
 		}
@@ -196,6 +204,20 @@ func (m *Manager) refreshOnce(f Fetcher) {
 	m.mu.RUnlock()
 
 	key, ok, err := f.Fetch(ctx, current)
+	if errors.Is(err, ErrBoundElsewhere) {
+		// The stack bound this licence to another installation. Remember it
+		// (also across restarts) so the instance says so; nothing is restricted
+		// beyond what StatusAt derives.
+		if werr := m.write(boundMarkerFile, []byte(m.now().Format(time.RFC3339))); werr != nil {
+			slog.Warn("license: could not record the refusal", "err", werr)
+		}
+		m.mu.Lock()
+		m.snap.BoundElsewhere = true
+		m.mu.Unlock()
+		slog.Error("license: the stack refused to renew this license because it is bound to another installation; this instance runs unlicensed",
+			m.Status().LogArgs()...)
+		return
+	}
 	if err != nil {
 		slog.Warn("license: could not collect the license from the stack; keeping the current one", "err", err)
 		return
@@ -208,11 +230,19 @@ func (m *Manager) refreshOnce(f Fetcher) {
 	m.mu.RLock()
 	same := m.snap.raw == key
 	m.mu.RUnlock()
+
+	lic, verr := m.verify(key)
+	if verr == nil || same {
+		// Any successful renewal, the same key included, lifts the marker.
+		m.clearBoundMarker()
+	}
 	if same {
 		return
 	}
-
-	lic, verr := m.verify(key)
+	if errors.Is(verr, ErrOtherCluster) {
+		slog.Warn("license: the stack returned a license bound to another installation; keeping the current one", "err", verr)
+		return
+	}
 	if verr != nil {
 		slog.Warn("license: the stack returned a license this build cannot verify; keeping the current one", "err", verr)
 		return
@@ -259,6 +289,22 @@ func (m *Manager) trialStart() time.Time {
 		return time.Time{}
 	}
 	return now
+}
+
+func (m *Manager) hasBoundMarker() bool {
+	_, err := os.Stat(filepath.Join(m.dir, boundMarkerFile))
+	return err == nil
+}
+
+// clearBoundMarker removes the refusal marker and the flag; called on any
+// successful renewal.
+func (m *Manager) clearBoundMarker() {
+	if err := os.Remove(filepath.Join(m.dir, boundMarkerFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		slog.Warn("license: could not remove the bound-elsewhere marker", "err", err)
+	}
+	m.mu.Lock()
+	m.snap.BoundElsewhere = false
+	m.mu.Unlock()
 }
 
 func (m *Manager) readCache() (string, error) {

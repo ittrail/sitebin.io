@@ -302,3 +302,129 @@ func TestManagerNoClusterIDBoundKey(t *testing.T) {
 		t.Fatalf("state=%s boundElsewhere=%v, want none/true (never expired)", st.State, st.BoundElsewhere)
 	}
 }
+
+// ---- the refusal marker ----
+
+func markerPath(dir string) string { return filepath.Join(dir, "license", boundMarkerFile) }
+
+// seqFetcher answers each call from a list, repeating the last step.
+type seqFetcher struct {
+	steps []stubFetcher
+	n     int
+}
+
+func (f *seqFetcher) Fetch(_ context.Context, _ string) (string, bool, error) {
+	s := f.steps[f.n]
+	if f.n < len(f.steps)-1 {
+		f.n++
+	}
+	return s.key, s.ok, s.err
+}
+
+func TestRefreshBoundElsewhereThenSameKeyClears(t *testing.T) {
+	c := newChain(t)
+	m, dir := newTestManager(t, c, refTime)
+	m.SetClusterID(clusterA)
+	key := boundKey(t, c, "")
+	if err := os.MkdirAll(filepath.Join(dir, "license"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "license", cacheFile), []byte(key), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if st := m.Load(""); st.State != StateLicensed {
+		t.Fatalf("setup: %s", st.State)
+	}
+
+	f := &seqFetcher{steps: []stubFetcher{{err: ErrBoundElsewhere}, {key: key, ok: true}}}
+	m.refreshOnce(f)
+	st := m.Status()
+	if !st.BoundElsewhere || st.State != StateNone {
+		t.Fatalf("after refusal: state=%s boundElsewhere=%v, want none/true", st.State, st.BoundElsewhere)
+	}
+	b, err := os.ReadFile(markerPath(dir))
+	if err != nil {
+		t.Fatalf("marker not written: %v", err)
+	}
+	if _, perr := time.Parse(time.RFC3339, strings.TrimSpace(string(b))); perr != nil {
+		t.Errorf("marker is not RFC3339: %q", b)
+	}
+
+	// The stack now returns the SAME key: any success clears the marker.
+	m.refreshOnce(f)
+	if st := m.Status(); st.BoundElsewhere || st.State != StateLicensed {
+		t.Fatalf("after same key: state=%s boundElsewhere=%v, want licensed/false", st.State, st.BoundElsewhere)
+	}
+	if _, err := os.Stat(markerPath(dir)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("marker still exists: %v", err)
+	}
+}
+
+func TestBoundElsewhereMarkerSurvivesRestart(t *testing.T) {
+	c := newChain(t)
+	m, dir := newTestManager(t, c, refTime)
+	m.SetClusterID(clusterA)
+	key := boundKey(t, c, "")
+	m.refreshOnce(&seqFetcher{steps: []stubFetcher{{err: ErrBoundElsewhere}}})
+	if _, err := os.Stat(markerPath(dir)); err != nil {
+		t.Fatalf("marker not written: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "license", cacheFile), []byte(key), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m2 := NewManager(dir, c.roots(), AppID, func() time.Time { return refTime })
+	m2.SetClusterID(clusterA)
+	st := m2.Load("")
+	if !st.BoundElsewhere || st.State != StateNone {
+		t.Fatalf("after restart: state=%s boundElsewhere=%v, want none/true", st.State, st.BoundElsewhere)
+	}
+}
+
+// The marker must not claim "unlicensed" for a licence bound to the own
+// cluster that stays licensed.
+func TestMarkerWithOwnBoundKeyStaysLicensed(t *testing.T) {
+	c := newChain(t)
+	m, dir := newTestManager(t, c, refTime)
+	m.SetClusterID(clusterA)
+	if err := os.MkdirAll(filepath.Join(dir, "license"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "license", cacheFile), []byte(boundKey(t, c, clusterA)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(markerPath(dir), []byte(refTime.Format(time.RFC3339)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st := m.Load("")
+	if st.State != StateLicensed || st.BoundElsewhere || st.Notice() != "" {
+		t.Fatalf("state=%s boundElsewhere=%v notice=%q, want licensed/false/empty", st.State, st.BoundElsewhere, st.Notice())
+	}
+}
+
+func TestNoticeWithoutOwnClusterIDOmitsInstallation(t *testing.T) {
+	if n := (Status{BoundElsewhere: true}).Notice(); n == "" || strings.Contains(n, "(installation") {
+		t.Errorf("notice = %q", n)
+	}
+	if n := (Status{BoundElsewhere: true, ClusterID: clusterA}).Notice(); !strings.Contains(n, "(installation aaaaaa…)") {
+		t.Errorf("notice = %q", n)
+	}
+}
+
+func TestRefreshOtherClusterKeyLogsSpecificWarning(t *testing.T) {
+	c := newChain(t)
+	m, _ := newTestManager(t, c, refTime)
+	m.SetClusterID(clusterA)
+	m.Load(boundKey(t, c, clusterA))
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	m.refreshOnce(&stubFetcher{key: boundKey(t, c, clusterB), ok: true})
+	if !strings.Contains(buf.String(), "bound to another installation") || strings.Contains(buf.String(), "cannot verify") {
+		t.Errorf("log = %s", buf.String())
+	}
+	if st := m.Status(); st.State != StateLicensed || st.Restricted {
+		t.Errorf("current licence not kept: %s", st.State)
+	}
+}

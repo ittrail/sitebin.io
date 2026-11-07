@@ -11,9 +11,11 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/ittrail/sitebin.io/ee/cluster"
 	"github.com/ittrail/sitebin.io/ee/licensing"
 	"github.com/ittrail/sitebin.io/internal/ext"
 )
@@ -63,6 +65,15 @@ func (p *provider) initLicensing() {
 			"trusted_roots", 0)
 	}
 	p.license = licensing.NewManager(p.host.DataDir(), roots, licensing.AppID, nil)
+	// A cluster id file that exists but is invalid is never regenerated; the
+	// licence path then runs without an id (an unbound licence still works).
+	clusterID, err := cluster.LoadOrCreateID(p.host.DataDir())
+	if err != nil {
+		slog.Error("license: the cluster id could not be loaded; license renewals go out without an installation id, so a license bound to this installation cannot verify",
+			"path", filepath.Join(p.host.DataDir(), "cluster", "id"), "err", err)
+		clusterID = ""
+	}
+	p.license.SetClusterID(clusterID)
 	// SITEBIN_LICENSE_REFRESH shortens the daily collection interval. It is for
 	// testing renewal-in-place, which is otherwise a day-long experiment, and
 	// for an operator who wants a renewal picked up sooner.
@@ -83,7 +94,7 @@ func (p *provider) initLicensing() {
 
 	// Collection is asynchronous and optional: it exists so a RENEWED licence
 	// reaches a running container, never as a precondition for starting.
-	if f := p.licenseFetcher(); f != nil {
+	if f := p.licenseFetcher(clusterID); f != nil {
 		p.license.Start(f)
 	}
 }
@@ -182,13 +193,14 @@ func (p *provider) customDomainCount() (int, error) {
 // The first licence therefore never comes from here; it arrives by email. This
 // path is for renewals, so that a customer whose subscription renewed is not
 // locked out because nobody read the mail.
-func (p *provider) licenseFetcher() licensing.Fetcher {
+func (p *provider) licenseFetcher(clusterID string) licensing.Fetcher {
 	if url := strings.TrimSpace(os.Getenv("SITEBIN_LICENSE_URL")); url != "" {
-		return &stackLicenseFetcher{url: url}
+		return &stackLicenseFetcher{url: url, clusterID: clusterID}
 	}
 	if p.cfg.PayGate != nil {
 		return &stackLicenseFetcher{
-			url: strings.TrimRight(p.cfg.PayGate.URL, "/") + "/api/v1/licenses/renew",
+			url:       strings.TrimRight(p.cfg.PayGate.URL, "/") + "/api/v1/licenses/renew",
+			clusterID: clusterID,
 		}
 	}
 	return nil
@@ -196,6 +208,8 @@ func (p *provider) licenseFetcher() licensing.Fetcher {
 
 type stackLicenseFetcher struct {
 	url string
+	// clusterID names this installation on the renewal; empty is omitted.
+	clusterID string
 	// client is nil in production (http.DefaultClient); tests inject one.
 	client *http.Client
 }
@@ -207,7 +221,11 @@ func (f *stackLicenseFetcher) Fetch(ctx context.Context, current string) (string
 		// never been licensed simply has no renewal to collect.
 		return "", false, nil
 	}
-	body, err := json.Marshal(map[string]string{"license": current})
+	reqBody := map[string]string{"license": current}
+	if f.clusterID != "" {
+		reqBody["cluster_id"] = f.clusterID
+	}
+	body, err := json.Marshal(reqBody)
 	if err != nil {
 		return "", false, err
 	}
@@ -232,6 +250,14 @@ func (f *stackLicenseFetcher) Fetch(ctx context.Context, current string) (string
 		// The stack has no licence for this instance. That is an answer, not a
 		// failure — and it is emphatically not "expired".
 		return "", false, nil
+	case res.StatusCode == http.StatusConflict:
+		var refusal struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(respBody, &refusal) == nil && refusal.Error == "LICENSE_BOUND" {
+			return "", false, licensing.ErrBoundElsewhere
+		}
+		return "", false, fmt.Errorf("license endpoint returned %d: %s", res.StatusCode, strings.TrimSpace(string(respBody)))
 	case res.StatusCode < 200 || res.StatusCode >= 300:
 		return "", false, fmt.Errorf("license endpoint returned %d: %s", res.StatusCode, strings.TrimSpace(string(respBody)))
 	}

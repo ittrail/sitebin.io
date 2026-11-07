@@ -112,10 +112,14 @@ func (s Snapshot) StatusAt(now time.Time) Status {
 	if !s.Loaded {
 		return Status{State: StateUnknown}
 	}
-	st := Status{Err: s.Err, Source: s.Source, ClusterID: s.ClusterID, BoundElsewhere: s.BoundElsewhere}
+	st := Status{Err: s.Err, Source: s.Source, ClusterID: s.ClusterID}
 	// A bound-elsewhere marker voids an UNBOUND licence (the stack refused it
-	// to this installation); one bound to this very cluster stays.
-	if l := s.License; l != nil && !(s.BoundElsewhere && l.Lic.ClusterID == "") {
+	// to this installation); one bound to this very cluster stays. The flag is
+	// reported only when it actually voided something (or the key itself was
+	// rejected), never beside a licence that stays in force.
+	voided := s.BoundElsewhere && (s.License == nil || s.License.Lic.ClusterID == "")
+	st.BoundElsewhere = voided
+	if l := s.License; l != nil && !voided {
 		st.Holder, st.Plan = l.Lic.Holder, l.Lic.Plan
 		st.ExpiresAt, st.GraceUntil = l.Lic.ExpiresAt, l.GraceEnd()
 		// A certificate that has expired since it was verified stops vouching
@@ -158,13 +162,14 @@ func (s Snapshot) StatusAt(now time.Time) Status {
 func (s Status) Notice() string {
 	switch {
 	case s.BoundElsewhere:
-		prefix := s.ClusterID
-		if len(prefix) > 6 {
-			prefix = prefix[:6]
+		msg := "This Sitebin Enterprise licence is bound to another installation, so this instance runs unlicensed: a 90-day trial from its first start, then no new sites or drops. The licence holder can move the licence to this installation in the account portal"
+		if prefix := s.ClusterID; prefix != "" {
+			if len(prefix) > 6 {
+				prefix = prefix[:6]
+			}
+			msg += " (installation " + prefix + "…)"
 		}
-		return fmt.Sprintf(
-			"This Sitebin Enterprise licence is bound to another installation, so this instance runs unlicensed: a 90-day trial from its first start, then no new sites or drops. The licence holder can move the licence to this installation in the account portal (installation %s…).",
-			prefix)
+		return msg + "."
 	case s.State == StateGrace:
 		return fmt.Sprintf(
 			"This Sitebin Enterprise licence expired on %s. Service continues until %s, after which no new sites or drops can be created. Renew to keep publishing.",

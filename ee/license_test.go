@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -418,6 +419,57 @@ func TestLicenseFetcherTreatsAnUnknownShapeAsNoAnswer(t *testing.T) {
 	key, ok, err := f.Fetch(context.Background(), "current.licence.four.segments")
 	if err != nil || ok || key != "" {
 		t.Errorf("Fetch = (%q, %v, %v), want no key and no error", key, ok, err)
+	}
+}
+
+func fetchWithServer(t *testing.T, clusterID string, status int, reply string) (ok bool, err error, body string) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		io.WriteString(w, reply)
+	}))
+	t.Cleanup(srv.Close)
+	f := &stackLicenseFetcher{url: srv.URL, client: srv.Client(), clusterID: clusterID}
+	_, ok, err = f.Fetch(context.Background(), "current.licence.four.segments")
+	return ok, err, body
+}
+
+func TestFetcherSendsClusterID(t *testing.T) {
+	id := strings.Repeat("a", 26)
+	_, err, body := fetchWithServer(t, id, 200, `{"license":"k.k.k.k"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]string
+	if json.Unmarshal([]byte(body), &m) != nil || m["cluster_id"] != id || m["license"] != "current.licence.four.segments" {
+		t.Errorf("body = %s", body)
+	}
+}
+
+func TestFetcherOmitsEmptyClusterID(t *testing.T) {
+	_, err, body := fetchWithServer(t, "", 200, `{"license":"k.k.k.k"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(body, "cluster_id") {
+		t.Errorf("body = %s", body)
+	}
+}
+
+func TestFetcherMapsLicenseBound(t *testing.T) {
+	ok, err, _ := fetchWithServer(t, "x", 409, `{"error":"LICENSE_BOUND","message":"bound"}`)
+	if ok || !errors.Is(err, licensing.ErrBoundElsewhere) {
+		t.Errorf("ok=%v err=%v", ok, err)
+	}
+}
+
+func TestFetcherOther409IsGeneric(t *testing.T) {
+	ok, err, _ := fetchWithServer(t, "x", 409, `{"error":"X"}`)
+	if ok || err == nil || errors.Is(err, licensing.ErrBoundElsewhere) {
+		t.Errorf("ok=%v err=%v", ok, err)
 	}
 }
 
