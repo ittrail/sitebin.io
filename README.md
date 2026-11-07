@@ -2422,6 +2422,36 @@ mistake must not punish harder than having no license at all. Nothing is ever
 restricted except the *creation* of a new site or drop — updating and serving an
 existing site keep working in every state.
 
+#### One licence, one installation
+
+A licence binds to **one installation**, identified by its **cluster id**: 26
+characters of `a-z2-7`, minted at the first enterprise start and kept in
+`<data>/cluster/id` (`/data/cluster/id` in the image). It is never regenerated,
+so keep it with the rest of the data directory. Until the `sitebin cluster id`
+command ships with the cluster CLI, read it from that file or from the
+`cluster_id=` field of the licence line in the startup log.
+
+- **Binding happens at the first renewal.** The first time the instance
+  collects its licence from the stack, the stack binds the licence to the
+  cluster id the instance presents. From then on the licence carries that id.
+- **A licence bound to another installation is `none`**, never `expired`: the
+  instance runs unlicensed (the trial rules above), the startup log says
+  `bound_elsewhere=true`, and the account UI says "This Sitebin Enterprise
+  licence is bound to another installation, so this instance runs unlicensed".
+  If the stack refuses a renewal with `409 LICENSE_BOUND`, the instance records
+  that and shows the same notice until a renewal succeeds.
+- **Moving a licence** to a new installation: in the stack's portal choose
+  "Move to a new installation". That releases the binding; the new installation
+  binds at its first renewal. A holder can do this once every 7 days, and the
+  released installation cannot take the licence back until the next release.
+- **Air-gapped installations** (`SITEBIN_LICENSE_KEY`, no renewal) never reach
+  the stack, so they stay unbound: the key works wherever it is installed, as
+  long as it names no cluster. A key that already names a cluster is checked
+  against the installation's own id even offline.
+- **Known limit:** a data directory copied whole carries the cluster id with
+  it and renews as the same installation. That is a breach of the licence
+  terms that no check can detect.
+
 #### Building your own Enterprise image
 
 Three build inputs, all easy to miss, and missing them produces a binary that

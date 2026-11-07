@@ -1020,6 +1020,13 @@ What is easy to get wrong:
   where a domain is *added* (`CustomDomainsAllowed`). Zero/absent = unlimited.
   It never removes a configured domain — it refuses only the next one — and the
   tier's own per-site cap still applies on top.
+- **A licence binds to one installation (cluster id).** `<data>/cluster/id`
+  (`ee/cluster.LoadOrCreateID`) is never regenerated: a new id orphans the
+  bound licence. A key naming another cluster is `none` (`ErrOtherCluster`),
+  never `expired`, and an own-bound key is never downgraded. A stack `409
+  LICENSE_BOUND` writes `<data>/license/bound-elsewhere`, cleared only by a
+  successful renewal and ignored for `SITEBIN_LICENSE_KEY`. `e2e/license.ps1`
+  covers both cases (`mintlicense -cluster-id`).
 - **Staying current:** the instance collects its licence from the stack daily,
   caches it under the data dir and applies it without a restart.
   `SITEBIN_LICENSE_KEY` wins when set, for air-gapped installs.
