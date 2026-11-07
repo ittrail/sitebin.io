@@ -459,7 +459,9 @@
       "</tbody></table></div></section>" +
       (me.can_share ? '<section class="panel"><h3>Share with an admin</h3><p class="d">They manage the site with their own account. Deleting, transferring and sharing stay with you.</p>' +
         '<form class="field" id="shareform"><input type="email" name="email" required maxlength="254" placeholder="Their account’s email" aria-label="Email"><input type="date" name="until" aria-label="Until, optional" style="flex:0 0 170px"><button class="btn sm primary" type="submit">Invite</button></form></section>' :
-        '<section class="panel"><h3>Share with an admin</h3><p class="d" style="margin:0">Sharing is not part of your plan. <a href="/account#/plan">See the plans</a></p></section>') +
+        // The plan shares, yet the owner may not: the operator's own sites are
+        // never shared (the classic dashboard's words, not an upgrade offer).
+        '<section class="panel"><h3>Share with an admin</h3><p class="d" style="margin:0">' + (WS.state.plan && WS.state.plan.caps && WS.state.plan.caps.sharing ? "Sites owned by the operator account cannot be shared." : 'Sharing is not part of your plan. <a href="/account#/plan">See the plans</a>') + "</p></section>") +
       '</div><div class="wcol">' +
       '<section class="panel"><h3>Transfer</h3><p class="d">Give the site to another account, with its addresses. Nothing moves until they accept.</p><a class="btn sm" href="/account/transfer?site=' + encodeURIComponent(site.id) + '">' + ic("swap") + "Start a transfer</a></section>" +
       '<section class="panel"><h3>Edit password</h3><p class="d">For tools that sign in with the site’s own password. A reset ends every upload token of this site; the new one is shown once.</p><button class="btn sm" type="button" data-people="rotate">' + ic("key") + "Reset edit password</button></section>" +
