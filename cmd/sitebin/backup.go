@@ -17,8 +17,10 @@ import (
 	"github.com/ittrail/sitebin.io/internal/store"
 )
 
-// backup writes a gzip-compressed tar of the data directory to outPath.
-func backup(outPath string) error { return backupData(mustConfig().DataDir, outPath) }
+// backup writes a gzip-compressed tar of the data directory SITEBIN_DATA_DIR
+// names (else /data) to outPath; like restore it reads nothing else of the
+// configuration.
+func backup(outPath string) error { return backupData(dataDirFromEnv(), outPath) }
 
 // restore extracts a backup into the data directory.
 func restore(inPath string) error { return restoreData(dataDirFromEnv(), inPath) }
