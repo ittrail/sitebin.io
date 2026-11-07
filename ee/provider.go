@@ -16,6 +16,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/ittrail/sitebin.io/internal/snapshots"
 	"time"
 
 	"github.com/ittrail/sitebin.io/ee/account"
@@ -33,6 +35,10 @@ import (
 // provider is the enterprise ext.Provider: it gates site creation behind
 // accounts/tiers and serves the account dashboard.
 type provider struct {
+	// snap is the snapshots agent's client (snapshotsClient), made once.
+	snapOnce sync.Once
+	snap     *snapshots.Client
+
 	host     ext.Host
 	cfg      eeconfig.Config
 	accounts *account.Store

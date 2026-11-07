@@ -370,7 +370,10 @@ type wsAccount struct {
 	IsAdmin bool   `json:"is_admin"`
 	// Containers shows the console's Containers view: the instance runs
 	// container sites (as the classic console's tab).
-	Containers    bool   `json:"containers"`
+	Containers bool `json:"containers"`
+	// Backups shows the console's Backups view: the instance has a
+	// snapshots agent.
+	Backups       bool   `json:"backups"`
 	UI            string `json:"ui"`
 	PublishURL    string `json:"publish_url"`
 	MCPEndpoint   string `json:"mcp_endpoint"`
@@ -645,6 +648,7 @@ func (p *provider) handleUIState(w http.ResponseWriter, r *http.Request) {
 	st.Account = wsAccount{
 		Email: acc.Email, Tier: tier, CSRF: token, IsAdmin: p.isAdmin(acc), UI: p.uiOf(acc),
 		Containers: p.containerLimits != nil && p.isAdmin(acc),
+		Backups:    p.snapshotsClient() != nil && p.isAdmin(acc),
 		PublishURL: p.host.PublishURL(), MCPEndpoint: p.host.BaseURL() + "/mcp", Base: p.baseURL(),
 		AccountURL: accountURL, DeletionURL: deletionURL, CancelURL: cancelURL,
 		StackDeletion: p.stackDeletion(acc), Verified: acc.EmailVerified,

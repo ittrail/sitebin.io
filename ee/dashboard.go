@@ -62,6 +62,8 @@ func (p *provider) PublicRoutes() map[string]http.Handler {
 		"GET /account/admin/containers":                    http.HandlerFunc(p.handleAdminContainers),
 		"POST /account/admin/containers/defaults":          http.HandlerFunc(p.handleAdminContainerDefaults),
 		"POST /account/admin/containers/sites/{id}/limits": http.HandlerFunc(p.handleAdminContainerLimits),
+		"POST /account/admin/backups/restore":              http.HandlerFunc(p.handleAdminBackupRestore),
+		"POST /account/admin/backups/copies/{name}/delete": http.HandlerFunc(p.handleAdminBackupCopyDelete),
 	}
 	p.oauthRoutes(routes)
 	p.emailRoutes(routes)

@@ -29,6 +29,11 @@ var _ ext.FormsMailHost = extHost{}
 
 func (h extHost) FormsMailConfigured() bool { return h.cfg.FormsSMTP != nil }
 
+// SnapshotsAgent implements ext.SnapshotsHost.
+var _ ext.SnapshotsHost = extHost{}
+
+func (h extHost) SnapshotsAgent() string { return h.cfg.SnapshotsAgent }
+
 func (h extHost) BaseURL() string        { return h.cfg.SiteURL(h.cfg.BaseDomain) }
 func (h extHost) MCPOAuthIssuer() string { return h.cfg.MCPOAuthIssuer }
 

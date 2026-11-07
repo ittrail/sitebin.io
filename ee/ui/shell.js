@@ -351,7 +351,7 @@ const WS = (() => {
       nav("account", "user", "Account") +
       (admin ? '<div class="navh">Instance<span class="stamp s-warn">Operator</span></div>' +
         nav("op", "radar", "Overview", '<span class="badge red hidden" id="ws-op-badge"></span>') +
-        nav("register", "list", "Register", '<span class="n" id="ws-op-n-register"></span>') + nav("reports", "flag", "Reports", '<span class="n" id="ws-op-n-reports"></span>') + (a.containers ? nav("containers", "box", "Containers", '<span class="n" id="ws-op-n-containers"></span>') : "") : "") +
+        nav("register", "list", "Register", '<span class="n" id="ws-op-n-register"></span>') + nav("reports", "flag", "Reports", '<span class="n" id="ws-op-n-reports"></span>') + (a.containers ? nav("containers", "box", "Containers", '<span class="n" id="ws-op-n-containers"></span>') : "") + (a.backups ? nav("backups", "clock", "Backups") : "") : "") +
       '<div class="spacer"></div>' +
       '<a class="btn primary publish" href="' + esc(a.publish_url || "/") + '">' + ic("plus") + "Publish a new site</a>" +
       '<button class="btn ghost uiswitch" type="button" data-ws-classic title="Your choice is kept for this account; switch back here at any time.">' + ic("layout") + "Classic interface</button>";
@@ -361,7 +361,7 @@ const WS = (() => {
   let pal, pItems = [], pSel = 0;
   const VIEWS = [["Sites", "sites", "#/sites"], ["Shared with me", "share", "#/shared"], ["Inbox", "inbox", "#/inbox"], ["Domains & zones", "globe", "#/domains"],
     ["API tokens & agents", "key", "#/tokens"], ["Plan & usage", "gauge", "#/plan"], ["Account", "user", "#/account"], ["Manage tags", "tag", "/account/tags"]];
-  const OPVIEWS = [["Instance overview", "radar", "#/op"], ["Register", "list", "#/register"], ["Abuse reports", "flag", "#/reports"], ["Containers", "box", "#/containers"]];
+  const OPVIEWS = [["Instance overview", "radar", "#/op"], ["Register", "list", "#/register"], ["Abuse reports", "flag", "#/reports"], ["Containers", "box", "#/containers"], ["Backups", "clock", "#/backups"]];
   function paletteOpen() {
     if (!state) return;
     if (!pal) {
@@ -393,7 +393,7 @@ const WS = (() => {
     const hay = (s) => (s.name + " " + s.view_url + " " + (s.domains || []).map((d) => d.Domain).join(" ") + " " + s.tags.map((t) => t.name).join(" ")).toLowerCase();
     const sites = state.sites.filter((s) => !q || hay(s).includes(q)).slice(0, 8);
     const doms = q ? state.sites.flatMap((s) => (s.domains || []).map((d) => [d.Domain, s])).filter(([d]) => d.includes(q)).slice(0, 5) : [];
-    const views = VIEWS.concat(state.account.is_admin ? OPVIEWS : []).filter(([l]) => !q || l.toLowerCase().includes(q));
+    const views = VIEWS.concat(state.account.is_admin ? OPVIEWS.filter(([, , h]) => h !== "#/backups" || state.account.backups) : []).filter(([l]) => !q || l.toLowerCase().includes(q));
     pItems = sites.map((s) => ["Sites", s.name || "Untitled drop", primaryAddr(s), "sites", () => openSite(s)])
       .concat(doms.map(([d, s]) => ["Domains", d, s.name || primaryAddr(s), "globe", () => openSite(s, "addresses")]))
       .concat(views.map(([l, i, h]) => ["Go to", l, "", i, () => { location.href = h.startsWith("#") ? link(h) : h; }]));

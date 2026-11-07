@@ -67,9 +67,9 @@
     const fn = {
       sites: renderSites, shared: renderSites, tag: renderSites, untagged: renderSites,
       inbox: renderInbox, domains: renderDomains, tokens: renderTokens, plan: renderPlan, account: renderAccount,
-      op: renderOp, register: renderRegister, reports: renderReports, containers: renderContainers,
+      op: renderOp, register: renderRegister, reports: renderReports, containers: renderContainers, backups: renderBackups,
     }[r.view] || renderSites;
-    if (["op", "register", "reports", "containers"].includes(r.view) && !st().account.is_admin) { location.hash = "#/sites"; return; }
+    if (["op", "register", "reports", "containers", "backups"].includes(r.view) && !st().account.is_admin) { location.hash = "#/sites"; return; }
     fn(r);
     if (st().account.is_admin) opBadge();
   }
@@ -821,6 +821,77 @@
       const reason = view.querySelector('[data-reason="' + l.dataset.rlock + '"]').value;
       if (!(await confirm("Lock this site?", "It stops being served at once and is kept as evidence. The reason is shown to its owner.", "Lock site", true))) return;
       try { await post("/account/admin/sites/" + encodeURIComponent(x.Site.ViewID) + "/lock?return=reports", { reason }); toast("Locked."); renderReports(); } catch (err) { fail(err); }
+    };
+  }
+
+  // ---- Backups: the instance's snapshots, and restoring the whole instance ----
+  const KINDS = { hourly: "Hourly", nightly: "Nightly", predeploy: "Before a deploy", archive: "Backup" };
+  const stamp = (iso) => iso ? new Date(iso).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+  const RUNNING = ["preparing", "extracting", "stopping", "swapping", "starting"];
+  const STEP = { preparing: "Checking the snapshot and the free space", extracting: "Unpacking the snapshot beside the data", stopping: "Stopping the instance and its site containers", swapping: "Putting the restored data in place", starting: "Starting the instance and waiting for it to be healthy" };
+  let backupsPoll = null;
+  async function renderBackups() {
+    clearTimeout(backupsPoll);
+    const lede = "Every snapshot of this instance, kept 48 hours (hourly) and 30 days (nightly), and restoring the whole instance to one.";
+    if (!view.querySelector("[data-backups-view]")) view.innerHTML = head("Backups", lede) + '<p class="loading">Reading the backups…</p>';
+    let b;
+    try { b = await adminGet("backups"); } catch (err) {
+      // While the instance restarts during a restore, this fails: try again.
+      view.innerHTML = head("Backups", lede) + '<div class="banner">The instance is not answering — probably restarting during a restore. Trying again…</div>';
+      backupsPoll = setTimeout(() => { if (route().view === "backups") renderBackups(); }, 4000);
+      return;
+    }
+    if (!b.available) { view.innerHTML = head("Backups", lede) + '<section class="panel"><div class="empty">No snapshots agent is configured on this instance (SITEBIN_SNAPSHOTS_AGENT).</div></section>'; return; }
+    const s = b.status || {}, R = s.restore || { state: "idle" }, runs = s.runs || {}, snaps = b.snapshots || [], copies = b.copies || [];
+    const running = RUNNING.includes(R.state);
+    const dis = running ? " disabled" : "";
+    const runLine = (mode, label) => {
+      const x = runs[mode];
+      if (!x) return "";
+      const ok = x.rc === 0 || x.rc === 1;
+      return '<div class="line">' + ic(ok ? "check" : "alert") + '<div class="grow"><b>' + esc(label) + '</b><span class="s">' + esc(stamp(x.at)) + (x.archive ? " · " + esc(x.archive) : "") + '</span></div><span class="st ' + (ok ? "s-ok" : "s-bad") + '">' + (ok ? "OK" : "Failed (" + esc(String(x.rc)) + ")") + "</span></div>";
+    };
+    let banner = "";
+    if (running) banner = '<div class="banner"><strong>Restoring the instance</strong>&nbsp;' + esc(STEP[R.state] || R.state) + "… This page updates by itself; the instance is unreachable for a minute while it restarts.</div>";
+    else if (R.state && R.state !== "idle" && R.finished && Date.now() - new Date(R.finished) < 7 * WS.DAY) {
+      const word = R.state === "done" ? "done" : R.state === "rolled-back" ? "switched back" : "failed";
+      banner = '<div class="banner' + (R.state === "done" ? "" : " err") + '"><strong>Last restore, ' + esc(stamp(R.finished)) + ": " + esc(word) + "</strong>&nbsp;" + esc(R.message || "") + "</div>";
+    }
+    const rows = snaps.length ? snaps.map((x) => '<tr><td class="num">' + esc(stamp(x.at)) + "</td><td>" + esc(KINDS[x.kind] || x.kind) + '</td><td class="num r">' + (x.indexed ? x.sites : "…") + '</td><td class="num r hide-md">' + (x.indexed ? esc(fmtBytes(x.bytes)) : "…") + '</td><td class="r"><button class="btn sm" type="button" data-restore="' + esc(x.id) + '" data-at="' + esc(x.at) + '"' + dis + ">Restore the instance…</button></td></tr>").join("") :
+      '<tr><td colspan="5" class="dim">No snapshots yet.</td></tr>';
+    const runsHTML = runLine("hourly", "Hourly") + runLine("nightly", "Nightly") + runLine("prune", "Pruning to 48 h / 30 days") + runLine("check", "Weekly check") + runLine("check-data", "Monthly full read-back");
+    const copiesHTML = copies.length ? '<div class="lines">' + copies.map((c) => '<div class="line">' + ic("box") + '<div class="grow"><span class="a">' + esc(c.kind === "failed-restore" ? "A restore that did not start" : "Before a restore") + '</span><span class="s">' + esc(stamp(c.at)) + "</span></div>" +
+      '<button class="btn sm" type="button" data-switch="' + esc(c.name) + '"' + dis + '>Switch to it…</button><button class="btn sm ghost" type="button" data-drop="' + esc(c.name) + '"' + dis + ">Delete</button></div>").join("") + "</div>" : '<p class="d" style="margin:0">None.</p>';
+    const pending = s.indexed != null && s.indexed < snaps.length ? " · " + (snaps.length - s.indexed) + " still being read" : "";
+    view.innerHTML = head("Backups", lede, '<button class="btn" type="button" data-refresh>' + ic("refresh") + "Refresh</button>") + "<div data-backups-view></div>" +
+      (b.error ? '<div class="banner err">' + esc(b.error) + "</div>" : "") + banner +
+      '<div class="wgrid"><div class="wcol">' +
+      '<section><h3 class="bh">Snapshots <span class="faint" style="font-weight:400;font-size:12.5px">' + snaps.length + pending + '</span></h3><div class="tblwrap"><table class="tbl"><thead><tr><th>Taken</th><th>Kind</th><th class="r">Sites</th><th class="r hide-md">Size</th><th></th></tr></thead><tbody>' + rows + "</tbody></table></div></section>" +
+      '</div><div class="wcol">' +
+      '<section class="panel"><h3>Backup runs</h3><div class="lines">' + (runsHTML || '<p class="d" style="margin:0">The agent reports no backup runs.</p>') + "</div></section>" +
+      '<section class="panel"><h3>Kept copies</h3><p class="d">The data from before a restore, or a restored copy that did not start, kept beside the data directory for 30 days. Switching to one is a restore too.</p>' + copiesHTML + "</section>" +
+      '<section class="panel"><h3>What a restore does</h3><p class="d" style="margin:0">The whole instance — every site, account, address and setting — goes back to the moment of the snapshot, and everything since is replaced. Sitebin stops for about a minute and its site containers start again. If the restored instance does not become healthy, the previous data is put back by itself. Owners restore a single site on its Backups tab.</p></section>' +
+      "</div></div>";
+    if (running) backupsPoll = setTimeout(() => { if (route().view === "backups") renderBackups(); }, 3000);
+    view.onclick = async (e) => {
+      if (e.target.closest("[data-refresh]")) { renderBackups(); return; }
+      const rs = e.target.closest("[data-restore]"), sw = e.target.closest("[data-switch]"), dr = e.target.closest("[data-drop]");
+      if (rs || sw) {
+        const what = rs ? "the snapshot of " + stamp(rs.dataset.at) : "the kept copy of " + stamp((copies.find((c) => c.name === sw.dataset.switch) || {}).at);
+        const v = await dialog({ title: "Restore the whole instance?", body: "Every site, account and setting goes back to " + what + ". Everything since is replaced, and Sitebin is unreachable for about a minute. The data as it is now is kept as a copy for 30 days. Type restore to go on.",
+          html: '<div class="field"><input type="text" name="confirm" autocomplete="off" placeholder="restore" aria-label="Type restore"></div>', actions: [{ label: "Cancel", value: null }, { label: "Restore the instance", value: true, danger: true }] });
+        if (!v) return;
+        try {
+          await post("/account/admin/backups/restore", Object.assign({ confirm: v.fields.confirm }, rs ? { snapshot: rs.dataset.restore } : { copy: sw.dataset.switch }));
+          toast("The restore has started.");
+          renderBackups();
+        } catch (err) { fail(err); }
+        return;
+      }
+      if (dr) {
+        if (!(await confirm("Delete this copy?", "It is gone for good; the backups are not affected.", "Delete copy", true))) return;
+        try { await post("/account/admin/backups/copies/" + encodeURIComponent(dr.dataset.drop) + "/delete", {}); toast("Copy deleted."); renderBackups(); } catch (err) { fail(err); }
+      }
     };
   }
 

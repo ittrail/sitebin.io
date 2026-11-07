@@ -126,6 +126,7 @@ func (p *provider) adminAPIRoutes(routes map[string]http.Handler) {
 	routes["GET /account/api/admin/reports"] = p.captured(p.handleAdminReports)
 	routes["GET /account/api/admin/containers"] = p.captured(p.handleAdminContainers)
 	routes["GET /account/api/admin/health"] = http.HandlerFunc(p.handleAdminHealth)
+	routes["GET /account/api/admin/backups"] = http.HandlerFunc(p.handleAdminBackups)
 }
 
 type wsHealth struct {

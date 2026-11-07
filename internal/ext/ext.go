@@ -382,6 +382,14 @@ type FormsMailHost interface {
 	FormsMailConfigured() bool
 }
 
+// SnapshotsHost is optional on Host: the unix socket of the snapshots agent
+// on the instance's host (SITEBIN_SNAPSHOTS_AGENT), "" when there is none.
+// The operator's Backups view asks it. See
+// docs/superpowers/specs/2026-11-07-snapshots-and-restore-design.md.
+type SnapshotsHost interface {
+	SnapshotsAgent() string
+}
+
 // SiteService lets the extension read and manage sites without importing the
 // core store. Implemented by the httpapi layer (which also invalidates its
 // auth caches on mutation).
