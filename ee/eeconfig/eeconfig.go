@@ -195,6 +195,10 @@ type Config struct {
 	AdminAccounts []string
 	AllowAnon     bool // in accounts mode, still allow anonymous creation
 	LocalAuth     bool // email+password auth (default true; false = SSO only)
+	// DefaultUI is the account interface of an account that never chose one,
+	// from SITEBIN_DEFAULT_UI: "workspace" (the default) or "classic". An
+	// account's own choice always wins.
+	DefaultUI string
 
 	Google    *OAuthProvider // nil = not configured
 	Microsoft *OAuthProvider
@@ -526,6 +530,14 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (Co
 	cfg.LocalAuth = true
 	if v := strings.ToLower(strings.TrimSpace(getenv("SITEBIN_LOCAL_AUTH"))); v != "" {
 		cfg.LocalAuth = boolish(v)
+	}
+	switch v := strings.ToLower(strings.TrimSpace(getenv("SITEBIN_DEFAULT_UI"))); v {
+	case "", "workspace":
+		cfg.DefaultUI = "workspace"
+	case "classic":
+		cfg.DefaultUI = "classic"
+	default:
+		return cfg, fmt.Errorf("SITEBIN_DEFAULT_UI %q is invalid (want workspace|classic)", v)
 	}
 	if url := strings.TrimSpace(getenv("SITEBIN_STACK_URL")); url != "" {
 		appID := strings.TrimSpace(getenv("SITEBIN_STACK_APP_ID"))

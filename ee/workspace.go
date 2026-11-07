@@ -29,7 +29,9 @@ import (
 // See docs/superpowers/specs/2026-11-06-workspace-ui-design.md.
 
 const (
-	uiClassic   = ""
+	// account.Account.UI: "" is no choice of the account's own (the
+	// instance's default applies, see uiOf), else the interface it chose.
+	uiClassic   = "classic"
 	uiWorkspace = "workspace"
 	// uiHeader asks a POST route to answer JSON instead of a page. A custom
 	// header: a cross-site form cannot send it, and nothing about what the
@@ -199,14 +201,29 @@ func uiFrame(w io.Writer) bool {
 	return ok && u.frame
 }
 
-// withUI marks every account route's writer: frame for an account that chose
+// uiOf is the interface the account sees: its own choice, else the
+// instance's default (SITEBIN_DEFAULT_UI, the workspace unless an operator
+// keeps the classic pages). A provider without that setting — the tests' —
+// shows the classic pages.
+func (p *provider) uiOf(acc *account.Account) string {
+	switch acc.UI {
+	case uiWorkspace, uiClassic:
+		return acc.UI
+	}
+	if p.cfg.DefaultUI == uiWorkspace {
+		return uiWorkspace
+	}
+	return uiClassic
+}
+
+// withUI marks every account route's writer: frame for an account that sees
 // the workspace, json for a request that sent uiHeader. A request with
 // neither passes untouched — the classic pages are exactly what they were.
 func (p *provider) withUI(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		js := r.Header.Get(uiHeader) == "json"
 		frame := false
-		if acc, ok := p.currentAccount(r); ok && acc.UI == uiWorkspace {
+		if acc, ok := p.currentAccount(r); ok && p.uiOf(acc) == uiWorkspace {
 			frame = true
 		}
 		if !js && !frame {
@@ -236,11 +253,11 @@ func (p *provider) handleSetUI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	// Stored as chosen, never as "": an account that went back to the classic
+	// pages keeps them whatever the instance's default becomes.
 	ui := r.PostFormValue("ui")
 	switch ui {
-	case "classic":
-		ui = uiClassic
-	case uiWorkspace:
+	case uiClassic, uiWorkspace:
 	default:
 		http.Error(w, "unknown interface", http.StatusBadRequest)
 		return
@@ -321,7 +338,7 @@ func (p *provider) renderWorkspace(w http.ResponseWriter, r *http.Request, acc *
 // scripts read the site through the same API edit.html uses.
 func (p *provider) ServeEditPage(w http.ResponseWriter, r *http.Request) bool {
 	acc, ok := p.currentAccount(r)
-	if !ok || acc.UI != uiWorkspace {
+	if !ok || p.uiOf(acc) != uiWorkspace {
 		return false
 	}
 	p.writeUIPage(w, siteTmpl, "")
@@ -626,7 +643,7 @@ func (p *provider) handleUIState(w http.ResponseWriter, r *http.Request) {
 		cancelURL = p.cfg.PayGate.CancelURL
 	}
 	st.Account = wsAccount{
-		Email: acc.Email, Tier: tier, CSRF: token, IsAdmin: p.isAdmin(acc), UI: acc.UI,
+		Email: acc.Email, Tier: tier, CSRF: token, IsAdmin: p.isAdmin(acc), UI: p.uiOf(acc),
 		Containers: p.containerLimits != nil && p.isAdmin(acc),
 		PublishURL: p.host.PublishURL(), MCPEndpoint: p.host.BaseURL() + "/mcp", Base: p.baseURL(),
 		AccountURL: accountURL, DeletionURL: deletionURL, CancelURL: cancelURL,

@@ -282,3 +282,15 @@ What building it changed or settled, 2026-11-06:
   through edit.js's `api()` (wrapped like `render`) or a new `updated_at`
   now marks it stale, and it reloads when shown (e2e check added, failing
   before the fix).
+- **The workspace is the default (2026-11-07, the operator's decision).**
+  `account.UI` "" now means *no choice*: the instance's default applies,
+  `SITEBIN_DEFAULT_UI` (`workspace` unless set to `classic`; anything else
+  stops the start). "Classic interface" stores `classic` explicitly, so an
+  account that went back keeps the classic pages whatever the default; the
+  classic dashboard's button reads "Use the new interface". `uiOf` is the one
+  place that decides. The ee tests drive the classic pages unless one sets the
+  interface (`initT` pins the classic default), and the e2e scripts that drive
+  the classic pages pass `SITEBIN_DEFAULT_UI=classic`. Accounts that switched
+  back to classic before this change were stored as "" and land in the
+  workspace once — on the hosted instance only the operator and test accounts
+  had used the switch.

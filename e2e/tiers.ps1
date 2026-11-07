@@ -68,7 +68,7 @@ Write-Host "== starting enterprise image (tiers mode) on $Port" -ForegroundColor
 docker rm -f $name 2>$null | Out-Null; docker volume rm $vol 2>$null | Out-Null
 docker run -d --name $name -p "${Port}:80" -v "${vol}:/data" -v "${workDocker}:/cfg:ro" `
     -e "SITEBIN_BASE_DOMAIN=${base}:$Port" -e "SITEBIN_HTTP_ONLY=true" `
-    -e "SITEBIN_ACCOUNT_MODE=tiers" -e "SITEBIN_TIERS_FILE=/cfg/tiers.json" -e "SITEBIN_DEFAULT_TIER=free" `
+    -e "SITEBIN_ACCOUNT_MODE=tiers" -e "SITEBIN_DEFAULT_UI=classic" -e "SITEBIN_TIERS_FILE=/cfg/tiers.json" -e "SITEBIN_DEFAULT_TIER=free" `
     -e "SITEBIN_RATE_AUTH_PER_5MIN=200" -e "SITEBIN_CLEANUP_INTERVAL=5s" `
     -e "SITEBIN_FORMS_SMTP_HOST=127.0.0.1" -e "SITEBIN_FORMS_SMTP_PORT=1" -e "SITEBIN_FORMS_SMTP_FROM=forms@localtest.me" `
     $Image | Out-Null

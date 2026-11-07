@@ -104,7 +104,7 @@ $workDocker = ($work -replace '\\', '/')
 Cleanup
 $a = @("run", "-d", "--name", $name, "-p", "${Port}:80", "-v", "${vol}:/data", "-v", "${workDocker}:/cfg:ro",
     "-e", "SITEBIN_BASE_DOMAIN=${base}:$Port", "-e", "SITEBIN_HTTP_ONLY=true",
-    "-e", "SITEBIN_ACCOUNT_MODE=tiers", "-e", "SITEBIN_TIERS_FILE=/cfg/mt-tiers.json", "-e", "SITEBIN_DEFAULT_TIER=pro",
+    "-e", "SITEBIN_ACCOUNT_MODE=tiers", "-e", "SITEBIN_DEFAULT_UI=classic", "-e", "SITEBIN_TIERS_FILE=/cfg/mt-tiers.json", "-e", "SITEBIN_DEFAULT_TIER=pro",
     "-e", "SITEBIN_RATE_AUTH_PER_5MIN=500", "-e", "SITEBIN_DOMAIN_VERIFICATION=off")
 if (-not $NoContainers) {
     $a += @("-v", "/var/run/docker.sock:/var/run/docker.sock", "--group-add", "0", "-e", "SITEBIN_CONTAINERS=docker")

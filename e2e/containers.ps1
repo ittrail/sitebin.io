@@ -87,7 +87,7 @@ Cleanup
 docker run -d --name $name -p "${Port}:80" -v "${vol}:/data" -v "${workDocker}:/cfg:ro" `
     -v "/var/run/docker.sock:/var/run/docker.sock" --group-add 0 `
     -e "SITEBIN_BASE_DOMAIN=${base}:$Port" -e "SITEBIN_HTTP_ONLY=true" `
-    -e "SITEBIN_ACCOUNT_MODE=tiers" -e "SITEBIN_TIERS_FILE=/cfg/ct-tiers.json" -e "SITEBIN_DEFAULT_TIER=pro" `
+    -e "SITEBIN_ACCOUNT_MODE=tiers" -e "SITEBIN_DEFAULT_UI=classic" -e "SITEBIN_TIERS_FILE=/cfg/ct-tiers.json" -e "SITEBIN_DEFAULT_TIER=pro" `
     -e "SITEBIN_DOMAIN_VERIFICATION=off" -e "SITEBIN_RATE_AUTH_PER_5MIN=500" `
     -e "SITEBIN_ADMIN_ACCOUNTS=ct@example.com" `
     -e "SITEBIN_CONTAINERS=docker" $Image | Out-Null

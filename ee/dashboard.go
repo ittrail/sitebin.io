@@ -119,7 +119,7 @@ func (p *provider) handleRoot(w http.ResponseWriter, r *http.Request) {
 	}
 	// Sliding lifetime: a render re-issues the cookie for a full term.
 	http.SetCookie(w, p.sessions.Cookie(acc.ID, acc.TokenVersion))
-	if acc.UI == uiWorkspace {
+	if p.uiOf(acc) == uiWorkspace {
 		p.renderWorkspace(w, r, acc)
 		return
 	}

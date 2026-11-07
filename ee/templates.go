@@ -200,7 +200,7 @@ var dashTmpl = twin("dash", nil, `
     <h1 style="margin:0">Your account</h1>
     <span class="muted">{{.Email}}{{if .Tier}} · {{.Tier}} tier{{end}}</span>
     <span class="spacer" style="flex:1"></span>
-    <form class="inline" method="post" action="/account/ui" title="The new workspace: your sites in one table, each site on a page of its own. Switch back at any time."><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="ui" value="workspace"><button class="btn small primary" type="submit">Try the new interface</button></form>
+    <form class="inline" method="post" action="/account/ui" title="The new workspace: your sites in one table, each site on a page of its own. Switch back at any time."><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="ui" value="workspace"><button class="btn small primary" type="submit">Use the new interface</button></form>
     {{if .IsAdmin}}<a class="btn small" href="/account/admin">Instance register</a>{{end}}
     {{if .AccountURL}}<a class="btn small" href="{{.AccountURL}}" rel="noopener" title="Password, sign-in methods, sessions, data export and account deletion">Manage account</a>{{end}}
     <form class="inline" method="post" action="/account/logout"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="btn small" type="submit">Sign out</button></form>

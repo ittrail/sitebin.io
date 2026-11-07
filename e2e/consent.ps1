@@ -209,7 +209,7 @@ function StartSitebin([string]$discoveryURL, [string]$issuerURL, [string]$secret
         "-p", "${Port}:80", "-v", "${vol}:/data",
         "-e", "SITEBIN_BASE_DOMAIN=${base}:$Port",
         "-e", "SITEBIN_HTTP_ONLY=true",
-        "-e", "SITEBIN_ACCOUNT_MODE=tiers",
+        "-e", "SITEBIN_ACCOUNT_MODE=tiers", "-e", "SITEBIN_DEFAULT_UI=classic",
         "-e", "SITEBIN_LOCAL_AUTH=false",
         "-e", "SITEBIN_DEFAULT_TIER=free",
         "-e", "SITEBIN_RATE_AUTH_PER_5MIN=500",

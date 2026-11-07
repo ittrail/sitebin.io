@@ -1779,6 +1779,7 @@ community binary stays pure MIT), while `sitebin:latest-ee` includes it.
 | `SITEBIN_OAUTH_OIDC_ISSUER` / `_CLIENT_ID` / `_CLIENT_SECRET` / `_LABEL` | Generic OIDC sign-in against any issuer (Keycloak, Okta, Authentik, the [SaaS Stack](#saas-stack-integration)). `_ISSUER` is the value that must appear in every token's `iss`. `_LABEL` is the login-button text (default `SSO`). **Sign-out ends the issuer's own session too** when its discovery document names an `end_session_endpoint` (RP-initiated logout with `client_id`, the sign-in's ID token as `id_token_hint`, and `post_logout_redirect_uri=<base>/account/signed-out`, which the client must accept as a post-logout redirect URI); Google and Microsoft signed in directly are never signed out at the provider. |
 | `SITEBIN_OAUTH_OIDC_DISCOVERY_URL` | Where the discovery document is **fetched**, when that is not the issuer's own URL. Unset = fetch it from `_ISSUER`, which is what a plain provider wants. Set it to put Sitebin behind the [SaaS Stack](#saas-stack-integration)'s **consent gate**: the stack's Auth Gateway serves the realm's document with `authorization_endpoint` pointed at itself, and an app that discovers straight from the identity provider never reaches the gate and its users are never asked to accept any terms. The document's own `issuer` is still required to equal `_ISSUER`, so this cannot be used to trust another realm by accident. Either the base URL or the full `/.well-known/openid-configuration` is accepted. |
 | `SITEBIN_LOCAL_AUTH` | `true` (default) or `false` = SSO only: no email/password form, signup/reset disabled; with a single OAuth provider, `/account/login` redirects straight to it. Requires an `SITEBIN_OAUTH_*` provider. |
+| `SITEBIN_DEFAULT_UI` | The account interface of an account that has not chosen one: `workspace` (default) or `classic`. An account's own choice always wins. Anything else stops the start. See [The workspace interface](#the-workspace-interface-enterprise). |
 | `SITEBIN_BILLING` | Which backend may charge customers: `stripe`, `paddle` or `paygate` (case-insensitive). Unset = inferred when exactly one is configured; **two configured and no choice is a startup error**. Exactly one backend is ever active: with `paygate` selected, configured Stripe/Paddle credentials are inert *and their webhook routes are not mounted*, so provider deliveries get a silent `404` — remove the webhook from the provider's dashboard, or you will be debugging retries. Startup also refuses a catalogue the selected direct backend cannot sell: every tier with a `price` must carry the matching `price.stripe` / `price.paddle`. See [Billing](#billing). |
 | `SITEBIN_PAYGATE_URL` / `_APP_ID` / `_API_KEY` | Sell tiers and resolve subscriptions through a SaaS-Stack PayGate. See [Billing](#billing) and [SaaS-Stack integration](#saas-stack-integration). |
 | `SITEBIN_PAYGATE_CACHE_TTL` | Per-user tier cache (default `5m`). "Manage subscription" needs no setting: with PayGate and `SITEBIN_OAUTH_OIDC_ISSUER` set it goes to the stack's hosted plan page, `<issuer origin>/apps/<SITEBIN_PAYGATE_APP_ID>/plan`, derived exactly as the stack's own `planUrl()` derives it. |
@@ -1822,11 +1823,14 @@ a `404`.
 
 ### The workspace interface *(Enterprise)*
 
-Every account chooses between two dashboards: **Classic** (the pages above,
-the default) and **Workspace**. "Try the new interface" on the classic
-dashboard switches; "Classic interface" in the workspace's sidebar and on its
-Account view switches back. The choice is stored on the account
-(`account.json`, `ui`), so it holds on every device and at every sign-in.
+Every account chooses between two dashboards: **Workspace** (the default)
+and **Classic** (the pages above). "Classic interface" in the workspace's
+sidebar and on its Account view switches; "Use the new interface" on the
+classic dashboard switches back. The choice is stored on the account
+(`account.json`, `ui`: `workspace` or `classic`), so it holds on every device
+and at every sign-in; an account that has not chosen (`ui` absent) gets the
+instance's default, `SITEBIN_DEFAULT_UI` (`workspace` unless set to
+`classic`).
 
 The workspace shows the account's sites in one table — status, address, type,
 tags, visitors of the last 7 days, last change, expiry — with tag groups as

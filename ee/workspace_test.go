@@ -82,8 +82,44 @@ func TestWorkspaceChoiceRefusesForgeryAndUnknownValues(t *testing.T) {
 		t.Errorf("unknown ui = %d, want 400", w.Code)
 	}
 	stored, _ := p.accounts.ByID(acc.ID)
-	if stored.UI != uiClassic {
+	if stored.UI != "" {
 		t.Errorf("a refused choice was stored: %q", stored.UI)
+	}
+}
+
+// The workspace is the default: an account that never chose lands in it, at
+// sign-up and at every later visit; "Classic interface" is stored as the
+// account's own choice and outlasts the default; an instance may keep the
+// classic pages as its default (SITEBIN_DEFAULT_UI=classic).
+func TestWorkspaceIsTheDefaultUntilAnAccountChoosesClassic(t *testing.T) {
+	p, _, mux, acc, cookie := namedAccount(t)
+	p.cfg.DefaultUI = uiWorkspace
+	isWorkspace := func() bool {
+		return strings.Contains(getAs(mux, "/account", cookie).Body.String(), `class="ws ws-app"`)
+	}
+	if !isWorkspace() {
+		t.Fatal("an account without a choice should land in the workspace")
+	}
+	if w := chooseUI(t, p, mux, acc, cookie, "classic"); w.Code != http.StatusSeeOther {
+		t.Fatalf("choose classic = %d %s", w.Code, w.Body)
+	}
+	stored, _ := p.accounts.ByID(acc.ID)
+	if stored.UI != uiClassic {
+		t.Fatalf("the classic choice is stored as %q, want %q", stored.UI, uiClassic)
+	}
+	if isWorkspace() {
+		t.Fatal("an account that chose classic must keep the classic pages under the workspace default")
+	}
+	// back to no choice: the instance's default decides, either way
+	if err := p.accounts.Update(stored, func(a *account.Account) error { a.UI = ""; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !isWorkspace() {
+		t.Fatal("no choice under the workspace default should be the workspace")
+	}
+	p.cfg.DefaultUI = uiClassic
+	if isWorkspace() {
+		t.Fatal("no choice under SITEBIN_DEFAULT_UI=classic should be the classic pages")
 	}
 }
 

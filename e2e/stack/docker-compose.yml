@@ -65,6 +65,7 @@ services:
       # people by the stack's identity (the OIDC subject, i.e. the Keycloak
       # user UUID). A local account has no subscription there and never will.
       SITEBIN_ACCOUNT_MODE: tiers
+      SITEBIN_DEFAULT_UI: classic
       SITEBIN_LOCAL_AUTH: "false"
       SITEBIN_TIERS_FILE: /cfg/tiers.json
       SITEBIN_DEFAULT_TIER: ${SITEBIN_DEFAULT_TIER:-free}

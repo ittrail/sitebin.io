@@ -165,7 +165,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "docker run (mailpit) failed" }
     docker run -d --name $name --network $net -p "${Port}:80" -v "${vol}:/data" -v "${cfgDocker}:/cfg:ro" `
         -e "SITEBIN_BASE_DOMAIN=${base}:$Port" -e "SITEBIN_HTTP_ONLY=true" `
-        -e "SITEBIN_ACCOUNT_MODE=tiers" -e "SITEBIN_TIERS_FILE=/cfg/tiers.json" `
+        -e "SITEBIN_ACCOUNT_MODE=tiers" -e "SITEBIN_DEFAULT_UI=classic" -e "SITEBIN_TIERS_FILE=/cfg/tiers.json" `
         -e "SITEBIN_DEFAULT_TIER=free" -e "SITEBIN_ANON_TIER=drop" -e "SITEBIN_TIER_SELF_SELECT=true" `
         -e "SITEBIN_LOCAL_AUTH=true" -e "SITEBIN_DOMAIN_VERIFICATION=off" `
         -e "SITEBIN_RATE_AUTH_PER_5MIN=200" `

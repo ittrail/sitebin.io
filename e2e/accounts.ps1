@@ -46,7 +46,7 @@ docker rm -f $name 2>$null | Out-Null
 docker volume rm $vol 2>$null | Out-Null
 docker run -d --name $name -p "${Port}:80" -v "${vol}:/data" `
     -e "SITEBIN_BASE_DOMAIN=${base}:$Port" -e "SITEBIN_HTTP_ONLY=true" `
-    -e "SITEBIN_ACCOUNT_MODE=accounts" `
+    -e "SITEBIN_ACCOUNT_MODE=accounts" -e "SITEBIN_DEFAULT_UI=classic" `
     -e "SITEBIN_RATE_AUTH_PER_5MIN=200" `
     $Image | Out-Null
 if ($LASTEXITCODE -ne 0) { Write-Host "docker run failed" -ForegroundColor Red; exit 1 }

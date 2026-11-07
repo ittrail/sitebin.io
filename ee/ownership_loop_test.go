@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -22,7 +23,13 @@ import (
 // initT is Init with the ownership loop stopped when the test ends.
 func initT(t testing.TB, p *provider, h ext.Host) error {
 	t.Cleanup(p.stopOwnershipLoop)
-	return p.Init(h)
+	err := p.Init(h)
+	// The tests drive the classic pages unless one sets the interface: the
+	// product's default (the workspace) has tests of its own.
+	if os.Getenv("SITEBIN_DEFAULT_UI") == "" {
+		p.cfg.DefaultUI = uiClassic
+	}
+	return err
 }
 
 // SiteOwners is the fake core's walk over every site: meta only.

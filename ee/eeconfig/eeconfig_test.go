@@ -1027,3 +1027,21 @@ func TestCheckMCPOAuthIssuer(t *testing.T) {
 		})
 	}
 }
+
+// The workspace is the interface of an account that never chose one, unless
+// the instance keeps the classic pages as its default.
+func TestDefaultUI(t *testing.T) {
+	for _, c := range []struct{ env, want string }{
+		{"", "workspace"},
+		{"workspace", "workspace"},
+		{"Classic", "classic"},
+	} {
+		cfg, err := Load(env(map[string]string{"SITEBIN_ACCOUNT_MODE": "accounts", "SITEBIN_DEFAULT_UI": c.env}), noFile)
+		if err != nil || cfg.DefaultUI != c.want {
+			t.Errorf("SITEBIN_DEFAULT_UI=%q: got %q (%v), want %q", c.env, cfg.DefaultUI, err, c.want)
+		}
+	}
+	if _, err := Load(env(map[string]string{"SITEBIN_ACCOUNT_MODE": "accounts", "SITEBIN_DEFAULT_UI": "modern"}), noFile); err == nil || !strings.Contains(err.Error(), "SITEBIN_DEFAULT_UI") {
+		t.Fatalf("an unknown interface must stop the start, got %v", err)
+	}
+}
