@@ -1613,7 +1613,8 @@ environment: [ "SITEBIN_SNAPSHOTS_AGENT=/run/sitebin-agent/agent.sock" ]
   `nightly-*`, `predeploy-*`, anything else is a backup.
 - **`-backup-now`** is the command that takes a snapshot on request. **A site
   restore takes one first** and refuses without it, so the files it replaces
-  are the newest version afterwards — every restore can be undone.
+  are the newest version afterwards — every restore can be undone for as
+  long as that snapshot is kept (48 hours with the hourly retention).
 - The agent **indexes** each snapshot once (per site: files, bytes and a
   fingerprint of `files/`, so equal snapshots are one *version*) and deletes
   an index with its snapshot.
