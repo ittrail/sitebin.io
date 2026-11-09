@@ -912,3 +912,22 @@ func TestDemux(t *testing.T) {
 		t.Errorf("demux = %q, %v", got, err)
 	}
 }
+
+// Postgres without a folder keeps its data in memory, like MySQL, and a
+// service's own initdb arguments come after the image's, so they win.
+func TestPostgresContainer(t *testing.T) {
+	r := newRig(t)
+	r.sites.add(siteA, "acct", "services:\n  db:\n    image: alpine-postgres-18\n    environment: [\"POSTGRES_INITDB_ARGS=--locale=C\"]\n")
+	r.reconcile(t, siteA, true)
+	db := r.eng.containers["sb-"+siteA+"-db"]
+	if db == nil || db.body.HostConfig.Tmpfs["/var/lib/postgresql"] == "" || db.body.HostConfig.Tmpfs["/var/run/postgresql"] == "" {
+		t.Fatalf("container: %+v", db)
+	}
+	img, own := slices.Index(db.body.Env, "POSTGRES_INITDB_ARGS=--locale-provider=icu --icu-locale=und"), slices.Index(db.body.Env, "POSTGRES_INITDB_ARGS=--locale=C")
+	if img < 0 || own < img {
+		t.Errorf("env = %q", db.body.Env)
+	}
+	if !strings.HasPrefix(db.body.Image, "postgres@sha256:") {
+		t.Errorf("image = %q", db.body.Image)
+	}
+}

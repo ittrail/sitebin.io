@@ -208,6 +208,16 @@ func parseService(at, name string, n *yaml.Node) (Service, error) {
 	if sv.Image.Name == "" {
 		return sv, fieldErr(at, "image: is required (%s)", strings.Join(ImageNames(), ", "))
 	}
+	// Checked once image and volumes are both known, whatever their order.
+	ownPath := sv.Image.DataPathEnv != "" && slices.ContainsFunc(sv.Env, func(e string) bool {
+		return strings.HasPrefix(e, sv.Image.DataPathEnv+"=")
+	})
+	for _, v := range sv.Volumes {
+		if now, ok := sv.Image.OldDataPaths[v.Target]; ok && !ownPath {
+			return sv, fieldErr(at+".volumes", "%q: %s keeps its data in %s, not %s — mount the folder there (%s:%s)",
+				v.String(), sv.Image.Name, now, v.Target, v.Folder, now)
+		}
+	}
 	return sv, nil
 }
 

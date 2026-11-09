@@ -34,6 +34,13 @@ type Image struct {
 	DataPaths []string
 	// DataTmpfs is the tmpfs option string used for an unmounted data path.
 	DataTmpfs string
+	// OldDataPaths are mount targets where earlier versions kept their data
+	// and this one refuses to start — target → where the data lives now. A
+	// compose file mounting one is refused with that path, rather than the
+	// project restarting forever, unless the service sets DataPathEnv and so
+	// chose its own data path.
+	OldDataPaths map[string]string
+	DataPathEnv  string
 }
 
 // Ref is the reference containers are created from.
@@ -127,6 +134,34 @@ var catalog = map[string]Image{
 		DataPaths: []string{"/var/lib/mysql"},
 		DataTmpfs: "rw,nosuid,nodev,size=256m,mode=1777",
 	},
+	// The Docker Official Image on Alpine. Its entrypoint runs as any uid
+	// (nss_wrapper fakes the passwd entry initdb wants) and initialises the
+	// cluster on the first start. Its defaults (128 MB shared buffers, 100
+	// connections) fit the per-container memory limit as they are.
+	"alpine-postgres-18": {
+		Name:    "alpine-postgres-18",
+		Display: "postgres:18.6-alpine3.24",
+		Repo:    "postgres",
+		Digest:  "sha256:123b17998ccaf47e53b502e8c6a1e79afd8f579c6f3eec83c563da026f957395",
+		Cmd:     []string{"postgres"},
+		Env: map[string]string{
+			// musl sorts by code point ("Bär" < "Zebra" < "apfel" <
+			// "Äpfel"); the ICU root collation sorts text as people expect
+			// in every language. It applies when the cluster is created,
+			// and a service's own value replaces it.
+			"POSTGRES_INITDB_ARGS": "--locale-provider=icu --icu-locale=und",
+		},
+		Tmpfs: map[string]string{
+			"/tmp":                "rw,nosuid,nodev,size=64m,mode=1777",
+			"/var/run/postgresql": "rw,nosuid,nodev,size=1m,mode=1777",
+		},
+		// Since 18 the image keeps the cluster in /var/lib/postgresql/18/docker
+		// (PGDATA), so the folder goes at /var/lib/postgresql.
+		DataPaths:    []string{"/var/lib/postgresql"},
+		DataTmpfs:    "rw,nosuid,nodev,size=256m,mode=1777",
+		OldDataPaths: map[string]string{"/var/lib/postgresql/data": "/var/lib/postgresql"},
+		DataPathEnv:  "PGDATA",
+	},
 }
 
 // Lookup returns the catalogue entry for a compose file's image name.
@@ -136,4 +171,6 @@ func Lookup(name string) (Image, bool) {
 }
 
 // ImageNames lists the catalogue, for error messages and docs.
-func ImageNames() []string { return []string{"alpine-node-22", "alpine-dotnet-10", "mysql-8.4"} }
+func ImageNames() []string {
+	return []string{"alpine-node-22", "alpine-dotnet-10", "mysql-8.4", "alpine-postgres-18"}
+}

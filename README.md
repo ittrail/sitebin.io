@@ -1297,7 +1297,7 @@ services:
 
 | Key | Meaning |
 |---|---|
-| `image` | One of Sitebin's own images — never a registry reference. `alpine-node-22` (`node:22.23.2-alpine3.24`), `alpine-dotnet-10` (`mcr.microsoft.com/dotnet/aspnet:10.0.9-alpine3.24-extra`: the .NET 10 and ASP.NET Core runtimes with ICU and time zones; ASP.NET listens on `8080`) and `mysql-8.4` (`mysql:8.4.11`), all pinned by digest. |
+| `image` | One of Sitebin's own images — never a registry reference. `alpine-node-22` (`node:22.23.2-alpine3.24`), `alpine-dotnet-10` (`mcr.microsoft.com/dotnet/aspnet:10.0.9-alpine3.24-extra`: the .NET 10 and ASP.NET Core runtimes with ICU and time zones; ASP.NET listens on `8080`) `mysql-8.4` (`mysql:8.4.11`) and `alpine-postgres-18` (`postgres:18.6-alpine3.24`: PostgreSQL 18, which keeps its data in `/var/lib/postgresql` — a compose file mounting the pre-18 `/var/lib/postgresql/data` is refused unless the service sets `PGDATA`; the cluster is created with the ICU root collation, `POSTGRES_INITDB_ARGS=--locale-provider=icu --icu-locale=und`, which the service's own value replaces), all pinned by digest. |
 | `environment` | A map or a `KEY=value` list, as in Compose. **No interpolation**: `$HOME` stays the five characters `$HOME`. Multi-line values (`KEY: \|` and an indented block, e.g. a PEM key) arrive intact. This is where secrets go: the compose file is never served, in any mode, and only the site's managers can read it (owner, admins, the edit password, tokens and agents with access to the site). |
 | `volumes` | `<folder>:<absolute path>[:ro]`. The folder is a **root folder of the site** — the same one the edit page, WebDAV and FTP show — created if it does not exist. That is how code reaches a container: upload it into the folder the service mounts. A volume is writable unless it says `:ro`, so a folder such as `data:/data` is the app's persistent storage (a SQLite file works): it survives restarts and deploys, counts toward the site's byte cap and is in the instance's backups. **A replace upload (`?replace=true`) replaces the whole site, data folders included** — deploy an app by uploading into its own folder, then restart it (only a change to the compose file restarts on its own). |
 | `http` | The ports the service speaks HTTP on — one, or a list (at most 10). Each `service:port` gets a **generated address**; which custom domain serves which port is the site's domain settings, never the file's. A service without `http:` has no address (services reach each other on any port by name). The old `domains:` key is refused with a message saying so. |
@@ -1344,7 +1344,7 @@ How it runs:
   Containers tab (see below) — changed on running containers in place,
   without a restart. The customer does not choose them. No
   port is published on the host. An image's data path you do not mount (e.g.
-  MySQL's) is a tmpfs, so it cannot fill the host's disk.
+  MySQL's or PostgreSQL's) is a tmpfs, so it cannot fill the host's disk.
 - **Quotas.** The tier's `max_containers` caps running services across **all**
   of an account's projects — `0`/absent means no containers. The site's byte
   cap counts everything the containers write; a project over it is stopped

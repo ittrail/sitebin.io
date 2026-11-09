@@ -4,6 +4,7 @@ package containers
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -225,5 +226,48 @@ func TestCatalogueAndImageNamesAgree(t *testing.T) {
 	}
 	if p.Services[0].Image.Name != "alpine-dotnet-10" || p.Services[0].Image.Env["HOME"] != "/tmp" {
 		t.Fatalf("parsed %+v", p.Services[0])
+	}
+}
+
+// alpine-postgres-18 sorts with ICU unless the service says otherwise, keeps
+// its data in /var/lib/postgresql, and starts the server itself.
+func TestPostgresImage(t *testing.T) {
+	p, err := Parse([]byte("services:\n  db:\n    image: alpine-postgres-18\n    environment:\n      POSTGRES_PASSWORD: pw\n    volumes: [\"db:/var/lib/postgresql\"]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	img := p.Services[0].Image
+	if img.Name != "alpine-postgres-18" || img.Env["POSTGRES_INITDB_ARGS"] != "--locale-provider=icu --icu-locale=und" {
+		t.Fatalf("parsed %+v", img)
+	}
+	if !slices.Equal(img.DataPaths, []string{"/var/lib/postgresql"}) || !slices.Equal(img.Cmd, []string{"postgres"}) {
+		t.Fatalf("data paths %v, cmd %v", img.DataPaths, img.Cmd)
+	}
+	if img.Tmpfs["/var/run/postgresql"] == "" || img.Tmpfs["/tmp"] == "" {
+		t.Fatalf("tmpfs %v", img.Tmpfs)
+	}
+}
+
+// Mounting the folder where Postgres kept its data before 18 is refused with
+// the path to use instead, whatever the key order; with PGDATA set the
+// service chose its own path, and other images are not concerned.
+func TestPostgresRefusesTheOldDataPath(t *testing.T) {
+	for _, src := range []string{
+		"services:\n  db:\n    image: alpine-postgres-18\n    volumes: [\"db:/var/lib/postgresql/data\"]\n",
+		"services:\n  db:\n    volumes: [\"db:/var/lib/postgresql/data:rw\"]\n    image: alpine-postgres-18\n",
+	} {
+		_, err := Parse([]byte(src))
+		if err == nil || !strings.Contains(err.Error(), "services.db.volumes") || !strings.Contains(err.Error(), "(db:/var/lib/postgresql)") {
+			t.Errorf("%q: err = %v", src, err)
+		}
+	}
+	for _, src := range []string{
+		"services:\n  db:\n    image: alpine-postgres-18\n    environment: [PGDATA=/var/lib/postgresql/data]\n    volumes: [\"db:/var/lib/postgresql/data\"]\n",
+		"services:\n  db:\n    image: alpine-postgres-18\n    environment: [PGDATA=/var/lib/postgresql/data/pg]\n    volumes: [\"db:/var/lib/postgresql/data/pg\"]\n",
+		"services:\n  db:\n    image: mysql-8.4\n    volumes: [\"db:/var/lib/postgresql/data\"]\n",
+	} {
+		if _, err := Parse([]byte(src)); err != nil {
+			t.Errorf("%q: %v", src, err)
+		}
 	}
 }
