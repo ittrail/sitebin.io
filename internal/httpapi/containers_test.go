@@ -599,6 +599,33 @@ func TestContainerSiteServiceSeam(t *testing.T) {
 	}
 }
 
+// Recording what the runtime observed is not a change to the site: the
+// workspace shows updated_at as "Last change", and an app that crashed or was
+// restarted by Docker must not look like an edit (2026-11-10).
+func TestObservedContainerStateLeavesUpdatedAt(t *testing.T) {
+	withContainers(t, &fakeRuntime{})
+	e := newEnv(t, nil)
+	c := e.createSite(t, map[string]string{"mode": "container"}, map[string]string{store.ComposeFile: "services: {}\n"})
+	before, err := e.st.ByViewID(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := ext.ContainerState{Status: store.ContainerError, Message: "exited (1)", AppliedHash: "h", AppliedSeq: 1}
+	if err := e.api.SiteService().SetContainerState(c.ID, st); err != nil {
+		t.Fatal(err)
+	}
+	after, err := e.st.ByViewID(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Meta.Container == nil || after.Meta.Container.Status != store.ContainerError || after.Meta.Container.ObservedAt == nil {
+		t.Fatalf("observed state not recorded: %+v", after.Meta.Container)
+	}
+	if !after.Meta.UpdatedAt.Equal(before.Meta.UpdatedAt) {
+		t.Errorf("recording observed state moved updated_at: %v, was %v", after.Meta.UpdatedAt, before.Meta.UpdatedAt)
+	}
+}
+
 func TestDeletingAContainerSiteStopsItFirst(t *testing.T) {
 	rt := &fakeRuntime{}
 	withContainers(t, rt)

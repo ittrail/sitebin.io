@@ -377,6 +377,20 @@ func (s *Store) load(dir string) (*Site, error) {
 // meta.json under the site lock, applies mutate, bumps updated_at, and writes
 // it back. site.Meta is refreshed with the result.
 func (s *Store) Update(site *Site, mutate func(*Meta) error) error {
+	return s.update(site, mutate, true)
+}
+
+// UpdateObserved is Update for a write that only records what Sitebin
+// observed — a domain check's answer, a container's state — and leaves
+// updated_at alone. updated_at is the site's last content or settings
+// change, the workspace's "Last change": a daily DNS check or a crashed app
+// is neither. A write that changes what the site serves (attaching or
+// detaching a domain) is a change and goes through Update.
+func (s *Store) UpdateObserved(site *Site, mutate func(*Meta) error) error {
+	return s.update(site, mutate, false)
+}
+
+func (s *Store) update(site *Site, mutate func(*Meta) error, touch bool) error {
 	l := s.lockSite(site.ViewID)
 	l.Lock()
 	defer l.Unlock()
@@ -391,7 +405,9 @@ func (s *Store) Update(site *Site, mutate func(*Meta) error) error {
 	if err := mutate(&meta); err != nil {
 		return err
 	}
-	meta.UpdatedAt = time.Now().UTC()
+	if touch {
+		meta.UpdatedAt = time.Now().UTC()
+	}
 	if err := writeMeta(site.dir, meta); err != nil {
 		return err
 	}

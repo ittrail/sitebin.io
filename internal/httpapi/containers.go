@@ -361,7 +361,7 @@ func (s siteService) SetContainerState(viewID string, st ext.ContainerState) err
 		return mapSiteGone(err, viewID)
 	}
 	now := time.Now().UTC()
-	err = s.a.st.Update(site, func(m *store.Meta) error {
+	err = s.a.st.UpdateObserved(site, func(m *store.Meta) error {
 		if m.Container == nil {
 			m.Container = &store.ContainerMeta{}
 		}

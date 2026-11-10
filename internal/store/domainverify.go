@@ -481,7 +481,7 @@ func (s *Store) ReconcileDomains(ctx context.Context, site *Site, now time.Time)
 // (a verified claim's CheckedAt schedules its next re-check, so a failure
 // there must leave it alone).
 func (s *Store) stampCheck(site *Site, d string, now time.Time, found string) {
-	s.Update(site, func(m *Meta) error {
+	s.UpdateObserved(site, func(m *Meta) error {
 		if i := claimIndex(m, d); i >= 0 {
 			t := now.UTC()
 			m.DomainClaims[i].CheckedAt = &t
@@ -495,7 +495,7 @@ func (s *Store) stampCheck(site *Site, d string, now time.Time, found string) {
 // which also ends any revocation window that was running and makes an
 // address held through the host independent.
 func (s *Store) stampOK(site *Site, d string, now time.Time) {
-	s.Update(site, func(m *Meta) error {
+	s.UpdateObserved(site, func(m *Meta) error {
 		if i := claimIndex(m, d); i >= 0 {
 			t := now.UTC()
 			m.DomainClaims[i].CheckedAt = &t
@@ -511,7 +511,7 @@ func (s *Store) stampOK(site *Site, d string, now time.Time) {
 // host holds it: no revocation window, and found says what its own record
 // would need.
 func (s *Store) stampViaHost(site *Site, d string, now time.Time, found string) {
-	s.Update(site, func(m *Meta) error {
+	s.UpdateObserved(site, func(m *Meta) error {
 		if i := claimIndex(m, d); i >= 0 {
 			t := now.UTC()
 			m.DomainClaims[i].CheckedAt = &t
@@ -525,7 +525,7 @@ func (s *Store) stampViaHost(site *Site, d string, now time.Time, found string) 
 
 // markFailing runs a verified domain's revocation window from since.
 func (s *Store) markFailing(site *Site, d string, now, since time.Time, found string) {
-	s.Update(site, func(m *Meta) error {
+	s.UpdateObserved(site, func(m *Meta) error {
 		if i := claimIndex(m, d); i >= 0 {
 			t, f := now.UTC(), since.UTC()
 			m.DomainClaims[i].CheckedAt = &t

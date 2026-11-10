@@ -294,3 +294,15 @@ What building it changed or settled, 2026-11-06:
   back to classic before this change were stored as "" and land in the
   workspace once — on the hosted instance only the operator and test accounts
   had used the switch.
+- **"Last change" is a change, not a check (2026-11-10).** The list's Changed
+  column and At a glance's "Last change" read `updated_at`, and every
+  `Store.Update` bumped it, including the daily domain re-check
+  (`stampCheck`, `stampOK`, `stampViaHost`, `markFailing`) and the container
+  runtime's observed state (`SetContainerState`). Every site with a custom
+  domain therefore looked edited within the last day, and the operator asked
+  who had changed a site nobody had touched for four days (the provenance log
+  was right: there was nothing to name). Those writes now go through
+  `Store.UpdateObserved`, which writes `meta.json` under the same lock and
+  leaves `updated_at` alone. Attaching or detaching a domain, the sweep's
+  included, still moves it: that changes what the site serves.
+  `TestDomainChecksLeaveUpdatedAt`, `TestObservedContainerStateLeavesUpdatedAt`.
