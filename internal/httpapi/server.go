@@ -436,6 +436,15 @@ func storeError(w http.ResponseWriter, err error) {
 		writeError(w, 400, err.Error())
 	case errors.Is(err, errUploadCutOff):
 		writeError(w, 400, errUploadCutOff.Error())
+	case errors.Is(err, errUploadTimedOut):
+		writeError(w, 408, errUploadTimedOut.Error())
+	case errors.As(err, new(*http.MaxBytesError)):
+		// A body past what the site can take (uploadBodyLimit): the
+		// uploader's to fix, so the answer says by how much.
+		var tooLarge *http.MaxBytesError
+		errors.As(err, &tooLarge)
+		writeError(w, 413, fmt.Sprintf("the upload is too large: one request to this site may carry at most %s (its size cap plus %s for the form) — send the files in several requests",
+			store.HumanBytes(tooLarge.Limit), store.HumanBytes(uploadFormRoom)))
 	case errors.Is(err, store.ErrBadDomain):
 		writeError(w, 400, err.Error())
 	case errors.Is(err, store.ErrFormNotFound):

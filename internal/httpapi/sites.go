@@ -348,20 +348,60 @@ func partFilename(p *multipart.Part) string {
 	return p.FileName()
 }
 
+// uploadFormRoom is what a multipart body may carry beyond the site's size
+// cap: boundaries, part headers and form fields.
+const uploadFormRoom = 10 << 20
+
+// UploadReadTimeout is how long the public server reads one request's body
+// (cmd/sitebin's ReadTimeout): an upload must arrive within it. Here so the
+// answer to one that did not can name it.
+const UploadReadTimeout = 10 * time.Minute
+
+// uploadBodyLimit is the most a multipart upload to site may carry: the
+// site's own size cap — the plan's, stamped at creation, else the instance's
+// default — plus room for the form. The store enforces the cap itself on
+// every file; this only stops a body that could never fit from streaming on.
+func (a *API) uploadBodyLimit(site *store.Site) int64 {
+	return a.st.EffMaxBytes(site) + uploadFormRoom
+}
+
 // errUploadCutOff is a request body that ended in the middle of a file: the
 // connection dropped on the way, which is the client's to retry, not a fault
 // of the server. Only bodyReader produces it, so a short read anywhere else
 // can never be mistaken for one.
 var errUploadCutOff = errors.New("the upload was cut off before it was complete — send it again")
 
+// errUploadTimedOut is a request body still arriving when the public
+// server's read timeout ran out.
+var errUploadTimedOut = fmt.Errorf("the upload took longer than the %d minutes one request may take — send the files in several requests", int(UploadReadTimeout/time.Minute))
+
+// bodyError names what went wrong reading an upload's body, or returns nil
+// when it was something else (a malformed body): too large (the
+// *http.MaxBytesError itself, which storeError answers with 413 and the
+// limit), timed out, or cut off.
+func bodyError(err error) error {
+	var tooLarge *http.MaxBytesError
+	switch {
+	case errors.As(err, &tooLarge):
+		return tooLarge
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		return errUploadTimedOut
+	case errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, errUploadCutOff):
+		return errUploadCutOff
+	}
+	return nil
+}
+
 // bodyReader reads an upload part and reports the body ending early as
-// errUploadCutOff.
+// errUploadCutOff, and the read timeout running out as errUploadTimedOut.
 type bodyReader struct{ r io.Reader }
 
 func (b bodyReader) Read(p []byte) (int, error) {
 	n, err := b.r.Read(p)
-	if errors.Is(err, io.ErrUnexpectedEOF) {
-		err = errUploadCutOff
+	if err != nil && err != io.EOF {
+		if be := bodyError(err); be != nil {
+			err = be
+		}
 	}
 	return n, err
 }
@@ -384,8 +424,9 @@ func (l liveSink) ExtractZip(r io.ReaderAt, n int64) error { return l.st.Extract
 
 // consumeUploads streams a multipart body into sink: "files" parts are
 // stored under their filename, "zip" parts are extracted, other parts are
-// collected as form fields and returned.
-func (a *API) consumeUploads(r *http.Request, sink uploadSink) (url.Values, error) {
+// collected as form fields and returned. maxBytes is the site's size cap,
+// which also bounds a zip archive's spool.
+func (a *API) consumeUploads(r *http.Request, sink uploadSink, maxBytes int64) (url.Values, error) {
 	mr, err := r.MultipartReader()
 	if err != nil {
 		return nil, &apiError{400, "expected multipart/form-data"}
@@ -397,6 +438,11 @@ func (a *API) consumeUploads(r *http.Request, sink uploadSink) (url.Values, erro
 			return fields, nil
 		}
 		if err != nil {
+			// Between parts the body can still run past its limit or out of
+			// time; only what is neither is a malformed body.
+			if be := bodyError(err); be != nil {
+				return fields, be
+			}
 			return fields, &apiError{400, "malformed multipart body"}
 		}
 		switch part.FormName() {
@@ -411,7 +457,7 @@ func (a *API) consumeUploads(r *http.Request, sink uploadSink) (url.Values, erro
 				return fields, err
 			}
 		case "zip":
-			err := a.extractZipPart(sink, bodyReader{part})
+			err := a.extractZipPart(sink, bodyReader{part}, maxBytes)
 			part.Close()
 			if err != nil {
 				return fields, err
@@ -434,8 +480,9 @@ var zipSpoolSlots = make(chan struct{}, 4)
 
 // extractZipPart spools a zip part to a temp file (zip needs random access)
 // under the data volume — never the container's /tmp, which is unbounded and
-// not what the operator sized — and extracts it into sink.
-func (a *API) extractZipPart(sink uploadSink, part io.Reader) error {
+// not what the operator sized — and extracts it into sink. maxBytes is the
+// site's size cap: no archive larger than that can hold what fits.
+func (a *API) extractZipPart(sink uploadSink, part io.Reader, maxBytes int64) error {
 	zipSpoolSlots <- struct{}{}
 	defer func() { <-zipSpoolSlots }()
 	spool := filepath.Join(a.cfg.DataDir, "tmp")
@@ -449,11 +496,11 @@ func (a *API) extractZipPart(sink uploadSink, part io.Reader) error {
 	defer os.Remove(tmp.Name())
 	defer tmp.Close()
 	// allow generous compressed size; extraction enforces the real quota
-	n, err := io.Copy(tmp, io.LimitReader(part, a.cfg.MaxSiteBytes+1))
+	n, err := io.Copy(tmp, io.LimitReader(part, maxBytes+1))
 	if err != nil {
 		return err
 	}
-	if n > a.cfg.MaxSiteBytes {
+	if n > maxBytes {
 		return store.ErrTooLarge
 	}
 	return sink.ExtractZip(tmp, n)
@@ -883,16 +930,18 @@ func (a *API) createSite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 429, "site creation rate limit reached, try again later")
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, a.cfg.MaxSiteBytes+(10<<20))
-
 	site, editPassword, warnings, err := a.createSiteWith(r, createOpts{
 		browserOK: true,
 		fill: func(site *store.Site) (updateSet, error) {
+			// Nothing reads the body before the site exists: its cap — the
+			// plan's, stamped by now — is what bounds it, not the instance's
+			// default.
+			r.Body = http.MaxBytesReader(w, r.Body, a.uploadBodyLimit(site))
 			var set updateSet
 			ct := r.Header.Get("Content-Type")
 			switch {
 			case strings.HasPrefix(ct, "multipart/"):
-				fields, err := a.consumeUploads(r, liveSink{st: a.st, site: site})
+				fields, err := a.consumeUploads(r, liveSink{st: a.st, site: site}, a.st.EffMaxBytes(site))
 				if err != nil {
 					return set, err
 				}
@@ -1013,7 +1062,7 @@ func (a *API) deleteSite(w http.ResponseWriter, r *http.Request, site *store.Sit
 }
 
 func (a *API) uploadFiles(w http.ResponseWriter, r *http.Request, site *store.Site) {
-	r.Body = http.MaxBytesReader(w, r.Body, a.cfg.MaxSiteBytes+(10<<20))
+	r.Body = http.MaxBytesReader(w, r.Body, a.uploadBodyLimit(site))
 	note := noteOf(r)
 	if r.URL.Query().Get("replace") == "true" {
 		note.action = provenance.ActionReplace
@@ -1026,7 +1075,7 @@ func (a *API) uploadFiles(w http.ResponseWriter, r *http.Request, site *store.Si
 			return
 		}
 		defer rep.Abort()
-		if _, err := a.consumeUploads(r, countingSink{rep, note}); err != nil {
+		if _, err := a.consumeUploads(r, countingSink{rep, note}, a.st.EffMaxBytes(site)); err != nil {
 			respondErr(w, err)
 			return
 		}
@@ -1037,7 +1086,7 @@ func (a *API) uploadFiles(w http.ResponseWriter, r *http.Request, site *store.Si
 			respondErr(w, err)
 			return
 		}
-	} else if _, err := a.consumeUploads(r, countingSink{liveSink{st: a.st, site: site}, note}); err != nil {
+	} else if _, err := a.consumeUploads(r, countingSink{liveSink{st: a.st, site: site}, note}, a.st.EffMaxBytes(site)); err != nil {
 		respondErr(w, err)
 		return
 	}

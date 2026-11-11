@@ -454,7 +454,7 @@ func newPublicServer(addr string, h http.Handler) *http.Server {
 		Addr:              addr,
 		Handler:           h,
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       10 * time.Minute,
+		ReadTimeout:       httpapi.UploadReadTimeout,
 		IdleTimeout:       2 * time.Minute,
 	}
 }
