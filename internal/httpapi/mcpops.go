@@ -705,6 +705,9 @@ func (o mcpOps) OpenUpload(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) (*
 		res.Examples = append(res.Examples, "curl "+h+" -F 'zip=@dist.zip' '"+res.UploadURL+"?replace=true'")
 	}
 	res.Examples = append(res.Examples, "curl "+h+" -F 'files=@video.mp4;filename=media/video.mp4' '"+res.UploadURL+"'")
+	// Several files that must go live together — a release's installer and
+	// the feed naming it — land all at once, in this order, or not at all.
+	res.Examples = append(res.Examples, "curl "+h+" -F 'files=@app-1.0.exe;filename=stable/app-1.0.exe' -F 'files=@latest.yml;filename=stable/latest.yml' '"+res.UploadURL+"?atomic=true'")
 	// With WebDAV off instance-wide the route is a 404, so it is not offered.
 	if o.a.cfg.WebDAVAllowed {
 		res.WebDAVURL = o.a.cfg.DAVURL(site.EditID)

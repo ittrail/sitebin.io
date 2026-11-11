@@ -100,7 +100,7 @@ func TestMCPWriteFilesReplaceOverTheQuotaLeavesTheSiteIntact(t *testing.T) {
 	}
 }
 
-const replaceBusyMsg = "another replace of this site is still running — wait for it to finish, then try again"
+const replaceBusyMsg = "another replace or atomic upload of this site is still running — wait for it to finish, then try again"
 
 func TestReplaceUploadWhileAnotherIsRunningIsAConflict(t *testing.T) {
 	e := newEnv(t, nil)
@@ -206,5 +206,85 @@ func TestUploadCutOffInsideAFormFieldIsABadRequest(t *testing.T) {
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	if w := e.public(t, req); w.Code != 400 {
 		t.Fatalf("cut-off form field: %d %s", w.Code, w.Body)
+	}
+}
+
+// ?atomic=true: every file of the request lands, or none does.
+func TestAtomicUploadLandsAllOrNothing(t *testing.T) {
+	ext.Register(&fakeProvider{enabled: true, owner: "acct-1", grant: ext.CreateGrant{MaxSiteBytes: 100}})
+	defer ext.Reset()
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "old", "stable/latest.yml": "version: 0.9"})
+	edit := editIDFrom(t, c.EditURL)
+	post := func(body *bytes.Buffer, ct string) *httptest.ResponseRecorder {
+		req := authed(httptest.NewRequest("POST", "/api/sites/"+edit+"/files?atomic=true", body), c.EditPassword)
+		req.Header.Set("Content-Type", ct)
+		return e.public(t, req)
+	}
+	read := func(name string) string {
+		site, _ := e.st.ByViewID(c.ID)
+		b, err := e.st.ReadContentFile(site, name)
+		if err != nil {
+			return "<missing>"
+		}
+		return string(b)
+	}
+
+	// The installer fits, the second file does not: neither lands, and the
+	// feed is untouched.
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	for _, f := range []struct{ name, body string }{
+		{"stable/app-1.0.exe", "MZ"},
+		{"stable/huge.bin", strings.Repeat("a", 120)},
+		{"stable/latest.yml", "version: 1.0"},
+	} {
+		h := textproto.MIMEHeader{}
+		h.Set("Content-Disposition", `form-data; name="files"; filename="`+f.name+`"`)
+		p, _ := mw.CreatePart(h)
+		p.Write([]byte(f.body))
+	}
+	mw.Close()
+	if w := post(&buf, mw.FormDataContentType()); w.Code != 413 {
+		t.Fatalf("an atomic upload past the cap: %d %s", w.Code, w.Body)
+	}
+	if got := read("stable/app-1.0.exe"); got != "<missing>" {
+		t.Fatalf("a failed atomic upload left a file: %q", got)
+	}
+	if got := read("stable/latest.yml"); got != "version: 0.9" {
+		t.Fatalf("a failed atomic upload changed the feed: %q", got)
+	}
+
+	// A body cut off in the middle: nothing either.
+	body, ct := uploadBody(t, nil, map[string]string{"stable/app-1.0.exe": "MZ", "stable/latest.yml": "version: 1.0"})
+	cut := bytes.NewBuffer(body.Bytes()[:body.Len()-10])
+	if w := post(cut, ct); w.Code != 400 {
+		t.Fatalf("a cut-off atomic upload: %d %s", w.Code, w.Body)
+	}
+	if got := read("stable/latest.yml"); got != "version: 0.9" {
+		t.Fatalf("a cut-off atomic upload changed the feed: %q", got)
+	}
+
+	// All of it: everything lands, and the rest of the site stays.
+	body, ct = uploadBody(t, nil, map[string]string{"stable/app-1.0.exe": "MZ", "stable/latest.yml": "version: 1.0"})
+	if w := post(body, ct); w.Code != 200 {
+		t.Fatalf("an atomic upload: %d %s", w.Code, w.Body)
+	}
+	if read("stable/app-1.0.exe") != "MZ" || read("stable/latest.yml") != "version: 1.0" || read("index.html") != "old" {
+		t.Fatalf("after the atomic upload: exe %q, feed %q, index %q", read("stable/app-1.0.exe"), read("stable/latest.yml"), read("index.html"))
+	}
+}
+
+// An upload token opens the atomic upload too: it is the same route.
+func TestAtomicUploadWithAnUploadToken(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x"})
+	edit := editIDFrom(t, c.EditURL)
+	tok := uploadTokenFor(t, e, c)
+	body, ct := uploadBody(t, nil, map[string]string{"stable/app.exe": "MZ"})
+	req := bearer(httptest.NewRequest("POST", "/api/sites/"+edit+"/files?atomic=true", body), tok)
+	req.Header.Set("Content-Type", ct)
+	if w := e.public(t, req); w.Code != 200 {
+		t.Fatalf("an atomic upload with an upload token: %d %s", w.Code, w.Body)
 	}
 }

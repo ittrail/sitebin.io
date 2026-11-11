@@ -411,9 +411,9 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
 }
 
-// msgReplaceBusy answers a replace of a site while another is still running,
-// on the API and over MCP alike.
-const msgReplaceBusy = "another replace of this site is still running — wait for it to finish, then try again"
+// msgReplaceBusy answers a replace or an atomic upload of a site while
+// another is still running, on the API and over MCP alike.
+const msgReplaceBusy = "another replace or atomic upload of this site is still running — wait for it to finish, then try again"
 
 // msgAccountFull refuses a write because the owner's sites together hold all
 // the storage the plan allows (store.ErrAccountFull).

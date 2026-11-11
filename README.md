@@ -300,7 +300,7 @@ Every file site sends a `Cache-Control` header on its successful responses
 
 *Revalidate* is `max-age=0, must-revalidate`: the browser asks every time and
 an unchanged file costs a body-less `304`, so an upload is visible at once.
-*Pages and data* are `.html`/`.htm`/`.xhtml`/`.json`/`.xml`/`.txt`/`.webmanifest`,
+*Pages and data* are `.html`/`.htm`/`.xhtml`/`.json`/`.xml`/`.txt`/`.webmanifest`/`.yml`/`.yaml`,
 names without an extension, directories, and every request that does not name
 an existing file (the SPA fallback's `index.html`, a 404 — never cached long).
 *Fingerprinted* names carry a content hash — `index-BqCz7v8e.js` (Vite),
@@ -315,6 +315,22 @@ pages, redirects and the password gate are never given the site's policy (a
 404 is `no-store`, see [Not-found pages](#not-found-pages)); container
 sites are left to their upstream. authz computes the value and Caddy copies it
 — see `docs/superpowers/specs/2026-10-16-browser-caching-design.md`.
+
+**Cache rules** (`"cache_rules"`, MCP `update_site`, the edit page's rules box)
+give paths their own policy: up to 20 `{"pattern", "cache"}` pairs, the first
+that matches decides, no match falls back to `cache`. A pattern is a glob over
+the path inside the site (`stable/*.exe`; `*` never crosses a folder), or over
+the file name when it has no `/` (`*.dmg`). A rule takes any `cache` value
+plus `immutable` (`max-age=31536000, immutable`), and decides only for files
+that are not pages or data — `stable/* immutable` caches versioned installers
+for a year and leaves `stable/latest.yml` fresh.
+
+**Content types.** Files are typed by extension from the image's mime table;
+Sitebin adds the release files that table lacks (`.dmg`, `.yml`/`.yaml`,
+`.AppImage`, `.msix`/`.appx` and their bundles, `.appinstaller`, `.msi`,
+`.blockmap`, `.7z`, `.sha256`/`.sha512`/`.minisig`), and a file without an
+extension is `text/plain` when its first bytes are text, else
+`application/octet-stream` — never sniffed into a page.
 
 ### API (for scripts and agents)
 
@@ -354,6 +370,7 @@ curl -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID
 # name is a private label of up to 60 characters, "" removes it; tags replaces the
 # whole set of up to 10 private tags, [] clears it; cache is the
 # browser-cache policy: auto, revalidate, hour, day, week, year or off;
+# cache_rules gives paths their own: [{"pattern":"stable/*.exe","cache":"immutable"}];
 # not_found_page is the .html file a 404 shows, "" returns to 404.html;
 # entry_file is the file the File viewer opens first, "" opens its file list)
 curl -X PUT -H "X-Edit-Password: $PW" -H "Content-Type: application/json" \
@@ -368,6 +385,11 @@ curl -X POST -H "X-Edit-Password: $PW" -F "zip=@all.zip" \
 # a replace is staged: the old files go only once the new ones are complete and
 # within the site's caps -- a failed or cut-off replace leaves the site as it was;
 # a second replace of the same site while one is still running gets 409
+curl -X POST -H "X-Edit-Password: $PW" -F "files=@app-1.0.exe;filename=stable/app-1.0.exe"      -F "files=@latest.yml;filename=stable/latest.yml"      "https://sitebin.example.com/api/sites/$EDIT_ID/files?atomic=true"  # all or none
+# an atomic upload is staged the same way but adds to the site: every file lands,
+# in the order sent, or none does (a release's feed never names a missing file);
+# one request carries at most the site's size cap plus 10 MiB and must arrive
+# within 10 minutes (413 / 408 otherwise)
 curl -X DELETE -H "X-Edit-Password: $PW" \
      https://sitebin.example.com/api/sites/$EDIT_ID/files/js/app.js
 
@@ -549,9 +571,10 @@ token for one site and the URLs to use it on:
 
 - `POST <upload_url>` — the JSON API's file upload: a `zip` part is extracted,
   each `files` part is stored at the path in its filename, `?replace=true`
-  makes the upload the whole site;
+  makes the upload the whole site, `?atomic=true` lands every file or none;
 - `<webdav_url>` — the site's WebDAV tree, whatever the site's own WebDAV
-  toggle says (omitted when `SITEBIN_WEBDAV_ENABLED=false`).
+  toggle says (omitted when `SITEBIN_WEBDAV_ENABLED=false`); a `PUT` creates
+  the folders its path names.
 
 Send the token as `Authorization: Bearer sbu_…` or as the Basic-auth password.
 It opens nothing else: every other API route answers `403`, and it is never

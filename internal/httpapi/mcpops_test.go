@@ -858,8 +858,15 @@ func TestMCPOpenUploadThenUploadOverHTTP(t *testing.T) {
 	if d := time.Until(up.ExpiresAt); d < 59*time.Minute || d > 61*time.Minute {
 		t.Errorf("expires_at = %v", up.ExpiresAt)
 	}
-	if len(up.Examples) != 3 {
+	if len(up.Examples) != 4 {
 		t.Fatalf("examples = %v", up.Examples)
+	}
+	atomic := false
+	for _, ex := range up.Examples {
+		atomic = atomic || strings.Contains(ex, "?atomic=true")
+	}
+	if !atomic {
+		t.Errorf("no example of an atomic upload: %v", up.Examples)
 	}
 	for _, ex := range up.Examples {
 		if !strings.HasPrefix(ex, "curl ") || !strings.Contains(ex, up.Token) {
@@ -904,8 +911,14 @@ func TestMCPOpenUploadWithoutWebDAVOffersOnlyTheAPI(t *testing.T) {
 	if v, ok := m["webdav_url"]; ok {
 		t.Errorf("webdav_url offered with WebDAV off: %v", v)
 	}
-	if ex, _ := m["examples"].([]any); len(ex) != 2 {
+	ex, _ := m["examples"].([]any)
+	if len(ex) != 3 {
 		t.Errorf("examples = %v", m["examples"])
+	}
+	for _, e := range ex {
+		if s, _ := e.(string); strings.Contains(s, "/dav/") {
+			t.Errorf("a WebDAV example with WebDAV off: %q", s)
+		}
 	}
 }
 

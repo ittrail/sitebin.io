@@ -164,7 +164,7 @@ type SiteResult struct {
 	EntryFile     string   `json:"entry_file,omitempty"`
 	SPAFallback   bool     `json:"spa_fallback"`
 	ViewProtected bool     `json:"view_password_protected"`
-	WebDAVEnabled bool     `json:"webdav_enabled"`
+	WebDAVEnabled bool     `json:"webdav_enabled" jsonschema:"whether the site's WebDAV drive opens with its edit password; an open_upload token reaches /dav/ whatever this says"`
 	FTPEnabled    bool     `json:"ftp_enabled"`
 	CustomDomains []string `json:"custom_domains,omitempty" jsonschema:"custom domains that are verified and serving"`
 	// PendingDomains are custom domains claimed but not yet proven. Each

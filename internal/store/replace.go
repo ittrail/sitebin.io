@@ -41,7 +41,7 @@ const staleStagingAge = time.Hour
 // ErrReplaceBusy is BeginReplace refusing a second replacement of a site while
 // one is still in flight. Each stages up to the site's full cap on the data
 // volume, so overlapping replaces of one site must not pile up.
-var ErrReplaceBusy = errors.New("another replace of this site is still running")
+var ErrReplaceBusy = errors.New("another replace or atomic upload of this site is still running")
 
 var (
 	errReplaceFinished = errors.New("this replacement was already committed or aborted")

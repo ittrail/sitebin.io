@@ -1095,6 +1095,25 @@ func (a *API) uploadFiles(w http.ResponseWriter, r *http.Request, site *store.Si
 			respondErr(w, err)
 			return
 		}
+	} else if r.URL.Query().Get("atomic") == "true" {
+		// Every file of the request lands, in the order it came, or none
+		// does: a release's installers and the feed naming them go together,
+		// and a failed or cut-off upload leaves the site exactly as it was.
+		m, err := a.st.BeginMerge(site)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		defer m.Abort()
+		if _, err := a.consumeUploads(r, countingSink{m, note}, a.st.EffMaxBytes(site)); err != nil {
+			respondErr(w, err)
+			return
+		}
+		if err := m.Commit(); err != nil {
+			note.held = errors.Is(err, store.ErrHeld)
+			respondErr(w, err)
+			return
+		}
 	} else if _, err := a.consumeUploads(r, countingSink{liveSink{st: a.st, site: site}, note}, a.st.EffMaxBytes(site)); err != nil {
 		respondErr(w, err)
 		return
