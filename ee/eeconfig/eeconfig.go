@@ -92,16 +92,21 @@ func formatAmount(amount, currency string) string {
 // Tier is a named quota bundle. Zero MaxSiteBytes/MaxFiles/MaxSites mean "fall
 // back to the global SITEBIN_MAX_* / unlimited"; the enforcing code decides.
 type Tier struct {
-	ID            string `json:"id"`
-	Label         string `json:"label"`
-	MaxSiteBytes  int64  `json:"max_site_bytes"`
-	MaxFiles      int    `json:"max_files"`
-	MaxSites      int    `json:"max_sites"`
-	WebDAV        bool   `json:"webdav"`
-	Git           bool   `json:"git,omitempty"`
-	Analytics     bool   `json:"analytics,omitempty"`
-	CustomDomains int    `json:"custom_domains"`
-	MaxExpiryDays int    `json:"max_expiry_days"`
+	ID           string `json:"id"`
+	Label        string `json:"label"`
+	MaxSiteBytes int64  `json:"max_site_bytes"`
+	MaxFiles     int    `json:"max_files"`
+	MaxSites     int    `json:"max_sites"`
+	// MaxAccountBytes caps the bytes ALL of an account's sites hold together
+	// (files plus Git repositories, container data included, as a site's own
+	// cap counts them). 0 / absent = no account cap, only the per-site caps —
+	// the polarity of max_site_bytes and max_sites.
+	MaxAccountBytes int64 `json:"max_account_bytes,omitempty"`
+	WebDAV          bool  `json:"webdav"`
+	Git             bool  `json:"git,omitempty"`
+	Analytics       bool  `json:"analytics,omitempty"`
+	CustomDomains   int   `json:"custom_domains"`
+	MaxExpiryDays   int   `json:"max_expiry_days"`
 	// MaxContainers caps the services an account runs across ALL its
 	// container sites. 0 / absent means NO containers — the same polarity as
 	// custom_domains, because a free tier that forgets the field must not get

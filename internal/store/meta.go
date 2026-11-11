@@ -82,15 +82,19 @@ type Meta struct {
 
 	// Per-site quota caps stamped from the owner's tier (enterprise). Zero /
 	// nil means "inherit the instance global".
-	QuotaBytes      int64      `json:"quota_bytes,omitempty"`
-	QuotaFiles      int        `json:"quota_files,omitempty"`
-	QuotaExpiryDays int        `json:"quota_expiry_days,omitempty"`
-	QuotaDomains    *int       `json:"quota_domains,omitempty"`   // nil = inherit global; value (incl. 0) = explicit cap
-	QuotaWebDAV     *bool      `json:"quota_webdav,omitempty"`    // nil = inherit global
-	QuotaGit        *bool      `json:"quota_git,omitempty"`       // nil or false = no git repository
-	QuotaAnalytics  *bool      `json:"quota_analytics,omitempty"` // nil or false = no site analytics
-	QuotaForms      *int       `json:"quota_forms,omitempty"`     // nil = instance default; value (incl. 0) = explicit cap
-	ExpiresAt       *time.Time `json:"expires_at"`
+	QuotaBytes      int64 `json:"quota_bytes,omitempty"`
+	QuotaFiles      int   `json:"quota_files,omitempty"`
+	QuotaExpiryDays int   `json:"quota_expiry_days,omitempty"`
+	QuotaDomains    *int  `json:"quota_domains,omitempty"`   // nil = inherit global; value (incl. 0) = explicit cap
+	QuotaWebDAV     *bool `json:"quota_webdav,omitempty"`    // nil = inherit global
+	QuotaGit        *bool `json:"quota_git,omitempty"`       // nil or false = no git repository
+	QuotaAnalytics  *bool `json:"quota_analytics,omitempty"` // nil or false = no site analytics
+	QuotaForms      *int  `json:"quota_forms,omitempty"`     // nil = instance default; value (incl. 0) = explicit cap
+	// QuotaAccountBytes is the owner's ACCOUNT cap: what all sites the owner
+	// owns may hold together. 0 = none (anonymous sites, community builds,
+	// plans without max_account_bytes). See ByteCap and accountusage.go.
+	QuotaAccountBytes int64      `json:"quota_account_bytes,omitempty"`
+	ExpiresAt         *time.Time `json:"expires_at"`
 	// ExpiryFromTier records whether ExpiresAt was imposed by the owner's tier
 	// (the creation default, sliding renewal, or a downgrade grace) rather than
 	// chosen by a caller. A tier change may lift an imposed expiry; it must

@@ -474,6 +474,7 @@ func grantFromTier(owner string, t eeconfig.Tier) ext.CreateGrant {
 	return ext.CreateGrant{
 		OwnerAccountID:  owner,
 		MaxSiteBytes:    t.MaxSiteBytes,
+		MaxAccountBytes: t.MaxAccountBytes,
 		MaxFiles:        t.MaxFiles,
 		MaxExpiryDays:   t.MaxExpiryDays,
 		MaxCustomDomain: &domains,

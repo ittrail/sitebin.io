@@ -23,7 +23,7 @@ import (
 // 5,000 entries decompressing to 100 MB each cost 5,000 directory walks and
 // 500 GB of zeros, all inside the site lock.
 func (s *Store) ExtractZip(site *Site, r io.ReaderAt, size int64) error {
-	maxBytes, maxFiles := s.EffMaxBytes(site), s.EffMaxFiles(site)
+	maxFiles := s.EffMaxFiles(site)
 	entries, err := zipEntries(r, size, maxFiles)
 	if err != nil {
 		return err
@@ -39,13 +39,16 @@ func (s *Store) ExtractZip(site *Site, r io.ReaderAt, size int64) error {
 	if err != nil {
 		return err
 	}
+	maxBytes, account := s.ByteCap(site)
 	root, err := openContent(site)
 	if err != nil {
 		return err
 	}
 	defer root.Close()
-	if _, _, err := extractEntries(root, entries, u.Bytes(), u.Files, maxBytes, maxFiles, liveGuard{s: s, site: site}); err != nil {
-		return err
+	used, _, err := extractEntries(root, entries, u.Bytes(), u.Files, maxBytes, maxFiles, liveGuard{s: s, site: site})
+	s.acct.note(site, used) // what is in place, a refused archive's first entries too
+	if err != nil {
+		return refusal(err, account)
 	}
 	return s.renewExpiryLocked(site)
 }

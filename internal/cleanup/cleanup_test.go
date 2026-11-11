@@ -722,3 +722,109 @@ func TestCollectGitSkipsARepositoryWithARunningWrite(t *testing.T) {
 		t.Fatalf("the other repository was not collected: %v", err)
 	}
 }
+
+func TestSweepReconcileKeepsTheAccountCap(t *testing.T) {
+	p := &stubProvider{grant: ext.CreateGrant{MaxExpiryDays: 0, MaxAccountBytes: 9000}, ok: true}
+	ext.Register(p)
+	defer ext.Reset()
+	st, err := store.New(t.TempDir(), "sitebin.example", 1<<20, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	site := expiredOwnedSite(t, st, now, "acct-1", 7, true)
+	if _, err := Sweep(st, now, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.ByViewID(site.ViewID)
+	if err != nil {
+		t.Fatalf("site deleted: %v", err)
+	}
+	if got.Meta.QuotaAccountBytes != 9000 {
+		t.Fatalf("QuotaAccountBytes = %d after reconcile, want the plan's 9000", got.Meta.QuotaAccountBytes)
+	}
+}
+
+// The account cap is backfilled and follows a tiers.json edit (which changes
+// no tier id, so nothing restamps), writing only that field.
+func TestReconcileAccountBytesBackfillsAndFollows(t *testing.T) {
+	p := &stubProvider{ok: true, grant: ext.CreateGrant{OwnerAccountID: "acct-1", MaxAccountBytes: 4000, MaxSiteBytes: 999, MaxExpiryDays: 1}}
+	ext.Register(p)
+	defer ext.Reset()
+	st, _ := store.New(t.TempDir(), "sitebin.example", 1<<20, 100)
+	site := gitOwnedSite(t, st)
+	before := *site.Meta.ExpiresAt
+
+	reconcileAccountBytes(st, site)
+	got, _ := st.ByViewID(site.ViewID)
+	if got.Meta.QuotaAccountBytes != 4000 {
+		t.Fatalf("QuotaAccountBytes = %d, want 4000", got.Meta.QuotaAccountBytes)
+	}
+	if got.Meta.ExpiresAt == nil || !got.Meta.ExpiresAt.Equal(before) || got.Meta.QuotaBytes != 5 {
+		t.Fatalf("reconcileAccountBytes touched other fields: expires %v (was %v), bytes %d", got.Meta.ExpiresAt, before, got.Meta.QuotaBytes)
+	}
+	p.grant.MaxAccountBytes = 0 // the operator removed the field
+	reconcileAccountBytes(st, got)
+	got, _ = st.ByViewID(site.ViewID)
+	if got.Meta.QuotaAccountBytes != 0 {
+		t.Fatalf("QuotaAccountBytes = %d after the plan dropped the cap, want 0", got.Meta.QuotaAccountBytes)
+	}
+}
+
+func TestReconcileAccountBytesLookupErrorChangesNothing(t *testing.T) {
+	for name, p := range map[string]*stubProvider{
+		"error":   {ok: true, err: errors.New("outage"), grant: ext.CreateGrant{MaxAccountBytes: 4000}},
+		"unknown": {ok: false, grant: ext.CreateGrant{MaxAccountBytes: 4000}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ext.Register(p)
+			defer ext.Reset()
+			st, _ := store.New(t.TempDir(), "sitebin.example", 1<<20, 100)
+			site := gitOwnedSite(t, st)
+			st.Update(site, func(m *store.Meta) error { m.QuotaAccountBytes = 123; return nil })
+			reconcileAccountBytes(st, site)
+			got, _ := st.ByViewID(site.ViewID)
+			if got.Meta.QuotaAccountBytes != 123 {
+				t.Fatalf("QuotaAccountBytes = %d, want the stamp left at 123", got.Meta.QuotaAccountBytes)
+			}
+		})
+	}
+}
+
+func TestSweepBackfillsTheAccountCap(t *testing.T) {
+	ext.Register(&stubProvider{ok: true, grant: ext.CreateGrant{OwnerAccountID: "acct-1", MaxAccountBytes: 4000}})
+	defer ext.Reset()
+	st, _ := store.New(t.TempDir(), "sitebin.example", 1<<20, 100)
+	site := gitOwnedSite(t, st)
+	if _, err := Sweep(st, time.Now(), Options{}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := st.ByViewID(site.ViewID)
+	if got.Meta.QuotaAccountBytes != 4000 {
+		t.Fatalf("QuotaAccountBytes = %d after a sweep, want 4000", got.Meta.QuotaAccountBytes)
+	}
+}
+
+// Every sweep rebuilds the account figures from disk: growth nobody measured
+// (a container's database) is found.
+func TestSweepMeasuresAccounts(t *testing.T) {
+	st, _ := store.New(t.TempDir(), "sitebin.example", 1<<20, 100)
+	mk := func() *store.Site {
+		site, _, _ := st.Create()
+		st.Update(site, func(m *store.Meta) error { m.OwnerAccountID = "acct-1"; m.QuotaAccountBytes = 1 << 40; return nil })
+		return site
+	}
+	a1, a2 := mk(), mk()
+	if err := os.WriteFile(filepath.Join(a2.ContentDir(), "db.bin"), make([]byte, 77), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, others := st.AccountUsage(a1); others != 0 {
+		t.Fatalf("others %d before a sweep, want 0 (nothing measured a2)", others)
+	}
+	if _, err := Sweep(st, time.Now(), Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, others := st.AccountUsage(a1); others != 77 {
+		t.Fatalf("others %d after a sweep, want 77", others)
+	}
+}

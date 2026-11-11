@@ -172,6 +172,10 @@ type Store struct {
 	// purgeHook hears every retention purge. See retention.go.
 	lockRetention time.Duration
 	purgeHook     func(LockPurge)
+
+	// acct is what each owned site holds, for the account storage cap. See
+	// accountusage.go.
+	acct accountIndex
 }
 
 // AbuseRulesFile is the instance's own abuse rules, in the data directory,
@@ -507,6 +511,7 @@ func (s *Store) deleteChecked(site *Site, check func(*Meta) error) error {
 	if err := os.RemoveAll(site.dir); err != nil {
 		return fmt.Errorf("delete site: %w", err)
 	}
+	s.acct.drop(site.ViewID)
 	s.mu.Lock()
 	delete(s.locks, site.ViewID)
 	delete(s.statsLocks, site.ViewID)

@@ -403,13 +403,14 @@ func mapSiteErr(err error, viewID string) error {
 // quotaFromGrant maps the extension's grant onto the store's cap set.
 func quotaFromGrant(g ext.CreateGrant) store.Quota {
 	return store.Quota{
-		Bytes:      g.MaxSiteBytes,
-		Files:      g.MaxFiles,
-		ExpiryDays: g.MaxExpiryDays,
-		Domains:    g.MaxCustomDomain,
-		WebDAV:     g.WebDAV,
-		Git:        g.Git,
-		Analytics:  g.Analytics,
-		Forms:      g.MaxForms,
+		Bytes:        g.MaxSiteBytes,
+		Files:        g.MaxFiles,
+		ExpiryDays:   g.MaxExpiryDays,
+		Domains:      g.MaxCustomDomain,
+		WebDAV:       g.WebDAV,
+		Git:          g.Git,
+		Analytics:    g.Analytics,
+		Forms:        g.MaxForms,
+		AccountBytes: g.MaxAccountBytes,
 	}
 }

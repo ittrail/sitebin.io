@@ -79,6 +79,8 @@ func (o mcpOps) mcpError(err error) error {
 		return errors.New("no site with that edit_id — check the id, or list_sites if you have an account token")
 	case errors.Is(err, store.ErrDomainTaken):
 		return errors.New("that domain is already in use by another site")
+	case errors.Is(err, store.ErrAccountFull): // before ErrTooLarge, which it also is
+		return errors.New("your account's storage is full: your sites together hold all the storage your plan allows — delete files or sites, or use a plan with more storage")
 	case errors.Is(err, store.ErrTooLarge):
 		return errors.New("the site's size limit would be exceeded — delete files, or use a plan with a larger quota")
 	case errors.Is(err, store.ErrTooManyFiles):

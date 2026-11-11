@@ -86,6 +86,27 @@ func reconcileGit(st *store.Store, site *store.Site) {
 	}
 }
 
+// reconcileAccountBytes backfills the account cap onto an owned site from its
+// owner's current plan, and follows a tiers.json edit, which changes no tier
+// id and so restamps nothing. It writes only that field. A community build, a
+// lookup error and an unknown owner change nothing.
+func reconcileAccountBytes(st *store.Store, site *store.Site) {
+	if site.Meta.OwnerAccountID == "" {
+		return
+	}
+	p, ok := ext.Get()
+	if !ok {
+		return
+	}
+	grant, known, err := p.QuotaFor(site.Meta.OwnerAccountID)
+	if err != nil || !known || grant.MaxAccountBytes == site.Meta.QuotaAccountBytes {
+		return
+	}
+	if err := st.SetQuotaAccountBytes(site, grant.MaxAccountBytes); err != nil {
+		slog.Error("cleanup: reconcile account cap", "id", site.ViewID, "owner", site.Meta.OwnerAccountID, "err", err)
+	}
+}
+
 func equalBoolPtr(a, b *bool) bool {
 	if a == nil || b == nil {
 		return a == b
@@ -139,6 +160,11 @@ func Sweep(st *store.Store, now time.Time, opts Options) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	// The account storage cap's figures, rebuilt from disk: what a container
+	// wrote, and what a delete behind the store's back removed.
+	if err := st.MeasureAccounts(); err != nil {
+		slog.Error("cleanup: measure account storage", "err", err)
+	}
 	// Zones first, so a zone verified now attaches its pending names in the
 	// per-site pass below, in this same sweep.
 	st.ReconcileZones(context.Background(), now)
@@ -172,6 +198,7 @@ func Sweep(st *store.Store, now time.Time, opts Options) (int, error) {
 		}
 		reconcileTrust(st, site)
 		reconcileGit(st, site)
+		reconcileAccountBytes(st, site)
 		reconcileAnalytics(st, site)
 		// The second half of custom-domain verification: claims whose record
 		// appeared since the owner asked are attached, verified domains are
@@ -329,14 +356,15 @@ func reconcile(st *store.Store, site *store.Site, now time.Time) (keep bool, err
 	}
 	// grace 0: this site already has an expiry, and a sweep must never invent one
 	if err := st.ApplyQuota(site, store.Quota{
-		Bytes:      grant.MaxSiteBytes,
-		Files:      grant.MaxFiles,
-		ExpiryDays: grant.MaxExpiryDays,
-		Domains:    grant.MaxCustomDomain,
-		WebDAV:     grant.WebDAV,
-		Git:        grant.Git,
-		Analytics:  grant.Analytics,
-		Forms:      grant.MaxForms,
+		Bytes:        grant.MaxSiteBytes,
+		Files:        grant.MaxFiles,
+		ExpiryDays:   grant.MaxExpiryDays,
+		Domains:      grant.MaxCustomDomain,
+		WebDAV:       grant.WebDAV,
+		Git:          grant.Git,
+		Analytics:    grant.Analytics,
+		Forms:        grant.MaxForms,
+		AccountBytes: grant.MaxAccountBytes,
 	}, 0); err != nil {
 		return false, fmt.Errorf("apply quota: %w", err)
 	}

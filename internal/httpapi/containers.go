@@ -296,6 +296,7 @@ func (s siteService) containerSiteOf(site *store.Site) ext.ContainerSite {
 		MaxBytes:  s.a.st.EffMaxBytes(site),
 		Name:      site.Meta.Name,
 	}
+	cs.AccountCap, cs.AccountOthers = s.a.st.AccountUsage(site)
 	if c := site.Meta.Container; c != nil {
 		cs.Enabled = c.Enabled
 		cs.RestartSeq = c.RestartSeq

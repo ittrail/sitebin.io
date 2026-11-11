@@ -1160,9 +1160,10 @@ func (m *Manager) enforcePlans(ctx context.Context) {
 	}
 }
 
-// enforceStorage stops running projects whose site is over its byte cap. A
-// container cannot be refused mid-write the way an upload is; this is the
-// bound. Nothing is deleted.
+// enforceStorage stops running projects whose site is over its byte cap, or
+// whose files plus the owner's other sites are over the account cap
+// (ContainerSite.AccountCap). A container cannot be refused mid-write the way
+// an upload is; this is the bound. Nothing is deleted.
 //
 // This is the ONE place that counts a site's FILES ALONE (info.Bytes, not
 // Bytes+GitBytes): a push must never stop a running app. Everywhere else the
@@ -1173,14 +1174,20 @@ func (m *Manager) enforceStorage(ctx context.Context) {
 		return
 	}
 	for _, cs := range all {
-		if !counts(cs) || cs.MaxBytes <= 0 {
+		if !counts(cs) || (cs.MaxBytes <= 0 && cs.AccountCap <= 0) {
 			continue
 		}
 		info, ok := m.sites.Info(cs.ViewID)
-		if !ok || info.Bytes <= cs.MaxBytes {
+		if !ok {
 			continue
 		}
-		m.holdOff(ctx, cs, fmt.Sprintf("the project uses %s of its %s storage, so it was stopped; free some space and press Start",
-			store.HumanBytes(info.Bytes), store.HumanBytes(cs.MaxBytes)))
+		switch {
+		case cs.MaxBytes > 0 && info.Bytes > cs.MaxBytes:
+			m.holdOff(ctx, cs, fmt.Sprintf("the project uses %s of its %s storage, so it was stopped; free some space and press Start",
+				store.HumanBytes(info.Bytes), store.HumanBytes(cs.MaxBytes)))
+		case cs.AccountCap > 0 && info.Bytes+cs.AccountOthers > cs.AccountCap:
+			m.holdOff(ctx, cs, fmt.Sprintf("your sites use %s of the %s storage your plan allows in total, so this project was stopped; free some space and press Start",
+				store.HumanBytes(info.Bytes+cs.AccountOthers), store.HumanBytes(cs.AccountCap)))
+		}
 	}
 }

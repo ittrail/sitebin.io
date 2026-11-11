@@ -62,6 +62,7 @@ func (s *Store) commitOwnership(site *Site, m Meta) error {
 		return err
 	}
 	site.Meta = m
+	s.acct.reown(site.ViewID, m.OwnerAccountID)
 	return nil
 }
 

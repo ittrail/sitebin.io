@@ -816,6 +816,29 @@ func TestStorageCapStopsTheProject(t *testing.T) {
 	}
 }
 
+// The account cap stops a project too: its files plus the account's other
+// sites past the cap. Its own repository still never counts.
+func TestEnforceStorageCountsTheAccount(t *testing.T) {
+	r := newRig(t)
+	cs := r.sites.add(siteA, "acct", example)
+	r.reconcile(t, siteA, true)
+	r.sites.mu.Lock()
+	cs.AccountCap, cs.AccountOthers = 1000, 600
+	r.sites.mu.Unlock()
+	r.sites.bytes[siteA] = 400 // exactly at the cap: runs
+	r.sites.gitBytes[siteA] = 10 << 20
+	r.m.enforceStorage(context.Background())
+	if st := r.sites.get(siteA).Observed; st.Status != store.ContainerRunning {
+		t.Fatalf("at the account cap: %+v", st)
+	}
+	r.sites.bytes[siteA] = 401
+	r.m.enforceStorage(context.Background())
+	st := r.sites.get(siteA).Observed
+	if st.Status != store.ContainerStopped || !strings.Contains(st.Message, "your sites use 1001 B of the 1000 B") || len(r.eng.containers) != 0 {
+		t.Errorf("over the account cap: %+v, %d containers", st, len(r.eng.containers))
+	}
+}
+
 // The one deliberate exception to "files and repository share one cap": a
 // push must never stop a running app, so the stop rule counts files only.
 func TestEnforceStorageIgnoresRepository(t *testing.T) {

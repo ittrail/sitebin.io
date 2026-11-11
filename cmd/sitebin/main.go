@@ -359,6 +359,13 @@ func serve() error {
 	go func() { errs <- fmt.Errorf("public listener: %w", public.ListenAndServe()) }()
 	go func() { errs <- fmt.Errorf("internal listener: %w", internal.ListenAndServe()) }()
 	go cleanup.Run(ctx, st, cfg.CleanupInterval, api.GitRunner(), sweepOptions(cfg, api.AnalyticsSalts()))
+	// The account storage cap's figures, measured once now; every sweep
+	// measures them again, and every write keeps its own site's current.
+	go func() {
+		if err := st.MeasureAccounts(); err != nil {
+			slog.Error("measure account storage", "err", err)
+		}
+	}()
 	// The analytics writer. It stops after the listeners (below), so a page
 	// view authz admits while they shut down is still written, and it drains
 	// its queue for at most 2 seconds before it returns.

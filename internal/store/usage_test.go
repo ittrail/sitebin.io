@@ -186,6 +186,35 @@ func TestByteChecksCountRepository(t *testing.T) {
 	}
 }
 
+// accountChecks is every place that checks a write against the owner's
+// ACCOUNT storage cap (ByteCap), each with the test that writes to one site of
+// an account whose other site fills it. A new byte funnel joins byteChecks
+// AND this table.
+var accountChecks = []struct {
+	check string
+	dir   string
+	test  string
+}{
+	{"Store.SaveFile, Store.ExtractZip, Replacement", "internal/store", "TestStoreFunnelsCountTheAccount"},
+	{"API upload (store.SaveFile through the route)", "internal/httpapi", "TestAPIUploadCountsTheAccount"},
+	{"WebDAV PUT", "internal/httpapi", "TestWebDAVPutCountsTheAccount"},
+	{"FTP transfers (Session.UsedOutside)", "internal/httpapi", "TestFTPCountsTheAccount"},
+	{"Git push allowance", "internal/httpapi", "TestGitAllowanceCountsTheAccount"},
+	{"Container stop rule (enforceStorage)", "ee/containers", "TestEnforceStorageCountsTheAccount"},
+}
+
+func TestAccountChecksAreTested(t *testing.T) {
+	tests := map[string]map[string]bool{}
+	for _, c := range accountChecks {
+		if tests[c.dir] == nil {
+			tests[c.dir] = testFuncs(t, c.dir)
+		}
+		if !tests[c.dir][c.test] {
+			t.Errorf("account check %s: its test %s is not in %s", c.check, c.test, c.dir)
+		}
+	}
+}
+
 // testFuncs lists the Test functions declared in a package's _test.go files,
 // whatever their build tags.
 func testFuncs(t *testing.T, dir string) map[string]bool {

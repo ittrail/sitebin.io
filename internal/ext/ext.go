@@ -309,10 +309,14 @@ func CredentialFrom(ctx context.Context) (Credential, bool) {
 // site and the per-site quota caps to stamp on it. Zero-valued cap fields mean
 // "inherit the instance global"; they are set only in tiers mode.
 type CreateGrant struct {
-	OwnerAccountID  string
-	MaxSiteBytes    int64
-	MaxFiles        int
-	MaxExpiryDays   int
+	OwnerAccountID string
+	MaxSiteBytes   int64
+	MaxFiles       int
+	MaxExpiryDays  int
+	// MaxAccountBytes caps what all of the owner's sites hold together; 0 is
+	// no account cap. Stamped onto every site like the per-site caps, so a
+	// write never asks the extension.
+	MaxAccountBytes int64
 	MaxCustomDomain *int  // nil = inherit global; value (incl. 0) = explicit cap
 	WebDAV          *bool // nil = inherit global
 	Git             *bool // nil = no git repository for the site
@@ -729,6 +733,12 @@ type ContainerSite struct {
 	// against it now and then through Info, which walks the tree and is far
 	// too costly for every tick.
 	MaxBytes int64
+	// AccountCap is the owner's account storage cap (0: none) and
+	// AccountOthers what the owner's OTHER sites hold, repositories
+	// included: the project stops when its files plus AccountOthers pass
+	// AccountCap. Its own repository never counts, as with MaxBytes.
+	AccountCap    int64
+	AccountOthers int64
 	// Name is the owner's label for the site, for the admin console.
 	Name string
 	// Limits are the operator's own resource limits for the site's

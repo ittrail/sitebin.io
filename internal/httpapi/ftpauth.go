@@ -48,12 +48,17 @@ func (a *API) FTPAuth(editID, password, clientIP string) (ftp.Session, error) {
 			Guard:    ftpGuard{st: a.st, site: site},
 			// The repository shares the byte cap, and a push can land
 			// between two transfers: asked at every check, never cached.
+			// So is the owner's account cap: what it takes from the site's
+			// own cap (EffMaxBytes - ByteCap) counts as used, which makes
+			// the session's files + UsedOutside <= MaxBytes the account's
+			// rule too.
 			UsedOutside: func() int64 {
 				u, err := a.st.SiteUsage(site)
 				if err != nil {
 					return 0
 				}
-				return u.GitBytes
+				maxBytes, _ := a.st.ByteCap(site)
+				return u.GitBytes + max(0, a.st.EffMaxBytes(site)-maxBytes)
 			},
 		}, nil
 	case verifyThrottled:

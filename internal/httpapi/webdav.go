@@ -143,9 +143,14 @@ func (a *API) webdav(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		count := u.Files
-		remaining := a.st.EffMaxBytes(site) - u.Bytes()
+		maxBytes, account := a.st.ByteCap(site) // the owner's account may leave less
+		remaining := maxBytes - u.Bytes()
 		if r.ContentLength > remaining || remaining <= 0 {
-			http.Error(w, "site size limit exceeded", http.StatusInsufficientStorage)
+			msg := "site size limit exceeded"
+			if account {
+				msg = msgAccountFull
+			}
+			http.Error(w, msg, http.StatusInsufficientStorage)
 			return
 		}
 		// Only a NEW file counts against the cap; overwriting an existing

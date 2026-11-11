@@ -15,3 +15,13 @@ func (s *Store) SetQuotaGit(site *Site, v *bool) error {
 		return nil
 	})
 }
+
+// SetQuotaAccountBytes writes the site's account cap and nothing else, for
+// the same reason as SetQuotaGit: the sweep backfills it on sites whose caps
+// and expiry it does not own.
+func (s *Store) SetQuotaAccountBytes(site *Site, n int64) error {
+	return s.Update(site, func(m *Meta) error {
+		m.QuotaAccountBytes = n
+		return nil
+	})
+}

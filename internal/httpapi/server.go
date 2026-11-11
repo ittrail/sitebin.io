@@ -415,6 +415,10 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 // on the API and over MCP alike.
 const msgReplaceBusy = "another replace of this site is still running — wait for it to finish, then try again"
 
+// msgAccountFull refuses a write because the owner's sites together hold all
+// the storage the plan allows (store.ErrAccountFull).
+const msgAccountFull = "account storage limit exceeded: your sites together hold all the storage your plan allows — delete files or sites, or upgrade"
+
 // storeError maps store sentinel errors onto HTTP responses.
 func storeError(w http.ResponseWriter, err error) {
 	switch {
@@ -422,6 +426,8 @@ func storeError(w http.ResponseWriter, err error) {
 		writeError(w, 404, "not found")
 	case errors.Is(err, store.ErrDomainTaken):
 		writeError(w, 409, "domain already in use by another site")
+	case errors.Is(err, store.ErrAccountFull): // before ErrTooLarge, which it also is
+		writeError(w, 413, msgAccountFull)
 	case errors.Is(err, store.ErrTooLarge):
 		writeError(w, 413, "site size limit exceeded")
 	case errors.Is(err, store.ErrTooManyFiles):

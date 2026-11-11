@@ -18,6 +18,7 @@ func stampCaps(m *store.Meta, g ext.CreateGrant) {
 	m.QuotaGit = g.Git
 	m.QuotaAnalytics = g.Analytics
 	m.QuotaForms = g.MaxForms
+	m.QuotaAccountBytes = g.MaxAccountBytes
 }
 
 // setTierExpiry imposes the plan's lifetime: now plus the site's cap, labelled

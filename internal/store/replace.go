@@ -61,6 +61,10 @@ type Replacement struct {
 	count    int
 	maxBytes int64
 	maxFiles int
+	// account is ByteCap's: the owner's account cap set maxBytes, and a
+	// refusal is ErrAccountFull. gitBytes is the repository, which stays.
+	account  bool
+	gitBytes int64
 	// failed records that a write returned an error: whatever the caller does
 	// next, a replacement missing a file is never committed.
 	failed   bool
@@ -162,9 +166,11 @@ func (s *Store) BeginReplace(site *Site) (*Replacement, error) {
 		os.RemoveAll(dir)
 		return nil, err
 	}
+	maxBytes, account := s.ByteCap(site)
 	rep := &Replacement{
 		s: s, site: site, dir: dir, root: root,
-		maxBytes: s.EffMaxBytes(site) - u.GitBytes, maxFiles: s.EffMaxFiles(site),
+		maxBytes: maxBytes - u.GitBytes, maxFiles: s.EffMaxFiles(site),
+		account: account, gitBytes: u.GitBytes,
 	}
 	begun = true
 	return rep, nil
@@ -220,7 +226,7 @@ func (r *Replacement) SaveFile(relPath string, rd io.Reader) error {
 	written, existing, err := writeFileIn(r.root, rel, rd, r.used, r.count, r.maxBytes, r.maxFiles, stagedGuard{r})
 	if err != nil {
 		r.failed = true
-		return err
+		return refusal(err, r.account)
 	}
 	r.used += written - existing
 	if existing == 0 {
@@ -297,7 +303,7 @@ func (r *Replacement) ExtractZip(ra io.ReaderAt, size int64) error {
 	if err != nil {
 		r.failed = true
 	}
-	return err
+	return refusal(err, r.account)
 }
 
 // Commit swaps the staged files in, all under the site lock, and in an order
@@ -410,6 +416,7 @@ func (r *Replacement) Commit() error {
 		}
 	}
 	keep = false
+	r.s.acct.note(r.site, r.used+r.gitBytes)
 	if held != nil {
 		return held
 	}

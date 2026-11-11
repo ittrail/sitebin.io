@@ -78,6 +78,9 @@ type Quota struct {
 	Git        *bool
 	Analytics  *bool
 	Forms      *int
+	// AccountBytes is the owner's account cap (Meta.QuotaAccountBytes); 0 is
+	// none. Every constructor must pass it, or ApplyQuota lifts the cap.
+	AccountBytes int64
 }
 
 // ApplyQuota restamps a site's per-site caps and reconciles its expiry with the
@@ -125,6 +128,7 @@ func (s *Store) ApplyQuota(site *Site, q Quota, grace time.Duration) error {
 		m.QuotaGit = q.Git
 		m.QuotaAnalytics = q.Analytics
 		m.QuotaForms = q.Forms
+		m.QuotaAccountBytes = q.AccountBytes
 
 		now := time.Now()
 		if q.ExpiryDays <= 0 {

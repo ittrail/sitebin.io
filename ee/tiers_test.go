@@ -1005,3 +1005,18 @@ func TestGrantFromTierCopiesAnalytics(t *testing.T) {
 		t.Fatalf("Analytics = %v for a tier without analytics, want an explicit false", g.Analytics)
 	}
 }
+
+func TestGrantFromTierCarriesTheAccountCap(t *testing.T) {
+	g := grantFromTier("acct", eeconfig.Tier{ID: "pro", MaxAccountBytes: 10 << 30})
+	if g.MaxAccountBytes != 10<<30 {
+		t.Fatalf("MaxAccountBytes = %d, want 10 GiB", g.MaxAccountBytes)
+	}
+	// A tier without the field caps no account: the per-site caps alone.
+	if g := grantFromTier("acct", eeconfig.Tier{ID: "free"}); g.MaxAccountBytes != 0 {
+		t.Fatalf("MaxAccountBytes = %d for a tier without the field, want 0", g.MaxAccountBytes)
+	}
+	var tier eeconfig.Tier
+	if err := json.Unmarshal([]byte(`{"id":"free","max_account_bytes":104857600}`), &tier); err != nil || tier.MaxAccountBytes != 100<<20 {
+		t.Fatalf("max_account_bytes not parsed: %+v %v", tier, err)
+	}
+}

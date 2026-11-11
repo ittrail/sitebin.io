@@ -25,7 +25,8 @@ func (u Usage) Bytes() int64 { return u.FileBytes + u.GitBytes }
 // can forget the repository. It walks the content directory as
 // usage does and the repository (GitDir) the same way — regular files only,
 // links neither counted nor followed. A site with no repository has
-// GitBytes 0.
+// GitBytes 0. Every answer is noted for the account storage cap
+// (accountusage.go), which is how the figures of sites in use stay current.
 //
 // Store.Usage stays files-only where the figure is about files, not the
 // cap: file COUNTS (WebDAV's new-file check), the MCP download bound (a
@@ -41,7 +42,9 @@ func (s *Store) SiteUsage(site *Site) (Usage, error) {
 	if err != nil {
 		return Usage{}, err
 	}
-	return Usage{FileBytes: fb, GitBytes: gb, Files: n}, nil
+	u := Usage{FileBytes: fb, GitBytes: gb, Files: n}
+	s.acct.note(site, u.Bytes()) // the account storage cap's figure
+	return u, nil
 }
 
 // repoBytes sums the regular files under a repository (0 if it is missing).

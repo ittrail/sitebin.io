@@ -260,9 +260,13 @@ func (a *API) gitAllowance(site *store.Site) (allowance int64, refusal string, e
 	if err != nil {
 		return 0, "", err
 	}
-	limit := a.st.EffMaxBytes(site)
+	limit, account := a.st.ByteCap(site) // the owner's account may leave less
 	allowance = min(limit-u.Bytes(), a.cfg.GitMaxPushBytes)
 	if allowance <= 0 {
+		if account {
+			cap, others := a.st.AccountUsage(site)
+			return 0, fmt.Sprintf("storage full: your sites hold %s of the %s your plan allows in total", store.HumanBytes(others+u.Bytes()), store.HumanBytes(cap)), nil
+		}
 		return 0, fmt.Sprintf("storage full: %s of %s used", store.HumanBytes(u.Bytes()), store.HumanBytes(limit)), nil
 	}
 	return allowance, "", nil
