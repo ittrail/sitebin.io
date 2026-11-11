@@ -271,6 +271,7 @@ var dashTmpl = twin("dash", nil, `
     {{/* The publish link is always here: with a front door, "/" sends a
          signed-in visitor straight back to this page. */}}
     <h3 class="sitesh">Your sites <span class="count">{{.SitesTotal}}</span><a class="btn small tagmanage" href="/account/tags">Manage tags</a><a class="btn small primary" href="{{.PublishURL}}">Publish a new site</a></h3>
+    {{with .Storage}}<p class="muted" style="margin:-6px 0 12px">Storage: {{.}} in use across your sites. When it is full, uploads stop until you free space.</p>{{end}}
     {{/* The tag filter: every chip and toggle is a link to the next filter
          state, so it works without script. */}}
     {{with .Filter}}{{if .Show}}

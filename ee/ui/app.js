@@ -168,14 +168,16 @@
     return out;
   }
 
-  // "21 of 500 sites, 4.8 GB in use": the plan caps how many sites an
-  // account owns (never how much they hold together: storage is per site),
-  // so the "of" is the site cap, counted over owned sites. No cap, no "of".
+  // "21 of 500 sites, 4.8 GB of 50 GB in use": the plan caps how many sites
+  // an account owns and what they hold together, counted over owned sites.
+  // No cap, no "of".
   function siteCountLede(total) {
-    const cap = (st().plan && st().plan.caps && st().plan.caps.sites) || 0;
-    if (cap > 0) {
+    const caps = (st().plan && st().plan.caps) || {};
+    const cap = caps.sites || 0, acct = caps.account_bytes || 0;
+    if (cap > 0 || acct > 0) {
       const own = st().sites.filter(owned);
-      return own.length + " of " + cap + " sites, " + fmtBytes(own.reduce((c, s) => c + s.bytes + s.git_bytes, 0)) + " in use.";
+      const held = own.reduce((c, s) => c + s.bytes + s.git_bytes, 0);
+      return own.length + (cap > 0 ? " of " + cap : "") + (own.length === 1 && !cap ? " site, " : " sites, ") + fmtBytes(held) + (acct > 0 ? " of " + fmtBytes(acct) : "") + " in use.";
     }
     return st().sites.length + (st().sites.length === 1 ? " site, " : " sites, ") + fmtBytes(total) + " in use.";
   }
@@ -533,7 +535,7 @@
       (p.portal ? '<button class="btn" type="button" data-portal>Manage subscription</button>' : "") + (st().account.cancel_url ? '<a class="btn ghost" href="' + esc(st().account.cancel_url) + '" rel="noopener">Cancel contracts here</a>' : "")) +
       '<div class="cols2"><section class="panel"><h3>What you use</h3><p class="d">Measured against what your plan allows.</p>' +
       meter("Sites", sites.length, c.sites, sites.length + (c.sites > 0 ? " of " + c.sites : "")) +
-      meter("Storage", bytes, 0, fmtBytes(bytes) + " · each site up to " + (c.site_bytes > 0 ? fmtBytes(c.site_bytes) : "unlimited")) +
+      meter("Storage", bytes, c.account_bytes, fmtBytes(bytes) + (c.account_bytes > 0 ? " of " + fmtBytes(c.account_bytes) : "") + " · each site up to " + (c.site_bytes > 0 ? fmtBytes(c.site_bytes) : "unlimited"), "When it is full, uploads stop until you free space.") +
       meter("Custom domains", doms, 0, doms + " · up to " + lim(c.custom_domains) + " per site") +
       meter("Zones", st().zones.length, c.zones, st().zones.length + (c.zones > 0 ? " of " + c.zones : " · none on this plan"), "Every name under a zone attaches without a record.") +
       meter("Forms", forms, 0, forms + (c.forms > 0 ? " · up to " + c.forms + " per site" : "")) +

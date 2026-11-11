@@ -105,7 +105,7 @@ func (s *fakeSites) WillNotMove(id, sender string) []string { return s.ad().notM
 
 const adoptTiersJSON = `[
   {"id":"free","label":"Free","max_site_bytes":1000,"max_files":10,"max_sites":1,"custom_domains":0,"max_expiry_days":7},
-  {"id":"pro","label":"Pro","max_site_bytes":1000,"max_files":10,"max_sites":3,"custom_domains":2,"max_expiry_days":30,"max_containers":2,"max_forms":1,"sharing":true,"trusted":true},
+  {"id":"pro","label":"Pro","max_site_bytes":1000,"max_account_bytes":1500,"max_files":10,"max_sites":3,"custom_domains":2,"max_expiry_days":30,"max_containers":2,"max_forms":1,"sharing":true,"trusted":true},
   {"id":"admin","label":"Admin","max_site_bytes":1000,"max_files":10,"max_sites":3,"max_expiry_days":30,"admin":true,"sharing":true}
 ]`
 
@@ -612,6 +612,32 @@ func TestLimitsCheck(t *testing.T) {
 		e.p.servicesOf = func(owner string) (int, error) { return 0, errors.New("listing failed") }
 		if _, err := e.p.limitsCheck(e.acc, []string{adoptA}); err == nil {
 			t.Error("an unknown service count passed")
+		}
+	})
+	t.Run("the bundle must fit the account's storage", func(t *testing.T) {
+		e := newAdoptEnv(t, "pro")
+		e.owned(adoptC, e.acc.ID, "x")
+		c := e.fs.infos[adoptC]
+		c.Bytes, c.GitBytes = 600, 200
+		e.fs.infos[adoptC] = c
+		e.p.accounts.LinkSite(e.acc, adoptC)
+		e.anon(adoptA, "x")
+		e.fs.ad().bytes[adoptA] = 700 // 800 + 700 = 1500: fits exactly
+		ls, err := e.p.limitsCheck(e.acc, []string{adoptA})
+		if err != nil || len(failing(ls)) != 0 {
+			t.Fatalf("a bundle that fits = %+v, %v", failing(ls), err)
+		}
+		e.fs.ad().bytes[adoptA] = 701
+		ls, err = e.p.limitsCheck(e.acc, []string{adoptA})
+		if err != nil || len(failing(ls)) != 1 || failing(ls)[0].Label != "Account storage" ||
+			!strings.Contains(failing(ls)[0].Detail, "Your sites hold 800 B, these add 701 B, and your plan allows 1.5 KB in total.") {
+			t.Fatalf("one byte too many = %+v, %v", failing(ls), err)
+		}
+		// A locked site is the operator's hold and counts for nobody.
+		c.Locked = &ext.SiteLock{Reason: "x"}
+		e.fs.infos[adoptC] = c
+		if ls, _ := e.p.limitsCheck(e.acc, []string{adoptA}); len(failing(ls)) != 0 {
+			t.Fatalf("a locked site counted: %+v", failing(ls))
 		}
 	})
 	t.Run("errors are errors", func(t *testing.T) {

@@ -205,6 +205,35 @@ if ($site) {
 }
 Remove-Item -Recurse -Force $gitTmp -ErrorAction SilentlyContinue
 
+# ---------- account storage: all of an account's sites share max_account_bytes ----------
+# 1000 B per site, 1500 B for the whole account: the second site has 600 left.
+$tiersAcct = '[{"id":"free","label":"Free","max_site_bytes":1000,"max_account_bytes":1500,"max_files":5,"max_sites":3,"webdav":false,"custom_domains":0,"max_expiry_days":7,"max_forms":1,"trusted":true}]'
+[IO.File]::WriteAllText((Join-Path $work "tiers.json"), $tiersAcct)
+docker restart $name | Out-Null
+$upA = $false
+for ($i = 0; $i -lt 30; $i++) { Start-Sleep -Milliseconds 700; if ((Req "GET" "$origin/").code -eq 200) { $upA = $true; break } }
+Assert "container back up with max_account_bytes" $upA
+$jar4 = Join-Path $work "tiers4.txt"; Remove-Item $jar4 -ErrorAction SilentlyContinue
+Req "POST" "$origin/account/signup" @("-c", $jar4, "--data-urlencode", "email=t4@example.com", "--data-urlencode", "password=password12345") | Out-Null
+$f900 = Join-Path $work "f900.txt"; [IO.File]::WriteAllText($f900, ("A" * 900))
+$f700 = Join-Path $work "f700.txt"; [IO.File]::WriteAllText($f700, ("B" * 700))
+$f500 = Join-Path $work "f500.txt"; [IO.File]::WriteAllText($f500, ("C" * 500))
+$r = Req "POST" "$origin/api/sites" @("-b", $jar4, "-F", "files=@$f900;filename=index.html")
+Assert "account storage: the first site (900 B) is created" ($r.code -eq 201) "got $($r.code): $($r.body)"
+$r = Req "POST" "$origin/api/sites" @("-b", $jar4, "-F", "files=@$f700;filename=index.html")
+Assert "account storage: 700 B more is refused for the account (413)" ($r.code -eq 413 -and $r.body -match "account storage") "got $($r.code): $($r.body)"
+$r = Req "POST" "$origin/api/sites" @("-b", $jar4, "-F", "files=@$f500;filename=index.html")
+Assert "account storage: 500 B fits beside the first site" ($r.code -eq 201) "got $($r.code): $($r.body)"
+if ($r.code -eq 201) {
+    $s2 = $r.body | ConvertFrom-Json
+    $edit2 = ($s2.edit_url -split "/e/")[1]
+    $r = Req "POST" "$origin/api/sites/$edit2/files" @("-H", "X-Edit-Password: $($s2.edit_password)", "-F", "files=@$f500;filename=more.html")
+    Assert "account storage: an upload past the account's room is refused (413)" ($r.code -eq 413 -and $r.body -match "account storage") "got $($r.code): $($r.body)"
+    $r = Req "GET" "$origin/api/sites/$edit2" @("-H", "X-Edit-Password: $($s2.edit_password)")
+    $m2 = $r.body | ConvertFrom-Json
+    Assert "account storage: the password holder is not told the account's figures" ($null -eq $m2.usage.account_max_bytes) "$($r.body)"
+}
+
 docker rm -f $name 2>$null | Out-Null; docker volume rm $vol 2>$null | Out-Null
 Write-Host ""
 Write-Host ("== tiers E2E: {0} passed, {1} failed" -f $script:pass, $script:fail) -ForegroundColor $(if ($script:fail -eq 0) { "Green" } else { "Red" })

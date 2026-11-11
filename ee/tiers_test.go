@@ -1020,3 +1020,19 @@ func TestGrantFromTierCarriesTheAccountCap(t *testing.T) {
 		t.Fatalf("max_account_bytes not parsed: %+v %v", tier, err)
 	}
 }
+
+// The dashboards count the account's own sites against the account cap: a
+// shared site counts for its owner, a locked one for nobody.
+func TestAccountStorageText(t *testing.T) {
+	rows := []siteRow{
+		{SiteInfo: ext.SiteInfo{Bytes: 1 << 20, GitBytes: 1 << 20}},
+		{SiteInfo: ext.SiteInfo{Bytes: 5 << 20}, Shared: true},
+		{SiteInfo: ext.SiteInfo{Bytes: 7 << 20, Locked: &ext.SiteLock{Reason: "x"}}},
+	}
+	if got := accountStorageText(rows, 10<<30); got != "2.0 MB of 10.0 GB" {
+		t.Fatalf("accountStorageText = %q, want 2.0 MB of 10.0 GB", got)
+	}
+	if got := accountStorageText(rows, 0); got != "" {
+		t.Fatalf("no account cap: %q, want nothing", got)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ittrail/sitebin.io/ee/eeconfig"
 	"github.com/ittrail/sitebin.io/internal/ext"
 	"github.com/ittrail/sitebin.io/internal/mcp"
 )
@@ -729,5 +730,23 @@ func TestRegistrationScopesCarryEnglishAndGerman(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Errorf("scopes missing: %v", want)
+	}
+}
+
+func TestTierFeaturesNameTheAccountStorage(t *testing.T) {
+	lines := func(tier eeconfig.Tier) []string {
+		var out []string
+		for _, f := range tierFeatures(tier) {
+			out = append(out, f["en"])
+		}
+		return out
+	}
+	got := lines(eeconfig.Tier{ID: "pro", MaxSites: 100, MaxAccountBytes: 10 << 30, MaxSiteBytes: 1 << 30})
+	want := []string{"Up to 100 sites", "10 GB storage in total", "1024 MB per site"}
+	if len(got) < 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("features = %q, want to start with %q", got, want)
+	}
+	if got := lines(eeconfig.Tier{ID: "free", MaxAccountBytes: 100 << 20}); len(got) == 0 || got[0] != "100 MB storage in total" {
+		t.Fatalf("features = %q, want 100 MB storage in total", got)
 	}
 }

@@ -667,6 +667,22 @@ The area with the most subtlety, and where the current unmerged work sits.
 - **The cleanup sweep is the last line of defence** for a late upgrade: before
   deleting an expired owned site it re-checks the owner's current caps.
 
+- **The account storage cap** (`max_account_bytes` → `Meta.QuotaAccountBytes`,
+  stamped like the other caps and backfilled by `reconcileAccountBytes`)
+  bounds what all of an owner's sites hold together. Writes check
+  `Store.ByteCap` (the site's own cap or what the account has left), never
+  `EffMaxBytes`, which stays the per-site cap for reports. The account's
+  figure is an in-memory index (`internal/store/accountusage.go`): every
+  `SiteUsage` notes its answer, deletes drop, ownership moves re-own, every
+  sweep and the startup rebuild it, and near the cap it is re-measured (30 s).
+  It may be LOW (parallel uploads, unmeasured container growth), never
+  permanently high. A locked site and a shared admin count for nobody but the
+  owner's own figure. A new write funnel joins `accountChecks` in
+  `usage_test.go` as well as `byteChecks`; a new `store.Quota` constructor
+  passes `AccountBytes`. Only the owner is told the account's figures (the
+  settings read's `account_bytes`); MCP outputs gained no field. Read
+  `docs/superpowers/specs/2026-11-11-account-storage-cap-design.md`.
+
 Read `docs/superpowers/specs/2026-08-12-tier-change-quota-sync-design.md` before
 touching any of it — including its "Corrections (post-implementation)" blocks,
 which record three rules that review had to fix after the fact. Tiers themselves

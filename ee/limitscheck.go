@@ -19,7 +19,8 @@ type checkLine struct {
 	// OK is false when the line is a reason to refuse.
 	OK bool
 	// Label names what was measured: "Sharing", "Sites", "Container
-	// services", "Storage", "Files", "Custom domains" or "Forms".
+	// services", "Storage", "Files", "Custom domains", "Forms" or "Account
+	// storage".
 	Label string
 	// Detail is the sentence for the person: what the account has, what the
 	// sites add and what the plan allows.
@@ -143,6 +144,7 @@ func (p *provider) limitsCheckWith(acc *account.Account, viewIDs []string, infos
 		return nil, errors.New("the site service cannot measure a site")
 	}
 	mover, _ := p.host.Sites().(moveReporter)
+	var incomingBytes int64 // the bundle's bytes, for the account's storage
 	for i, id := range viewIDs {
 		info := read[i]
 		name := siteLabel(info)
@@ -150,6 +152,7 @@ func (p *provider) limitsCheckWith(acc *account.Account, viewIDs []string, infos
 		if err != nil {
 			return nil, fmt.Errorf("could not measure %s: %w", name, err)
 		}
+		incomingBytes += bytes
 		if tier.MaxSiteBytes > 0 {
 			lines = append(lines, checkLine{
 				OK: bytes <= tier.MaxSiteBytes, Label: "Storage", Site: name,
@@ -182,6 +185,25 @@ func (p *provider) limitsCheckWith(acc *account.Account, viewIDs []string, infos
 		lines = append(lines, checkLine{
 			OK: info.Forms <= tier.MaxForms, Label: "Forms", Site: name,
 			Detail: fmt.Sprintf("%d form(s), and your plan allows %d per site.", info.Forms, tier.MaxForms),
+		})
+	}
+
+	// The account's storage: what its sites hold (a locked one counts for
+	// nobody, as in the store's own figure) plus the whole bundle.
+	if tier.MaxAccountBytes > 0 {
+		owned, err := p.ownedSiteInfos(acc)
+		if err != nil {
+			return nil, fmt.Errorf("could not measure your sites: %w", err)
+		}
+		var held int64
+		for _, info := range owned {
+			if info.Locked == nil && !slices.Contains(viewIDs, info.ViewID) {
+				held += info.Bytes + info.GitBytes
+			}
+		}
+		lines = append(lines, checkLine{
+			OK: held+incomingBytes <= tier.MaxAccountBytes, Label: "Account storage",
+			Detail: fmt.Sprintf("Your sites hold %s, these add %s, and your plan allows %s in total.", humanBytes(held), humanBytes(incomingBytes), humanBytes(tier.MaxAccountBytes)),
 		})
 	}
 	return lines, nil

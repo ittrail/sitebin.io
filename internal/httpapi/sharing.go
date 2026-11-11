@@ -147,7 +147,9 @@ func ownerEmail(site *store.Site) (string, bool) {
 }
 
 // payloadFor is sitePayload for the caller the gate let in: plus "role"
-// (owner, admin or password; absent where no gate ran) and, for an admin,
+// (owner, admin or password; absent where no gate ran), for the owner the
+// account's storage (usage.account_bytes / account_max_bytes, when the plan
+// caps the account), and, for an admin,
 // "shared_by" (the owner's address) and the admin's own tags in place of the
 // owner's. Every per-site handler answers with it; sitePayload stays the
 // site's own document. Older clients ignore the new keys.
@@ -158,6 +160,18 @@ func (a *API) payloadFor(r *http.Request, site *store.Site) map[string]any {
 		return p
 	}
 	p["role"] = act.role
+	// The owner's account storage, to the owner alone: an admin or a holder
+	// of the password learns nothing about the owner's other sites.
+	if act.role == roleOwner {
+		if cap, others := a.st.AccountUsage(site); cap > 0 {
+			if u, ok := p["usage"].(map[string]any); ok {
+				if b, ok := u["bytes"].(int64); ok {
+					u["account_bytes"] = others + b
+					u["account_max_bytes"] = cap
+				}
+			}
+		}
+	}
 	if act.role == roleAdmin {
 		p["tags"] = a.tagsFor(site, act.role, act.account)
 		if email, ok := ownerEmail(site); ok {

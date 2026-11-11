@@ -480,6 +480,7 @@ type wsPlan struct {
 // which, as the pricing page does).
 type wsCaps struct {
 	SiteBytes     int64 `json:"site_bytes"`
+	AccountBytes  int64 `json:"account_bytes"` // all own sites together; 0 = no account cap
 	Files         int   `json:"files"`
 	Sites         int   `json:"sites"`
 	CustomDomains int   `json:"custom_domains"`
@@ -620,7 +621,7 @@ func (p *provider) handleUIState(w http.ResponseWriter, r *http.Request) {
 	checkout := p.canCheckout()
 	plan := wsPlan{Current: current.ID, Tiers: []tierOption{}, SelfSelect: p.cfg.SelfSelect, Checkout: checkout, Portal: p.billing != nil,
 		Caps: wsCaps{
-			SiteBytes: current.MaxSiteBytes, Files: current.MaxFiles, Sites: current.MaxSites, CustomDomains: current.CustomDomains,
+			SiteBytes: current.MaxSiteBytes, AccountBytes: current.MaxAccountBytes, Files: current.MaxFiles, Sites: current.MaxSites, CustomDomains: current.CustomDomains,
 			ExpiryDays: current.MaxExpiryDays, Containers: current.MaxContainers, Zones: current.MaxZones, Forms: current.MaxForms,
 			WebDAV: current.WebDAV, Git: current.Git, Analytics: current.Analytics, Sharing: current.Sharing,
 		}}

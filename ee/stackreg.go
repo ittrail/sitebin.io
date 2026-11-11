@@ -324,6 +324,15 @@ func tierLabel(t eeconfig.Tier) string {
 	return t.ID
 }
 
+// planBytes is a plan's byte figure as a pricing line says it: whole
+// gigabytes as GB, else megabytes ("10 GB", "100 MB").
+func planBytes(n int64) string {
+	if n >= 1<<30 && n%(1<<30) == 0 {
+		return fmt.Sprintf("%d GB", n>>30)
+	}
+	return fmt.Sprintf("%d MB", n>>20)
+}
+
 // tierFeatures turns the quota bundle into the human lines a pricing page or a
 // consent screen can show. Zero means "inherit the instance global", which is
 // not a promise worth printing, so those are skipped.
@@ -333,6 +342,9 @@ func tierFeatures(t eeconfig.Tier) []map[string]string {
 
 	if t.MaxSites > 0 {
 		add(fmt.Sprintf("Up to %d sites", t.MaxSites))
+	}
+	if t.MaxAccountBytes > 0 {
+		add(planBytes(t.MaxAccountBytes) + " storage in total")
 	}
 	if t.MaxSiteBytes > 0 {
 		add(fmt.Sprintf("%d MB per site", t.MaxSiteBytes/(1<<20)))

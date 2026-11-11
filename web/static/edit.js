@@ -296,6 +296,15 @@ function render() {
     : fmtBytes(site.usage.bytes) + " of " + fmtBytes(site.usage.max_bytes);
   $("usage-note").textContent =
     used + " · " + site.usage.files + (site.usage.max_files ? "/" + site.usage.max_files : "") + " files";
+  // The plan caps what all the owner's sites hold together; only the owner
+  // is told (account_max_bytes is absent for anyone else).
+  const acctMax = site.usage.account_max_bytes || 0;
+  $("usage-account").classList.toggle("hidden", !acctMax);
+  if (acctMax) {
+    const acct = site.usage.account_bytes || 0;
+    $("usage-account").textContent = "Your account: " + fmtBytes(acct) + " of " + fmtBytes(acctMax) + " in use across all your sites" +
+      (acct >= acctMax ? " — full: delete files or sites, or upgrade" : "");
+  }
 
   // name: never overwrite what is being typed (a container site re-renders
   // on a timer while it starts)

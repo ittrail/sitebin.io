@@ -2104,8 +2104,19 @@ Design: `docs/superpowers/specs/2026-10-25-container-limits-admin-design.md`.
 Note that an unlimited tier needs explicit large caps, not zeros:
 `max_site_bytes: 0` and `max_files: 0` fall back to the instance globals, and
 `custom_domains: 0` means *no* custom domains, and `max_containers: 0`,
-`max_zones: 0` and `max_forms: 0` mean none. Only `max_sites: 0` and
-`max_expiry_days: 0` mean unlimited.
+`max_zones: 0` and `max_forms: 0` mean none. Only `max_sites: 0`,
+`max_expiry_days: 0` and `max_account_bytes: 0` (or absent) mean unlimited.
+
+A tier's `max_account_bytes` caps what ALL the sites an account owns hold
+together, counted as a site's own cap counts them: files, Git repository and
+whatever a container wrote into the site. A site shared with an admin counts
+for its owner; a locked site counts for nobody. Once the account is full,
+every upload, WebDAV or FTP write and Git push that adds bytes is refused
+(`413` / `507` "account storage limit exceeded"), container projects are
+stopped, and adopting or accepting sites must fit; sites stay online and
+deletes always work. `max_site_bytes` still bounds each site. A changed value
+reaches existing sites within one cleanup sweep. Design:
+`docs/superpowers/specs/2026-11-11-account-storage-cap-design.md`.
 
 A tier's `git` (bool, absent = false) turns on the [Git repository](#git-a-repository-per-site) for the sites it owns; a plan without it leaves an existing repository read-only, never deleted.
 

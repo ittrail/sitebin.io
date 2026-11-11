@@ -157,3 +157,34 @@ func TestContainerSiteCarriesTheAccount(t *testing.T) {
 		t.Fatalf("AccountCap %d, AccountOthers %d; want 200 and 150", cs.AccountCap, cs.AccountOthers)
 	}
 }
+
+// The owner is told the account's storage on the settings read; an admin or a
+// holder of the edit password learns nothing about the owner's other sites.
+func TestSettingsReadTellsOnlyTheOwnerTheAccount(t *testing.T) {
+	e, _ := formsEnv(t, nil)
+	f := registerSharing(t, ext.CreateGrant{Trusted: true, MaxAccountBytes: 5000})
+	edit, pw, _ := sharedSite(t, e, f)
+	other := e.createSite(t, nil, map[string]string{"big.bin": strings.Repeat("o", 300)})
+	ownAs(t, e, editIDFrom(t, other.EditURL), "acct-1", 5000)
+
+	usage := func(as func(*http.Request) *http.Request) map[string]any {
+		t.Helper()
+		w := e.public(t, as(bodyReq("GET", "/api/sites/"+edit, nil)))
+		if w.Code != 200 {
+			t.Fatalf("get = %d %s", w.Code, w.Body)
+		}
+		return payloadOf(t, w)["usage"].(map[string]any)
+	}
+	u := usage(func(r *http.Request) *http.Request { return bearer(r, "sbp_owner") })
+	if u["account_max_bytes"] != float64(5000) || u["account_bytes"] != float64(300+len("<h1>shared</h1>")) {
+		t.Fatalf("owner's usage = %v, want the account's 5000 cap and both sites' bytes", u)
+	}
+	for name, as := range map[string]func(*http.Request) *http.Request{
+		"admin":    func(r *http.Request) *http.Request { return bearer(r, "sbp_admin") },
+		"password": func(r *http.Request) *http.Request { return authed(r, pw) },
+	} {
+		if u := usage(as); u["account_max_bytes"] != nil || u["account_bytes"] != nil {
+			t.Errorf("%s was told the owner's account: %v", name, u)
+		}
+	}
+}

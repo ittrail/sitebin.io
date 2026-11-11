@@ -706,6 +706,22 @@ func (p *provider) renderAuth(w http.ResponseWriter, mode, email, errMsg string)
 	})
 }
 
+// accountStorageText is "X of Y" for the plan's account storage cap, over the
+// account's own rows (a shared site counts for its owner, a locked one for
+// nobody — the store's rule), or "" when the plan caps no account.
+func accountStorageText(rows []siteRow, cap int64) string {
+	if cap <= 0 {
+		return ""
+	}
+	var held int64
+	for _, r := range rows {
+		if !r.Shared && r.Locked == nil {
+			held += r.Bytes + r.GitBytes
+		}
+	}
+	return humanBytes(held) + " of " + humanBytes(cap)
+}
+
 type siteRow struct {
 	ext.SiteInfo
 	SizeText   string
@@ -757,6 +773,9 @@ type tierOption struct {
 type dashView struct {
 	// Flash is a one-time notice at the top of the page (see takeNotice).
 	Flash string
+	// Storage is what the account's own sites hold against the plan's
+	// account cap ("4.8 MB of 10 GB"), "" when the plan has none.
+	Storage string
 	// PublishURL is where the dashboard sends a person to publish: the front
 	// door when there is one (never "/", which sends a signed-in visitor
 	// back here), else the instance root.
@@ -879,6 +898,7 @@ func (p *provider) renderDashboard(w http.ResponseWriter, r *http.Request, acc *
 	}
 	dashTmpl.Execute(w, dashView{
 		Flash:       flash,
+		Storage:     accountStorageText(rows, current.MaxAccountBytes),
 		MCPEndpoint: p.host.BaseURL() + "/mcp",
 		Email:       acc.Email, Tier: tier, Sites: tags.rows, SitesTotal: len(rows), CSRF: token, Base: p.baseURL(), PublishURL: p.host.PublishURL(),
 		Filter: tags.filter, TagOptions: tags.options, Groups: tags.groups, Back: tags.back,
