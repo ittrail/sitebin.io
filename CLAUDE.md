@@ -709,6 +709,13 @@ second copy of the rule.
 
 - MCP is **core, not `ee/`** — for the same reason the API is. Accounts are the
   enterprise part, and they gate MCP from outside through `ext.Provider`.
+- **Output schemas are open, input schemas closed** (`openOutputSchema` in
+  `internal/mcp/server.go`, since 2026-11-11): clients validate results
+  against the schema they cached, and the inferred `additionalProperties:
+  false` made every new result field fail in every client that had not
+  reconnected (cache_rules). Clients that cached a schema before then still
+  hold the closed one, so a new result field stays `omitempty` and appears
+  only where it is set. `TestOutputSchemasAllowNewFields` guards both halves.
 - MCP is deliberately stricter than the API in one place: it never takes the
   `fromOwnBrowser` escape hatch, because an MCP client is never one of
   Sitebin's own pages.

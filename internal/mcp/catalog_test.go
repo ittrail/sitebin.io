@@ -203,3 +203,32 @@ func TestRefusalNeverShowsThePlaceholder(t *testing.T) {
 		t.Errorf("refusal does not say the connection holds nothing: %q", text)
 	}
 }
+
+// A result may gain a field: a client that cached a tool's output schema
+// must not then reject every result (go-sdk's and other clients validate
+// structured content against the schema they hold). So no output schema
+// forbids additional properties, at any depth. Input schemas stay strict.
+func TestOutputSchemasAllowNewFields(t *testing.T) {
+	cs := connect(t, &fakeOps{}, nil)
+	res, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	outputs := 0
+	for _, tool := range res.Tools {
+		if tool.OutputSchema != nil {
+			outputs++
+			raw, _ := json.Marshal(tool.OutputSchema)
+			if strings.Contains(string(raw), `"additionalProperties":false`) || strings.Contains(string(raw), `"additionalProperties":{"not":{}}`) {
+				t.Errorf("tool %q: its output schema forbids new fields: %s", tool.Name, raw)
+			}
+		}
+		raw, _ := json.Marshal(tool.InputSchema)
+		if !strings.Contains(string(raw), `"additionalProperties":false`) && !strings.Contains(string(raw), `"additionalProperties":{"not":{}}`) {
+			t.Errorf("tool %q: its input schema stopped refusing unknown arguments: %s", tool.Name, raw)
+		}
+	}
+	if outputs == 0 {
+		t.Fatal("no tool has an output schema: nothing was checked")
+	}
+}

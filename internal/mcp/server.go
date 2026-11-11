@@ -2,8 +2,12 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
+
+	"github.com/google/jsonschema-go/jsonschema"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -115,6 +119,12 @@ func addTool[In, Out any](s *sdk.Server, auth Auth, t *sdk.Tool, h sdk.ToolHandl
 	hints := spec.annotations
 	hints.Title = spec.title
 	t.Annotations = &hints
+	if t.OutputSchema == nil {
+		// Never a typed nil: the SDK would take it for a schema.
+		if schema := openOutputSchema[Out](t.Name); schema != nil {
+			t.OutputSchema = schema
+		}
+	}
 	sdk.AddTool(s, t, func(ctx context.Context, req *sdk.CallToolRequest, in In) (*sdk.CallToolResult, Out, error) {
 		if err := authorize(auth, spec.scope); err != nil {
 			var none Out
@@ -521,3 +531,59 @@ func formsOut(r *FormsResult, err error) (*sdk.CallToolResult, *FormsResult, err
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// openOutputSchema is the output schema the SDK would infer for Out, with no
+// object in it closed to new fields. A client that cached a tool's schema
+// validates every result against it (go-sdk's client does), so with the
+// inferred additionalProperties: false a result gaining a field — cache_rules,
+// 2026-11-11 — failed in every client that had not reconnected, although the
+// call had done its work. Results may grow; input schemas stay closed, so an
+// unknown argument is still refused. nil for a tool without structured output.
+func openOutputSchema[Out any](tool string) *jsonschema.Schema {
+	rt := reflect.TypeFor[Out]()
+	if rt == reflect.TypeFor[any]() {
+		return nil
+	}
+	if rt.Kind() == reflect.Pointer {
+		rt = rt.Elem()
+	}
+	schema, err := jsonschema.ForType(rt, &jsonschema.ForOptions{})
+	if err != nil {
+		panic("mcp: tool " + tool + ": output schema: " + err.Error())
+	}
+	openObjects(schema)
+	return schema
+}
+
+// openObjects drops every "additionalProperties": false in s, at any depth. A
+// map's value schema (additionalProperties as a schema) stays.
+func openObjects(s *jsonschema.Schema) {
+	if s == nil {
+		return
+	}
+	if s.AdditionalProperties != nil {
+		if raw, err := json.Marshal(s.AdditionalProperties); err == nil && string(raw) == "false" {
+			s.AdditionalProperties = nil
+		} else {
+			openObjects(s.AdditionalProperties)
+		}
+	}
+	for _, p := range s.Properties {
+		openObjects(p)
+	}
+	for _, p := range s.PatternProperties {
+		openObjects(p)
+	}
+	for _, d := range s.Defs {
+		openObjects(d)
+	}
+	for _, d := range s.Definitions {
+		openObjects(d)
+	}
+	openObjects(s.Items)
+	for _, list := range [][]*jsonschema.Schema{s.PrefixItems, s.AnyOf, s.AllOf, s.OneOf} {
+		for _, x := range list {
+			openObjects(x)
+		}
+	}
+}
