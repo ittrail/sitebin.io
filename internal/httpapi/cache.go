@@ -30,10 +30,12 @@ const (
 )
 
 // documentExts are the files that point at everything else — pages and data.
-// They always revalidate: a stale page keeps visitors on the old site.
+// They always revalidate: a stale page keeps visitors on the old site, and a
+// stale feed (electron-updater's latest*.yml) keeps an app on the old release.
 var documentExts = map[string]bool{
 	"": true, ".html": true, ".htm": true, ".xhtml": true,
 	".json": true, ".xml": true, ".txt": true, ".webmanifest": true,
+	".yml": true, ".yaml": true,
 }
 
 // immutableTrees are directories frameworks keep content-addressed as a
@@ -164,6 +166,25 @@ func (a *API) cacheValue(site *store.Site, rawURI, prefix string) string {
 	if site.Meta.Cache == store.CacheOff {
 		return ""
 	}
+	f := a.servedFile(site, rawURI, prefix)
+	return cacheControl(site.Meta.Cache, f.path, f.isFile, site.Meta.ViewPasswordProtected)
+}
+
+// served is what a file site's request names: path is the request path within
+// the site (after the /v/<id> or mount prefix), rel the same path cleaned and
+// relative to the served folder, isFile whether rel is an existing regular
+// file there.
+type served struct {
+	path, rel string
+	isFile    bool
+}
+
+// servedFile resolves a file site's request against the folder the file
+// server serves (files/, which in viewer mode holds _raw/), through its own
+// os.Root, so no path can look outside it. That root is never created: a
+// site deleted after authz loaded it must not come back as a folder without
+// meta.json.
+func (a *API) servedFile(site *store.Site, rawURI, prefix string) served {
 	p := "/"
 	if u, err := url.ParseRequestURI(rawURI); err == nil && u.Path != "" {
 		p = u.Path
@@ -171,16 +192,17 @@ func (a *API) cacheValue(site *store.Site, rawURI, prefix string) string {
 	if prefix != "" {
 		p = strings.TrimPrefix(p, prefix)
 	}
-	isFile := false
+	f := served{path: p}
 	if rel := strings.TrimPrefix(path.Clean("/"+p), "/"); rel != "" && !strings.HasSuffix(p, "/") {
+		f.rel = rel
 		if root, err := store.OpenServedRoot(site); err == nil {
 			if fi, err := root.Stat(rel); err == nil && fi.Mode().Type() == 0 {
-				isFile = true
+				f.isFile = true
 			} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
-				a.log.Debug("cache stat", "id", site.ViewID, "err", err)
+				a.log.Debug("served stat", "id", site.ViewID, "err", err)
 			}
 			root.Close()
 		}
 	}
-	return cacheControl(site.Meta.Cache, p, isFile, site.Meta.ViewPasswordProtected)
+	return f
 }

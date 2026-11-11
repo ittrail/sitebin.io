@@ -68,6 +68,9 @@ func TestCacheControl(t *testing.T) {
 		// Nuxt's builds/latest.json lives in its hashed folder and changes
 		// with every build: data always revalidates, wherever it is.
 		{"", "/_nuxt/builds/latest.json", true, false, revalidate},
+		// electron-updater's feed is YAML, polled under one name: data too.
+		{"year", "/stable/latest.yml", true, false, revalidate},
+		{"week", "/stable/latest-mac.YAML", true, false, revalidate},
 		{"", "/_astro/index.DfSBlnLq.css", true, false, immutable},
 		{"", "/assets/index-BqCz7v8e.js", true, false, immutable},
 		{"", "/style.css", true, false, revalidate},

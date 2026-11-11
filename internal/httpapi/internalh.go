@@ -153,10 +153,17 @@ func (a *API) admit(w http.ResponseWriter, r *http.Request, site *store.Site, pa
 	}
 	a.countView(r, site)
 	a.recordPageView(r, site, addr, mount, pathMode)
-	// A file site's Cache-Control, which Caddy sets on a 2xx or 304 only —
-	// computed on the path the file server will see.
-	if v := a.cacheValue(site, r.Header.Get("X-Forwarded-Uri"), prefix); v != "" {
-		w.Header().Set(cacheHeader, v)
+	// A file site's Cache-Control, which Caddy sets on a 2xx or 304 only, and
+	// the Content-Type of a file the system's table cannot name, set on a 2xx
+	// only — both computed on the path the file server will see.
+	file := a.servedFile(site, r.Header.Get("X-Forwarded-Uri"), prefix)
+	if site.Meta.Cache != store.CacheOff {
+		if v := cacheControl(site.Meta.Cache, file.path, file.isFile, site.Meta.ViewPasswordProtected); v != "" {
+			w.Header().Set(cacheHeader, v)
+		}
+	}
+	if t := a.typeValue(site, file.rel, file.isFile); t != "" {
+		w.Header().Set(typeHeader, t)
 	}
 	// The page Caddy shows for a 404 when the site has it.
 	if t := site.Meta.NotFoundTarget(); t != "" {

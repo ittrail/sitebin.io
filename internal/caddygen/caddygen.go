@@ -187,11 +187,13 @@ func writePathViewRoutes(b *strings.Builder, backend func(string) string, dataDi
 	b.WriteString("\t\troute {\n")
 	fmt.Fprintf(b, "\t\t\trequest_header -%s\n", cacheHeader)
 	fmt.Fprintf(b, "\t\t\trequest_header -%s\n", notFoundHeader)
-	fmt.Fprintf(b, "\t\t\tforward_auth %s {\n\t\t\t\turi /internal/authz\n\t\t\t\theader_up X-Sitebin-View {re.view.1}\n\t\t\t\tcopy_headers Set-Cookie %s %s\n\t\t\t}\n", backend("9000"), cacheHeader, notFoundHeader)
+	fmt.Fprintf(b, "\t\t\trequest_header -%s\n", typeHeader)
+	fmt.Fprintf(b, "\t\t\tforward_auth %s {\n\t\t\t\turi /internal/authz\n\t\t\t\theader_up X-Sitebin-View {re.view.1}\n\t\t\t\tcopy_headers Set-Cookie %s %s %s\n\t\t\t}\n", backend("9000"), cacheHeader, notFoundHeader, typeHeader)
 	b.WriteString("\t\t\turi strip_prefix /v/{re.view.1}\n")
 	fmt.Fprintf(b, "\t\t\troot * %s/sites/{re.view.1}/files\n", dataDir)
 	writeSecurityHeaders(b, "\t\t\t", untrusted)
 	writeCacheHeader(b, "\t\t\t")
+	writeTypeHeader(b, "\t\t\t")
 	writeFileServing(b, "\t\t\t")
 	b.WriteString("\t\t}\n")
 	b.WriteString("\t}\n")
@@ -233,15 +235,16 @@ func writeContentRoutes(b *strings.Builder, backend func(string) string, root, u
 	// own path): authz takes it as the site to check, and on a view host the
 	// folder served comes from the label — a client sending it would have
 	// another, open site checked and the protected one served.
-	// So is the not-found page, which names a file the 404 handler serves.
-	for _, h := range []string{upstreamHeader, cacheHeader, siteHeader, stripHeader, mountHeader, notFoundHeader, "X-Forwarded-Prefix", "X-Sitebin-View"} {
+	// So is the not-found page, which names a file the 404 handler serves,
+	// and the type, which names a file's Content-Type.
+	for _, h := range []string{upstreamHeader, cacheHeader, siteHeader, stripHeader, mountHeader, notFoundHeader, typeHeader, "X-Forwarded-Prefix", "X-Sitebin-View"} {
 		fmt.Fprintf(b, "\t\t\trequest_header -%s\n", h)
 	}
 	// Pin X-Forwarded-Host to Caddy's own {host} placeholder so authz resolves
 	// the SAME site that file_server will serve. Without this, a client-supplied
 	// X-Forwarded-Host could make the gate evaluate a different (open) site than
 	// the one whose files are served — a password-gate bypass.
-	fmt.Fprintf(b, "\t\t\tforward_auth %s {\n\t\t\t\turi /internal/authz\n\t\t\t\theader_up X-Forwarded-Host {host}\n\t\t\t\tcopy_headers Set-Cookie %s %s %s %s %s %s\n\t\t\t}\n", backend("9000"), upstreamHeader, cacheHeader, siteHeader, stripHeader, mountHeader, notFoundHeader)
+	fmt.Fprintf(b, "\t\t\tforward_auth %s {\n\t\t\t\turi /internal/authz\n\t\t\t\theader_up X-Forwarded-Host {host}\n\t\t\t\tcopy_headers Set-Cookie %s %s %s %s %s %s %s\n\t\t\t}\n", backend("9000"), upstreamHeader, cacheHeader, siteHeader, stripHeader, mountHeader, notFoundHeader, typeHeader)
 	fmt.Fprintf(b, "\t\t\troot * %s\n", root)
 	if mounts {
 		fmt.Fprintf(b, "\t\t\t@strip header %s *\n", stripHeader)
@@ -251,6 +254,7 @@ func writeContentRoutes(b *strings.Builder, backend func(string) string, root, u
 	}
 	writeSecurityHeaders(b, "\t\t\t", untrusted)
 	writeCacheHeader(b, "\t\t\t")
+	writeTypeHeader(b, "\t\t\t")
 	// A container site: authz admitted it WITH an upstream, so it is proxied
 	// there and never reaches the file server below. authz never admits a
 	// container site without one.
@@ -338,6 +342,23 @@ func writeCacheHeader(b *strings.Builder, ind string) {
 	fmt.Fprintf(b, "%sheader @cachepolicy {\n", ind)
 	fmt.Fprintf(b, "%s\tCache-Control {http.request.header.%s}\n", ind, cacheHeader)
 	fmt.Fprintf(b, "%s\tmatch {\n%s\t\tstatus 2xx 304\n%s\t}\n", ind, ind, ind)
+	fmt.Fprintf(b, "%s}\n", ind)
+}
+
+// typeHeader mirrors httpapi's: authz names the Content-Type of a file the
+// system's table has no type for (httpapi/ctype.go).
+const typeHeader = "X-Sitebin-Type"
+
+// writeTypeHeader sets Content-Type from authz's answer, on a 2xx only. The
+// file server leaves the header empty for exactly the files authz names, and
+// a 404 page, a redirect or the gate keeps its own type. authz never names one
+// for a container site, so a proxied answer keeps the app's. The client's own
+// copy of the header was removed before the gate.
+func writeTypeHeader(b *strings.Builder, ind string) {
+	fmt.Fprintf(b, "%s@filetype header %s *\n", ind, typeHeader)
+	fmt.Fprintf(b, "%sheader @filetype {\n", ind)
+	fmt.Fprintf(b, "%s\tContent-Type {http.request.header.%s}\n", ind, typeHeader)
+	fmt.Fprintf(b, "%s\tmatch {\n%s\t\tstatus 2xx\n%s\t}\n", ind, ind, ind)
 	fmt.Fprintf(b, "%s}\n", ind)
 }
 

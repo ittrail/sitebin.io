@@ -529,3 +529,38 @@ func TestClientCannotNameTheNotFoundPage(t *testing.T) {
 		}
 	}
 }
+
+// Content-Type for the files the system's table has no type for comes from
+// authz and nowhere else: a client's copy is stripped before the gate, the
+// gate's answer is copied, and it is set on a 2xx only — never on an error
+// page, a redirect, the gate or a 404. Every content origin does it.
+func TestEveryContentOriginSetsTheFileTypeFromAuthz(t *testing.T) {
+	out := Generate(mustLoad(t, map[string]string{"SITEBIN_BASE_DOMAIN": "sitebin.example", "SITEBIN_HTTP_ONLY": "true", "SITEBIN_VIEW_ACCESS": "both"}))
+	for _, block := range []string{"*.sitebin.example {", "http://:80 {", "handle @view {"} {
+		body := blockBody(t, out, block)
+		strip := strings.Index(body, "request_header -X-Sitebin-Type")
+		gate := strings.Index(body, "forward_auth")
+		set := strings.Index(body, "Content-Type {http.request.header.X-Sitebin-Type}")
+		files := strings.Index(body, "file_server")
+		if strip < 0 || gate < 0 || set < 0 || files < 0 {
+			t.Fatalf("%s: missing a directive:\n%s", block, body)
+		}
+		if !(strip < gate && gate < set && set < files) {
+			t.Errorf("%s: order strip=%d gate=%d set=%d files=%d", block, strip, gate, set, files)
+		}
+		copied := false
+		for _, line := range strings.Split(body, "\n") {
+			if strings.Contains(line, "copy_headers") && strings.Contains(line, "X-Sitebin-Type") {
+				copied = true
+			}
+		}
+		if !copied {
+			t.Errorf("%s: authz's X-Sitebin-Type is not copied", block)
+		}
+		typeBlock := body[set:]
+		typeBlock = typeBlock[:strings.Index(typeBlock, "\n"+strings.Repeat("\t", 3)+"}")]
+		if !strings.Contains(typeBlock, "status 2xx") || strings.Contains(typeBlock, "304") {
+			t.Errorf("%s: Content-Type is not limited to 2xx:\n%s", block, typeBlock)
+		}
+	}
+}

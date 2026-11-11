@@ -539,6 +539,16 @@ missing hashed bundle would leave a year of `index.html` in a browser; and
 year of stale content, so when in doubt it says no. Container sites get no
 header. Read `docs/superpowers/specs/2026-10-16-browser-caching-design.md`.
 
+**Content types** (`internal/httpapi/ctype.go`) follow the same shape: Caddy
+types a file from the system's table and sends NO type for an extension it
+lacks; authz names those few — `extraTypes` (release files: `.dmg`, `.yml`,
+`.AppImage`, `.msix` …) and a file without an extension (`text/plain` or
+`application/octet-stream` by its first 512 bytes, never anything a browser
+renders) — as `X-Sitebin-Type`, stripped from the client's request before the
+gate and set as `Content-Type` on a 2xx only. Never sniff a file into an
+active type: the scanner judges by extension. Container sites get no header.
+See `docs/superpowers/specs/2026-11-11-release-hosting-design.md`.
+
 ## Not-found pages, never a listing
 
 No site ever lists a folder (`browse` is gone from the Caddyfile). A missing
