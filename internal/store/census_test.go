@@ -27,14 +27,16 @@ import (
 //     a locked site, after the running push stopped.
 var writeCensus = map[string]string{
 	// the guarded paths themselves
-	"internal/store/files.go:writeFileIn:OpenFile":              "the temp file of every guarded write",
-	"internal/store/files.go:writeFileIn:Rename":                "the rename after the verdict is settled",
-	"internal/store/staged.go:Store.OpenStaged:OpenFile":        "the temp file of a staged (WebDAV, FTP) write",
-	"internal/store/staged.go:Store.commitStagedLocked:Rename":  "the rename after the verdict is settled",
-	"internal/store/staged.go:Store.RenameChecked:Rename":       "the rename after the verdict is settled",
-	"internal/store/replace.go:Replacement.Commit:commitRename": "moves staged files whose verdict Commit settled first",
-	"internal/store/replace.go:Replacement.Symlink:Symlink":     "a link a container site's restore keeps inside its tree: no bytes to scan, never followed out",
-	"internal/httpapi/backups.go:API.restoreBackup:Symlink":     "Replacement.Symlink above, from a container site's restore",
+	"internal/store/files.go:writeFileIn:OpenFile":                   "the temp file of every guarded write",
+	"internal/store/files.go:writeFileIn:Rename":                     "the rename after the verdict is settled",
+	"internal/store/staged.go:Store.OpenStaged:OpenFile":             "the temp file of a staged (WebDAV, FTP) write",
+	"internal/store/staged.go:Store.commitStagedLocked:Rename":       "the rename after the verdict is settled",
+	"internal/store/staged.go:Store.RenameChecked:Rename":            "the rename after the verdict is settled",
+	"internal/store/replace.go:Replacement.Commit:commitRename":      "moves staged files whose verdict Commit settled first",
+	"internal/store/replace.go:Replacement.commitMerge:commitRename": "moves an atomic upload's staging directory into the site folder, after commitMerge settled its verdict",
+	"internal/store/replace.go:Replacement.commitMerge:Rename":       "moves each staged file of an atomic upload into place through the site folder's os.Root, after the verdict",
+	"internal/store/replace.go:Replacement.Symlink:Symlink":          "a link a container site's restore keeps inside its tree: no bytes to scan, never followed out",
+	"internal/httpapi/backups.go:API.restoreBackup:Symlink":          "Replacement.Symlink above, from a container site's restore",
 	// surfaces that reach site content only through the guarded paths
 	"internal/httpapi/webdavfs.go:siteFS.OpenFile:OpenFile":   "read-only opens; writes go to Store.OpenStaged above it",
 	"internal/ftp/quota.go:quotaFs.Create:OpenFile":           "goes through quotaFs.OpenFile",

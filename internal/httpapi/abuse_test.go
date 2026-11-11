@@ -189,6 +189,8 @@ func TestEveryWriteSurfaceIsScanned(t *testing.T) {
 		{"api upload zip", apiUpload("", nil, map[string]string{"index.html": kitHTML}), "index.html"},
 		{"api replace", apiUpload("?replace=true", map[string]string{"index.html": kitHTML}, nil), "index.html"},
 		{"api replace zip", apiUpload("?replace=true", nil, map[string]string{"index.html": kitHTML}), "index.html"},
+		{"api atomic upload", apiUpload("?atomic=true", map[string]string{"index.html": kitHTML}, nil), "index.html"},
+		{"api atomic upload zip", apiUpload("?atomic=true", nil, map[string]string{"index.html": kitHTML}), "index.html"},
 		{"upload token", func(t *testing.T, e *env, fp *fakeProvider) (string, int, string) {
 			id, edit, _ := cleanSite(t, e, nil)
 			tok := e.uploadToken(t, id)
