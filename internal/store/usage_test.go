@@ -168,6 +168,7 @@ var byteChecks = []struct {
 	{"Store.SaveFile (API, MCP, upload tokens)", "internal/store", "TestSaveFileCountsRepository"},
 	{"Store.ExtractZip (zip uploads)", "internal/store", "TestExtractZipCountsRepository"},
 	{"Replacement (staged replace: budget fixed at BeginReplace)", "internal/store", "TestReplaceBudgetCountsRepository"},
+	{"Replacement merge (atomic upload: checked again at Commit)", "internal/store", "TestMergeCountsRepository"},
 	{"WebDAV PUT", "internal/httpapi", "TestWebDAVPutCountsRepository"},
 	{"FTP transfers (Session.UsedOutside)", "internal/ftp", "TestFTPCountsRepository"},
 	{"FTP login hands over the repository's bytes", "internal/httpapi", "TestFTPAuthReportsRepository"},
@@ -196,6 +197,7 @@ var accountChecks = []struct {
 	test  string
 }{
 	{"Store.SaveFile, Store.ExtractZip, Replacement", "internal/store", "TestStoreFunnelsCountTheAccount"},
+	{"Replacement merge (atomic upload: ByteCap again at Commit)", "internal/store", "TestMergeCommitCountsTheAccount"},
 	{"API upload (store.SaveFile through the route)", "internal/httpapi", "TestAPIUploadCountsTheAccount"},
 	{"WebDAV PUT", "internal/httpapi", "TestWebDAVPutCountsTheAccount"},
 	{"FTP transfers (Session.UsedOutside)", "internal/httpapi", "TestFTPCountsTheAccount"},

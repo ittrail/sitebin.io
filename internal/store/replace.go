@@ -76,6 +76,13 @@ type Replacement struct {
 	// guard, when set, is asked in Commit, under the site lock, with
 	// meta.json as it is then; an error refuses the commit (see Guard).
 	guard func(Meta) error
+	// merge makes this an atomic upload (BeginMerge): Commit adds the staged
+	// files to the content and overwrites the ones they name, instead of
+	// replacing it. order is the staged paths in the order they first came,
+	// which is the order Commit moves them in.
+	merge bool
+	order []string
+	seen  map[string]bool
 }
 
 // Guard has Commit ask fn, under the site lock and with meta.json as it is
@@ -127,6 +134,20 @@ func (s *Store) releaseReplace(viewID string) {
 // on the data volume — so a second is ErrReplaceBusy until the first is
 // committed or aborted.
 func (s *Store) BeginReplace(site *Site) (*Replacement, error) {
+	return s.beginStaged(site, false)
+}
+
+// BeginMerge starts an atomic upload into site: files staged like a
+// replacement's, which Commit adds to the content — overwriting the paths
+// they name, keeping every other file — only once all of them arrived, and
+// in the order they came, so an update feed uploaded last is never visible
+// before the files it names. It shares BeginReplace's one-per-site claim.
+// See docs/superpowers/specs/2026-11-11-release-hosting-design.md.
+func (s *Store) BeginMerge(site *Site) (*Replacement, error) {
+	return s.beginStaged(site, true)
+}
+
+func (s *Store) beginStaged(site *Site, merge bool) (*Replacement, error) {
 	if !s.claimReplace(site.ViewID) {
 		return nil, ErrReplaceBusy
 	}
@@ -166,11 +187,15 @@ func (s *Store) BeginReplace(site *Site) (*Replacement, error) {
 		os.RemoveAll(dir)
 		return nil, err
 	}
+	// A merge's staged files are bounded the same way while they stream —
+	// none can be larger than the whole cap — and checked against the live
+	// content, and the account as it is then, in Commit.
 	maxBytes, account := s.ByteCap(site)
 	rep := &Replacement{
 		s: s, site: site, dir: dir, root: root,
 		maxBytes: maxBytes - u.GitBytes, maxFiles: s.EffMaxFiles(site),
 		account: account, gitBytes: u.GitBytes,
+		merge: merge, seen: map[string]bool{},
 	}
 	begun = true
 	return rep, nil
@@ -232,7 +257,16 @@ func (r *Replacement) SaveFile(relPath string, rd io.Reader) error {
 	if existing == 0 {
 		r.count++
 	}
+	r.staged(rel)
 	return nil
+}
+
+// staged records rel in the order a merge commits in: where it first came.
+func (r *Replacement) staged(rel string) {
+	if !r.seen[rel] {
+		r.seen[rel] = true
+		r.order = append(r.order, rel)
+	}
 }
 
 // SetMode gives a staged file the permission bits of mode, at most 0755: a
@@ -302,8 +336,12 @@ func (r *Replacement) ExtractZip(ra io.ReaderAt, size int64) error {
 	r.used, r.count, err = extractEntries(r.root, entries, r.used, r.count, r.maxBytes, r.maxFiles, stagedGuard{r})
 	if err != nil {
 		r.failed = true
+		return refusal(err, r.account)
 	}
-	return refusal(err, r.account)
+	for _, e := range entries {
+		r.staged(e.rel)
+	}
+	return nil
 }
 
 // Commit swaps the staged files in, all under the site lock, and in an order
@@ -365,6 +403,9 @@ func (r *Replacement) Commit() error {
 	// The mode decides where the content lives; take it as it is now, not as
 	// it was when the upload began.
 	r.site.Meta = meta
+	if r.merge {
+		return r.commitMerge()
+	}
 	// The abuse guard's verdict on what is about to go live, settled in
 	// meta.json before a single staged file moves in: a held replacement is
 	// committed, as evidence, into a site nobody is served.
@@ -417,6 +458,114 @@ func (r *Replacement) Commit() error {
 	}
 	keep = false
 	r.s.acct.note(r.site, r.used+r.gitBytes)
+	if held != nil {
+		return held
+	}
+	return r.s.renewExpiryLocked(r.site)
+}
+
+// mergeMoved, when set, is told each path a merge commit moved into place,
+// in order (a test's window on the order).
+var mergeMoved func(rel string)
+
+// commitMerge is Commit for an atomic upload, under the site lock, with
+// meta.json read: nothing is moved unless everything can be.
+//
+//  1. Every staged path is looked up in the live content, through the site
+//     folder's os.Root: a folder or a link where a file goes, or a path
+//     through something that is not a folder, refuses the whole upload.
+//  2. The caps are checked against the site as it is now: the bytes of the
+//     files the upload overwrites leave, the staged bytes arrive, and only
+//     new paths count as files.
+//  3. The abuse guard's verdict is settled in meta.json (a held upload is
+//     committed as evidence, as a replace is).
+//  4. The staging directory moves into the site folder as one unit, then
+//     each file is renamed into place in the order it came. Should a rename
+//     fail, the rest stays in the site's .replace-commit-* directory (the
+//     next staged upload removes it), as a replace's does.
+func (r *Replacement) commitMerge() error {
+	dst := r.site.ContentDir()
+	for _, d := range []string{r.site.FilesDir(), dst} {
+		if err := os.Mkdir(d, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+	}
+	root, err := os.OpenRoot(r.site.dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	content, err := filepath.Rel(r.site.dir, dst)
+	if err != nil {
+		return err
+	}
+
+	u, err := r.s.SiteUsage(r.site)
+	if err != nil {
+		return err
+	}
+	var leaving int64
+	adding := 0
+	for _, rel := range r.order {
+		fi, err := root.Lstat(filepath.Join(content, filepath.FromSlash(rel)))
+		switch {
+		case err == nil && fi.Mode().IsRegular():
+			leaving += fi.Size()
+		case err == nil:
+			return fmt.Errorf("%w: %s is a folder or a link on the site", ErrBadPath, rel)
+		case errors.Is(err, fs.ErrNotExist):
+			adding++
+		default:
+			return fmt.Errorf("%w: %s", ErrBadPath, rel)
+		}
+	}
+	// ByteCap now, not when the upload began: the owner's other sites may
+	// have grown since, and the account cap counts them all.
+	after := u.Bytes() - leaving + r.used
+	if maxBytes, account := r.s.ByteCap(r.site); after > maxBytes {
+		return refusal(ErrTooLarge, account)
+	}
+	if u.Files+adding > r.s.EffMaxFiles(r.site) {
+		return ErrTooManyFiles
+	}
+
+	var held error
+	if len(r.pending) > 0 {
+		ev, err := r.s.settleLocked(r.site, r.pending, FindingUpload, "", false)
+		if err != nil && !errors.Is(err, ErrHeld) {
+			return err
+		}
+		held = err
+		r.s.emit(ev)
+	}
+
+	moved := replaceCommitPrefix + randomSuffix()
+	if err := commitRename(r.dir, filepath.Join(r.site.dir, moved)); err != nil {
+		return fmt.Errorf("commit upload: %w", err)
+	}
+	keep := false
+	defer func() {
+		if !keep {
+			os.RemoveAll(filepath.Join(r.site.dir, moved))
+		}
+	}()
+	keep = true
+	for _, rel := range r.order {
+		target := filepath.Join(content, filepath.FromSlash(rel))
+		if d := filepath.Dir(target); d != content {
+			if err := root.MkdirAll(d, 0o755); err != nil {
+				return fmt.Errorf("commit upload: %w (the rest of the upload is kept in %s)", err, moved)
+			}
+		}
+		if err := root.Rename(filepath.Join(moved, filepath.FromSlash(rel)), target); err != nil {
+			return fmt.Errorf("commit upload: %w (the rest of the upload is kept in %s)", err, moved)
+		}
+		if mergeMoved != nil {
+			mergeMoved(rel)
+		}
+	}
+	keep = false
+	r.s.acct.note(r.site, after)
 	if held != nil {
 		return held
 	}
