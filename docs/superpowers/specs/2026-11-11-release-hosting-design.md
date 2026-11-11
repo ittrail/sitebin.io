@@ -124,6 +124,21 @@ wins over `atomic=true` (it already is).
 Not in MCP: `write_files` files arrive in one call. `open_upload`'s
 instructions name `?atomic=true`.
 
+## Corrections (post-implementation)
+
+- **The account storage cap landed between deploys A and B** (08e2ba5,
+  another session). Every write funnel checks `Store.ByteCap(site)` — the
+  site's own cap, or what the owner's account has left — not `EffMaxBytes`.
+  The merge commit asks `ByteCap` again under the site lock (the owner's
+  other sites may have grown while the upload streamed), refuses with
+  `ErrAccountFull` when the account bound it, and notes what the site holds
+  after the commit in the account index. It joins `byteChecks`
+  (`TestMergeCountsRepository`) and `accountChecks`
+  (`TestMergeCommitCountsTheAccount`) in `internal/store/usage_test.go`.
+- The upload body limit of point 1 stays the site's own cap plus 10 MiB: the
+  account cap is enforced per file by the store, and a body bound by it
+  would refuse a valid overwrite.
+
 ## Not done
 
 - Bandwidth and load for downloads (point 6): deliberately deferred by the

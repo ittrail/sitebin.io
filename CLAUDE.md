@@ -779,6 +779,12 @@ second copy of the rule.
   in `<site>/.replace-commit-*` until the site's next replace, which removes
   every one of them (the one-replace claim proves no commit is running), so
   they never pile up. `sitebin backup` skips those and `tmp/`.
+  **An atomic upload** (`?atomic=true`, `Store.BeginMerge`) is the same
+  staging with a different commit: it adds files instead of replacing the
+  content, and only when every staged path can go in — a folder or link
+  where a file goes, the caps against the live site and the account
+  (`ByteCap`) — renaming each through the site folder's `os.Root` in the
+  order it came. It shares the one-per-site claim with replace.
 - **`stats.json` has its own per-site lock** (`lockStats`), not the site lock:
   a page view must never wait for an upload holding the site lock. `Delete`
   takes the site lock, then the stats lock — keep that order.
