@@ -85,6 +85,11 @@ func TestCacheControl(t *testing.T) {
 		{"year", "/index.html", true, false, revalidate},
 		{"year", "/missing.css", false, false, revalidate},
 		{"off", "/style.css", true, false, ""},
+		// immutable is a rule's: a year, marked immutable — files only, and
+		// never a page or data.
+		{"immutable", "/stable/app.exe", true, false, immutable},
+		{"immutable", "/stable/latest.yml", true, false, revalidate},
+		{"immutable", "/stable/app.exe", false, false, revalidate},
 		{"off", "/", false, false, ""},
 		// a view password keeps shared caches out.
 		{"", "/assets/index-BqCz7v8e.js", true, true, "private, max-age=31536000, immutable"},
@@ -330,5 +335,100 @@ func TestAuthzNeverServesTheComposeFile(t *testing.T) {
 	req.Header.Set("X-Forwarded-Uri", "/v/"+c2.ID+"/sitebin-container-compose.yaml")
 	if got := e2.internal(t, req).Code; got != 404 {
 		t.Errorf("path view: %d, want 404", got)
+	}
+}
+
+func TestCacheRulesDecideForFiles(t *testing.T) {
+	m := store.Meta{Cache: store.CacheRevalidate, CacheRules: []store.CacheRule{
+		{Pattern: "stable/latest*", Cache: store.CacheRevalidate},
+		{Pattern: "stable/*", Cache: store.CacheImmutable},
+		{Pattern: "*.dmg", Cache: store.CacheDay},
+		{Pattern: "nocache/*", Cache: store.CacheOff},
+	}}
+	file := func(p string) served { return served{path: p, rel: strings.TrimPrefix(p, "/"), isFile: true} }
+	for _, c := range []struct {
+		f    served
+		want string
+	}{
+		{file("/stable/Atoo-Mail-Setup-1.0.0.exe"), immutable},
+		{file("/stable/latest-mac.zip"), revalidate},
+		{file("/beta/Atoo-Mail.dmg"), "public, max-age=86400"},
+		{file("/nocache/a.bin"), ""},
+		{file("/other.bin"), revalidate}, // no rule: the site's policy
+		// A rule never makes a page or data long-lived.
+		{file("/stable/latest.json"), revalidate},
+		{file("/stable/SHA256SUMS"), revalidate},
+		{file("/stable/index.html"), revalidate},
+		{served{path: "/stable/missing.exe", rel: "stable/missing.exe"}, revalidate},
+	} {
+		if got := siteCacheControl(m, c.f); got != c.want {
+			t.Errorf("%s: %q, want %q", c.f.path, got, c.want)
+		}
+	}
+	// A rule matches when the site's policy is off.
+	m.Cache = store.CacheOff
+	if got := siteCacheControl(m, file("/stable/app.exe")); got != immutable {
+		t.Errorf("site off, rule immutable: %q", got)
+	}
+	if got := siteCacheControl(m, file("/other.bin")); got != "" {
+		t.Errorf("site off, no rule: %q", got)
+	}
+	// In viewer mode the files sit under _raw/; a rule names them as the
+	// owner does.
+	m = store.Meta{Mode: store.ModeViewer, CacheRules: []store.CacheRule{{Pattern: "stable/*.exe", Cache: store.CacheImmutable}}}
+	if got := siteCacheControl(m, file("/_raw/stable/app.exe")); got != immutable {
+		t.Errorf("viewer: %q", got)
+	}
+}
+
+func TestCacheRulesThroughTheAPI(t *testing.T) {
+	e := newEnv(t, nil)
+	c := e.createSite(t, nil, map[string]string{"index.html": "x", "stable/app.exe": "MZ", "stable/latest.yml": "v: 1"})
+	edit := editIDFrom(t, c.EditURL)
+	w := e.public(t, jsonReq("PUT", "/api/sites/"+edit, `{"cache_rules":[{"pattern":"stable/*","cache":"immutable"}]}`, c.EditPassword))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"cache_rules":[{"pattern":"stable/*","cache":"immutable"}]`) {
+		t.Fatalf("set rules: %d %s", w.Code, w.Body)
+	}
+	host := c.ID + ".sitebin.example"
+	if got := e.internal(t, authzReq(host, "/stable/app.exe", "")).Header().Get(cacheHeader); got != immutable {
+		t.Errorf("installer: %q", got)
+	}
+	if got := e.internal(t, authzReq(host, "/stable/latest.yml", "")).Header().Get(cacheHeader); got != revalidate {
+		t.Errorf("feed: %q", got)
+	}
+	if w := e.public(t, jsonReq("PUT", "/api/sites/"+edit, `{"cache_rules":[{"pattern":"/abs","cache":"year"}]}`, c.EditPassword)); w.Code != 400 || !strings.Contains(w.Body.String(), "leading") {
+		t.Errorf("a bad rule: %d %s", w.Code, w.Body)
+	}
+	if w := e.public(t, jsonReq("PUT", "/api/sites/"+edit, `{"cache_rules":[]}`, c.EditPassword)); w.Code != 200 || !strings.Contains(w.Body.String(), `"cache_rules":[]`) {
+		t.Fatalf("clear rules: %d %s", w.Code, w.Body)
+	}
+	if got := e.internal(t, authzReq(host, "/stable/app.exe", "")).Header().Get(cacheHeader); got != revalidate {
+		t.Errorf("after clearing: %q", got)
+	}
+}
+
+func TestMCPCacheRules(t *testing.T) {
+	e := newEnv(t, nil)
+	cs := mcpClient(t, e, nil)
+	editID, pw := mcpCreate(t, cs, "hi")
+	res := mcpCall(t, cs, "get_site", map[string]any{"edit_id": editID, "edit_password": pw})
+	if strings.Contains(mcpText(res), `"cache_rules"`) {
+		t.Errorf("a site without rules carries cache_rules: %s", mcpText(res))
+	}
+	res = mcpCall(t, cs, "update_site", map[string]any{"edit_id": editID, "edit_password": pw, "settings": map[string]any{
+		"cache_rules": []any{map[string]any{"pattern": "stable/*.exe", "cache": "immutable"}},
+	}})
+	if txt := mcpText(res); res.IsError || !strings.Contains(txt, `"cache_rules":[{`) || !strings.Contains(txt, `"pattern":"stable/*.exe"`) || !strings.Contains(txt, `"cache":"immutable"`) {
+		t.Errorf("update_site cache_rules: %v %s", res.IsError, mcpText(res))
+	}
+	res = mcpCall(t, cs, "update_site", map[string]any{"edit_id": editID, "edit_password": pw, "settings": map[string]any{
+		"cache_rules": []any{map[string]any{"pattern": "*.exe", "cache": "forever"}},
+	}})
+	if !res.IsError || !strings.Contains(mcpText(res), "immutable") {
+		t.Errorf("a bad rule must say which policies exist: %v %s", res.IsError, mcpText(res))
+	}
+	res = mcpCall(t, cs, "update_site", map[string]any{"edit_id": editID, "edit_password": pw, "settings": map[string]any{"cache_rules": []any{}}})
+	if res.IsError || strings.Contains(mcpText(res), `"cache_rules"`) {
+		t.Errorf("clearing rules: %v %s", res.IsError, mcpText(res))
 	}
 }

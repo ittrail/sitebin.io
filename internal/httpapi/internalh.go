@@ -157,10 +157,8 @@ func (a *API) admit(w http.ResponseWriter, r *http.Request, site *store.Site, pa
 	// the Content-Type of a file the system's table cannot name, set on a 2xx
 	// only — both computed on the path the file server will see.
 	file := a.servedFile(site, r.Header.Get("X-Forwarded-Uri"), prefix)
-	if site.Meta.Cache != store.CacheOff {
-		if v := cacheControl(site.Meta.Cache, file.path, file.isFile, site.Meta.ViewPasswordProtected); v != "" {
-			w.Header().Set(cacheHeader, v)
-		}
+	if v := siteCacheControl(site.Meta, file); v != "" {
+		w.Header().Set(cacheHeader, v)
 	}
 	if t := a.typeValue(site, file.rel, file.isFile); t != "" {
 		w.Header().Set(typeHeader, t)

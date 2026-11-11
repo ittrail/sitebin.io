@@ -321,7 +321,7 @@
               <h3>Browser caching</h3>
               <div class="opt" id="cachewrap">
                 <div class="row">
-                  <select id="e-cache" aria-label="Browser caching" title="Pages and data (HTML, JSON, XML, TXT) always revalidate, so visitors see an upload at once. Automatic caches files whose names carry a content hash (index-BqCz7v8e.js) for a year. The fixed times cache every other file that long: only pick one if those files never change under the same name.">
+                  <select id="e-cache" aria-label="Browser caching" title="Pages and data (HTML, JSON, XML, TXT, YAML) always revalidate, so visitors see an upload at once. Automatic caches files whose names carry a content hash (index-BqCz7v8e.js) for a year. The fixed times cache every other file that long: only pick one if those files never change under the same name.">
                     <option value="auto">Automatic: pages always fresh, hashed files for a year</option>
                     <option value="revalidate">Always check: browsers re-check every file on every visit</option>
                     <option value="hour">Cache files for an hour</option>
@@ -330,6 +330,11 @@
                     <option value="year">Cache files for a year</option>
                     <option value="off">Off: send no cache headers</option>
                   </select>
+                </div>
+                <div class="cacherules">
+                  <label for="e-cacherules">Rules for single paths</label>
+                  <textarea id="e-cacherules" rows="3" spellcheck="false" placeholder="stable/*.exe immutable&#10;*.dmg year" title="One rule per line: a path pattern, then a policy (auto, revalidate, hour, day, week, year, immutable or off). The first rule that matches decides; * stays within a folder, and a pattern without / matches the file name in any folder. Pages and data always revalidate."></textarea>
+                  <div class="row"><button class="btn small" id="save-cacherules" type="button">Save rules</button></div>
                 </div>
               </div>
             </section>

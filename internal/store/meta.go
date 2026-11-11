@@ -43,6 +43,9 @@ type Meta struct {
 	// Cache is the owner's browser-cache policy (CleanCachePolicy); "" is
 	// auto, the default. See cache.go.
 	Cache string `json:"cache,omitempty"`
+	// CacheRules are the owner's per-path exceptions to Cache, first match
+	// first (CleanCacheRules, CacheRuleFor). See cache.go.
+	CacheRules []CacheRule `json:"cache_rules,omitempty"`
 	// NotFoundPage is the owner's page for an address that does not exist
 	// (CleanNotFoundPage); "" is the convention, DefaultNotFoundPage. See
 	// notfound.go.

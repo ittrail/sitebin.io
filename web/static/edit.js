@@ -338,6 +338,7 @@ function render() {
   // A container site's upstream sends its own cache headers.
   $("cachewrap").classList.toggle("hidden", site.mode === "container");
   if (document.activeElement !== $("e-cache")) $("e-cache").value = site.cache || "auto";
+  if (document.activeElement !== $("e-cacherules")) $("e-cacherules").value = cacheRulesText(site.cache_rules);
   if (site.mode === "viewer") {
     const sel = $("entry-file");
     sel.innerHTML = "";
@@ -1489,6 +1490,31 @@ $("startpage-viewer").addEventListener("click", () => put({ mode: "viewer" }, "S
 
 $("e-cache").addEventListener("change", (e) =>
   put({ cache: e.target.value }, "Browser caching: " + e.target.selectedOptions[0].textContent.split(" — ")[0]));
+
+// Cache rules are edited as text, one per line: the pattern, then the policy
+// (its last word, so a pattern may hold a space).
+function cacheRulesText(rules) {
+  return (rules || []).map((r) => r.pattern + " " + r.cache).join("\n");
+}
+
+function parseCacheRules(text) {
+  const rules = [];
+  text.split("\n").forEach((line, i) => {
+    line = line.trim();
+    if (!line || line.startsWith("#")) return;
+    const cut = line.search(/\s+\S+$/);
+    if (cut < 0) throw new Error("Line " + (i + 1) + ": write the pattern, then the policy (stable/*.exe immutable)");
+    rules.push({ pattern: line.slice(0, cut).trim(), cache: line.slice(cut).trim() });
+  });
+  return rules;
+}
+
+$("save-cacherules").addEventListener("click", () => {
+  let rules;
+  try { rules = parseCacheRules($("e-cacherules").value); } catch (err) { toast(err.message, true); return; }
+  $("e-cacherules").blur();
+  put({ cache_rules: rules }, rules.length ? "Cache rules saved (" + rules.length + ")" : "Cache rules removed");
+});
 
 $("save-expiry").addEventListener("click", () => {
   const v = $("e-expires").value;

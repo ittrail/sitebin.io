@@ -196,10 +196,19 @@
             <option value="off">Off &mdash; send no cache headers</option>
           </select>
         </div>
-        <span class="sub">Pages and data (HTML, JSON, XML, TXT) always revalidate, so visitors see an upload at once.
+        <span class="sub">Pages and data (HTML, JSON, XML, TXT, YAML) always revalidate, so visitors see an upload at once.
           <em>Automatic</em> caches files whose names carry a content hash (<code>index-BqCz7v8e.js</code>, as Vite,
           webpack, Next.js, Astro, Nuxt or Expo build them) for a year &mdash; what Lighthouse asks for. The fixed times cache every
           other file that long: only pick one if those files never change under the same name.</span>
+        <div class="cacherules">
+          <label for="e-cacherules">Rules for single paths</label>
+          <textarea id="e-cacherules" rows="3" spellcheck="false" placeholder="stable/*.exe immutable&#10;*.dmg year"></textarea>
+          <div class="row"><button class="btn small" id="save-cacherules" type="button">Save rules</button></div>
+          <span class="sub">One rule per line: a path pattern, then a policy (auto, revalidate, hour, day, week, year,
+            <em>immutable</em> or off). The first rule that matches decides; <code>*</code> stays within a folder, and a
+            pattern without <code>/</code> matches the file name in any folder. Pages and data always revalidate, so
+            <code>stable/* immutable</code> caches versioned installers for a year and leaves <code>stable/latest.yml</code> fresh.</span>
+        </div>
       </div>
     </section>
 

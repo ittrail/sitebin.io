@@ -25,19 +25,20 @@ import (
 // updateSet carries settings changes. Pointers distinguish "absent" from
 // zero values; ExpiresAt additionally distinguishes JSON null (= clear).
 type updateSet struct {
-	Name          *string         `json:"name"` // "" clears it
-	Tags          *[]string       `json:"tags"` // nil = leave alone, [] = clear
-	Mode          *string         `json:"mode"`
-	EntryFile     *string         `json:"entry_file"`
-	ViewPassword  *string         `json:"view_password"`
-	ViewProtected *bool           `json:"view_password_protected"`
-	WebDAV        *bool           `json:"webdav_enabled"`
-	FTP           *bool           `json:"ftp_enabled"`
-	SPA           *bool           `json:"spa_fallback"`
-	Cache         *string         `json:"cache"`          // auto, revalidate, hour, day, week, year or off
-	NotFoundPage  *string         `json:"not_found_page"` // "" = the convention (404.html)
-	ExpiresAt     json.RawMessage `json:"expires_at"`     // absent=keep, null=clear, string=set
-	Domains       []string        `json:"custom_domains"`
+	Name          *string            `json:"name"` // "" clears it
+	Tags          *[]string          `json:"tags"` // nil = leave alone, [] = clear
+	Mode          *string            `json:"mode"`
+	EntryFile     *string            `json:"entry_file"`
+	ViewPassword  *string            `json:"view_password"`
+	ViewProtected *bool              `json:"view_password_protected"`
+	WebDAV        *bool              `json:"webdav_enabled"`
+	FTP           *bool              `json:"ftp_enabled"`
+	SPA           *bool              `json:"spa_fallback"`
+	Cache         *string            `json:"cache"`          // auto, revalidate, hour, day, week, year or off
+	CacheRules    *[]store.CacheRule `json:"cache_rules"`    // nil = leave alone, [] = clear
+	NotFoundPage  *string            `json:"not_found_page"` // "" = the convention (404.html)
+	ExpiresAt     json.RawMessage    `json:"expires_at"`     // absent=keep, null=clear, string=set
+	Domains       []string           `json:"custom_domains"`
 }
 
 func strPtr(s string) *string { return &s }
@@ -257,6 +258,13 @@ func (a *API) writeSettings(site *store.Site, set updateSet, expires **time.Time
 				return &apiError{400, err.Error()}
 			}
 			m.Cache = policy
+		}
+		if set.CacheRules != nil {
+			rules, err := store.CleanCacheRules(*set.CacheRules)
+			if err != nil {
+				return &apiError{400, err.Error()}
+			}
+			m.CacheRules = rules
 		}
 		if set.NotFoundPage != nil {
 			page, err := store.CleanNotFoundPage(*set.NotFoundPage)
@@ -627,6 +635,7 @@ func (a *API) sitePayload(site *store.Site) map[string]any {
 		"entry_file":              m.EntryFile,
 		"spa_fallback":            m.SPAFallback,
 		"cache":                   m.CachePolicy(),
+		"cache_rules":             cacheRulesOut(m.CacheRules),
 		"not_found_page":          m.NotFoundPage,
 		"not_found_serves":        store.NotFoundServes(site),
 		"start_page_missing":      store.MissingStartPage(site),
@@ -1237,4 +1246,17 @@ func maxFilesPayload(n int) int {
 		return 0
 	}
 	return n
+}
+
+// cacheRulesOut is a site's cache rules as the API and MCP show them: the
+// policy by name (auto for ""), and [] rather than null for none.
+func cacheRulesOut(rules []store.CacheRule) []store.CacheRule {
+	out := make([]store.CacheRule, 0, len(rules))
+	for _, r := range rules {
+		if r.Cache == "" {
+			r.Cache = store.CacheAuto
+		}
+		out = append(out, r)
+	}
+	return out
 }

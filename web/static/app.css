@@ -912,6 +912,13 @@ button.an-val:hover { color: var(--amber); }
 .an-goals > h3 + .an-goal { border-top: 0; padding-top: 0; }
 .an-goalname { display: grid; gap: 4px; min-width: 0; }
 .an-goalnums { text-align: left; }
+.cacherules { display: grid; gap: 8px; margin-top: 14px; }
+.cacherules textarea {
+  width: 100%; max-width: 520px; resize: vertical;
+  background: #0d1322; color: var(--ink); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 12px; font: 13px/1.5 var(--mono);
+}
+.cacherules textarea:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(91, 140, 255, .2); }
 .an-form { display: grid; gap: 14px; }
 .an-form textarea {
   width: 100%; max-width: 520px; resize: vertical;

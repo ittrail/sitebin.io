@@ -84,6 +84,8 @@ func cacheControl(policy, p string, isFile, private bool) string {
 		return maxAge(cacheWeek, "")
 	case store.CacheYear:
 		return maxAge(cacheYear, "")
+	case store.CacheImmutable:
+		return maxAge(cacheYear, "immutable")
 	}
 	if fingerprinted(p) {
 		return maxAge(cacheYear, "immutable")
@@ -163,11 +165,33 @@ func hashSegment(s string) bool {
 // never created: a site deleted after authz loaded it must not come back
 // as a folder without meta.json.
 func (a *API) cacheValue(site *store.Site, rawURI, prefix string) string {
-	if site.Meta.Cache == store.CacheOff {
+	if site.Meta.Cache == store.CacheOff && len(site.Meta.CacheRules) == 0 {
 		return ""
 	}
-	f := a.servedFile(site, rawURI, prefix)
-	return cacheControl(site.Meta.Cache, f.path, f.isFile, site.Meta.ViewPasswordProtected)
+	return siteCacheControl(site.Meta, a.servedFile(site, rawURI, prefix))
+}
+
+// siteCacheControl is the Cache-Control value for a file site's request: the
+// first of the owner's cache rules that matches decides for an existing file
+// that is not a page or data, and the site's policy for everything else. A
+// rule never makes a page, a document or a missing file long-lived —
+// cacheControl revalidates those whatever the policy — so "stable/*"
+// immutable leaves stable/latest.json fresh. In viewer mode the owner's
+// files are served under _raw/, and a rule names them as the owner does.
+func siteCacheControl(m store.Meta, f served) string {
+	policy := m.Cache
+	if f.isFile && len(m.CacheRules) > 0 {
+		subject := f.rel
+		if m.Mode == store.ModeViewer {
+			if rest, ok := strings.CutPrefix(subject, "_raw/"); ok {
+				subject = rest
+			}
+		}
+		if c, ok := m.CacheRuleFor(subject); ok {
+			policy = c
+		}
+	}
+	return cacheControl(policy, f.path, f.isFile, m.ViewPasswordProtected)
 }
 
 // served is what a file site's request names: path is the request path within

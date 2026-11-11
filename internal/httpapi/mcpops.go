@@ -203,6 +203,7 @@ func (o mcpOps) siteResult(site *store.Site, auth mcp.Auth, st standing) *mcp.Si
 		EntryFile:     m.EntryFile,
 		SPAFallback:   m.SPAFallback,
 		Cache:         m.Cache,
+		CacheRules:    mcpCacheRules(m.CacheRules),
 		NotFoundPage:  m.NotFoundPage,
 		ViewProtected: m.ViewPasswordProtected,
 		WebDAVEnabled: m.WebDAVEnabled,
@@ -279,6 +280,13 @@ func settingsToUpdateSet(s mcp.Settings) updateSet {
 		SPA:          s.SPA,
 		Cache:        s.Cache,
 		NotFoundPage: s.NotFoundPage,
+	}
+	if s.CacheRules != nil {
+		rules := make([]store.CacheRule, 0, len(*s.CacheRules))
+		for _, r := range *s.CacheRules {
+			rules = append(rules, store.CacheRule{Pattern: r.Pattern, Cache: r.Cache})
+		}
+		set.CacheRules = &rules
 	}
 	if s.ExpiresAt != nil {
 		if *s.ExpiresAt == "" {
@@ -797,4 +805,17 @@ func mcpPaths(files []mcp.DecodedFile) string {
 		paths = append(paths, f.Path)
 	}
 	return filesDetail(paths)
+}
+
+// mcpCacheRules is a site's cache rules as MCP shows them: nil for none, so
+// the field stays out of every result that had none (cached output schemas).
+func mcpCacheRules(rules []store.CacheRule) []mcp.CacheRule {
+	if len(rules) == 0 {
+		return nil
+	}
+	out := make([]mcp.CacheRule, 0, len(rules))
+	for _, r := range cacheRulesOut(rules) {
+		out = append(out, mcp.CacheRule{Pattern: r.Pattern, Cache: r.Cache})
+	}
+	return out
 }

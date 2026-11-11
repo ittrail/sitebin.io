@@ -129,17 +129,24 @@ type DecodedFile struct {
 // field is optional; a nil pointer means "leave it alone", which is the same
 // distinction the JSON API's updateSet draws with the same technique.
 type Settings struct {
-	Name         *string   `json:"name,omitempty" jsonschema:"a private label for the site, up to 60 characters, shown to its owner in the account's site list and on the edit page, never to visitors; an empty string removes it"`
-	Tags         *[]string `json:"tags,omitempty" jsonschema:"your own private tags for the site (the owner's tags for an owner, your private tags for an admin of a shared site): up to 10, each 1 to 30 characters without commas; case-insensitive, so Demo and demo are one tag; the list replaces the current tags, an empty list removes them all"`
-	Mode         *string   `json:"mode,omitempty" jsonschema:"webserver (serve the files as a site), viewer (show the files in the browser: a file list by folder, or the entry_file first), or container (Enterprise: run the services sitebin-container-compose.yaml declares; every change to that file restarts them; the file is never served in any mode, so the services' secrets belong in its environment:; leaving container mode serves the site's other folders, the app's data included)"`
-	EntryFile    *string   `json:"entry_file,omitempty" jsonschema:"in viewer mode, the file the File viewer opens first; an empty string opens its file list"`
-	ViewPassword *string   `json:"view_password,omitempty" jsonschema:"password visitors must enter; an empty string removes the protection"`
-	WebDAV       *bool     `json:"webdav_enabled,omitempty" jsonschema:"expose the site over WebDAV"`
-	FTP          *bool     `json:"ftp_enabled,omitempty" jsonschema:"expose the site over FTP"`
-	SPA          *bool     `json:"spa_fallback,omitempty" jsonschema:"webserver mode: serve index.html for unknown paths, for single-page apps"`
-	Cache        *string   `json:"cache,omitempty" jsonschema:"browser caching: auto (the default — pages and data revalidate, content-hashed build files like index-BqCz7v8e.js are cached for a year), revalidate (every file is re-checked on every visit), hour, day, week or year (every file but pages and data is cached that long — only for files that never change under their name), or off (no Cache-Control header)"`
-	NotFoundPage *string   `json:"not_found_page,omitempty" jsonschema:"the page shown, with status 404, for an address that does not exist on a web server site: the path of an .html file inside the site; an empty string returns to the default (404.html when the site has one, otherwise Sitebin's own page)"`
-	ExpiresAt    *string   `json:"expires_at,omitempty" jsonschema:"RFC3339 timestamp when the site stops serving; the empty string clears it, where the plan allows"`
+	Name         *string      `json:"name,omitempty" jsonschema:"a private label for the site, up to 60 characters, shown to its owner in the account's site list and on the edit page, never to visitors; an empty string removes it"`
+	Tags         *[]string    `json:"tags,omitempty" jsonschema:"your own private tags for the site (the owner's tags for an owner, your private tags for an admin of a shared site): up to 10, each 1 to 30 characters without commas; case-insensitive, so Demo and demo are one tag; the list replaces the current tags, an empty list removes them all"`
+	Mode         *string      `json:"mode,omitempty" jsonschema:"webserver (serve the files as a site), viewer (show the files in the browser: a file list by folder, or the entry_file first), or container (Enterprise: run the services sitebin-container-compose.yaml declares; every change to that file restarts them; the file is never served in any mode, so the services' secrets belong in its environment:; leaving container mode serves the site's other folders, the app's data included)"`
+	EntryFile    *string      `json:"entry_file,omitempty" jsonschema:"in viewer mode, the file the File viewer opens first; an empty string opens its file list"`
+	ViewPassword *string      `json:"view_password,omitempty" jsonschema:"password visitors must enter; an empty string removes the protection"`
+	WebDAV       *bool        `json:"webdav_enabled,omitempty" jsonschema:"expose the site over WebDAV"`
+	FTP          *bool        `json:"ftp_enabled,omitempty" jsonschema:"expose the site over FTP"`
+	SPA          *bool        `json:"spa_fallback,omitempty" jsonschema:"webserver mode: serve index.html for unknown paths, for single-page apps"`
+	Cache        *string      `json:"cache,omitempty" jsonschema:"browser caching: auto (the default — pages and data revalidate, content-hashed build files like index-BqCz7v8e.js are cached for a year), revalidate (every file is re-checked on every visit), hour, day, week or year (every file but pages and data is cached that long — only for files that never change under their name), or off (no Cache-Control header)"`
+	CacheRules   *[]CacheRule `json:"cache_rules,omitempty" jsonschema:"per-path exceptions to cache, up to 20, the first that matches decides; the list replaces the current rules, an empty list removes them all. Rules decide only for files that are not pages or data (HTML, JSON, XML, TXT, YAML and names without an extension always revalidate), so stable/* immutable leaves stable/latest.json fresh"`
+	NotFoundPage *string      `json:"not_found_page,omitempty" jsonschema:"the page shown, with status 404, for an address that does not exist on a web server site: the path of an .html file inside the site; an empty string returns to the default (404.html when the site has one, otherwise Sitebin's own page)"`
+	ExpiresAt    *string      `json:"expires_at,omitempty" jsonschema:"RFC3339 timestamp when the site stops serving; the empty string clears it, where the plan allows"`
+}
+
+// CacheRule is one of a site's per-path exceptions to its cache policy.
+type CacheRule struct {
+	Pattern string `json:"pattern" jsonschema:"a glob over the path inside the site, without a leading slash: stable/*.exe; * never crosses a folder; a pattern without / matches the file name in any folder: *.dmg"`
+	Cache   string `json:"cache" jsonschema:"auto, revalidate, hour, day, week, year, immutable (a year, marked immutable: for files that never change under their name, such as versioned installers) or off (no Cache-Control header)"`
 }
 
 // SiteResult is what every site-shaped tool returns. It is deliberately the
@@ -181,6 +188,8 @@ type SiteResult struct {
 	// site is exactly what it was before they existed.
 	// Cache is present only when the policy is not auto, for the same reason.
 	Cache string `json:"cache,omitempty" jsonschema:"the browser-cache policy, when it is not auto"`
+	// CacheRules is present only when the site has rules, for the same reason.
+	CacheRules []CacheRule `json:"cache_rules,omitempty" jsonschema:"the site's per-path cache rules, when it has any"`
 	// NotFoundPage is present only when the owner named one, for the same
 	// reason.
 	NotFoundPage    string           `json:"not_found_page,omitempty" jsonschema:"the site's own not-found page, when one is set"`

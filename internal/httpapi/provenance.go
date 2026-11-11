@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -308,6 +309,9 @@ func settingsDetail(set updateSet) string {
 	}
 	if set.Cache != nil {
 		parts = append(parts, "cache="+strings.ToLower(strings.TrimSpace(*set.Cache)))
+	}
+	if set.CacheRules != nil {
+		parts = append(parts, "cache_rules="+strconv.Itoa(len(*set.CacheRules)))
 	}
 	if set.NotFoundPage != nil {
 		parts = append(parts, "not_found_page")
