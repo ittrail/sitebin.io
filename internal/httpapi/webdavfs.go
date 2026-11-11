@@ -193,6 +193,9 @@ func (f *siteFS) OpenFile(ctx context.Context, name string, flag int, perm os.Fi
 		}
 	}
 	if flag&(os.O_WRONLY|os.O_RDWR) != 0 {
+		if err := f.parentFolders(name, flag); err != nil {
+			return nil, err
+		}
 		sf, err := f.st.OpenStaged(f.site, rootName(name), flag, perm, f.lockHeld)
 		if err != nil {
 			if errors.Is(err, store.ErrBadPath) {
@@ -212,6 +215,34 @@ func (f *siteFS) OpenFile(ctx context.Context, name string, flag int, perm os.Fi
 		return nil, err
 	}
 	return file, nil
+}
+
+// parentFolders creates the folders a new file's path names, as a multipart
+// upload does. RFC 4918 lets a PUT into a missing collection fail with 409,
+// and x/net/webdav does — but a script publishing file by file (an update
+// feed over an upload token) then needs a MKCOL per folder, while the same
+// files POSTed to the API land wherever they name. The name has passed check,
+// so every folder on the way is a name the store accepts; they are made
+// through the content root, so never through a link out of the site.
+func (f *siteFS) parentFolders(name string, flag int) error {
+	if flag&os.O_CREATE == 0 {
+		return nil
+	}
+	dir := filepath.Dir(rootName(name))
+	if dir == "." {
+		return nil
+	}
+	if err := f.unlocked(); err != nil {
+		return err
+	}
+	return f.withRoot(func(r *os.Root) error {
+		if err := r.MkdirAll(dir, 0o755); err != nil {
+			// A file where a folder would go: the DAV library's own answer
+			// to a missing parent (409), not a server fault.
+			return os.ErrNotExist
+		}
+		return nil
+	})
 }
 
 func (f *siteFS) RemoveAll(ctx context.Context, name string) error {
