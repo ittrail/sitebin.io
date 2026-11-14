@@ -43,6 +43,13 @@ func linkTarget(addr, viewID string) string {
 // serves it — decoded and cleaned by the caller. It costs one stat per
 // candidate prefix (at most maxPathSegments) and never lists a directory:
 // this is on every request to a custom domain.
+//
+// ErrNotFound means nothing is there — no address attached, or an index link
+// that leads to no site — and says which. Any other error is a site that is
+// attached but cannot be read (meta.json unreadable or corrupt, an I/O or
+// permission fault): the caller must not answer it as a deleted site. A path
+// address whose site cannot be read is that error, never a fall back to a
+// shorter path or the host, which would serve another site's files there.
 func (s *Store) ResolveAddress(host, reqPath string) (*Site, string, error) {
 	h, err := normalizeDomain(host)
 	if err != nil {
@@ -61,15 +68,28 @@ func (s *Store) ResolveAddress(host, reqPath string) (*Site, string, error) {
 		if !linkExists(link) {
 			continue
 		}
-		if site, err := s.load(link); err == nil {
+		site, err := s.load(link)
+		if err == nil {
 			return site, addr, nil
 		}
+		if !errors.Is(err, ErrNotFound) {
+			return nil, "", fmt.Errorf("address %s: %w", addr, err)
+		}
+		// A dangling path link (its site is gone): what a shorter path or
+		// the host serves applies, as if the link were not there.
 	}
-	site, err := s.load(s.addrLink(h))
-	if err != nil {
-		return nil, "", ErrNotFound
+	link := s.addrLink(h)
+	site, err := s.load(link)
+	switch {
+	case err == nil:
+		return site, h, nil
+	case !errors.Is(err, ErrNotFound):
+		return nil, "", fmt.Errorf("address %s: %w", h, err)
+	case linkExists(link):
+		return nil, "", fmt.Errorf("%w: the index link of %s leads to no site", ErrNotFound, h)
+	default:
+		return nil, "", fmt.Errorf("%w: nothing is attached at %s", ErrNotFound, h)
 	}
-	return site, h, nil
 }
 
 // HostAddress is one attached address on a host and the site it serves.

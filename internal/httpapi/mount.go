@@ -55,7 +55,7 @@ func requestPath(forwardedURI string) string {
 // ResolveAddress — the address it matched and that address's path.
 func (a *API) siteByRequest(host, reqPath string) (site *store.Site, addr, mount string, err error) {
 	h := strings.ToLower(hostWithoutPort(host))
-	if a.cfg.ViewDomain != "" && strings.HasSuffix(h, "."+a.cfg.ViewDomain) {
+	if a.onViewDomain(h) {
 		site, err = a.siteByHost(h)
 		return site, h, "", err
 	}
@@ -64,6 +64,13 @@ func (a *API) siteByRequest(host, reqPath string) (site *store.Site, addr, mount
 		return nil, "", "", err
 	}
 	return site, addr, store.PathOf(addr), nil
+}
+
+// onViewDomain reports whether host is a generated address: a label of the
+// view domain.
+func (a *API) onViewDomain(host string) bool {
+	h := strings.ToLower(hostWithoutPort(host))
+	return a.cfg.ViewDomain != "" && strings.HasSuffix(h, "."+a.cfg.ViewDomain)
 }
 
 // underMount is what a request path is below its mount, "/" for the mount

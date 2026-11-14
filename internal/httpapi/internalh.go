@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"path"
@@ -12,7 +13,8 @@ import (
 
 // authz answers Caddy's forward_auth subrequest for every content request on
 // view subdomains, custom domains, and /v/<id> path views: 200 serve, 401 gate
-// (body relayed to the client), 410 expired or locked, 404 unknown.
+// (body relayed to the client), 410 expired or locked, 404 unknown, 503 a site
+// that is attached but could not be read.
 func (a *API) authz(w http.ResponseWriter, r *http.Request) {
 	var site *store.Site
 	var err error
@@ -33,7 +35,7 @@ func (a *API) authz(w http.ResponseWriter, r *http.Request) {
 		site, addr, mount, err = a.siteByRequest(host, reqPath)
 	}
 	if err != nil {
-		a.msgPage(w, 404, "Site not found", "There is no site at this address. It may have been deleted.")
+		a.authzLookupFailed(w, host, pathMode || a.onViewDomain(host), err)
 		return
 	}
 	// <mount>/_sitebin/* is Sitebin's own, as /_sitebin/* is at the root,
@@ -238,4 +240,24 @@ func (a *API) countView(r *http.Request, site *store.Site) {
 	if a.cfg.TrackViews && strings.Contains(r.Header.Get("Accept"), "text/html") {
 		a.st.RecordView(site)
 	}
+}
+
+// authzLookupFailed answers a lookup that found no site. ErrNotFound is "Site
+// not found" (404), counted for the minute report; anything else is a site
+// that is attached but could not be read, and that is "temporarily
+// unavailable" (503) and an ERROR line, never a 404: an uptime monitor must
+// not be told a site is gone because a read failed. view is a generated
+// address or a path view. See
+// docs/superpowers/specs/2026-11-14-authz-lookup-errors-design.md.
+func (a *API) authzLookupFailed(w http.ResponseWriter, host string, view bool, err error) {
+	if errors.Is(err, store.ErrNotFound) {
+		a.authzMisses.miss(host, view, err)
+		a.msgPage(w, 404, "Site not found", "There is no site at this address. It may have been deleted.")
+		return
+	}
+	if logNow, suppressed := a.authzMisses.lookupError(); logNow {
+		a.log.Error("authz: site lookup failed, answered 503", "host", reportHost(host), "err", err, "suppressed", suppressed)
+	}
+	w.Header().Set("Retry-After", "10")
+	a.msgPage(w, 503, "Temporarily unavailable", "This site cannot be loaded right now. Try again in a moment.")
 }

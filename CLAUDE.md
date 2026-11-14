@@ -430,6 +430,20 @@ a non-serving address the forms and unlock routes answer 404
 - A path counts as one custom domain everywhere (per-site cap,
   `CountDomains` for the licence ceiling); zone names stay exempt.
 
+**A lookup that cannot read is not "no site"**
+(`internal/httpapi/authzreport.go`, `authzLookupFailed`): `ResolveAddress`
+returns `ErrNotFound` only for "nothing is attached" or "the index link leads
+to no site" (wrapped with which); an attached site whose `meta.json` cannot be
+read is another error, and a path address's read error never falls back to the
+host's site. authz answers it **503** "Temporarily unavailable" with
+`Retry-After: 10` and one ERROR line per 10 s (`authz: site lookup failed`),
+never a 404. Every 404 is counted, never logged per request: a minute line
+`authz: answered site not found` names the custom hosts with the store's reason
+(generated addresses only as a number, bot noise) and appears only when a
+custom domain missed or a lookup failed. authz has no request log, so these two
+lines are what an outage of custom domains leaves behind (2026-11-14). Read
+`docs/superpowers/specs/2026-11-14-authz-lookup-errors-design.md`.
+
 ## Container sites
 
 The third site mode (`store.ModeContainer`) runs the project its

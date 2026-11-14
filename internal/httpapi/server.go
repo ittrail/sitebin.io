@@ -71,6 +71,7 @@ type API struct {
 	git            *gitrepo.Runner // nil: Git is turned off, or no git binary
 	gitInspect     pushInspector   // nil: git; a test's stand-in for the push bookkeeping
 	sharingWarn    *auth.Limiter   // one "plan unknown" log line per account a minute
+	authzMisses    *authzReport    // what authz answered "not found" or could not look up
 	analytics      *analytics.Recorder
 	analyticsSalts *analytics.Salts  // the one salt store: the recorder hashes with it, the sweep prunes it
 	analyticsGeo   *analytics.Geo    // nil: no GeoIP database
@@ -114,6 +115,7 @@ func New(cfg config.Config, st *store.Store, secret []byte, webFS fs.FS) (*API, 
 		tripSlots:      make(chan struct{}, tripSlots),
 		reportKey:      reportTicketKey(secret),
 		sharingWarn:    auth.NewLimiter(60, 1),
+		authzMisses:    newAuthzReport(time.Now),
 
 		analyticsLimiter: auth.NewLimiter(analyticsSendPerHour, analyticsSendBurst),
 	}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -90,6 +91,79 @@ func TestResolveAddressLongestPrefix(t *testing.T) {
 	mustAdd(t, s2, only[0], "n.at/a")
 	if _, _, err := s2.ResolveAddress("n.at", "/other"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("an empty root must be ErrNotFound, got %v", err)
+	}
+}
+
+// breakMeta makes a site's meta.json unreadable as a site, as a torn write or
+// a disk fault would: the file is there, but no site can be read from it.
+func breakMeta(t *testing.T, s *Store, site *Site) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(s.Root(), "sites", site.ViewID, "meta.json"), []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A site that is attached but cannot be read is not "no site": authz must be
+// able to tell a fault from a deleted site (the 2026-11-14 outage, where both
+// looked like "Site not found").
+func TestResolveAddressUnreadableSiteIsAnError(t *testing.T) {
+	s, sites := pathStore(t, 1)
+	mustAdd(t, s, sites[0], "m.at")
+	breakMeta(t, s, sites[0])
+	_, _, err := s.ResolveAddress("m.at", "/")
+	if err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("ResolveAddress on an unreadable site = %v, want an error that is not ErrNotFound", err)
+	}
+	if !strings.Contains(err.Error(), "m.at") {
+		t.Errorf("the error does not name the address: %v", err)
+	}
+}
+
+// A path address whose site cannot be read must not fall back to the host's
+// site: that would serve another site's files at the path.
+func TestResolveAddressUnreadablePathDoesNotFallBack(t *testing.T) {
+	s, sites := pathStore(t, 2)
+	host, path := sites[0], sites[1]
+	mustAdd(t, s, host, "m.at")
+	mustAdd(t, s, path, "m.at/docs")
+	breakMeta(t, s, path)
+	got, _, err := s.ResolveAddress("m.at", "/docs/a.html")
+	if err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("ResolveAddress = %v, %v; want the path site's read error", got, err)
+	}
+	if !strings.Contains(err.Error(), "m.at/docs") {
+		t.Errorf("the error does not name the path address: %v", err)
+	}
+	// The host itself still resolves.
+	if got, _, err := s.ResolveAddress("m.at", "/other"); err != nil || got.ViewID != host.ViewID {
+		t.Fatalf("the host = %v, %v; want its own site", got, err)
+	}
+}
+
+// Not found still means not found, and says which kind.
+func TestResolveAddressNotFoundSaysWhy(t *testing.T) {
+	s, sites := pathStore(t, 2)
+	mustAdd(t, s, sites[0], "m.at")
+	mustAdd(t, s, sites[1], "n.at/a")
+	_, _, err := s.ResolveAddress("x.at", "/")
+	if !errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "nothing is attached at x.at") {
+		t.Errorf("unknown host = %v, want ErrNotFound saying nothing is attached", err)
+	}
+	// The site's folder disappears behind its host link (a crash mid-delete).
+	if err := os.RemoveAll(filepath.Join(s.Root(), "sites", sites[0].ViewID)); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = s.ResolveAddress("m.at", "/")
+	if !errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "leads to no site") {
+		t.Errorf("dangling host link = %v, want ErrNotFound saying the link leads to no site", err)
+	}
+	// A dangling path link still falls back to what the host serves (here:
+	// nothing), as before.
+	if err := os.RemoveAll(filepath.Join(s.Root(), "sites", sites[1].ViewID)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.ResolveAddress("n.at", "/a/x"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("dangling path link = %v, want ErrNotFound", err)
 	}
 }
 

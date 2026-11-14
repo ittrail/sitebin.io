@@ -376,6 +376,16 @@ func serve() error {
 		defer close(analyticsDone)
 		api.AnalyticsRecorder().Run(analyticsCtx)
 	}()
+	// What authz answered "Site not found" to, and what it could not look
+	// up, once a minute. It stops after the listeners too, so its last line
+	// covers what was answered while they shut down.
+	reportCtx, stopReport := context.WithCancel(context.Background())
+	defer stopReport()
+	reportDone := make(chan struct{})
+	go func() {
+		defer close(reportDone)
+		api.RunAuthzReport(reportCtx)
+	}()
 
 	// Optional FTP server (off by default). Login is the edit UUID + edit
 	// password; each session is confined to that site's files.
@@ -441,6 +451,11 @@ func serve() error {
 	select { // the analytics writer's last records
 	case <-analyticsDone:
 	case <-time.After(3 * time.Second):
+	}
+	stopReport()
+	select { // the authz report's last line
+	case <-reportDone:
+	case <-time.After(time.Second):
 	}
 	select { // give caddy a moment to drain
 	case <-caddyDone:
