@@ -27,8 +27,13 @@ const stackTiersJSON = `[
 
 func stackProvider(t *testing.T, licensing string) *provider {
 	t.Helper()
+	return stackProviderTiers(t, stackTiersJSON, licensing)
+}
+
+func stackProviderTiers(t *testing.T, tiers, licensing string) *provider {
+	t.Helper()
 	t.Setenv("SITEBIN_ACCOUNT_MODE", "tiers")
-	t.Setenv("SITEBIN_TIERS", stackTiersJSON)
+	t.Setenv("SITEBIN_TIERS", tiers)
 	t.Setenv("SITEBIN_DEFAULT_TIER", "free")
 	t.Setenv("SITEBIN_STACK_URL", "https://platform.example")
 	t.Setenv("SITEBIN_STACK_APP_ID", "sitebin")

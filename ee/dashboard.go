@@ -12,6 +12,7 @@ import (
 	"github.com/ittrail/sitebin.io/ee/account"
 	"github.com/ittrail/sitebin.io/ee/authn"
 	"github.com/ittrail/sitebin.io/ee/billing"
+	"github.com/ittrail/sitebin.io/ee/eeconfig"
 	"github.com/ittrail/sitebin.io/internal/ext"
 	"github.com/ittrail/sitebin.io/internal/provenance"
 	"github.com/ittrail/sitebin.io/internal/store"
@@ -325,6 +326,11 @@ func (p *provider) handleSelectTier(w http.ResponseWriter, r *http.Request) {
 	}
 	if t.Paid() {
 		http.Error(w, "upgrading to a paid tier requires checkout", http.StatusForbidden)
+		return
+	}
+	// An unlisted tier is the operator's to give, never the customer's to take.
+	if t.Unlisted() {
+		http.Error(w, "this plan is not on offer", http.StatusForbidden)
 		return
 	}
 	if err := p.accounts.Update(acc, func(cur *account.Account) error { cur.Tier = t.ID; return nil }); err != nil {
@@ -770,6 +776,28 @@ type tierOption struct {
 	Price   string
 }
 
+// planOptions is the list of plans an account's pages show: every tier in
+// catalogue order, minus the unlisted ones the account is not on. An unlisted
+// tier is an operator's gift; only its holder may see it, as the current plan.
+func (p *provider) planOptions(current eeconfig.Tier) []tierOption {
+	opts := []tierOption{}
+	for _, t := range p.cfg.Tiers {
+		if t.Unlisted() && t.ID != current.ID {
+			continue
+		}
+		label := t.Label
+		if label == "" {
+			label = t.ID
+		}
+		// Label formats the amount when there is one and falls back to the
+		// display string only when there is not. Reading Display outright
+		// printed nothing for every PayGate tier, which carries amounts and
+		// no display string: paid plans were offered at a blank price.
+		opts = append(opts, tierOption{ID: t.ID, Label: label, Current: t.ID == current.ID, Paid: t.Paid(), Price: t.Price.Label()})
+	}
+	return opts
+}
+
 type dashView struct {
 	// Flash is a one-time notice at the top of the page (see takeNotice).
 	Flash string
@@ -874,17 +902,7 @@ func (p *provider) renderDashboard(w http.ResponseWriter, r *http.Request, acc *
 	// portal is the stack's hosted plan page.
 	portal := p.billing != nil
 	if p.cfg.SelfSelect || checkout {
-		for _, t := range p.cfg.Tiers {
-			label := t.Label
-			if label == "" {
-				label = t.ID
-			}
-			// Label formats the amount when there is one and falls back to the
-			// display string only when there is not. Reading Display outright
-			// printed nothing for every PayGate tier, which carries amounts and
-			// no display string: paid plans were offered at a blank price.
-			opts = append(opts, tierOption{ID: t.ID, Label: label, Current: t.ID == current.ID, Paid: t.Paid(), Price: t.Price.Label()})
-		}
+		opts = p.planOptions(current)
 	}
 	var accountURL, deletionURL, cancelURL string
 	if acc.Provider == account.OIDCProv {

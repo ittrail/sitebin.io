@@ -174,6 +174,11 @@ type stackTier struct {
 	// the tiers array IS the order, so declaring the catalogue in tiers.json
 	// order is what makes the page's order deliberate rather than accidental.
 	Featured bool `json:"featured,omitempty"`
+
+	// Listed is sent only as false. The stack stores `listed !== false` on
+	// every registration, so an absent field lists the tier, and a listed
+	// tier's declaration stays what it always was.
+	Listed *bool `json:"listed,omitempty"`
 }
 
 type stackMCP struct {
@@ -266,6 +271,10 @@ func (p *provider) stackDeclaration(appID string) stackRegistration {
 			DisplayName: map[string]string{"en": tierLabel(t)},
 			Features:    tierFeatures(t),
 			Featured:    t.Featured,
+		}
+		if t.Unlisted() {
+			unlisted := false
+			st.Listed = &unlisted
 		}
 		if amount, currency, ok := t.Price.Amount(); ok {
 			st.MonthlyPrice = amount

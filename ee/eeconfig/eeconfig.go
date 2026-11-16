@@ -136,8 +136,20 @@ type Tier struct {
 	// it per tier in the registration declaration; only the app knows which of
 	// its plans it wants to sell, and the stack will not guess. The tier ORDER
 	// needs no field: it is the order of the tier catalogue itself.
-	Featured bool   `json:"featured,omitempty"`
-	Price    *Price `json:"price,omitempty"`
+	Featured bool `json:"featured,omitempty"`
+	// Listed false keeps the tier off every list of plans: the stack's price
+	// list and widgets (declared as `listed: false`), the plans Sitebin's own
+	// pages show — except to an account already on it — and self-select. It is
+	// how an operator gives a plan away: the stack grants only a tier without
+	// a price, so a gift is a priceless copy of a paid tier that nobody else
+	// may see or pick. Absent means listed.
+	Listed *bool  `json:"listed,omitempty"`
+	Price  *Price `json:"price,omitempty"`
+}
+
+// Unlisted reports whether the tier is kept off every list of plans.
+func (t Tier) Unlisted() bool {
+	return t.Listed != nil && !*t.Listed
 }
 
 // Paid reports whether the tier requires payment to activate.

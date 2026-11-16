@@ -626,13 +626,7 @@ func (p *provider) handleUIState(w http.ResponseWriter, r *http.Request) {
 			WebDAV: current.WebDAV, Git: current.Git, Analytics: current.Analytics, Sharing: current.Sharing,
 		}}
 	if p.cfg.SelfSelect || checkout {
-		for _, t := range p.cfg.Tiers {
-			label := t.Label
-			if label == "" {
-				label = t.ID
-			}
-			plan.Tiers = append(plan.Tiers, tierOption{ID: t.ID, Label: label, Current: t.ID == current.ID, Paid: t.Paid(), Price: t.Price.Label()})
-		}
+		plan.Tiers = p.planOptions(current)
 	}
 	st.Plan = plan
 

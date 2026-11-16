@@ -2145,6 +2145,15 @@ A tier's `git` (bool, absent = false) turns on the [Git repository](#git-a-repos
 
 A tier's `sharing` (bool, absent = false) allows [adopting, transferring and sharing sites](#site-ownership-enterprise); its notices need `SITEBIN_SMTP_*`.
 
+A tier's `listed` (bool, absent = true) set to `false` keeps the tier off every
+list of plans: the plan lists on `/account` (except for an account already on
+it, which sees it as its current plan), self-select, and — declared as
+`"listed": false` — the stack's price list and widgets. It is how an operator
+gives a plan away on a stack instance: the stack moves a customer onto a tier
+with a price only by changing a subscription they pay for, so a gift is a copy
+of the paid tier without a `price`, marked `"listed": false`, assigned in the
+stack's admin portal.
+
 A tier's `price` maps it to provider price IDs, e.g. a tier with
 `"price":{"stripe":"price_123","paddle":"pri_456","display":"€9/mo"}` becomes a
 paid plan the dashboard sells via checkout. The dashboard lives at `/account`
