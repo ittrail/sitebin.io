@@ -632,6 +632,17 @@ origin, and the core mails them to a recipient. Read
   recipient confirms; GET on a confirm or stop link only ever shows a button,
   because mail scanners fetch every link. `seq` moves on a recipient change
   and on a stop, and that is what kills older confirmation links.
+- **An owner's account may vouch for a recipient** (`knownRecipient` in
+  `internal/httpapi/forms.go`, optional `ext.FormAccounts`): the owner —
+  never an admin, never the edit password — adds a form, changes a
+  recipient or resends a pending form for its verified sign-in address, or
+  for one an active form on a site it owns confirmed while it owned that site
+  (not locked): the form is active at once (`ConfirmedVia`), with no mail and
+  no throttle spent. A stop blocks it: `StoppedAt` stands through a resend
+  and only the recipient's confirmation clears it. Any error means the mail.
+  The store re-checks the owner under the lock (`FormShortcut.applies`). MCP
+  output gained no field. Read
+  `docs/superpowers/specs/2026-11-17-form-recipients-known-to-the-account-design.md`.
 - **The cap is stamped, like custom_domains.** Submissions read `quota_forms`
   from `meta.json` and never ask the extension. With accounts enabled, an
   unstamped site has **0** forms (never the community default of 10; an

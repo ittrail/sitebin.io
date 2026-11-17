@@ -290,7 +290,7 @@ type CreateInput struct {
 // update_form a field left out is left alone.
 type FormInput struct {
 	Name      *string `json:"name,omitempty" jsonschema:"the form's name, 1-60 characters; recipients see it as the sender of every message"`
-	Recipient *string `json:"recipient,omitempty" jsonschema:"the one email address that receives the submissions; it must confirm by email before the form works"`
+	Recipient *string `json:"recipient,omitempty" jsonschema:"the one email address that receives the submissions; it must confirm by email before the form works, unless the connected account owns the site and already holds it"`
 	Captcha   *bool   `json:"captcha,omitempty" jsonschema:"require an ALTCHA proof-of-work captcha; the snippet then includes the widget"`
 	Files     *bool   `json:"files,omitempty" jsonschema:"accept file attachments; the snippet then posts multipart/form-data"`
 	Redirect  *string `json:"redirect,omitempty" jsonschema:"a path on this site to send visitors to after a successful submission, e.g. /thanks.html; empty for the default page"`

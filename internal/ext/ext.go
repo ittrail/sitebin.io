@@ -565,6 +565,26 @@ type AccountDirectory interface {
 	AccountEmail(accountID string) (email string, ok bool)
 }
 
+// FormAccounts is implemented by a Provider whose accounts let a site's owner
+// skip a form recipient's confirmation mail for an address the account
+// already holds: its verified sign-in address, or one that confirmed another
+// form on a site the account owns. OPTIONAL: without it every recipient
+// confirms by email, as in the community build. The core decides the rule
+// (httpapi.knownRecipient) from the sites' meta.json; the extension only
+// answers about the account. Asked only where a form is added, its
+// recipient changed or its confirmation resent, never on a submission. See
+// docs/superpowers/specs/2026-11-17-form-recipients-known-to-the-account-design.md.
+type FormAccounts interface {
+	// VerifiedEmail is the account's sign-in address when its identity
+	// provider (or Sitebin's own verification mail) verified it, else "".
+	// An error means unknown: the recipient is then asked by mail.
+	VerifiedEmail(accountID string) (string, error)
+	// OwnedSiteIDs lists the view ids the account owns by meta.json, not by
+	// markers. An error means the list may be incomplete: the recipient is
+	// then asked by mail.
+	OwnedSiteIDs(accountID string) ([]string, error)
+}
+
 // ZoneInfo is one account zone as the dashboard shows it.
 type ZoneInfo struct {
 	Zone         string

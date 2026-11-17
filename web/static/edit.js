@@ -1674,6 +1674,20 @@ const FORM_STATUS = {
   paused: ["Paused — plan limit", "This site's plan allows fewer forms. It resumes when the plan allows it again."],
 };
 
+// CONFIRMED_VIA says why an active form needed no confirmation mail: its
+// owner's account already held the address (confirmed_via in the listing).
+const CONFIRMED_VIA = {
+  sign_in: "Confirmed through your account: this is your sign-in address.",
+  account: "Confirmed through your account: this address already confirmed another of your forms.",
+};
+
+// knownNote is the toast's tail for a form that went live without a mail.
+function knownNote(f) {
+  return f.confirmed_via === "sign_in"
+    ? "active at once, it is your sign-in address"
+    : "active at once, " + f.recipient + " already confirmed another of your forms";
+}
+
 async function loadForms() {
   try {
     formsData = await api("GET", "/forms");
@@ -1735,7 +1749,8 @@ function renderForms() {
   const rows = $("formrows");
   rows.innerHTML = "";
   for (const f of formsData.forms) {
-    const [label, hint] = FORM_STATUS[f.status] || [f.status, ""];
+    const [label, statusHint] = FORM_STATUS[f.status] || [f.status, ""];
+    const hint = (f.status === "active" && CONFIRMED_VIA[f.confirmed_via]) || statusHint;
     const row = document.createElement("div");
     row.className = "formrow";
     const head = document.createElement("div");
@@ -1775,7 +1790,8 @@ function renderForms() {
         try {
           formsData = await api("POST", "/forms/" + f.key + "/confirmation");
           renderForms();
-          toast("Confirmation sent to " + f.recipient);
+          const now = formsData.forms.find((x) => x.key === f.key);
+          toast(now && now.status === "active" ? "Confirmed — " + knownNote(now) : "Confirmation sent to " + f.recipient);
         } catch (err) { toast(err.message, true); }
       }));
     }
@@ -1825,14 +1841,21 @@ $("f-save").addEventListener("click", async () => {
     redirect: $("f-redirect").value.trim(),
   };
   const wasEditing = editingKey;
+  const before = new Set(formsData.forms.map((x) => x.key));
+  const prev = formsData.forms.find((x) => x.key === wasEditing);
   try {
     formsData = wasEditing
       ? await api("PUT", "/forms/" + wasEditing, body)
       : await api("POST", "/forms", body);
     resetFormEditor();
     renderForms();
+    // The form this save wrote: the edited one, or the one that is new.
+    const saved = formsData.forms.find((x) => (wasEditing ? x.key === wasEditing : !before.has(x.key)));
+    const asked = !wasEditing || (prev && prev.recipient !== body.recipient);
     if (formsData.warnings && formsData.warnings.length) toast(formsData.warnings[0], true);
-    else toast(wasEditing ? "Saved" : "Added — " + body.recipient + " has an email to confirm");
+    else if (!asked) toast("Saved");
+    else if (saved && saved.status === "active") toast((wasEditing ? "Saved — " : "Added — ") + knownNote(saved));
+    else toast((wasEditing ? "Saved — " : "Added — ") + body.recipient + " has an email to confirm");
   } catch (err) { toast(err.message, true); }
 });
 $("f-cancel").addEventListener("click", () => { resetFormEditor(); renderForms(); });

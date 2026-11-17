@@ -742,12 +742,23 @@ func (o mcpOps) ListForms(_ context.Context, auth mcp.Auth, ref mcp.SiteRef) (*m
 	return toFormsResult(o.a.listFormsFor(site)), nil
 }
 
+// mcpFormCaller is the MCP caller of a form write: its client IP, and its
+// account when openSiteAs let it in as the site's owner. An admin and the
+// edit password never vouch for a recipient (knownRecipient).
+func mcpFormCaller(auth mcp.Auth, st standing) formCaller {
+	c := formCaller{ip: auth.ClientIP}
+	if st == standOwner {
+		c.owner = auth.AccountID
+	}
+	return c
+}
+
 func (o mcpOps) AddForm(ctx context.Context, auth mcp.Auth, ref mcp.SiteRef, in mcp.FormInput) (*mcp.FormsResult, error) {
 	site, st, err := o.openSiteAs(auth, ref)
 	if err != nil {
 		return nil, err
 	}
-	v, err := o.a.addForm(ctx, site, toFormInput(in), auth.ClientIP)
+	v, err := o.a.addForm(ctx, site, toFormInput(in), mcpFormCaller(auth, st))
 	if err != nil {
 		return nil, o.mcpError(err)
 	}
@@ -764,7 +775,7 @@ func (o mcpOps) UpdateForm(ctx context.Context, auth mcp.Auth, ref mcp.SiteRef, 
 	if err != nil {
 		return nil, err
 	}
-	v, err := o.a.updateForm(ctx, site, key, toFormInput(in), auth.ClientIP)
+	v, err := o.a.updateForm(ctx, site, key, toFormInput(in), mcpFormCaller(auth, st))
 	if err != nil {
 		return nil, o.mcpError(err)
 	}
@@ -790,7 +801,7 @@ func (o mcpOps) ResendFormConfirmation(ctx context.Context, auth mcp.Auth, ref m
 	if err != nil {
 		return nil, err
 	}
-	v, err := o.a.resendConfirmation(ctx, site, key, auth.ClientIP)
+	v, err := o.a.resendConfirmation(ctx, site, key, mcpFormCaller(auth, st))
 	if err != nil {
 		return nil, o.mcpError(err)
 	}

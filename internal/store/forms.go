@@ -18,6 +18,35 @@ const (
 	FormStopped = "stopped" // the recipient used the stop link
 )
 
+// How an active form was confirmed without a mail (Form.ConfirmedVia); "" is
+// the recipient's own click. Design:
+// docs/superpowers/specs/2026-11-17-form-recipients-known-to-the-account-design.md.
+const (
+	FormViaSignIn  = "sign_in" // the recipient is the owner account's verified sign-in address
+	FormViaAccount = "account" // the recipient confirmed another form of the same owner
+)
+
+// FormShortcut activates a form without a confirmation mail, because the
+// owner's account already holds its recipient's consent (decided by the
+// caller, httpapi.knownRecipient). It applies only while meta.json still
+// names Owner: the decision is made before the write, across several sites,
+// and a transfer may commit in between.
+type FormShortcut struct {
+	Owner string
+	Via   string // FormViaSignIn or FormViaAccount
+}
+
+// applies reports whether sc may activate a form on the site m describes.
+func (sc *FormShortcut) applies(m *Meta) bool {
+	return sc != nil && sc.Owner != "" && sc.Via != "" && m.OwnerAccountID == sc.Owner
+}
+
+// activate makes g active through sc, confirmed now.
+func (sc *FormShortcut) activate(g *Form) {
+	now := time.Now().UTC()
+	g.Status, g.ConfirmedAt, g.ConfirmedVia = FormActive, &now, sc.Via
+}
+
 // FormKeyLen is the length of a form key, drawn from the id alphabet.
 const FormKeyLen = 16
 
@@ -38,7 +67,13 @@ type Form struct {
 	Seq         int        `json:"seq,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 	ConfirmedAt *time.Time `json:"confirmed_at,omitempty"`
-	StoppedAt   *time.Time `json:"stopped_at,omitempty"`
+	// ConfirmedVia says how an active form was confirmed without a mail
+	// (FormViaSignIn, FormViaAccount); "" is the recipient's own click.
+	ConfirmedVia string `json:"confirmed_via,omitempty"`
+	// StoppedAt is the recipient's stop. It stands until they confirm the
+	// form again: a resend moves the form back to pending and keeps it, so an
+	// owner's account never skips a recipient who said stop.
+	StoppedAt *time.Time `json:"stopped_at,omitempty"`
 }
 
 // FormPatch changes a form's settings. A nil field is left alone.
@@ -48,6 +83,9 @@ type FormPatch struct {
 	Captcha   *bool
 	Files     *bool
 	Redirect  *string
+	// Shortcut activates the form at once when its recipient changes to an
+	// address the owner's account already holds. Nothing else uses it.
+	Shortcut *FormShortcut
 }
 
 var (
@@ -82,6 +120,12 @@ func FormPaused(index, limit int) bool { return index >= limit }
 // cap, resolved by the caller, and it is compared under the site lock, so
 // two concurrent adds cannot both take the last slot.
 func (s *Store) AddForm(site *Site, spec Form, limit int) (Form, error) {
+	return s.AddFormKnown(site, spec, limit, nil)
+}
+
+// AddFormKnown is AddForm for a recipient the owner's account already holds:
+// with a shortcut that applies, the form is active at once.
+func (s *Store) AddFormKnown(site *Site, spec Form, limit int, sc *FormShortcut) (Form, error) {
 	var out Form
 	err := s.Update(site, func(m *Meta) error {
 		if len(m.Forms) >= limit {
@@ -96,6 +140,9 @@ func (s *Store) AddForm(site *Site, spec Form, limit int) (Form, error) {
 			Redirect:  spec.Redirect,
 			Status:    FormPending,
 			CreatedAt: time.Now().UTC(),
+		}
+		if sc.applies(m) {
+			sc.activate(&out)
 		}
 		m.Forms = append(m.Forms, out)
 		return nil
@@ -114,7 +161,8 @@ func newFormKey(existing []Form) string {
 
 // UpdateForm applies p. A new recipient puts the form back to pending and
 // moves its seq, so every earlier confirmation link dies; recipientChanged
-// tells the caller to send a fresh one.
+// tells the caller to send a fresh one — unless p.Shortcut applies, which
+// makes the form active at once (the seq moves all the same).
 func (s *Store) UpdateForm(site *Site, key string, p FormPatch) (f Form, recipientChanged bool, err error) {
 	err = s.Update(site, func(m *Meta) error {
 		_, i, ok := FindForm(*m, key)
@@ -138,7 +186,10 @@ func (s *Store) UpdateForm(site *Site, key string, p FormPatch) (f Form, recipie
 			g.Recipient = *p.Recipient
 			g.Status = FormPending
 			g.Seq++
-			g.ConfirmedAt, g.StoppedAt = nil, nil
+			g.ConfirmedAt, g.StoppedAt, g.ConfirmedVia = nil, nil, ""
+			if p.Shortcut.applies(m) {
+				p.Shortcut.activate(g)
+			}
 			recipientChanged = true
 		}
 		f = *g
@@ -162,7 +213,7 @@ func (s *Store) DeleteForm(site *Site, key string) error {
 // ConfirmForm records the recipient's consent. The link carries the recipient
 // and seq it was minted for; if either differs, the link predates a recipient
 // change or a stop and is refused. Confirming an active form again is not an
-// error.
+// error. A confirmation ends a stop that stood on the form.
 func (s *Store) ConfirmForm(site *Site, key, recipient string, seq int) (Form, error) {
 	var out Form
 	err := s.Update(site, func(m *Meta) error {
@@ -179,7 +230,7 @@ func (s *Store) ConfirmForm(site *Site, key, recipient string, seq int) (Form, e
 			return errFormUnchanged
 		}
 		now := time.Now().UTC()
-		g.Status, g.ConfirmedAt = FormActive, &now
+		g.Status, g.ConfirmedAt, g.ConfirmedVia, g.StoppedAt = FormActive, &now, "", nil
 		out = *g
 		return nil
 	})
@@ -218,9 +269,17 @@ func (s *Store) StopForm(site *Site, key, recipient string) (f Form, changed boo
 }
 
 // RequestConfirmation readies a form for a new confirmation mail. A stopped
-// form goes back to pending (its seq already moved at the stop), a pending
-// one stays as it is, and an active one is refused.
+// form goes back to pending (its seq already moved at the stop) and keeps its
+// StoppedAt, a pending one stays as it is, and an active one is refused.
 func (s *Store) RequestConfirmation(site *Site, key string) (Form, error) {
+	return s.RequestConfirmationKnown(site, key, nil)
+}
+
+// RequestConfirmationKnown is RequestConfirmation for a recipient the owner's
+// account already holds: a pending form with no stop standing is active at
+// once when sc applies. A stopped form never is, on this resend or a later
+// one, until its recipient confirms.
+func (s *Store) RequestConfirmationKnown(site *Site, key string, sc *FormShortcut) (Form, error) {
 	var out Form
 	err := s.Update(site, func(m *Meta) error {
 		_, i, ok := FindForm(*m, key)
@@ -232,7 +291,11 @@ func (s *Store) RequestConfirmation(site *Site, key string) (Form, error) {
 		case FormActive:
 			return ErrFormActive
 		case FormStopped:
-			g.Status, g.StoppedAt = FormPending, nil
+			g.Status = FormPending
+		case FormPending:
+			if g.StoppedAt == nil && sc.applies(m) {
+				sc.activate(g)
+			}
 		}
 		out = *g
 		return nil

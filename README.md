@@ -538,7 +538,7 @@ require stdio) can bridge with `npx mcp-remote https://…/mcp --header …`.
 | `set_domain_target` | Point a container site's custom domain at another of its HTTP ports *(Enterprise)* |
 | `download_site` | The site as a zip, attached as a resource |
 | `open_upload` | A short-lived token and URLs to upload large files with your own HTTP client (WebDAV or the zip/files upload), with ready-to-run `curl` commands |
-| `list_forms` / `add_form` / `update_form` / `remove_form` / `resend_form_confirmation` | Email forms; a new form works once its recipient confirms |
+| `list_forms` / `add_form` / `update_form` / `remove_form` / `resend_form_confirmation` | Email forms; a new form works once its recipient confirms, or at once when the connected owner account already holds the address |
 
 `get_site` and `list_sites` return `tags` (left out when a site has none; `create_site` takes `settings.tags` too). A connector that cached the tool schemas from before tags existed must reconnect before it can read tagged sites.
 
@@ -928,7 +928,13 @@ A site's pages can post plain HTML forms to Sitebin, which mails each
 submission to one recipient: no backend, and no script unless you want a
 captcha. Add a form on the edit page (or with the API or MCP). Its recipient
 gets **one email to confirm**; until they click it, the form refuses
-submissions. Then paste its snippet into any page:
+submissions. With accounts (Enterprise), the owner of a site skips that mail
+for an address their account already holds: their verified sign-in address,
+or one that confirmed another form on a site they own while they owned it.
+Such a form is active at once (`confirmed_via` says why). An admin of a shared
+site and the edit password always ask the recipient, and so does every address
+whose recipient stopped one of the account's forms, until they confirm again.
+Then paste its snippet into any page:
 
 ```html
 <form action="/_sitebin/forms/k7f3m2q9xaw4npd6" method="post">

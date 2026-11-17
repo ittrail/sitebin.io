@@ -345,7 +345,9 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 	addTool(s, auth, &sdk.Tool{
 		Name: "add_form",
 		Description: "Add an email form to a site. The recipient gets one email to confirm; until they click it the form is " +
-			"pending and refuses every submission, so do not tell the user it works before then. Paste the returned " +
+			"pending and refuses every submission, so do not tell the user it works before then. When the connected " +
+			"account owns the site and already holds the address (its verified sign-in address, or one that confirmed " +
+			"another of its forms), the form is active at once and no email is sent: read the returned status. Paste the returned " +
 			"snippet into a page of the site with write_files. Needs an instance with form mail configured; plans limit " +
 			"the forms per site. Each submission arrives as a plain-text email, not a designed one: the fields in form " +
 			"order, the visitor's files and a submission.json attached. Tell the user to add the sender address to their " +
@@ -357,7 +359,8 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 	addTool(s, auth, &sdk.Tool{
 		Name: "update_form",
 		Description: "Change a form's name, recipient, captcha, attachments or thank-you page. A new recipient has to " +
-			"confirm by email again before the form works.",
+			"confirm by email again before the form works, unless the connected account owns the site and already holds " +
+			"the address (as for add_form): then the form stays active.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in formUpdateArgs) (*sdk.CallToolResult, *FormsResult, error) {
 		return formsOut(ops.UpdateForm(ctx, auth, in.ref(), in.Key, in.Form))
 	})
@@ -370,8 +373,10 @@ func newServer(ops Ops, info Info, auth Auth) *sdk.Server {
 	})
 
 	addTool(s, auth, &sdk.Tool{
-		Name:        "resend_form_confirmation",
-		Description: "Email a form's recipient the confirmation link again, for a form that is pending or that its recipient stopped.",
+		Name: "resend_form_confirmation",
+		Description: "Email a form's recipient the confirmation link again, for a form that is pending or that its recipient stopped. " +
+			"A pending form whose recipient the connected owner account already holds becomes active instead, with no email; " +
+			"a stopped form always asks its recipient.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, in formKeyArgs) (*sdk.CallToolResult, *FormsResult, error) {
 		return formsOut(ops.ResendFormConfirmation(ctx, auth, in.ref(), in.Key))
 	})
