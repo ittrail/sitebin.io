@@ -641,7 +641,9 @@ origin, and the core mails them to a recipient. Read
   no throttle spent. A stop blocks it: `StoppedAt` stands through a resend
   and only the recipient's confirmation clears it. Any error means the mail.
   The store re-checks the owner under the lock (`FormShortcut.applies`). MCP
-  output gained no field. Read
+  output gained no field. On an owned site the confirmation mail says the
+  click also covers the account's other forms (`confirmsAccountWide`); the
+  privacy page and the DPA (2026-11-17) describe the rule. Read
   `docs/superpowers/specs/2026-11-17-form-recipients-known-to-the-account-design.md`.
 - **The cap is stamped, like custom_domains.** Submissions read `quota_forms`
   from `meta.json` and never ask the extension. With accounts enabled, an

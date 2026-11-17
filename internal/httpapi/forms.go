@@ -319,11 +319,7 @@ func (a *API) knownRecipient(site *store.Site, owner, addr string) *store.FormSh
 	if owner == "" || site.Meta.OwnerAccountID != owner {
 		return nil
 	}
-	p, ok := ext.Get()
-	if !ok || !p.AccountsEnabled() {
-		return nil
-	}
-	fa, ok := p.(ext.FormAccounts)
+	fa, ok := formAccounts()
 	if !ok {
 		return nil
 	}
@@ -541,17 +537,41 @@ func (a *API) resendConfirmation(ctx context.Context, site *store.Site, key stri
 	return a.formsListing(site), nil
 }
 
+// formAccounts is the extension that answers knownRecipient, when the
+// instance runs one with accounts on.
+func formAccounts() (ext.FormAccounts, bool) {
+	p, ok := ext.Get()
+	if !ok || !p.AccountsEnabled() {
+		return nil, false
+	}
+	fa, ok := p.(ext.FormAccounts)
+	return fa, ok
+}
+
+// confirmsAccountWide reports whether confirming a form of site would let
+// the other forms of the account that owns it skip the mail for the same
+// address (knownRecipient). The confirmation mail says so whenever it might,
+// so a recipient's click never covers more than they were told.
+func confirmsAccountWide(site *store.Site) bool {
+	if site.Meta.OwnerAccountID == "" {
+		return false
+	}
+	_, ok := formAccounts()
+	return ok
+}
+
 // sendConfirmation mails f's recipient the link that activates the form.
 func (a *API) sendConfirmation(ctx context.Context, site *store.Site, f store.Form) error {
 	now := time.Now()
 	tok := a.forms.links.ConfirmToken(forms.ConfirmClaim{ViewID: site.ViewID, Key: f.Key, Recipient: f.Recipient, Seq: f.Seq}, now)
 	m, err := forms.BuildConfirmation(forms.ConfirmationMail{
-		From:       a.cfg.FormsSMTP.From,
-		FormName:   f.Name,
-		Recipient:  f.Recipient,
-		Host:       a.formHost(site),
-		ConfirmURL: a.baseURL() + "/forms/confirm?t=" + url.QueryEscape(tok),
-		At:         now,
+		From:        a.cfg.FormsSMTP.From,
+		FormName:    f.Name,
+		Recipient:   f.Recipient,
+		Host:        a.formHost(site),
+		ConfirmURL:  a.baseURL() + "/forms/confirm?t=" + url.QueryEscape(tok),
+		At:          now,
+		AccountWide: confirmsAccountWide(site),
 	})
 	if err != nil {
 		return err

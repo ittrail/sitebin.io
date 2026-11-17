@@ -55,6 +55,10 @@ type ConfirmationMail struct {
 	Host       string
 	ConfirmURL string
 	At         time.Time
+	// AccountWide says that confirming also lets the other forms of the
+	// account that owns the site send to this address without asking again,
+	// so the recipient learns what the click covers.
+	AccountWide bool
 }
 
 // ErrHeader refuses a header value that carries a line break.
@@ -80,16 +84,17 @@ type attachment struct {
 
 // mailView is what the HTML templates and the text builders read.
 type mailView struct {
-	Preheader  string
-	FormName   string
-	Host       string
-	Recipient  string
-	Fields     []viewField
-	Files      []viewFile
-	At         string
-	StopURL    string
-	ConfirmURL string
-	ReplyHint  bool
+	Preheader   string
+	FormName    string
+	Host        string
+	Recipient   string
+	Fields      []viewField
+	Files       []viewFile
+	At          string
+	StopURL     string
+	ConfirmURL  string
+	ReplyHint   bool
+	AccountWide bool
 }
 
 type viewField struct {
@@ -163,12 +168,13 @@ func BuildConfirmation(in ConfirmationMail) (Mail, error) {
 		return Mail{}, err
 	}
 	v := mailView{
-		FormName:   in.FormName,
-		Host:       in.Host,
-		Recipient:  in.Recipient,
-		ConfirmURL: in.ConfirmURL,
-		At:         in.At.UTC().Format("2 Jan 2006, 15:04 UTC"),
-		Preheader:  in.Host + " would like to email you the messages from one of its forms.",
+		FormName:    in.FormName,
+		Host:        in.Host,
+		Recipient:   in.Recipient,
+		ConfirmURL:  in.ConfirmURL,
+		At:          in.At.UTC().Format("2 Jan 2006, 15:04 UTC"),
+		Preheader:   in.Host + " would like to email you the messages from one of its forms.",
+		AccountWide: in.AccountWide,
 	}
 	var html bytes.Buffer
 	if err := mailTmpl.ExecuteTemplate(&html, "confirm.html", v); err != nil {
@@ -243,10 +249,17 @@ func submissionText(v mailView) string {
 	return b.String()
 }
 
+// accountWideText is what a confirmation also covers on a site an account
+// owns; the HTML part says the same.
+const accountWideText = "Confirming also lets the other forms of the same Sitebin account send to this address without asking you again."
+
 func confirmText(v mailView) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s would like to send the messages of its form \"%s\" to this address (%s).\n\n", v.Host, v.FormName, v.Recipient)
 	fmt.Fprintf(&b, "To agree, open this link within 7 days:\n%s\n\n", v.ConfirmURL)
+	if v.AccountWide {
+		b.WriteString(accountWideText + "\n\n")
+	}
 	b.WriteString("If you did not expect this email, ignore it. Nothing is sent to you unless you confirm,\n")
 	b.WriteString("and every message you receive carries a link to stop them.\n\n-- \nSitebin\n")
 	return b.String()

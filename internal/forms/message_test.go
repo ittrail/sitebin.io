@@ -420,6 +420,28 @@ func TestConfirmationMail(t *testing.T) {
 			!strings.Contains(string(l.body), "office@example.com") {
 			t.Errorf("%s part lacks the link or the address", l.mediaType)
 		}
+		if strings.Contains(string(l.body), "other forms") {
+			t.Errorf("%s part speaks of the account's other forms on a site no account owns", l.mediaType)
+		}
+	}
+}
+
+// On a site an account owns, the click also covers that account's other
+// forms, and both parts say so before the recipient clicks.
+func TestConfirmationMailAccountWide(t *testing.T) {
+	m, err := BuildConfirmation(ConfirmationMail{
+		From: "forms@sitebin.example", FormName: "Contact", Recipient: "office@example.com",
+		Host: "www.example.com", ConfirmURL: "https://sitebin.example/forms/confirm?t=tok", At: time.Now(),
+		AccountWide: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, leaves := readMail(t, m)
+	for _, l := range leaves {
+		if !strings.Contains(strings.Join(strings.Fields(string(l.body)), " "), accountWideText) {
+			t.Errorf("%s part does not say the click covers the account's other forms", l.mediaType)
+		}
 	}
 }
 

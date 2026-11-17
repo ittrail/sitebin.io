@@ -84,3 +84,19 @@ a minute ago. The operator, who is customer zero, confirms their own address aga
 - The confirmation mail's text is unchanged (it is delivered and gates every form; see the forms
   design's deliverability notes).
 - Forms that are `pending` today are not activated in the background; their next resend does it.
+
+## Corrections (post-implementation)
+
+- **The confirmation mail says what the click covers.** "The confirmation mail's text is
+  unchanged" no longer holds. With the privacy page and the DPA (version 2026-11-17) describing
+  the shortcut, a recipient who confirms one form must learn that the click also lets the same
+  account's other forms send to the address. On a site an account owns, on an instance whose
+  extension answers `ext.FormAccounts` (`confirmsAccountWide`), both parts of the mail add one
+  sentence: "Confirming also lets the other forms of the same Sitebin account send to this
+  address without asking you again." It is said wherever a click might count, not only where it
+  will (a site locked or transferred later still got the sentence): the mail must never cover
+  less than the click does.
+- **A deleted stopped form no longer blocks.** The standing stop is read from the forms that
+  exist, so an owner who removes the stopped form lifts the block for the address (another
+  active, confirmed form still vouches). The recipient's stop link on each form still works. The
+  legal texts therefore do not promise that a stop makes the account ask again.

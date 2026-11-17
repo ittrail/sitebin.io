@@ -53,6 +53,7 @@ func main() {
 	cm, err := forms.BuildConfirmation(forms.ConfirmationMail{
 		From: "forms@sitebin.io", FormName: "Kontakt", Recipient: "office@example.com",
 		Host: "www.example.com", ConfirmURL: "https://app.sitebin.io/forms/confirm?t=preview", At: time.Now(),
+		AccountWide: true,
 	})
 	if err != nil {
 		log.Fatal(err)

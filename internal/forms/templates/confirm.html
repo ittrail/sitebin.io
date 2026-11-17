@@ -20,7 +20,7 @@
           <td style="background:#fffdf8;border:2px dashed #c9cfdb;border-radius:14px;padding:26px 28px 28px;">
             <span style="display:inline-block;padding:6px 10px;border:2px solid #d99a26;border-radius:6px;font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:12px;line-height:14px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#a8740f;">{{.FormName}}</span>
             <div style="margin-top:14px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:20px;line-height:28px;font-weight:600;color:#141a26;">{{.Host}} would like to email you its form messages</div>
-            <div style="margin-top:12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#3a4254;">The form &ldquo;{{.FormName}}&rdquo; on {{.Host}} wants to send the messages people submit to <strong>{{.Recipient}}</strong>. Nothing is sent to you until you agree.</div>
+            <div style="margin-top:12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#3a4254;">The form &ldquo;{{.FormName}}&rdquo; on {{.Host}} wants to send the messages people submit to <strong>{{.Recipient}}</strong>. Nothing is sent to you until you agree.{{if .AccountWide}} Confirming also lets the other forms of the same Sitebin account send to this address without asking you again.{{end}}</div>
             <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:22px;">
               <tr>
                 <td style="border-radius:10px;background:#f5b84d;">

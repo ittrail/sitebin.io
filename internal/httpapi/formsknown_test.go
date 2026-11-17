@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -322,6 +323,23 @@ func TestKnownRecipientUnknownMeansMail(t *testing.T) {
 	if rs.count() != 3 {
 		t.Errorf("mails = %d, want 3", rs.count())
 	}
+	// The site belongs to an account, so the mail tells the recipient what
+	// the click also covers.
+	if !strings.Contains(strings.Join(strings.Fields(mailText(t, rs.last(t))), " "), "other forms of the same Sitebin account") {
+		t.Errorf("the confirmation mail does not say it covers the account's other forms:\n%s", mailText(t, rs.last(t)))
+	}
+}
+
+// The mail speaks of the account's other forms only where a click can count
+// for them: an owned site on an instance whose extension answers.
+func TestConfirmsAccountWide(t *testing.T) {
+	knownEnv(t)
+	if !confirmsAccountWide(&store.Site{Meta: store.Meta{OwnerAccountID: "acct-1"}}) {
+		t.Error("an owned site with FormAccounts: want account-wide")
+	}
+	if confirmsAccountWide(&store.Site{}) {
+		t.Error("a site no account owns: want this form only")
+	}
 }
 
 // A provider without ext.FormAccounts changes nothing.
@@ -333,6 +351,9 @@ func TestKnownRecipientNeedsTheExtension(t *testing.T) {
 	edit, _, _ := knownSite(t, e)
 	if _, f := addBy(t, e, byToken("sbp_owner"), edit, "office@example.com"); f.Status != "pending" || rs.count() != 1 {
 		t.Errorf("without FormAccounts = %+v, mails %d; want pending", f, rs.count())
+	}
+	if strings.Contains(mailText(t, rs.last(t)), "other forms") {
+		t.Error("without FormAccounts the mail still speaks of the account's other forms")
 	}
 }
 
