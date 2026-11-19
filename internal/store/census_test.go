@@ -49,7 +49,6 @@ var writeCensus = map[string]string{
 	"internal/httpapi/sites.go:API.extractZipPart:CreateTemp": "the zip spool under tmp/, extracted through the store",
 	// not site content
 	"internal/httpapi/sites.go:API.createSiteWith:Create":     "store.Create: a new, empty site",
-	"internal/store/files.go:Store.ZipContent:Create":         "an entry of the download archive",
 	"internal/store/links_other.go:makeLink:Symlink":          "an index link",
 	"internal/store/links_windows.go:makeLink:Symlink":        "an index link",
 	"internal/store/meta.go:writeMeta:WriteFile":              "meta.json",

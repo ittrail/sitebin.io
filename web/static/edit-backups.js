@@ -94,18 +94,12 @@ const backupsTab = (() => {
   // fmtSize is edit.js's byte formatter when there is one.
   function fmtSize(n) { return typeof fmtBytes === "function" ? fmtBytes(n) : n + " B"; }
 
+  // The browser downloads the version itself (edit.js's startDownload), so
+  // it shows at once and never sits in this tab's memory.
   async function download(snap) {
     try {
-      const res = await fetch("/api/sites/" + editID + "/backups/" + encodeURIComponent(snap) + "/download", { headers: authHeaders() });
-      if (!res.ok) { let m = ""; try { m = (await res.json()).error; } catch {} throw new Error(m || "download failed (" + res.status + ")"); }
-      const url = URL.createObjectURL(await res.blob());
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = site.id + "-" + snap + ".zip";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      await startDownload("/backups/" + encodeURIComponent(snap) + "/download");
+      toast("Download started — your browser saves the ZIP as it is packed.");
     } catch (err) { toast(err.message, true); }
   }
 

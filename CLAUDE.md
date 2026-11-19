@@ -124,6 +124,17 @@ the optional `ext.SessionAccounts`); the edit password.
   push re-checks it from `meta.json` after `BeginGitWrite`
   (`gitStandingHolds`; `WriteRPCRefusal` prints the refusal on the POST), and
   `UpdateAdmins` cancels a running push when an admin stops standing.
+- **A download link** (`POST …/download-link`, `internal/httpapi/downloadlinks.go`)
+  is how Sitebin's pages download without holding the file: memory only,
+  single use, 60 s, bound to the edit id and the exact path + query, and
+  accepted only by `withDownloadAuth` on `GET …/download`,
+  `…/backups/{snapshot}/download` and `…/git/archive`. On use it re-checks
+  its minter through `openerStands` (the rule upload tokens share) and the
+  lock. Never accept a ticket on another route, from a header, or as a
+  password, and never loosen the session's header rule to let a plain link
+  through instead. ZIPs go through `internal/zipstream` (media stored, the
+  rest BestSpeed). See
+  `docs/superpowers/specs/2026-11-19-streamed-downloads-design.md`.
 - **`tags`** an API or MCP caller sees are the caller's own: the owner's
   `Meta.Tags`, or the admin's private list (`AdminTags`), never the owner's. See
   "Ownership" below.

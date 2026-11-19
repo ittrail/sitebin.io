@@ -88,3 +88,18 @@ func TestNewUploadToken(t *testing.T) {
 		}
 	}
 }
+
+func TestNewDownloadTicket(t *testing.T) {
+	a, b := NewDownloadTicket(), NewDownloadTicket()
+	if !strings.HasPrefix(a, DownloadTicketPrefix) || len(a) != len(DownloadTicketPrefix)+40 {
+		t.Fatalf("bad download ticket %q", a)
+	}
+	if a == b {
+		t.Fatal("two download tickets collided")
+	}
+	for _, p := range []string{APITokenPrefix, UploadTokenPrefix} {
+		if p == DownloadTicketPrefix {
+			t.Fatalf("download tickets share the prefix %q", p)
+		}
+	}
+}

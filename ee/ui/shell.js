@@ -205,16 +205,19 @@ const WS = (() => {
     return data;
   }
 
+  // download hands a site's ZIP to the browser itself: a one-minute,
+  // single-use link from the session, opened as a plain download, so the
+  // transfer shows at once and the ZIP goes to disk as it is packed (never
+  // into this tab's memory). The server names it after the site.
   async function download(editID, name) {
-    const res = await fetch("/api/sites/" + editID + "/download", { headers: { "X-Sitebin-Session": "1" } });
-    if (!res.ok) throw new Error("The download was refused (" + res.status + ").");
-    const blob = await res.blob();
+    const q = name ? "?" + new URLSearchParams({ name }).toString() : "";
+    const { url } = await siteAPI(editID, "POST", "/download-link", { path: "/download" + q });
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = (name || editID) + ".zip";
+    a.href = url;
+    a.download = "";
     document.body.appendChild(a);
     a.click();
-    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    a.remove();
   }
 
   // ---- toast, dialogs, menus ----

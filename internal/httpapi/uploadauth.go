@@ -24,41 +24,66 @@ var errUploadShareEnded = &apiError{http.StatusForbidden, msgUploadTokenShareEnd
 // or whose edit password was changed: it is as dead as a revoked one.
 var errUploadTokenRevoked = &apiError{http.StatusUnauthorized, msgUploadTokenRefused}
 
-// uploadTokenStands re-applies, on every request a token makes, what opened
-// it, so a token never outlives it. An admin's token is the admin's only
-// while the admin is (accountStanding == standAdmin): a share that ended, a
-// plan that no longer shares — or one that cannot be asked
-// (errSharingUnknown) — refuses the request, and the token works again if
-// the share is restored. An owner's token holds while the account owns the
-// site (standOwner), and the edit password's while the site's hash is the
-// one it was opened against. A transfer and a rotate revoke the site's
-// tokens, but a token minted in the moment after that revoke was opened on
-// the old authority: this is what refuses it. Nothing is changed. It reads
-// meta.json the request already loaded, takes no lock and is never on the
-// serving path.
-func (a *API) uploadTokenStands(site *store.Site, secret string) error {
-	account, role, pwHash := a.uploads.openedBy(secret)
+// opener is what openerStands found of the authority that opened a
+// short-lived credential.
+type opener int
+
+const (
+	openerHolds      opener = iota
+	openerShareEnded        // an admin's, and the admin no longer stands
+	openerRevoked           // the owner no longer owns, or the password changed
+)
+
+// openerStands re-applies, on every use of a short-lived credential (an
+// upload token, a download link), what opened it, so the credential never
+// outlives it. An admin's holds only while the admin is (accountStanding ==
+// standAdmin): a share that ended, a plan that no longer shares — or one that
+// cannot be asked (errSharingUnknown, returned as the error) — refuses the
+// request, and the credential works again if the share is restored. An
+// owner's holds while the account owns the site (standOwner), and the edit
+// password's (any other role) while the site's hash is the one it was opened
+// against. A transfer and a rotate revoke the site's upload tokens, but one
+// minted in the moment after that revoke was opened on the old authority:
+// this is what refuses it. Nothing is changed. It reads meta.json the request
+// already loaded, takes no lock and is never on the serving path.
+func (a *API) openerStands(site *store.Site, account, role, pwHash string) (opener, error) {
 	switch role {
 	case roleAdmin:
 		st, err := a.accountStanding(site, account)
 		if err != nil {
-			return err
+			return openerRevoked, err
 		}
 		if st != standAdmin {
-			return errUploadShareEnded
+			return openerShareEnded, nil
 		}
 	case roleOwner:
 		st, err := a.accountStanding(site, account)
 		if err != nil {
-			return err
+			return openerRevoked, err
 		}
 		if st != standOwner {
-			return errUploadTokenRevoked
+			return openerRevoked, nil
 		}
 	default:
 		if pwHash == "" || pwHash != site.Meta.EditPasswordHash {
-			return errUploadTokenRevoked
+			return openerRevoked, nil
 		}
+	}
+	return openerHolds, nil
+}
+
+// uploadTokenStands is openerStands for the upload token secret, as the
+// refusal its surfaces answer.
+func (a *API) uploadTokenStands(site *store.Site, secret string) error {
+	account, role, pwHash := a.uploads.openedBy(secret)
+	v, err := a.openerStands(site, account, role, pwHash)
+	switch {
+	case err != nil:
+		return err
+	case v == openerShareEnded:
+		return errUploadShareEnded
+	case v == openerRevoked:
+		return errUploadTokenRevoked
 	}
 	return nil
 }

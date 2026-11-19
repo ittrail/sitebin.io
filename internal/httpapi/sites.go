@@ -1013,12 +1013,27 @@ func (a *API) listDir(w http.ResponseWriter, r *http.Request, site *store.Site) 
 	writeJSON(w, 200, map[string]any{"path": rel, "entries": entries, "truncated": truncated})
 }
 
-// downloadSite streams the site's content files as a zip.
+// downloadSite streams the site's content files as a zip, named after the
+// view id or the caller's `name`. A failure once the archive has begun cuts
+// the connection: ended normally, a browser would keep the broken archive as
+// a finished file.
 func (a *API) downloadSite(w http.ResponseWriter, r *http.Request, site *store.Site) {
+	name := site.ViewID
+	if n := downloadName(r.URL.Query().Get("name")); n != "" {
+		name = n
+	}
 	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+site.ViewID+`.zip"`)
-	if err := a.st.ZipContent(site, w); err != nil {
+	w.Header().Set("Content-Disposition", attachmentDisposition(name+".zip"))
+	w.Header().Set("Cache-Control", "no-store")
+	sw := &startedWriter{w: w}
+	if err := a.st.ZipContent(site, sw); err != nil {
 		a.log.Error("zip download", "id", site.ViewID, "err", err)
+		if !sw.started {
+			w.Header().Del("Content-Disposition")
+			writeError(w, 500, "the download could not be built")
+			return
+		}
+		panic(http.ErrAbortHandler)
 	}
 }
 

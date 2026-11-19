@@ -61,6 +61,7 @@ type API struct {
 	domainSites    *auth.Limiter // DNS checks an owner asks for, per site
 	davLockSystems *davLocks
 	uploads        *uploadTokens
+	downloads      *downloadLinks
 	assets         assetCache
 	csp            *cspAggregator
 	forms          *formsState     // nil when the instance has no forms
@@ -110,6 +111,7 @@ func New(cfg config.Config, st *store.Store, secret []byte, webFS fs.FS) (*API, 
 		domainSites:    auth.NewLimiter(domainSiteChecksPerHour, domainSiteChecksBurst),
 		davLockSystems: newDavLocks(),
 		uploads:        newUploadTokens(time.Now),
+		downloads:      newDownloadLinks(time.Now),
 		forms:          newFormsState(cfg, secret),
 		tripLimiter:    auth.NewLimiter(tripPerHour, tripBurst),
 		tripSlots:      make(chan struct{}, tripSlots),
@@ -216,7 +218,8 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("GET /report", a.reportPage)
 	mux.HandleFunc("POST /report", a.reportSubmit)
 	mux.HandleFunc("GET /api/sites/{editID}", a.withEditAuthEvenLocked(a.getSite))
-	mux.HandleFunc("GET /api/sites/{editID}/download", a.withEditAuth(a.downloadSite))
+	mux.HandleFunc("GET /api/sites/{editID}/download", a.withDownloadAuth(a.downloadSite))
+	mux.HandleFunc("POST /api/sites/{editID}/download-link", a.withEditAuth(a.createDownloadLink))
 	mux.HandleFunc("GET /api/sites/{editID}/content/{path...}", a.withEditAuth(a.getFileContent))
 	mux.HandleFunc("GET /api/sites/{editID}/dir", a.withEditAuth(a.listDir))
 	mux.HandleFunc("PUT /api/sites/{editID}", a.withEditAuth(a.recorded(provenance.ActionSettings, a.updateSite)))
@@ -234,7 +237,7 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("GET /api/sites/{editID}/containers/stats", a.withEditAuth(a.containerStats))
 
 	mux.HandleFunc("GET /api/sites/{editID}/backups", a.withEditAuth(a.listBackups))
-	mux.HandleFunc("GET /api/sites/{editID}/backups/{snapshot}/download", a.withEditAuth(a.downloadBackup))
+	mux.HandleFunc("GET /api/sites/{editID}/backups/{snapshot}/download", a.withDownloadAuth(a.downloadBackup))
 	mux.HandleFunc("POST /api/sites/{editID}/backups/{snapshot}/restore", a.withEditAuth(a.recorded(provenance.ActionRestore, a.restoreBackup)))
 
 	mux.HandleFunc("GET /api/sites/{editID}/forms", a.withEditAuth(a.listForms))
@@ -249,7 +252,7 @@ func (a *API) Public() http.Handler {
 	mux.HandleFunc("GET /api/sites/{editID}/git/commit/{sha}", a.withEditAuth(a.gitCommit))
 	mux.HandleFunc("GET /api/sites/{editID}/git/tree", a.withEditAuth(a.gitTree))
 	mux.HandleFunc("GET /api/sites/{editID}/git/blob", a.withEditAuth(a.gitBlob))
-	mux.HandleFunc("GET /api/sites/{editID}/git/archive", a.withEditAuth(a.gitArchive))
+	mux.HandleFunc("GET /api/sites/{editID}/git/archive", a.withDownloadAuth(a.gitArchive))
 	mux.HandleFunc("DELETE /api/sites/{editID}/git", a.withEditAuth(a.recorded(provenance.ActionGitDelete, a.deleteGitRepo)))
 
 	mux.HandleFunc("GET /api/sites/{editID}/analytics", a.withEditAuthEvenLocked(a.getAnalytics))

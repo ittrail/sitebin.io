@@ -46,6 +46,14 @@ func NewUploadToken() string { return UploadTokenPrefix + randomString(base62, 4
 // can start with it: those are base62, which has no underscore.
 const UploadTokenPrefix = "sbu_"
 
+// NewDownloadTicket returns a single-use download link's secret: the prefix
+// "sbd_" and a 40-char base62 secret (~238 bits). It travels only in the
+// `ticket` query parameter of a download route, never as a credential.
+func NewDownloadTicket() string { return DownloadTicketPrefix + randomString(base62, 40) }
+
+// DownloadTicketPrefix marks a string as a Sitebin download ticket.
+const DownloadTicketPrefix = "sbd_"
+
 // NewEditPassword returns a 22-char base62 secret (~131 bits).
 func NewEditPassword() string { return randomString(base62, 22) }
 

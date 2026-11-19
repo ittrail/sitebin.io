@@ -399,6 +399,35 @@ func TestDownloadIsAZipOfTheVersionsFiles(t *testing.T) {
 	}
 }
 
+// TestBackupDownloadStoresMedia: a version's ZIP stores formats that are
+// compressed already (zipstream) and keeps each file's time.
+func TestBackupDownloadStoresMedia(t *testing.T) {
+	b := newBackupEnv(t)
+	tMedia := tOld.Add(-24 * time.Hour)
+	writeSnapshot(t, b.dir, "nightly-media", tMedia, b.site.ViewID, "webserver", []snapFile{
+		{path: "img/a.webp", body: "RIFF....WEBP", mtime: tMedia}, {path: "index.html", body: "<p>media</p>", mtime: tMedia},
+	})
+	b.agent.IndexNow(context.Background())
+	w := b.call(t, "GET", "/api/sites/"+b.editID+"/backups/nightly-media/download", b.pw, nil)
+	if w.Code != 200 {
+		t.Fatalf("download: %d %s", w.Code, w.Body)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(w.Body.Bytes()), int64(w.Body.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	methods := map[string]uint16{}
+	for _, f := range zr.File {
+		methods[f.Name] = f.Method
+		if !f.Modified.Equal(tMedia) {
+			t.Errorf("%s modified %v", f.Name, f.Modified)
+		}
+	}
+	if methods["img/a.webp"] != zip.Store || methods["index.html"] != zip.Deflate {
+		t.Errorf("methods %v, want the webp stored and the page deflated", methods)
+	}
+}
+
 // What a restore decided at its start is checked again after its snapshot
 // (which can take minutes) and under the site lock at the commit.
 func TestRestoreRechecksTheSiteAfterItsSnapshot(t *testing.T) {

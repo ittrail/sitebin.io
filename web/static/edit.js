@@ -37,6 +37,22 @@ function authHeaders() {
   return { "X-Edit-Password": sitePw, "X-Sitebin-Session": "1" };
 }
 
+// startDownload hands a download to the browser itself. The page's
+// credential travels in headers, which a plain link cannot carry, so the page
+// asks for a one-minute, single-use link (POST …/download-link) and opens it:
+// the browser's download bar shows the transfer at once and writes the ZIP to
+// disk as the server packs it, instead of this tab holding every byte first.
+// The file name comes from the server's Content-Disposition.
+async function startDownload(path) {
+  const { url } = await api("POST", "/download-link", { path });
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 async function api(method, path, body, isForm) {
   const headers = authHeaders();
   if (body && !isForm) headers["Content-Type"] = "application/json";
@@ -1589,23 +1605,17 @@ $("editor-save").addEventListener("click", async () => {
   } catch (err) { toast(err.message, true); }
 });
 
-$("download-zip").addEventListener("click", async () => {
+$("download-zip").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  if (btn.disabled) return;
+  btn.disabled = true;
   try {
-    const res = await fetch("/api/sites/" + editID + "/download", {
-      headers: authHeaders(),
-    });
-    if (!res.ok) throw new Error("download failed (" + res.status + ")");
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = site.id + ".zip";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    await startDownload("/download");
+    toast("Download started — your browser saves the ZIP as it is packed.");
   } catch (err) {
     toast(err.message, true);
+  } finally {
+    setTimeout(() => { btn.disabled = false; }, 2000);
   }
 });
 

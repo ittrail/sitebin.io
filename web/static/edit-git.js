@@ -601,7 +601,9 @@ const gitTab = (() => {
 
   q("git-zip").addEventListener("click", () => {
     if (!S.treeRef) return;
-    download("/git/archive" + qs({ ref: S.treeRef }), editID + "-" + (S.commit ? S.commit.sha.slice(0, 7) : S.ref.replace(/[^A-Za-z0-9._-]/g, "_")) + ".zip");
+    // The archive goes to the browser's own download (edit.js's
+    // startDownload), named by the server after the view id and commit.
+    startDownload("/git/archive" + qs({ ref: S.treeRef })).catch((err) => toast(err.message, true));
   });
 
   return { show: () => show(false), reload: () => show(true), state: S };

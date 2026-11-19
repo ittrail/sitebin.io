@@ -468,8 +468,14 @@ curl -X DELETE -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$
 # read one file's content (used by the in-browser editor)
 curl -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID/content/index.html
 
-# download the whole site as a zip
+# download the whole site as a zip (streamed as it is packed; images, video,
+# fonts and archives are stored, the rest deflated; ?name=… names the file)
 curl -H "X-Edit-Password: $PW" -o site.zip https://sitebin.example.com/api/sites/$EDIT_ID/download
+
+# a one-minute, single-use link to a download, for a browser that cannot send
+# the credential header: path is /download, /backups/<snapshot>/download or
+# /git/archive (with its query); the answer's url needs no credential
+curl -X POST -H "X-Edit-Password: $PW" -H "Content-Type: application/json"      -d '{"path":"/download"}' https://sitebin.example.com/api/sites/$EDIT_ID/download-link
 
 # delete the site
 curl -X DELETE -H "X-Edit-Password: $PW" https://sitebin.example.com/api/sites/$EDIT_ID

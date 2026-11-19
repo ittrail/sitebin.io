@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/ittrail/sitebin.io/internal/abuse"
+	"github.com/ittrail/sitebin.io/internal/zipstream"
 )
 
 // FileInfo describes one stored user file.
@@ -414,7 +415,9 @@ func (s *Store) ReadContentFile(site *Site, relPath string) ([]byte, error) {
 	return root.ReadFile(p)
 }
 
-// ZipContent writes a zip archive of the site's content files to w.
+// ZipContent writes a zip archive of the site's content files to w as it
+// walks them (zipstream: media stored, the rest deflated fast, each file's
+// time kept). Nothing is spooled; a client that stops reading stops the walk.
 func (s *Store) ZipContent(site *Site, w io.Writer) error {
 	dir := site.ContentDir()
 	root, err := openContent(site)
@@ -422,7 +425,7 @@ func (s *Store) ZipContent(site *Site, w io.Writer) error {
 		return err
 	}
 	defer root.Close()
-	zw := zip.NewWriter(w)
+	zw := zipstream.NewWriter(w)
 	walkErr := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -439,15 +442,23 @@ func (s *Store) ZipContent(site *Site, w io.Writer) error {
 		if err != nil {
 			return err
 		}
+		// Sitebin's own markers (and any top-level ".sitebin-" name, which
+		// CleanRelPath refuses) stay out: one of them in the archive failed
+		// the whole re-upload of a downloaded ZIP.
+		if !strings.ContainsRune(rel, filepath.Separator) && strings.HasPrefix(strings.ToLower(rel), ".sitebin-") {
+			return nil
+		}
 		src, err := root.Open(rel)
 		if err != nil {
 			return nil // vanished or swapped for something else since the walk saw it
 		}
 		defer src.Close()
-		if fi, err := src.Stat(); err != nil || !fi.Mode().IsRegular() {
+		fi, err := src.Stat()
+		if err != nil || !fi.Mode().IsRegular() {
 			return nil
 		}
-		zf, err := zw.Create(filepath.ToSlash(rel))
+		name := filepath.ToSlash(rel)
+		zf, err := zw.CreateHeader(&zip.FileHeader{Name: name, Method: zipstream.Method(name), Modified: fi.ModTime()})
 		if err != nil {
 			return err
 		}

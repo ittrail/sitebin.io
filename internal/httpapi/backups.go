@@ -17,6 +17,7 @@ import (
 	"github.com/ittrail/sitebin.io/internal/provenance"
 	"github.com/ittrail/sitebin.io/internal/snapshots"
 	"github.com/ittrail/sitebin.io/internal/store"
+	"github.com/ittrail/sitebin.io/internal/zipstream"
 )
 
 // A site's Backups tab: the versions of its files the instance's snapshots
@@ -248,9 +249,9 @@ func (a *API) downloadBackup(w http.ResponseWriter, r *http.Request, site *store
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+site.ViewID+"-"+id+`.zip"`)
 	w.Header().Set("Cache-Control", "no-store")
-	zw := zip.NewWriter(w)
+	zw := zipstream.NewWriter(w)
 	err = eachFile(tar.NewReader(body), root, func(rel string, h *tar.Header, rd io.Reader) error {
-		f, err := zw.CreateHeader(&zip.FileHeader{Name: rel, Method: zip.Deflate, Modified: h.ModTime})
+		f, err := zw.CreateHeader(&zip.FileHeader{Name: rel, Method: zipstream.Method(rel), Modified: h.ModTime})
 		if err != nil {
 			return err
 		}
